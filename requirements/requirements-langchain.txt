@@ -1,0 +1,6 @@
+# 可选依赖：执行侧 Agent（langgraph 编排）。不装不影响任何既有功能——
+# 未安装时执行侧自动回退到 action_plan 保底路径（见 设计_执行侧Agent化_langgraph_2026-08-03.md）。
+# 安装：pip install -r requirements-langchain.txt
+langgraph>=0.2
+langchain-core>=0.3
+langchain-openai>=0.2

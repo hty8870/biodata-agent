@@ -1,0 +1,4 @@
+interface:
+  display_name: "BioData Change Lifecycle"
+  short_description: "Safe change flow: triage, claim, atomic contracts, gates, dev-log"
+  default_prompt: "Use $biodata-change-lifecycle to run this BioData change safely from first write to merge."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "BioData Frontend Contract"
+  short_description: "Change /api fields or shared JS without silently blanking the browser"
+  default_prompt: "Use $biodata-frontend-contract before renaming or reshaping any BioData /api response field."

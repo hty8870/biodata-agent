@@ -1,0 +1,101 @@
+# .deliveryignore —— 对外交付包**必须排除**的内部材料清单（供 scripts/make_delivery.py 打包时剔除）。
+#
+# 语法：gitignore 风格。每行一个 glob；`#` 起始为注释；`dir/` 匹配整个目录；`*` 不跨 `/`，`**` 跨目录。
+# 路径相对仓库根（本文件所在目录）。DEVELOPMENT §11 规定"提交包不应含个人汇报/开发过程记录/未发表材料"，
+# 本清单把该规定变成**机制**：make_delivery.py 按此剔除，并对**留下的**文件做敏感词复核（真名/联系人/机构名/
+# 本机绝对路径），命中即拒绝打包。改动内部材料的存放位置时，同步更新本清单。
+
+# —— 开发过程记录 / 个人汇报 / 未发表工作笔记（含真名与未发表工作，按 IP 约束严禁外发）——
+开发日志归档/
+协同/
+eval/*.md
+# —— 内部工作笔记 / 旧逻辑归档 / 内部汇报（2026-08-22 om1 交付审计发现漏登，补登记）——
+# docs/工作记录/ 含任务记录、设计稿、技术/研究报告、评审简报与未发表文章（.md 与 .pdf）；
+# docs/归档/ 是已移除旧逻辑的 .removed.diff / .head-snapshot；docs/汇报/ 是个人汇报原稿（部分已被 .gitignore 挡下）。
+docs/工作记录/
+docs/归档/
+docs/汇报/
+
+# —— 数据采集流水线内部工作区（台账/暂存/采集脚本，2026-07-30 起入库但属内部材料；
+# 7-24 提交包不含它——彼时未入 git；入 git 时漏同步本清单，2026-08-05 补登；
+# 2026-08-27 整体迁出 database/，现为顶层 research/）——
+research/
+
+# —— 内部评审 / 规划 / 反馈报告（面向开发迭代，非对外产品文档）——
+docs/NEXT_STEPS_CANDIDATES_*.md
+docs/POST_IMPLEMENTATION_AUDIT_*.md
+docs/MAINLINE_*_SENIOR_FEEDBACK*.md
+docs/CICD_NATURE_SKILLS_IMPLEMENTATION_PLAN_*.md
+docs/agent/
+docs/README.md
+工作笔记/
+下一阶段方向_*.md
+给联系人的汇报*
+案例研究*
+# 变更说明是给项目所有者本人看的自然语言批次解读（含真名/汇报语境），属个人材料不外发
+# （2026-08-08 深度整理批坐实：首份在根目录时曾逃过扫描，移动后被主门抓到——当场补登）
+变更说明_*.md
+# 联系人指示台账已移出仓库（2026-08-27 脱敏批 R2：归档至 gitignored 的 开发日志归档/，仍被上方规则挡住交付；
+# 原始补核理由 2026-08-08：内部汇报语境 + 微信会话引用。glob 保留作同名残留兜底）
+联系人指示台账*
+
+# —— 开发过程叙事 / 一次性调研与审计报告 ——
+# CHANGELOG 是按内部开发批次写的工程日志（批次代号、内部提交、过程叙事），不是客户要读的产品说明；
+# 产品能力以 README + 使用说明书为准。其余几份是一次性调研/审计快照，对使用者零价值。
+docs/CHANGELOG.md
+docs/AE_INGEST_COVERAGE_AUDIT_*.md
+docs/CICD_NATURE_SKILLS_RESEARCH_*.md
+docs/overnight-search-experience-plan.md
+docs/research/
+PRODUCT.md
+# 使用说明书的**排版源文件**（HTML + 截图）：客户拿到的是排好版的 PDF（放在提交包根目录），
+# 这里保留源文件只为将来能重新生成，不必随包发出去。
+docs/使用说明书/
+
+# —— 面向「改本项目代码的人」的 Agent 操作 skill（与已排除的 AGENTS.md 同源，描述内部协作流程）——
+# 例外：biodata-dataset-discovery 是给**使用者**装进自己 AI 助手的，随包交付，见 使用教程/Skill安装/。
+.agents/skills/README.md
+.agents/skills/biodata-change-lifecycle/
+.agents/skills/biodata-frontend-contract/
+.agents/skills/biodata-release-readiness/
+.agents/skills/biodata-windows-python/
+
+# —— Agent 执行契约 / 客户端开发配置（描述内部协作流程，非客户功能文档）——
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# —— 提交给客户的包里用不到的开发期 git 配置 ——
+# `.githooks/pre-commit` 只在**本仓库的 git 工作树**里生效（core.hooksPath 指过去）；
+# 交付包里没有 .git，它是纯死文件。已确认无测试/脚本读取该目录（precommit_check.py 只在 docstring 里提到）。
+.githooks/
+
+# —— 发布工具本身（含敏感词检测规则的字面量，非客户运行时；排除即自我豁免于内容复核）——
+scripts/make_delivery.py
+scripts/make_submission_package.py
+.deliveryignore
+
+# —— 安装器工程构建工具（Inno .iss/语言文件/spec/signing/构建锁，非客户运行时）——
+# `packaging/assets/BioDataAgent.ico` 是唯一例外：source/portable 的 pywebview 标题栏
+# 运行时直接读取它；若把整个 packaging/ 排除，源码提交包会静默退回 Python 图标。
+# mac/Linux 交付包装配工具（含生成 mac/Linux 版「从这里开始.txt」与入口脚本的副本，
+# 非客户运行时；客户 mac/Linux 包由 assemble.py 单独产出，不经 make_delivery）。
+packaging/delivery-posix/
+packaging/assets/make_ico.py
+packaging/inno/
+packaging/pyinstaller/
+packaging/requirements/
+packaging/signing/
+
+# —— 秘密与缓存（脚本另有硬排除，这里再列一遍作显式清单；绝不外发）——
+# 注意：这里**只列真正含密钥的文件**。`.env.example` / `.env.zhipu.example` 是纯占位符模板，
+# README 与 MCP 教程都让用户复制它们来建自己的 `.env`——挡掉模板会让交付包里的指引断掉。
+.env
+.env.zhipu
+.git/
+.gitignore
+.pytest_cache/
+**/__pycache__/
+
+# —— 本机环境修复残留（永不入 git 的 scratch，2026-08-07 登记）——
+回滚-恢复GBK代码页.reg

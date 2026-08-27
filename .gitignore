@@ -1,0 +1,125 @@
+# ---- 密钥：绝对不能提交 ----
+.env
+.env.zhipu
+# .env.* 一并忽略，覆盖今后新增的本地环境文件（如 .env.production），避免漏配时静默入库。
+# 显式放行入库模板（纯示例、无真实密钥）：根目录 .env.example / .env.zhipu.example，
+# 以及遥测接收端子目录 services/telemetry-receiver/.env.example。
+.env.*
+!.env.example
+!.env.zhipu.example
+!services/telemetry-receiver/.env.example
+# 私钥/对称密钥一律不入库（本机 SSH/API 私钥等）；按后缀通配，避免漏收。
+*.pem
+*.key
+# 个人化交付敏感词清单：scripts/make_delivery.py 的个人层黑名单来源（真名/内部称谓等，
+# 已从源码外置到这里）；与 .env 同级处理，只存本机、绝不入库/交付。
+.delivery-tokens.local
+
+# ---- 体积大 / 外部依赖 ----
+langchain-master/
+
+# ---- 旧备份（已有 git 后不再需要跟踪） ----
+backup_*/
+
+# ---- 运行产物 / 日志 ----
+outputs/
+artifacts/
+*.log
+# 启动器运行时状态（A2-L4）：固定端口持久化 runtime.json 与 run/ 实例记录/迁移 staging——
+# 本机生成、逐实例不同，不入库（data_root 重定向时同样落于数据根下）
+runtime.json
+run/
+# 启动器（launch_web.ps1）首启完成标记：空文件、逐机生成、非交付物（test_launcher_first_run_setup 只钉它在根目录）
+.biodata-setup-done
+# 附加重排评测的即时报告：LLM 输出不可复现，不入库（避免伪装成固定结果，可用 scripts/evaluate_rerank.py 重生）
+eval/rerank_report.json
+# 向量召回评测报告：确定性但依赖本地模型权重（不在库里），不入库，可用 scripts/evaluate_recall.py 重生
+eval/recall_report.json
+# cr1 盲跑/噪声地板对照的原始 run 与摘要：LLM 输出不可复现、一次性实验，不入库（结论已沉淀进 eval/report_blind_rerun_cr1-after2.md）
+eval/run_blind_*.jsonl
+eval/run_blind_*_summary.json
+
+# ---- 可选：向量召回的本地稠密嵌入模型权重（几十~几百 MB，公开可重下，不入库） ----
+models/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# ---- 本地工具配置（预览/启动，仅本机用，不入库） ----
+.claude/
+
+# ---- 本地账户数据（用户名 + scrypt 密码哈希，仅本机、绝不入库/交付） ----
+.userdata/
+
+# ---- 内部工作笔记（详细汇报原版 + 同类系统调研笔记，供自己参考，不随交付包上交） ----
+工作笔记/
+
+# ---- 本地草稿 / 个人汇报（保留在本地、不入项目历史；含 .md 原稿与导出的 .docx/.pdf 等） ----
+# 用 `*汇报_*` 而不是 `汇报_*`：导出工具常给文件名加前缀（如 `biodata汇报_….pdf`），
+# 只锚定开头会漏掉它们，而 .pdf/.docx 不在交付扫描的文本后缀里 → 漏一个就是静默外发。
+*汇报_*
+
+# ---- 截图验收脚手架（本地证据链，不入项目历史） ----
+.uni1-shots/
+.ux6-shots/
+.ux7-shots/
+.agent1-shots/
+.sidebar-shots/
+.agent2-shots/
+.fix-shots/
+.census/
+
+# ---- 一次性 UI 冒烟脚手架与截图（本地验证证据，不入项目历史） ----
+scripts/_*
+
+# ---- curate sync 运行时入库产物（本机同步生成；不入 git、不进交付，接收方运行同步可再得） ----
+database/external/upload_*.json
+
+# ---- agent trace 运行时产物（可追溯性事件日志 + 回退快照，2026-08-17 波1；本机生成、可再得，不入库） ----
+database/trace/
+# ---- 本地验证工作目录（如 _ux1_check/、_mn1_check/ 等；2026-08-23 起改通配——此前逐目录
+# 枚举，新批次忘补一条就会以 untracked 噪音漏出甚至误提交。均为本机验证残留，不入库、不进交付） ----
+_*_check/
+
+# ---- 2026-08-26 仓库清理批（留档 tag：archive/pre-cleanup-20260826；物理文件在仓库外
+# _冷备_2026-08-26/，未删除）----
+# eval 可再生 LLM 运行产物（实跑记录与报告、延迟/质量审计快照；结论已沉淀进对应 *.md 与
+# 开发日志，可用 scripts/evaluate_*.py 重生，不入库）。查询集/金标（eval_queries*、
+# *_graded.json、*_cases_*、curate_nlu/、baseline_L0 等）保留 tracked。
+eval/agent_live_run_*.jsonl
+eval/agent_live_report_*.md
+eval/search_live_run_*.jsonl
+eval/search_live_report_*.md
+eval/latency_ab_*
+eval/data_quality_audit.*
+eval/entity_gap_report.*
+eval/metadata_coverage.*
+eval/provisioning_report.*
+eval/agent_decide_capture.jsonl
+# research/staging 采集流水线原始中间产物（204M、非检索/评测资产；研究成果保留在
+# research/reports|tasks|promotions 与 7 个 *.md，staging 新产出不再入库）
+research/staging/
+# 本机一次性注册表修复 scratch（.deliveryignore:99 自述永不入库，本批纠正 tracked 状态）
+回滚-恢复GBK代码页.reg
+
+# --- 过程性协作文件（本地保留，不进版本库；2026-08-26 GitHub 展示面清理）---
+# 例外：协同 认领/交接 的空白模板是仓库治理契约的一部分（scripts/validate-agent-governance.ps1
+# 的 RequiredFiles 硬要求），必须入库；模板不含任何任务信息。
+协同/*
+!协同/认领/
+!协同/交接/
+协同/认领/*
+!协同/认领/_模板.md
+协同/交接/*
+!协同/交接/_模板.md
+开发日志归档/
+
+# 本机评测运行产物（不上传）
+eval/bakeoff_dense_api.json
+eval/bakeoff_rerank_api.json
+eval/frozen_after_patch_batch.json

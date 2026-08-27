@@ -1,0 +1,153 @@
+name: Deploy web
+
+# 网页版免密部署管线：GitHub OIDC 换腾讯云 STS 临时凭证 → TAT 远端执行 deploy.sh。
+# 凭证链全程无长期云密钥（唯一长期密钥是 TCR registry 密码，爆炸半径 = 镜像仓库读写）。
+#
+# 触发方式：
+#   1. workflow_run：上游「Web image」在 master 上 conclusion==success 后接力。
+#      **默认关闭**——必须先把仓库变量 vars.AUTO_DEPLOY 设为 'true' 才会真正执行，
+#      否则两个 job 都直接跳过。原因（项目纪律）：真实部署必须用户在对话里点头，
+#      GitHub 事件本身不算授权；全自动能力交付但开关默认关。
+#   2. workflow_dispatch：手动部署 TCR 中已存在的镜像 tag（跳过构建/推送，不受 AUTO_DEPLOY 门限制）。
+#
+# secrets（Settings → Environments → production）：
+#   DEPLOY_SSH_KEY           部署专用 SSH 私钥（deploy@biodata-prod；sudoers 只放行
+#                            docker pull/tag + deploy.sh，sshd Match 禁转发/禁 tty）
+#   TCR_REGISTRY_PASSWORD    TCR 个人版 registry 登录密码（开通个人版时设置的那个）
+# vars（environment 或仓库级）：
+#   TCR_REGISTRY             registry 域名，个人版 = ccr.ccs.tencentyun.com
+#   TCR_NAMESPACE            个人版命名空间名
+#   TCR_USERNAME             个人版登录用户名 = 腾讯云账号 ID（UIN，账号信息页可查）
+#   DEPLOY_HOST              部署目标机，如 <server-ip>
+#   DEPLOY_USER              部署专用账号，deploy
+#   DEPLOY_HOST_KEY          目标机 SSH host key（known_hosts 行，防 MITM 钉死）
+#   PUBLIC_HEALTH_URL        公网健康检查地址，如 http://<server-ip>/api/health
+#   AUTO_DEPLOY              'true' 才放行 workflow_run 自动部署；未设/其他值 = 仅手动
+#
+# 部署前置（一次性，步骤见 deploy/web/OIDC-SETUP.md）：
+#   TCR 个人版 namespace、服务器 root 已 docker login TCR（pull 凭据）、
+#   服务器 deploy 用户 + sudoers 白名单 + sshd Match 限制（均已在 §4 落成）。
+#   注：CAM OIDC 角色（sub == repo:...:environment:production）曾为 TAT 部署通道准备；
+#   TAT 公网 API 对轻量机恒报 AgentNotInstalled，部署已改走 SSH，角色保留给未来 CVM 场景。
+on:
+  workflow_run:
+    workflows: ["Web image"]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要部署的既有镜像 tag（TCR 中已存在，如 2.7.0-ge568d853）"
+        required: true
+        type: string
+
+# 默认零令牌权限；各 job 按需单独申请。
+permissions: {}
+
+concurrency:
+  group: deploy-web-production
+  cancel-in-progress: false # 部署进行到一半不取消，避免服务器停在中间态
+
+jobs:
+  build-push:
+    name: build and push / web image
+    # 仅 workflow_run 自动路径需要构建推送；手动 dispatch 部署既有 tag 时本 job 整体跳过。
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Check out the upstream commit
+        # 构建上游 CI 刚验证过的那个 commit，而非 workflow_run 上下文里的默认分支头。
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Compute image tag
+        id: tag
+        # 与手工发布同一规则：<WEB_API_VERSION>-g<8位短sha>（见 deploy/web/README.md §1）。
+        run: |
+          set -euo pipefail
+          version="$(grep -oE 'WEB_API_VERSION = "[^"]+"' src/dataset_recommender/app/webapp.py | cut -d'"' -f2)"
+          tag="${version}-g$(git rev-parse --short=8 HEAD)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "镜像 tag：$tag"
+
+      - name: Build the web image
+        run: "docker build -f deploy/web/Dockerfile -t biodata-web:${{ steps.tag.outputs.tag }} ."
+
+      - name: Log in to TCR and push
+        # TCR 个人版无临时凭证 API（临时登录指令仅企业版），用 registry 长期密码；
+        # 密码只经 --password-stdin 管道传递，不出现在命令行参数里。
+        env:
+          TCR_PASSWORD: ${{ secrets.TCR_REGISTRY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          REGISTRY_IMAGE="${{ vars.TCR_REGISTRY }}/${{ vars.TCR_NAMESPACE }}/biodata-web:${{ steps.tag.outputs.tag }}"
+          printf '%s' "$TCR_PASSWORD" | docker login "${{ vars.TCR_REGISTRY }}" --username "${{ vars.TCR_USERNAME }}" --password-stdin
+          docker tag "biodata-web:${{ steps.tag.outputs.tag }}" "$REGISTRY_IMAGE"
+          docker push "$REGISTRY_IMAGE"
+          docker logout "${{ vars.TCR_REGISTRY }}" || true
+
+  deploy:
+    name: deploy / biodata-prod via SSH
+    needs: [build-push]
+    # 手动 dispatch 恒可跑（部署既有 tag）；workflow_run 路径需 AUTO_DEPLOY=true
+    # 且上游 CI 与本仓 build-push 均成功。always() 使手动路径不被 build-push 跳过连带跳过。
+    if: >-
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        vars.AUTO_DEPLOY == 'true' &&
+        needs.build-push.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 部署通道（2026-08-27 起）：专用 SSH 账号。sudoers 白名单只允许
+    # docker pull / docker tag / deploy.sh 三条命令，sshd Match 禁转发/禁 tty，
+    # host key 经 vars.DEPLOY_HOST_KEY 钉死；私钥只存在于 GitHub secret。
+    environment: production
+    permissions: {} # 本 job 不需要任何 GitHub token
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || needs.build-push.outputs.tag }}
+      REGISTRY_IMAGE: ${{ vars.TCR_REGISTRY }}/${{ vars.TCR_NAMESPACE }}/biodata-web
+    steps:
+      - name: Deploy on biodata-prod via SSH
+        # 远端序列与 deploy/web/README.md 手工发布等价：pull → tag → deploy.sh
+        # （deploy.sh 自带 healthy 等待 + 护栏断言 + 失败自动回退，非零退出即步骤失败）。
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          echo "部署 tag：$TAG"
+          install -m 600 /dev/null /tmp/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" > /tmp/deploy_key
+          printf '%s\n' "${{ vars.DEPLOY_HOST_KEY }}" > /tmp/deploy_known_hosts
+          trap 'shred -u /tmp/deploy_key /tmp/deploy_known_hosts 2>/dev/null || rm -f /tmp/deploy_key /tmp/deploy_known_hosts' EXIT
+          ssh -i /tmp/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile=/tmp/deploy_known_hosts \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 \
+            "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "set -euo pipefail && \
+             sudo -n /usr/bin/docker pull '${REGISTRY_IMAGE}:${TAG}' && \
+             sudo -n /usr/bin/docker tag '${REGISTRY_IMAGE}:${TAG}' 'biodata-web:${TAG}' && \
+             sudo -n /opt/biodata-web/deploy.sh '${TAG}'"
+
+      - name: Assert public health guard
+        # 服务器侧 deploy.sh 已在容器内断言 account.required==true；这里再从公网入口复核一次。
+        run: |
+          set -euo pipefail
+          health_json="$(mktemp)"
+          curl -sf "${{ vars.PUBLIC_HEALTH_URL }}" -o "$health_json"
+          python3 -c 'import json, sys; d = json.load(sys.stdin); sys.exit(0 if (d.get("account") or {}).get("required") is True else 1)' < "$health_json" \
+            || { echo "::error::公网 /api/health 断言失败：account.required != true"; cat "$health_json" || true; exit 1; }
+          echo "公网健康检查通过：${{ vars.PUBLIC_HEALTH_URL }} 返回 account.required == true"

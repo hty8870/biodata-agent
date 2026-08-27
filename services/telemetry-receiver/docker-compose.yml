@@ -1,0 +1,71 @@
+# BioData Agent 遥测接收端：receiver（FastAPI）+ db（postgres:16）两服务
+# 部署与运维见 README.md；敏感值从同目录 .env（chmod 600）注入，示例见 .env.example。
+# 机上约定（根 AGENTS.md）：服务 /opt/biodata-telemetry、持久化 /data/biodata-telemetry/pgdata。
+services:
+  receiver:
+    build: .
+    container_name: biodata-telemetry-receiver
+    restart: unless-stopped
+    ports:
+      # 当前生产端点是用户知情接受的固定公网 HTTP 例外（见 SECURITY.md）；未来有域名/TLS
+      # 反向代理后再收窄为 127.0.0.1:8471:8471，并关闭防火墙的公网 8471。
+      - "8471:8471"
+    environment:
+      INGEST_TOKEN: ${INGEST_TOKEN:?缺少 INGEST_TOKEN，请在 .env 中配置}
+      STATS_TOKEN: ${STATS_TOKEN:?缺少 STATS_TOKEN，请在 .env 中配置}
+      DATABASE_URL: postgresql+psycopg2://telemetry:${DB_PASSWORD:?缺少 DB_PASSWORD，请在 .env 中配置}@db:5432/biodata_telemetry
+      # 可选覆盖（S2：配额/保留/限流调参；空值不注入，走 app.py 默认值）
+      BODY_READ_TIMEOUT: ${BODY_READ_TIMEOUT:-}
+      DAILY_BYTES_BUDGET: ${DAILY_BYTES_BUDGET:-}
+      PER_IP_DAILY_BYTES: ${PER_IP_DAILY_BYTES:-}
+      PER_INSTALL_DAILY_PACKETS: ${PER_INSTALL_DAILY_PACKETS:-}
+      RETENTION_DAYS: ${RETENTION_DAYS:-90}
+      RETENTION_INTERVAL_SECONDS: ${RETENTION_INTERVAL_SECONDS:-86400}
+      EXPORT_DIR: /data/biodata-telemetry/export
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-}
+      PROFILE_RATE_LIMIT_MAX: ${PROFILE_RATE_LIMIT_MAX:-}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-}
+      # 公网部署填实际 HTTPS UI origins（逗号分隔）并清空/收窄 regex；默认 regex 只放 loopback。
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ALLOWED_ORIGIN_REGEX: ${ALLOWED_ORIGIN_REGEX:-}
+      # 意见反馈正文的 P-256 解密私钥；只从服务器 .env 注入，不进入镜像或客户端。
+      FEEDBACK_DECRYPT_KEY: ${FEEDBACK_DECRYPT_KEY:-}
+      # 默认单 worker 保持现有、已验证语义。提升前须同时部署代理层共享限流，并按
+      # workers*(DB_POOL_SIZE+DB_MAX_OVERFLOW) 核算 PostgreSQL max_connections。
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-10}
+    command: ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port 8471 --workers $${UVICORN_WORKERS:-1}"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # 导出/删除脚本挂进容器（README 的 compose exec 用法依赖此路径；只读）
+      - /opt/biodata-telemetry/scripts:/opt/biodata-telemetry/scripts:ro
+      # 导出产物落宿主机 /data 分区（自动进每日 03:00 备份，留 7 天）
+      - /data/biodata-telemetry/export:/data/biodata-telemetry/export
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8471/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  db:
+    # SUP-M01：postgres:16 钉 amd64 digest（Docker Hub 2026-08-21 查询）
+    image: postgres:16@sha256:56f243d2355bad7d2016b1e78b80da8ac9e7967b766be2bfbff84fe85ffa30bc
+    container_name: biodata-telemetry-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: telemetry
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?缺少 DB_PASSWORD，请在 .env 中配置}
+      POSTGRES_DB: biodata_telemetry
+    volumes:
+      # 数据挂宿主机 /data/biodata-telemetry/pgdata，自动进每日 03:00 备份
+      - /data/biodata-telemetry/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telemetry -d biodata_telemetry"]
+      interval: 5s
+      timeout: 3s
+      retries: 12

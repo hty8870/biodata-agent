@@ -1,0 +1,81 @@
+# BioData Agent 构建上下文瘦身（对照 .gitignore 思路，宁窄勿宽）。
+# 目的：① 防密钥/本机数据进镜像层（.env*、.userdata、models、协同、工作笔记）；
+#       ② 减小发给 docker daemon 的上下文（.git、trace 运行产物、测试、文档）。
+# Dockerfile 只 COPY src/ web/ database/ scripts/run_web.py 使用教程两个文件
+# .agents/skills/biodata-dataset-discovery/ 与 deploy/web/requirements-web.lock，
+# 其余条目均为纵深防御（防未来有人改成 COPY . / .）。
+
+# --- 密钥与本机凭据：绝不进镜像 ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- 版本控制与 CI ---
+.git
+.gitignore
+.github
+
+# --- Python 产物与环境 ---
+.venv
+venv
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+
+# --- 本机运行产物 / 大目录 ---
+models/
+.userdata/
+outputs/
+artifacts/
+run/
+runtime.json
+.biodata-setup-done
+logs/
+database/trace/
+database/external/upload_*.json
+# 2026-08-26 清理批：staging 采集中间产物已移出 git（仓库外冷备），同步挡在镜像外
+# （2026-08-27 随目录迁移：该工作区现为顶层 research/staging/）
+research/staging/
+langchain-master/
+
+# --- 本机验证残留 / 截图脚手架 ---
+_*_check/
+scripts/_*
+.uni1-shots/
+.ux6-shots/
+.ux7-shots/
+.agent1-shots/
+.sidebar-shots/
+.agent2-shots/
+.fix-shots/
+.census/
+
+# --- 内部材料（未发表内容不进镜像层）---
+工作笔记/
+协同/
+开发日志归档/
+*汇报_*
+
+# --- 测试与文档（非运行必需）---
+tests/
+docs/
+eval/
+
+# 使用教程只放行运行时实际读取的两个文件（上传规范 / agent 接入提示词），
+# 其余（含 MCP_安装教程 等组内材料）不进镜像层。
+使用教程/*
+!使用教程/数据集上传
+使用教程/数据集上传/*
+!使用教程/数据集上传/数据集上传规范.md
+!使用教程/MCP安装
+使用教程/MCP安装/*
+!使用教程/MCP安装/agent接入提示词.md
+!.agents/skills/biodata-dataset-discovery/
+
+# --- 杂项 ---
+*.log
+.claude/
+backup_*/

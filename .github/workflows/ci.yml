@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  # push 限定到集成分支与发布 tag：避免「同一分支 push 事件 + 该分支 PR 的 synchronize 事件」
+  # 因并发组 key 不同（push 走 github.ref、PR 走 PR number）而**双跑**整套 OS 矩阵（评审 low）。
+  # feature 分支的验证交给 pull_request 覆盖。
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Start from no token permissions. Only the job that checks out source receives
+# the single read permission it needs.
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUTF8: "1"
+  PYTHONHASHSEED: "0"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
+  BIODATA_ALLOW_MODEL_DOWNLOAD: "0"
+  BIODATA_CI_OFFLINE: "1"
+
+jobs:
+  quality:
+    name: quality / ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # 公开仓不含 eval/（冻结/holdout/dev 评测输入）与 docs/agent/ 内部工程文档，
+        # full profile 的 pytest 全量、评测与治理门不可跑；三条腿统一执行 fast 契约门
+        # （Python 语法、JS 语法、自动化契约测试）。
+        include:
+          - label: windows-primary-fast
+            os: windows-2025
+            python: "3.12"
+            profile: fast
+          - label: ubuntu-min-fast
+            os: ubuntu-24.04
+            python: "3.10"
+            profile: fast
+          - label: ubuntu-current-fast
+            os: ubuntu-24.04
+            python: "3.14"
+            profile: fast
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements/requirements-ci.lock
+
+      - name: Install the reviewed hash-locked CI environment
+        run: "python -m pip install --require-hashes --only-binary=:all: -r requirements/requirements-ci.lock"
+
+      - name: Run the manifest-defined quality profile
+        run: >-
+          python scripts/quality_gate.py
+          --profile ${{ matrix.profile }}
+          --report-json artifacts/quality-${{ matrix.label }}.json
+
+      - name: Preserve the machine-readable report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-${{ matrix.label }}
+          path: artifacts/quality-${{ matrix.label }}.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Configure this exact, non-matrix job name as the protected-branch check.
+  gate:
+    name: gate
+    if: always()
+    needs: [quality]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every quality leg to pass
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+        run: >-
+          test "$QUALITY_RESULT" = "success"

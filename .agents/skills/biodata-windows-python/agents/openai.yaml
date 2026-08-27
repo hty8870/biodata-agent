@@ -1,0 +1,4 @@
+interface:
+  display_name: "BioData Windows and Python"
+  short_description: "Resolve $Python and run gates, pytest, frozen-eval, and git on this Windows repo"
+  default_prompt: "Use $biodata-windows-python to resolve the interpreter and run the right BioData gates."

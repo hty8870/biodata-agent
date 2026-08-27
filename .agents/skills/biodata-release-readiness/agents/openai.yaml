@@ -1,0 +1,5 @@
+interface:
+  display_name: "BioData Release Readiness"
+  short_description: "Audit, gate, package, and roll back BioData releases"
+  default_prompt: "Use $biodata-release-readiness to verify this BioData change and prepare a reversible release candidate."
+
