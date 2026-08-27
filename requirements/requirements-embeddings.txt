@@ -1,0 +1,13 @@
+# Optional dependencies for local semantic reranking.
+# Install them with the same Python environment used to run BioData Agent:
+#
+#   <python> -m pip install -r requirements-embeddings.txt
+#   <python> scripts/fetch_embedding_model.py
+#
+# Use --all with fetch_embedding_model.py to download every supported local model.
+# Model weights are not bundled with the project. If dependencies or weights are missing,
+# the application falls back to rule-based ordering without blocking the main workflow.
+
+sentence-transformers>=2.2,<4
+# Preferred download source; the fetch script can fall back to Hugging Face.
+modelscope>=1.9

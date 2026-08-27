@@ -1,0 +1,4 @@
+interface:
+  display_name: "BioData Dataset Discovery (honest client)"
+  short_description: "Use BioData Agent's catalog without turning 'not in this catalog' into 'does not exist'"
+  default_prompt: "Use $biodata-dataset-discovery when answering dataset-discovery questions with BioData Agent, so a catalog miss is never reported as a research verdict."

@@ -1,0 +1,455 @@
+{
+  "metrics": {
+    "n_queries": 44,
+    "Top1_Accuracy_%": 71.8,
+    "Top5_Hit_Rate_%": 79.5,
+    "Constraint_Violation_%": 37.7,
+    "FASTQ_Violation_%": 0.0,
+    "Avg_Matched_Fields": 1.54,
+    "Duplicate_Family_%": 1.5,
+    "NoResult_Correct": "2/5",
+    "_counts": {
+      "returned_items": 204,
+      "violations": 77,
+      "fastq_items": 30,
+      "fastq_violations": 0
+    }
+  },
+  "per_query": [
+    {
+      "id": "sp01",
+      "query": "给我一些人类的数据集",
+      "category": "species",
+      "support": 575,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "sp02",
+      "query": "小鼠的数据",
+      "category": "species",
+      "support": 241,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "sp03",
+      "query": "斑马鱼相关数据",
+      "category": "species",
+      "support": 3,
+      "n_returned": 3,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "ti01",
+      "query": "人脑组织的数据",
+      "category": "tissue",
+      "support": 22,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "ti02",
+      "query": "乳腺相关数据",
+      "category": "tissue",
+      "support": 44,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "ti03",
+      "query": "肺组织数据",
+      "category": "tissue",
+      "support": 30,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "ti04",
+      "query": "肾脏数据集",
+      "category": "tissue",
+      "support": 75,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "ti05",
+      "query": "血液样本数据",
+      "category": "tissue",
+      "support": 287,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": true
+    },
+    {
+      "id": "di01",
+      "query": "乳腺癌数据",
+      "category": "disease",
+      "support": 41,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "di02",
+      "query": "淋巴瘤的数据集",
+      "category": "disease",
+      "support": 46,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "di03",
+      "query": "黑色素瘤数据",
+      "category": "disease",
+      "support": 21,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "di04",
+      "query": "胶质母细胞瘤数据",
+      "category": "disease",
+      "support": 13,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "di05",
+      "query": "肺癌数据集",
+      "category": "disease",
+      "support": 25,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "di06",
+      "query": "胃癌相关数据",
+      "category": "disease",
+      "support": 12,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "di07",
+      "query": "白血病数据",
+      "category": "disease",
+      "support": 15,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": true
+    },
+    {
+      "id": "te01",
+      "query": "Visium 空间转录组数据",
+      "category": "technology",
+      "support": 141,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "te02",
+      "query": "Xenium 数据集",
+      "category": "technology",
+      "support": 43,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "te03",
+      "query": "单细胞数据",
+      "category": "technology",
+      "support": 581,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "te04",
+      "query": "Atera 平台数据",
+      "category": "technology",
+      "support": 2,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "te05",
+      "query": "ATAC 染色质可及性数据",
+      "category": "technology",
+      "support": 93,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "te06",
+      "query": "Multiome 多组学数据",
+      "category": "technology",
+      "support": 22,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "fq01",
+      "query": "有 FASTQ 原始数据的人类数据集",
+      "category": "fastq",
+      "support": 521,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "fq02",
+      "query": "可以重新跑流程的乳腺癌数据",
+      "category": "fastq",
+      "support": 35,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co01",
+      "query": "有 FASTQ 的人类乳腺癌数据",
+      "category": "combination",
+      "support": 35,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co02",
+      "query": "人类乳腺癌的 Visium 数据",
+      "category": "combination",
+      "support": 14,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co03",
+      "query": "小鼠脑的空间转录组数据",
+      "category": "combination",
+      "support": 41,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co04",
+      "query": "人类淋巴瘤的单细胞数据",
+      "category": "combination",
+      "support": 46,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "co05",
+      "query": "人类黑色素瘤数据",
+      "category": "combination",
+      "support": 21,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "co06",
+      "query": "人类肺癌的单细胞数据",
+      "category": "combination",
+      "support": 13,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co07",
+      "query": "Xenium 的人类乳腺癌数据",
+      "category": "combination",
+      "support": 5,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co08",
+      "query": "小鼠肾脏数据",
+      "category": "combination",
+      "support": 57,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co09",
+      "query": "人类血液的单细胞数据",
+      "category": "combination",
+      "support": 261,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": true
+    },
+    {
+      "id": "co10",
+      "query": "人脑的 Visium 空间数据",
+      "category": "combination",
+      "support": 10,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "co11",
+      "query": "有 FASTQ 的小鼠脑数据",
+      "category": "combination",
+      "support": 92,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co12",
+      "query": "人类卵巢癌数据",
+      "category": "combination",
+      "support": 8,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co13",
+      "query": "人类胃癌数据",
+      "category": "combination",
+      "support": 12,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": false,
+      "top5_ok": false
+    },
+    {
+      "id": "co14",
+      "query": "有 FASTQ 的 Xenium 人类数据",
+      "category": "combination",
+      "support": 35,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co15",
+      "query": "有原始数据的人类乳腺 Visium 数据",
+      "category": "combination",
+      "support": 9,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "co16",
+      "query": "小鼠的单细胞数据",
+      "category": "combination",
+      "support": 176,
+      "n_returned": 5,
+      "expect_empty": false,
+      "top1_ok": true,
+      "top5_ok": true
+    },
+    {
+      "id": "nr01",
+      "query": "斑马鱼乳腺癌的 FASTQ 数据",
+      "category": "no_result",
+      "support": 0,
+      "n_returned": 0,
+      "expect_empty": true,
+      "no_result_ok": true
+    },
+    {
+      "id": "nr02",
+      "query": "斑马鱼的黑色素瘤数据",
+      "category": "no_result",
+      "support": 0,
+      "n_returned": 3,
+      "expect_empty": true,
+      "no_result_ok": false
+    },
+    {
+      "id": "nr03",
+      "query": "大象的单细胞数据",
+      "category": "no_result",
+      "support": 0,
+      "n_returned": 5,
+      "expect_empty": true,
+      "no_result_ok": false
+    },
+    {
+      "id": "nr04",
+      "query": "斑马鱼的 Xenium 数据",
+      "category": "no_result",
+      "support": 0,
+      "n_returned": 3,
+      "expect_empty": true,
+      "no_result_ok": false
+    },
+    {
+      "id": "nr05",
+      "query": "小鼠乳腺癌的 Atera 数据",
+      "category": "no_result",
+      "support": 0,
+      "n_returned": 0,
+      "expect_empty": true,
+      "no_result_ok": true
+    }
+  ]
+}

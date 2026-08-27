@@ -1,0 +1,8 @@
+# Minimal runtime dependencies for the BioData Agent web UI and CLI.
+# The MCP server and local semantic reranking are NOT covered here:
+# see 使用教程/MCP安装/MCP_安装教程.md and requirements-embeddings.txt.
+python-dotenv>=1.0
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+httpx>=0.27

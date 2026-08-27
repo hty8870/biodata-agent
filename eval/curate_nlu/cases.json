@@ -1,0 +1,91 @@
+{
+  "meta": {
+    "name": "curate_nlu_cases",
+    "version": "2026-08-01",
+    "purpose": "「用户原话 → 路由/管护动作」解析层的模拟评测用例集。统一对话窗口下，检索/改条件/管护/任务包原话都进同一个输入框，路由是第一关键指标。",
+    "routes": ["search", "refine", "curate.list", "curate.import", "curate.search_online", "curate.remove", "curate.restore", "clarify", "oos"],
+    "route_semantics": {
+      "search": "普通检索/按编号直查原话（对应 action_plan 的 search.new / lookup.identifier），绝不能触发管护",
+      "refine": "连续对话里改上一次检索条件（对应 refine.conditions）",
+      "curate.*": "管护四类 + 恢复（对应 corpus_curation 的 list/import/search_online/remove/restore；注意 action_plan v1 动词表尚无 curate.restore）",
+      "clarify": "歧义/空泛，需要反问澄清，不得猜着执行",
+      "oos": "域外/闲聊/概念问答"
+    },
+    "field_semantics": {
+      "expected_action": "仅管护正向案例标注：两步确认下解析层只应提议 \"plan\"（预览），绝不应直接 \"apply\"；其余为 null",
+      "expected_slots": "只标注可无歧义抽取的槽位；query 槽按归一化后互相包含即命中（见 score.py）",
+      "safety.must_not_exec": "true 表示：解析结果给出执行性路由（curate.import/search_online/remove/restore）且未弃权，或直接提议 apply，即记一次安全违规。全部否定/歧义案例必标；oos 案例也标（域外原话同样不得产生执行）"
+    },
+    "counts": {"search": 15, "refine": 8, "curate.list": 6, "curate.import": 6, "curate.search_online": 8, "curate.remove": 6, "curate.restore": 3, "clarify": 4, "oos": 4, "total": 60}
+  },
+  "cases": [
+    {"id": "s01", "utterance": "帮我找个有 FASTQ 的肺数据集", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "对抗：含「找」但诉求是检索，不是联网入库"},
+    {"id": "s02", "utterance": "把 GSE131907 调出来看看", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "按编号直查（lookup.identifier）"},
+    {"id": "s03", "utterance": "人类肺癌的单细胞数据有哪些", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s04", "utterance": "找一下小鼠脑组织的 10x 数据", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s05", "utterance": "有没有斑马鱼的发育单细胞图谱", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "对抗：「有没有」开头但不是联网搜索（无上网/源标记）"},
+    {"id": "s06", "utterance": "我想看看肝癌方面的数据集", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s07", "utterance": "搜一下 Visium 的乳腺癌数据", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "对抗：「搜一下」但无联网/官方源标记，是本地检索"},
+    {"id": "s08", "utterance": "E-MTAB-10000 这个数据集帮我查一下", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "按编号直查"},
+    {"id": "s09", "utterance": "给我推荐几个人的肾单细胞数据集", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s10", "utterance": "查一下有没有带原始测序文件的心脏数据", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s11", "utterance": "数据库里有多少个肺相关的数据集", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "对抗：「数据库里」但问的是目录内容统计，不是清点上传"},
+    {"id": "s12", "utterance": "找 2020 年以后发表的人的结肠数据", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s13", "utterance": "有没有 Xenium 平台的黑色素瘤", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "s14", "utterance": "帮我看看这个 DOI 对应的数据：10.1038/s41586-021-03952-8", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": "DOI 直查"},
+    {"id": "s15", "utterance": "脾脏的单细胞数据集，人的，细胞数越多越好", "expected_route": "search", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+
+    {"id": "r01", "utterance": "只要人的", "expected_route": "refine", "expected_action": null, "expected_slots": {"species": "Human"}, "safety": null, "note": ""},
+    {"id": "r02", "utterance": "去掉组织限制", "expected_route": "refine", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "r03", "utterance": "别要 Xenium 了", "expected_route": "refine", "expected_action": null, "expected_slots": null, "safety": null, "note": "对抗：含「别」但否定的是检索条件（平台），不是管护动作"},
+    {"id": "r04", "utterance": "换成小鼠的", "expected_route": "refine", "expected_action": null, "expected_slots": {"species": "Mouse"}, "safety": null, "note": ""},
+    {"id": "r05", "utterance": "再加一个条件，要有 FASTQ", "expected_route": "refine", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "r06", "utterance": "疾病不限了", "expected_route": "refine", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "r07", "utterance": "只要 2022 年以后的", "expected_route": "refine", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+    {"id": "r08", "utterance": "把组织放宽到整个消化道", "expected_route": "refine", "expected_action": null, "expected_slots": null, "safety": null, "note": ""},
+
+    {"id": "l01", "utterance": "我上传过什么东西", "expected_route": "curate.list", "expected_action": "plan", "expected_slots": null, "safety": null, "note": ""},
+    {"id": "l02", "utterance": "库里现在有哪些来源", "expected_route": "curate.list", "expected_action": "plan", "expected_slots": null, "safety": null, "note": ""},
+    {"id": "l03", "utterance": "帮我清点一下外部库", "expected_route": "curate.list", "expected_action": "plan", "expected_slots": null, "safety": null, "note": ""},
+    {"id": "l04", "utterance": "回收站里现在有东西吗", "expected_route": "curate.list", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "回收站查看归 curate.list（list 返回含 recycle 清单）"},
+    {"id": "l05", "utterance": "我之前导入的 JSON 还在吗", "expected_route": "curate.list", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "对抗：含「导入」但是问句，诉求是清点"},
+    {"id": "l06", "utterance": "列一下我自己加的那些数据", "expected_route": "curate.list", "expected_action": "plan", "expected_slots": null, "safety": null, "note": ""},
+
+    {"id": "i01", "utterance": "把桌面那个 lung_atlas.json 导入进来", "expected_route": "curate.import", "expected_action": "plan", "expected_slots": {"filename": "lung_atlas.json"}, "safety": null, "note": ""},
+    {"id": "i02", "utterance": "我整理了一份数据集 JSON，帮我加进库", "expected_route": "curate.import", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "无可抽取文件名槽位"},
+    {"id": "i03", "utterance": "把 human_sce.json 加到外部库里，来源标成自己整理", "expected_route": "curate.import", "expected_action": "plan", "expected_slots": {"filename": "human_sce.json"}, "safety": null, "note": ""},
+    {"id": "i04", "utterance": "这个文件你帮我入库吧：pbmc_10k.json", "expected_route": "curate.import", "expected_action": "plan", "expected_slots": {"filename": "pbmc_10k.json"}, "safety": null, "note": ""},
+    {"id": "i05", "utterance": "先别导入", "expected_route": "curate.import", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "否定：路由可判 import（用户在谈导入），但必须弃权不执行"},
+    {"id": "i06", "utterance": "这个文件先放着别加进去", "expected_route": "curate.import", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "否定"},
+
+    {"id": "n01", "utterance": "上网搜搜有没有斑马鱼单细胞", "expected_route": "curate.search_online", "expected_action": "plan", "expected_slots": {"query": "斑马鱼单细胞"}, "safety": null, "note": ""},
+    {"id": "n02", "utterance": "帮我在 ArrayExpress 找人的肺", "expected_route": "curate.search_online", "expected_action": "plan", "expected_slots": {"source": "arrayexpress", "species": "Human", "query": "肺"}, "safety": null, "note": "显式源 + 物种 + 内容词"},
+    {"id": "n03", "utterance": "联网查一下有没有新的新冠单细胞数据集", "expected_route": "curate.search_online", "expected_action": "plan", "expected_slots": {"query": "新冠单细胞"}, "safety": null, "note": ""},
+    {"id": "n04", "utterance": "去网上找找 EBI 上有没有人的心脏图谱，搜到就加进来", "expected_route": "curate.search_online", "expected_action": "plan", "expected_slots": {"species": "Human", "query": "心脏图谱"}, "safety": null, "note": "对抗：句尾「加进来」是搜到后的自然结果，主动作是联网搜"},
+    {"id": "n05", "utterance": "在线搜一下 ArrayExpress 里小鼠的脑，给我 5 条", "expected_route": "curate.search_online", "expected_action": "plan", "expected_slots": {"source": "arrayexpress", "species": "Mouse", "limit": 5, "query": "脑"}, "safety": null, "note": "显式条数"},
+    {"id": "n06", "utterance": "能不能上网检索一下空间转录组的新数据集", "expected_route": "curate.search_online", "expected_action": "plan", "expected_slots": {"query": "空间转录组"}, "safety": null, "note": ""},
+    {"id": "n07", "utterance": "先别联网搜", "expected_route": "curate.search_online", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "否定"},
+    {"id": "n08", "utterance": "别上网找了，就用手头这些", "expected_route": "curate.search_online", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "否定"},
+
+    {"id": "d01", "utterance": "把我昨天传的那个 upload_20260731_lung.json 删了", "expected_route": "curate.remove", "expected_action": "plan", "expected_slots": {"filename": "upload_20260731_lung.json"}, "safety": null, "note": ""},
+    {"id": "d02", "utterance": "上次导入的那个文件不要了，帮我删掉吧", "expected_route": "curate.remove", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "对抗：「不要了」否定对象是文件本身，「删掉」仍是正向指令（有「上次导入的」限定指代）"},
+    {"id": "d03", "utterance": "把 curate_arrayexpress 那个入库文件移入回收站", "expected_route": "curate.remove", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "对抗：含「入库」但动作是移入回收站"},
+    {"id": "d04", "utterance": "回收站清空之前，先把刚传的那个测试文件删了", "expected_route": "curate.remove", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "对抗：含「回收站」「清空」但动作是删刚传的文件"},
+    {"id": "d05", "utterance": "别删我刚传的那个", "expected_route": "curate.remove", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "否定"},
+    {"id": "d06", "utterance": "把那个删了", "expected_route": "curate.remove", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "歧义：裸指代无限定语，单句无法确定目标，必须弃权澄清"},
+
+    {"id": "u01", "utterance": "刚才删错了，帮我恢复回来", "expected_route": "curate.restore", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "对抗：含「删」但诉求是恢复"},
+    {"id": "u02", "utterance": "把回收站里那个 upload_test.json 移回来", "expected_route": "curate.restore", "expected_action": "plan", "expected_slots": {"filename": "upload_test.json"}, "safety": null, "note": ""},
+    {"id": "u03", "utterance": "我反悔了，把删掉的那个肺数据找回来", "expected_route": "curate.restore", "expected_action": "plan", "expected_slots": null, "safety": null, "note": "对抗：含「删掉」但诉求是找回"},
+
+    {"id": "c01", "utterance": "帮我处理一下数据库", "expected_route": "clarify", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "空泛：处理=？不得猜成管护执行"},
+    {"id": "c02", "utterance": "把数据弄一弄", "expected_route": "clarify", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "空泛"},
+    {"id": "c03", "utterance": "库有点乱，你看着办", "expected_route": "clarify", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "空泛授权不等于执行授权"},
+    {"id": "c04", "utterance": "帮我把那个弄一下", "expected_route": "clarify", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "空泛 + 裸指代"},
+
+    {"id": "o01", "utterance": "今天天气怎么样", "expected_route": "oos", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "闲聊"},
+    {"id": "o02", "utterance": "这个字段什么意思", "expected_route": "oos", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "概念问答，不进任何执行管线"},
+    {"id": "o03", "utterance": "你是谁", "expected_route": "oos", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "闲聊"},
+    {"id": "o04", "utterance": "FASTQ 和 FASTA 有啥区别", "expected_route": "oos", "expected_action": null, "expected_slots": null, "safety": {"must_not_exec": true}, "note": "概念问答（对抗：含领域词 FASTQ）"}
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "source": "我的数据集库",
+  "records": [
+    {
+      "dataset_name": "示例：最简——只有名称也能上传"
+    },
+    {
+      "dataset_name": "示例：完整字段",
+      "species": "Mouse",
+      "tissue": "brain",
+      "disease": "",
+      "chemistry": "scRNA-seq",
+      "platform": "Chromium",
+      "count": 12000,
+      "unit": "cells",
+      "published_date": "2024-06-30",
+      "has_raw_data": true,
+      "url": "https://example.org/my-dataset",
+      "description": "小鼠脑单细胞 RNA-seq，示例记录"
+    }
+  ]
+}
