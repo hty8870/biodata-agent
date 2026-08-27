@@ -1,0 +1,76 @@
+{
+  "_comment": {
+    "name": "eval_queries_dev",
+    "version": "2026-08-06",
+    "purpose": "dev 集：修复 holdout 集暴露的措辞盲区所用的**开发/调参集**。主集 eval/eval_queries.json（54 条）仍是唯一发布门；holdout 只用一次、不据其回改；本 dev 集是允许反复跑、据以修解析器的集子。",
+    "design": "现象×条数：否定后缀句 8（dv01-dv08：「X的不要」「X的就不用给了」「别带X」+ 既有前缀形对照）、「或」句式 6（dv09-dv14，含「哪个都行」口语收尾与否定侧或）、fastq 口语 8（dv15-dv22：「有fastq吗」「能下到」「得含」「里头有」+ 已覆盖形对照）、V(D)J 5（dv23-dv27：VDJ/TCR/免疫受体库/免疫组库）、非人模式生物 6（dv28-dv33：玉米/maize/斑马鱼/果蝇/拟南芥/玉米或拟南芥）、亚型辨析 6（dv34-dv39：霍奇金 vs 小淋巴细胞淋巴瘤、急髓 vs 急淋、泛称对照）、典型正常用例对照 10（dv40-dv49）、no_result 5（dv50-dv54）、「原位检测」措辞 1（dv55）。合计 55 条。",
+    "annotation_convention": "与主集/holdout 同一裁判口径：must_match/must_not_match 键 ∈ {species,tissue,disease,technology,platform,assay,modality,has_raw_data}；值为字符串或数组（数组=「或」）；归一化后字段大小写不敏感子串判定；has_raw_data 必须 bool 精确；no_result_expected=true 表示库中确实不该有。每条 _note 记录 2026-08-06 在 database/base/10x-Visium.json（774 条）上用评测裁判同一套判定数出的支撑数（含 must_not_match 负向），--validate 零问题。",
+    "relationship_to_holdout": "dv03/dv05/dv07/dv10/dv18/dv19/dv25/dv28/dv34 分别对应 holdout 未命中病例 h41/h37/h38/h39/h49/h50/h31/h34/h20 的**句型**（措辞重写、不逐字照抄）；dv55 对应 h28「原位检测」句型；其余为同族变体或对照。",
+    "author": "BioData Agent developers, 2026-08-06",
+    "counts": {"negation": 8, "disjunction": 6, "fastq": 8, "technology_vdj": 5, "species": 6, "disease_subtype": 6, "combination_control": 10, "no_result_expected": 5, "technology_in_situ_wording": 1, "total": 55}
+  },
+  "queries": [
+    {"id": "dv01", "category": "negation", "query": "人类的数据，不要肿瘤的", "must_match": {"species": "human"}, "must_not_match": {"disease": ["cancer", "carcinoma"]}, "nice_to_have": {}, "_note": "support=442；既有前缀否定形（对照）"},
+    {"id": "dv02", "category": "negation", "query": "排除肝癌数据", "must_match": {}, "must_not_match": {"disease": ["hepatocellular", "liver cancer"]}, "nice_to_have": {}, "_note": "support=773；纯排除句（对照，当前已可执行）"},
+    {"id": "dv03", "category": "negation", "query": "人的血液样本，淋巴瘤的不要", "must_match": {"species": "human", "tissue": "blood"}, "must_not_match": {"disease": "lymphoma"}, "nice_to_have": {}, "_note": "support=224；否定后缀「X的不要」（h41 句型）"},
+    {"id": "dv04", "category": "negation", "query": "人类肾脏数据，肿瘤的不要", "must_match": {"species": "human", "tissue": "kidney"}, "must_not_match": {"disease": ["cancer", "carcinoma"]}, "nice_to_have": {}, "_note": "support=55；否定后缀「X的不要」变体（人+肺 support=0 故换肾）"},
+    {"id": "dv05", "category": "negation", "query": "找人的数据，小鼠的就不用给了", "must_match": {"species": "human"}, "must_not_match": {"species": "mouse"}, "nice_to_have": {}, "_note": "support=497；否定后缀「X的就不用给了」（h37 句型）"},
+    {"id": "dv06", "category": "negation", "query": "脑组织数据，小鼠的就不用给了", "must_match": {"tissue": "brain"}, "must_not_match": {"species": "mouse"}, "nice_to_have": {}, "_note": "support=22；同上句型换组织"},
+    {"id": "dv07", "category": "negation", "query": "人体数据都行，就是别带脑组织的", "must_match": {"species": "human"}, "must_not_match": {"tissue": "brain"}, "nice_to_have": {}, "_note": "support=559；「别带X」口语否定（h38 句型）"},
+    {"id": "dv08", "category": "negation", "query": "人类数据，别带小鼠的", "must_match": {"species": "human"}, "must_not_match": {"species": "mouse"}, "nice_to_have": {}, "_note": "support=497；「别带X」变体（物种）"},
+
+    {"id": "dv09", "category": "disjunction", "query": "肺癌或乳腺癌的数据", "must_match": {"disease": ["lung cancer", "non-small cell lung", "breast cancer", "invasive ductal carcinoma", "ductal carcinoma"]}, "nice_to_have": {}, "_note": "support=65；同维「或」（对照，adv06 同族）"},
+    {"id": "dv10", "category": "disjunction", "query": "斑马鱼或者果蝇，哪个都行", "must_match": {"species": ["zebrafish", "drosophila"]}, "nice_to_have": {}, "_note": "support=5；「或者…哪个都行」口语收尾（h39 句型）"},
+    {"id": "dv11", "category": "disjunction", "query": "大鼠或小鼠的脾脏数据", "must_match": {"species": ["mouse", "rat", "norvegicus"], "tissue": "spleen"}, "nice_to_have": {}, "_note": "support=14；「或」+组织"},
+    {"id": "dv12", "category": "disjunction", "query": "不要小鼠或大鼠的人类数据", "must_match": {"species": "human"}, "must_not_match": {"species": ["mouse", "rat", "norvegicus"]}, "nice_to_have": {}, "_note": "support=497；否定侧「或」（¬(A∨B)=¬A∧¬B，对照）"},
+    {"id": "dv13", "category": "disjunction", "query": "人或小鼠的脑数据", "must_match": {"species": ["human", "mouse"], "tissue": "brain"}, "nice_to_have": {}, "_note": "support=114；adv05 同族对照"},
+    {"id": "dv14", "category": "disjunction", "query": "黑色素瘤或肺癌的数据", "must_match": {"disease": ["melanoma", "lung cancer", "non-small cell lung"]}, "nice_to_have": {}, "_note": "support=46；疾病「或」变体"},
+
+    {"id": "dv15", "category": "fastq", "query": "有 fastq 吗", "must_match": {"has_raw_data": true}, "nice_to_have": {}, "_note": "support=620；裸 fastq 口语问句"},
+    {"id": "dv16", "category": "fastq", "query": "人类肺数据能下到原始数据吗", "must_match": {"species": "human", "tissue": "lung", "has_raw_data": true}, "nice_to_have": {}, "_note": "support=21；「能下到…吗」口语"},
+    {"id": "dv17", "category": "fastq", "query": "带原始测序数据的小鼠肾脏数据", "must_match": {"species": "mouse", "tissue": "kidney", "has_raw_data": true}, "nice_to_have": {}, "_note": "support=56；「带原始测序数据的」（对照，当前已可执行）"},
+    {"id": "dv18", "category": "fastq", "query": "小鼠肾脏数据，得含原始测序数据（fastq）", "must_match": {"species": "mouse", "tissue": "kidney", "has_raw_data": true}, "nice_to_have": {}, "_note": "support=56；「得含…（fastq）」（h49 句型）"},
+    {"id": "dv19", "category": "fastq", "query": "Visium 里头有 FASTQ 原始文件的数据集", "must_match": {"technology": "visium", "has_raw_data": true}, "nice_to_have": {}, "_note": "support=111；「里头有…原始文件」（h50 句型）"},
+    {"id": "dv20", "category": "fastq", "query": "人脑的数据，要带原始 FASTQ 文件的那种", "must_match": {"species": "human", "tissue": "brain", "has_raw_data": true}, "nice_to_have": {}, "_note": "support=13；h48 对照（当前已可执行）"},
+    {"id": "dv21", "category": "fastq", "query": "可以重新跑流程的乳腺癌数据", "must_match": {"disease": ["breast cancer", "invasive ductal carcinoma", "ductal carcinoma"], "has_raw_data": true}, "nice_to_have": {}, "_note": "support=30；fq02 对照（当前已可执行）"},
+    {"id": "dv22", "category": "fastq", "query": "有没有 fastq 的人类肺数据", "must_match": {"species": "human", "tissue": "lung", "has_raw_data": true}, "nice_to_have": {}, "_note": "support=21；存在性问句+fastq（对照）"},
+
+    {"id": "dv23", "category": "technology", "query": "VDJ 数据", "must_match": {"technology": "v(d)j"}, "nice_to_have": {}, "_note": "support=12；库内 chemistry 写作 V(D)J（Chromium … V(D)J v1.1 等 12 条）"},
+    {"id": "dv24", "category": "technology", "query": "TCR 测序的数据", "must_match": {"technology": "v(d)j"}, "nice_to_have": {}, "_note": "support=12；TCR 测序=10x V(D)J 化学"},
+    {"id": "dv25", "category": "technology", "query": "V(D)J 免疫受体库的数据", "must_match": {"technology": "v(d)j"}, "nice_to_have": {}, "_note": "support=12；带括号大写形+「免疫受体库」（h31 句型）"},
+    {"id": "dv26", "category": "technology", "query": "免疫组库数据", "must_match": {"technology": "v(d)j"}, "nice_to_have": {}, "_note": "support=12；既有别名对照（修复前 target=immune 在 base 零命中）"},
+    {"id": "dv27", "category": "technology", "query": "小鼠的 V(D)J 数据", "must_match": {"species": "mouse", "technology": "v(d)j"}, "nice_to_have": {}, "_note": "support=3；物种+V(D)J 组合"},
+    {"id": "dv55", "category": "technology", "query": "Xenium 原位检测的数据有没有", "must_match": {"technology": "xenium"}, "nice_to_have": {}, "_note": "support=43（platform+chemistry 子串 xenium，2026-08-06 实测）；h28 句型：「原位」落维后「检测」曾触发 unresolved_term 弃权"},
+
+    {"id": "dv28", "category": "species", "query": "玉米的数据也能查到吗", "must_match": {"species": "maize"}, "nice_to_have": {}, "_note": "support=2（species='Maize'）；「玉米」中文名（h34 句型）"},
+    {"id": "dv29", "category": "species", "query": "maize 的数据", "must_match": {"species": "maize"}, "nice_to_have": {}, "_note": "support=2；英文名"},
+    {"id": "dv30", "category": "species", "query": "斑马鱼相关数据", "must_match": {"species": "zebrafish"}, "nice_to_have": {}, "_note": "support=3；sp03 对照"},
+    {"id": "dv31", "category": "species", "query": "果蝇的有没有", "must_match": {"species": "drosophila"}, "nice_to_have": {}, "_note": "support=2；对照"},
+    {"id": "dv32", "category": "species", "query": "拟南芥的数据有没有", "must_match": {"species": "arabidopsis"}, "nice_to_have": {}, "_note": "support=1（species='Arabidopsis thaliana'）；对照"},
+    {"id": "dv33", "category": "species", "query": "玉米或拟南芥的数据", "must_match": {"species": ["maize", "arabidopsis"]}, "nice_to_have": {}, "_note": "support=3；模式生物+「或」组合"},
+
+    {"id": "dv34", "category": "disease", "query": "霍奇金淋巴瘤的数据", "must_match": {"disease": "hodgkin"}, "nice_to_have": {}, "_note": "support=7（均为 Hodgkin's Lymphoma）；h20 病灶：修复前泛化到 lymphoma，rank-1 被 small lymphocytic lymphoma 抢走"},
+    {"id": "dv35", "category": "disease", "query": "小淋巴细胞淋巴瘤的数据", "must_match": {"disease": "small lymphocytic"}, "nice_to_have": {}, "_note": "support=2；霍奇金的镜像亚型（非霍奇金系）"},
+    {"id": "dv36", "category": "disease", "query": "淋巴瘤的数据集", "must_match": {"disease": "lymphoma"}, "nice_to_have": {}, "_note": "support=46；泛称对照（di02 同族）"},
+    {"id": "dv37", "category": "disease", "query": "急性髓系白血病的数据", "must_match": {"disease": "acute myeloid"}, "nice_to_have": {}, "_note": "support=4（Acute myeloid leukemia (AML)）；急髓"},
+    {"id": "dv38", "category": "disease", "query": "急性淋巴细胞白血病数据", "must_match": {"disease": "acute lymphoid"}, "nice_to_have": {}, "_note": "support=1（acute lymphoid leukemia）；急淋"},
+    {"id": "dv39", "category": "disease", "query": "白血病数据", "must_match": {"disease": "leukemia"}, "nice_to_have": {}, "_note": "support=15；泛称对照（di07 同族）"},
+
+    {"id": "dv40", "category": "combination", "query": "人类乳腺癌数据", "must_match": {"species": "human", "disease": ["breast cancer", "invasive ductal carcinoma", "ductal carcinoma"]}, "nice_to_have": {}, "_note": "support=43；正常对照"},
+    {"id": "dv41", "category": "combination", "query": "小鼠脑的空间转录组数据", "must_match": {"species": "mouse", "tissue": "brain", "technology": "visium"}, "nice_to_have": {}, "_note": "support=41；正常对照"},
+    {"id": "dv42", "category": "combination", "query": "人脑组织的数据", "must_match": {"species": "human", "tissue": "brain"}, "nice_to_have": {}, "_note": "support=22；正常对照"},
+    {"id": "dv43", "category": "combination", "query": "黑色素瘤数据", "must_match": {"disease": "melanoma"}, "nice_to_have": {}, "_note": "support=21；正常对照"},
+    {"id": "dv44", "category": "combination", "query": "Visium 空间转录组数据", "must_match": {"technology": "visium"}, "nice_to_have": {}, "_note": "support=147；正常对照"},
+    {"id": "dv45", "category": "combination", "query": "小鼠肾脏数据", "must_match": {"species": "mouse", "tissue": "kidney"}, "nice_to_have": {}, "_note": "support=57；正常对照"},
+    {"id": "dv46", "category": "combination", "query": "人类血液的单细胞数据", "must_match": {"species": "human", "tissue": "blood", "modality": "single-cell"}, "nice_to_have": {}, "_note": "support=261；正常对照"},
+    {"id": "dv47", "category": "combination", "query": "人类卵巢癌数据", "must_match": {"species": "human", "disease": "ovarian"}, "nice_to_have": {}, "_note": "support=9；正常对照"},
+    {"id": "dv48", "category": "combination", "query": "肾脏数据集", "must_match": {"tissue": "kidney"}, "nice_to_have": {}, "_note": "support=75；正常对照"},
+    {"id": "dv49", "category": "combination", "query": "人类黑色素瘤的 Xenium 数据", "must_match": {"species": "human", "disease": "melanoma", "technology": "xenium"}, "nice_to_have": {}, "_note": "support=3；正常对照（三维组合）"},
+
+    {"id": "dv50", "category": "no_result_expected", "query": "大象的单细胞数据", "must_match": {"species": "elephant", "modality": "single-cell"}, "nice_to_have": {}, "no_result_expected": true, "_note": "support=0：库内无 elephant（nr03 同族对照）"},
+    {"id": "dv51", "category": "no_result_expected", "query": "水稻的数据有吗", "must_match": {"species": "oryza"}, "nice_to_have": {}, "no_result_expected": true, "_note": "support=0：词表已收水稻（外部库有），base 无 → 正确无结果"},
+    {"id": "dv52", "category": "no_result_expected", "query": "鸡的脑组织数据有没有", "must_match": {"species": "chicken", "tissue": "brain"}, "nice_to_have": {}, "no_result_expected": true, "_note": "support=0：库内无 chicken"},
+    {"id": "dv53", "category": "no_result_expected", "query": "猪的心脏数据", "must_match": {"species": "pig", "tissue": "heart"}, "nice_to_have": {}, "no_result_expected": true, "_note": "support=0：库内无 pig"},
+    {"id": "dv54", "category": "no_result_expected", "query": "新冠患者的肺数据", "must_match": {"disease": "covid", "tissue": "lung"}, "nice_to_have": {}, "no_result_expected": true, "_note": "support=0：base 无 covid（外部库有）"}
+  ]
+}

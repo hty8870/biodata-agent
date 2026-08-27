@@ -1,0 +1,4533 @@
+{
+ "source": "NCBI GEO",
+ "source_url": "https://www.ncbi.nlm.nih.gov/geo/",
+ "note": "离线快照·外部平台库候选（opt-in），不并入官方评测语料。T35 缓存抢救产物：60 条 GEO Series 全部字段逐条对照 T09 缓存的官方 ESummary 原文核验；仅身份/物种/发布日期/描述/PubMed id 有原文直接支撑，其余字段无证据恒为 null。平台/化学/10x 对齐无任何已核验声明（T09 人工复核 8/8 抽查注解不可靠）；has_raw_data 因官方 ELink 传输失败保持 null（未知，非无）。样本为 T09 固定最老 accession 试点，存在年代偏倚，非代表性样本。",
+ "record_count": 60,
+ "records": [
+  {
+   "dataset_uid": "geo:GSE3642",
+   "dataset_name": "Single-cell aneuploidy detection by array CGH",
+   "source": "NCBI GEO",
+   "public_accession": "GSE3642",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": "Aneuploidy",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2006-02-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE3642",
+   "download_url": null,
+   "description": "In this study, we extend array CGH technology by making the accurate detection of chromosomal imbalances possible from a single fibroblast and blastomere following Phi29 DNA polymerase amplification. Keywords: CGH",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200003642",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 29,
+    "pubmed_ids": [
+     "16698960"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease"
+     ],
+     "displays": {
+      "disease": [
+       "Aneuploidy"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE4244",
+   "dataset_name": "Single-cell chromosomal imbalances detection by array CGH",
+   "source": "NCBI GEO",
+   "public_accession": "GSE4244",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2006-02-16",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE4244",
+   "download_url": null,
+   "description": "In this study, we extend array CGH technology by making the accurate detection of segmental aneusomies possible from a single lymphoblast and fibroblast following Phi29 DNA polymerase amplification Keywords: array CGH, aCGH",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200004244",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 9,
+    "pubmed_ids": [
+     "16698960"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE4307",
+   "dataset_name": "Expression data from single cells from ICMs of mouse blastocysts at E3.5",
+   "source": "NCBI GEO",
+   "public_accession": "GSE4307",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2006-04-26",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE4307",
+   "download_url": null,
+   "description": "The inner cell mass (ICM) of the early blastocyst at E3.5, a source of ES cell derivation, is a morphologically homogeneous population of undifferentiated pluripotent cells that give rise to all embryonic lineages. The immediate application of the newly developed V1V3 method to single cells in this stage of mouse embryos revealed the presence of two populations of cells, one with primitive endoderm expression and the other with pluripotent epiblast-like gene expression. The genes expressed differentially between these two populations were well preserved in morphologically differentiated primitive endoderm and epiblast in the embryos one day later (E4.5), demonstrating that the method successfully detects subtle but essential differences in gene expression at the single-cell level among seemingly homogeneous cell populations. This study provides a strategy to analyze biophysical events in medicine as well as in neural, stem cell, and developmental biology, where small numbers of distinctive or diseased cells play critical roles. Keywords: Single cell analysis",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200004307",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 20,
+    "pubmed_ids": [
+     "16547197"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE4858",
+   "dataset_name": "Single cell expression profiling of human epidermal stem and transit amplifying cells",
+   "source": "NCBI GEO",
+   "public_accession": "GSE4858",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Skin",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2006-08-04",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE4858",
+   "download_url": null,
+   "description": "To explore which signaling pathways are of importance in maintenance of human epidermal keratinocytes we have established a protocol which allows single cell expression profiling. The protocol was applied to cultured human epidermal keratinocytes, and single cell cDNA libraries from stem and transit amplifying cells were identified based on the expression of known SC markers, MCSP and Dll1. We used microarrays to obtain expression profiles from single cells and identify common denominators that could be important for maintenance and signalling in epidermal stem cells. Keywords: Timecourse",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200004858",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 24,
+    "pubmed_ids": [
+     "16877544"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Skin"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE6941",
+   "dataset_name": "Integrating whole transcriptome assays on a lab-on-a-chip for single cell gene profiling",
+   "source": "NCBI GEO",
+   "public_accession": "GSE6941",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2008-02-15",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE6941",
+   "download_url": null,
+   "description": "To correlate gene expression profiles to fundamental biological processes such as cell growth, differentiation and migration, it is essential to work at the single cell level. Gene expression analysis always starts with the relatively low efficient reverse transcription (RT) of RNA into complementary DNA (cDNA), an essential step as unprocessed RNAs will not be analyzed further. In this paper, we present a novel method for RT that uses microfluidics to manipulate nanoliter volumes. We compare our method to conventional protocols performed in microliter volumes. More specifically, reverse transcription was performed either in a poly-dimethylsiloxane (PDMS) rotary mixer or in a tube, using single cell amount of mouse brain RNA (10 pg), and was followed by a template-switching PCR (TS-PCR) amplification step. We demonstrate that, using the microfluidic protocol, 74% of the genes expressed in mouse brain were detected, while only 4% were found with the conventional approach. We next profiled single neuronal progenitors. Using our microfluidic approach, i.e. performing cell capture, lysis and reverse transcription on-chip followed by TS-PCR amplification in tube, a mean of 5000 genes were detected in each neuron, which corresponds to the expected number of genes expressed in a single cell. This demonstrates the outstanding sensitivity of the microfluidic method. Keywords: Single cell, transcriptome, PDMS, microfluidic, reverse-transcription (RT), template-switching, lab-on-a-chip",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200006941",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 16,
+    "pubmed_ids": [
+     "18305863"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE8567",
+   "dataset_name": "SNPchip analysis of single cell products",
+   "source": "NCBI GEO",
+   "public_accession": "GSE8567",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Brain",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2007-12-20",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE8567",
+   "download_url": null,
+   "description": "Single-cell human genome analysis using whole-genome amplified product is hampered by allele bias during amplification. Using an oligonucleotide SNP array, we examined the nature of the allele bias and its effect on the chromosomal copy number analysis. Keywords: single cell, copy number analysis, whole genome amplification, brain",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200008567",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 17,
+    "pubmed_ids": [
+     "18074030"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE9812",
+   "dataset_name": "Molecular heterogeneity of developing retinal ganglion and amacrine cells",
+   "source": "NCBI GEO",
+   "public_accession": "GSE9812",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Retina",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2007-12-31",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE9812",
+   "download_url": null,
+   "description": "During development of the central nervous system (CNS), cycling uncommitted progenitor cells give rise to a variety of distinct neuronal and glial cell types. As these different cell types are born, they progress from newly specified cells to fully differentiated neurons and glia. In order to define the developmental processes of individual cell types, single cell expression profiling was carried out on developing ganglion and amacrine cells of the murine retina. Individual cells from multiple developmental stages were isolated and profiled on Affymetrix oligonucleotide arrays. These experiments have yielded an expanded view of the processes underway in developing retinal ganglion and amacrine cells, as well as several hundred new marker genes for these cell types. In addition, this study has allowed for the definition of some of the molecular heterogeneity both between developing ganglion and amacrine cells and among subclasses of each cell type. Keywords: Single retinal cell gene expression profiling across multiple mouse developmental stages",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200009812",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 22,
+    "pubmed_ids": [
+     "17444492",
+     "19470466"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Retina"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE10881",
+   "dataset_name": "Properties of mammalian neural progenitor cells as revealed by genome-wide single cell gene expression profiles",
+   "source": "NCBI GEO",
+   "public_accession": "GSE10881",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain, Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2008-08-08",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE10881",
+   "download_url": null,
+   "description": "Cellular diversity of the brain is largely attributed to the spatial and temporal heterogeneity of progenitor cells. In mammalian cerebral development, it has been difficult to determine how neural progenitor cells are heterogeneous, due to their dynamic changes in nuclear position and gene expression. To address this issue, we systematically analyzed the cDNA profiles of a large number of single progenitor cells at the mid-embryonic stage. Keywords: single cell analysis",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200010881",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 70,
+    "pubmed_ids": [
+     "18725516",
+     "28879493"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain",
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE11128",
+   "dataset_name": "Expression data from single cells from mouse primordial germ cell lineage (E6.25-E8.25, wild type and Blimp1KO)",
+   "source": "NCBI GEO",
+   "public_accession": "GSE11128",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2008-08-22",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE11128",
+   "download_url": null,
+   "description": "Specification of germ cell fate is fundamental in development. With a highly representative single-cell microarray and rigorous quantitative-PCR analysis, we defined the genome-wide transcription dynamics that create primordial germ cells (PGCs) from the epiblast, a process that exclusively segregates them from their somatic neighbors. We also analyzed the effect of the loss of Blimp1, a key transcriptional regulator, on these dynamics. Our analysis revealed that PGC specification involves complex, yet highly ordered regulation of a large number of genes, proceeding under the strong influence of mesoderm induction with active repression of specific programs such as epithelial-mesenchymal transition, Hox gene activation, cell-cycle progression and DNA methyltransferase machinery. Remarkably, Blimp1 is essential for repressing nearly all the genes normally down-regulated in PGCs relative to their somatic neighbors, whereas it is dispensable for the activation of approximately half of the genes up-regulated in PGCs. Keywords: single cell analysis, time course, Blimp1 knocked out",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200011128",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 106,
+    "pubmed_ids": [
+     "18559478"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE12601",
+   "dataset_name": "Development and Diversification of Retinal Amacrine Interneurons at Single Cell Resolution",
+   "source": "NCBI GEO",
+   "public_accession": "GSE12601",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain, Retina",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2009-06-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12601",
+   "download_url": null,
+   "description": "The vertebrate retina uses diverse neuronal cell types arrayed into complex neural circuits to extract, process and relay information from the visual scene to the higher order processing centers of the brain. Amacrine cells, a diverse class of inhibitory interneurons, are thought to mediate the majority of the processing of the visual signal that occurs within the retina. Despite morphological characterization, the number of known molecular markers of amacrine cell types is still much smaller than the 26 morphological types that have been identified. Furthermore, it is not known how this diversity arises during development. Here, we have combined in vivo genetic labeling and single cell genome-wide expression profiling to: 1) Identify specific molecular types of amacrine cells; 2) Demonstrate the molecular diversity of the amacrine cell class.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200012601",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 26,
+    "pubmed_ids": [
+     "19470466"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain",
+       "Retina"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE14605",
+   "dataset_name": "mRNA-Seq Whole Transcriptome Analysis of a Single Cell",
+   "source": "NCBI GEO",
+   "public_accession": "GSE14605",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2009-02-23",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE14605",
+   "download_url": null,
+   "description": "Here we modified a single cell whole transcriptome amplification method to make it capable of amplifying cDNAs as long as 3kb efficiently and unbiasedly. We combined this modified single cell cDNA amplification method with Applied Biosystems next generation sequencing SOLiD™ System to set up a single cell whole transcriptome assay. The modified amplification strategy allows us to amplify full-length cDNAs for most of the expressed genes. We show that it is feasible to get digital gene expression profiles at single cell resolution. This allows us to ask fundamental biological questions that could not be addressed previously, especially in the early embryonic development field, and to understand transcriptome complexity at the resolution of a single cell.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200014605",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 6,
+    "pubmed_ids": [
+     "19349980"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE15556",
+   "dataset_name": "Systematic and single cell analysis of Xenopus Piwi-interacting RNAs and Xiwi",
+   "source": "NCBI GEO",
+   "public_accession": "GSE15556",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Xenopus laevis; Xenopus tropicalis",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2009-09-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE15556",
+   "download_url": null,
+   "description": "Various small RNA libraries from purified microtubules or Xiwi immunoprecipitates or total extract from X.tropicalis or X.laevis egg extract. Various small RNA libraries from single X.tropicalis eggs. Analysis of this series of files is described in the manuscript \"Systematic and single cell analysis of Xenopus Piwi-interacting RNAs and Xiwi\".",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200015556",
+    "source_taxon": "Xenopus laevis; Xenopus tropicalis",
+    "source_n_samples": 11,
+    "pubmed_ids": [
+     "19713941"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon (verbatim)",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE17318",
+   "dataset_name": "Genome-wide haplotyping of human single cells",
+   "source": "NCBI GEO",
+   "public_accession": "GSE17318",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2012-10-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE17318",
+   "download_url": null,
+   "description": "A method to infer genome-wide haplotypes from the analysis of one or two single (human) cells has tremendous applicative value. It would revolutionize not only preimplantation genetic diagnosis of in vitro fertilized human embryos in the clinic, but also animal breeding programs by enabling genome-wide quantitative trait loci selection at the embryonic level. In addition, it allows to further scrutinize drivers of haplotype diversity, mainly meiotic homologous recombination as well as somatic (homologous) recombination processes that occur often during (human) tumorigenesis. We developed a generic approach to type genome-wide single nucleotide polymorphisms in single human cells and to reconstruct genome-wide haplotypes of single or dual cell derived genotypes. Genome-wide sequences of syntenic alleles were determined for EBV-transformed lymphoblastoid cells as well as human blastomeres. To this end, multiple displacement amplified DNA samples of single cells were hybridized to Affymetrix 250K SNP-arrays. Different algorithmic designs were subsequently developed to assess from the single cell-derived SNP-probe intensities the sequence of syntenic alleles and to pinpoint accurately the majority of parental homologous recombination sites using a linkage-based approach.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200017318",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 34,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE18617",
+   "dataset_name": "Single-cell gene expression data from Bergmann glial cells of mouse cerebellum",
+   "source": "NCBI GEO",
+   "public_accession": "GSE18617",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Cerebellum",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2010-02-12",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE18617",
+   "download_url": null,
+   "description": "Bergmann glial cells of the vertebrate cerebellum play essential roles in the development and maintenance of cerebellar structure and function. During development, Bergmann glia provide structural support to the expanding cerebellar anlage and also serve as guides for migrating neurons (granule cells). As the cerebellum matures, Bergmann glia become important in dendritic arborization, synapse maintenance and synaptic function. The molecular mechanisms underlying these diverse and important functions of Bergmann glia remain largely unknown. We used microarray analysis to examine global gene expression in individual Bergmann glial cells derived at P6 (a time of extensive neuronal migration and cerebellar growth) and at P30 (when cerebellar development is complete and Bergmann glia play important roles at synapses).",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200018617",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 10,
+    "pubmed_ids": [
+     "20169146"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Cerebellum"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE19142",
+   "dataset_name": "Single cell analysis of the Common Lymphoid Progenitor compartment reveals functional and molecular heterogeneity",
+   "source": "NCBI GEO",
+   "public_accession": "GSE19142",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2009-11-24",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE19142",
+   "download_url": null,
+   "description": "In order to investigate molecular events involved in the regulation of lymphoid lineage commitment, we crossed lamda5 reporter transgenic mice to mice where the GFP gene is inserted into the Rag1 locus. This allowed us to sub-fractionate common lymphoid progenitors (CLPs) and pre-pro-B cells into lamda5-Rag1low, lamda5-Rag1high and lamda5+Rag1high cells. Clonal in vitro differentiation analysis demonstrated that Rag1low cells gave rise to B/T and NK cells. Rag1high cells displayed reduced NK-cell potential with preserved capacity to generate B- and T-lineage cells while the lamda5+ cells were B-lineage restricted. Ebf1 and Pax5 expression was largely confined to the Rag1high populations. These cells also expressed a higher level of the surface protein LY6D providing an additional tool for the analysis of early lymphoid development. These data suggest that the classical CLP compartment composes a mixture of cells with more or less restricted lineage potentials opening new possibilities to investigate early hematopoiesis.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200019142",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 4,
+    "pubmed_ids": [
+     "19996414"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE20187",
+   "dataset_name": "Tracing the derivation of embryonic stem cells from the inner cell mass by single cell RNA-seq analysis",
+   "source": "NCBI GEO",
+   "public_accession": "GSE20187",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2010-05-10",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE20187",
+   "download_url": null,
+   "description": "Here we modified a single cell whole transcriptome amplification method to make it capable of amplifying cDNAs as long as 3kb efficiently and unbiasedly. We combined this modified single cell cDNA amplification method with Applied Biosystems next generation sequencing SOLiD™ System to set up a single cell whole transcriptome assay. The modified amplification strategy allows us to amplify full-length cDNAs for most of the expressed genes. We show that it is feasible to get digital gene expression profiles at single cell resolution. This allows us to ask fundamental biological questions that could not be addressed previously, especially in the embyronic stem cell studues , and to understand transcriptome complexity at the resolution of a single cell. Four-cell stage embryos were recovered from MF1 females mated with MF1 male mice (Nagy et al. 2003). The zona pellucida was removed by treatment with acidic tyrode solution. The individual blastomeres were separated by gentle pipeting using a glass capillary. Mature oocytes were isolated from Dicer knockout [Dicer-/Flox, Zp3-Cre] and Ago2 knockout [Ago2-/Flox, Zp3-Cre] female mice (14,17). Cumulus cells were removed from oocytes by treatment with hyaluronidase. All the ‘mature oocytes’ mentioned in the text are ovulated mature oocytes.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200020187",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 34,
+    "pubmed_ids": [
+     "20452321"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE21180",
+   "dataset_name": "Characterization of the single-cell transcriptional landscape by highly multiplex RNA-Seq",
+   "source": "NCBI GEO",
+   "public_accession": "GSE21180",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2010-09-21",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE21180",
+   "download_url": null,
+   "description": "Our understanding of the development and maintenance of tissues has been greatly aided by large-scale gene expression analysis. However, tissues are invariably complex, and expression analysis of a tissue confounds the true expression patterns of its constitutent cell types. Here we propose a novel strategy to access such complex samples. Hundreds of single-cell RNA-Seq expression profiles were generated, and clustered to form a two-dimensional cell map onto which expression data was projected. The resulting cell map integrates three levels of organization: the whole population of cells, the functionally distinct subpopulations it contains, and the single cells themselves—all without need for known markers to classify cell types. The feasibility of the strategy is demonstrated by analyzing the complete transcriptomes of 436 single cells of three distinct types. We believe this strategy will enable the unbiased discovery and analysis of naturally occurring cell types during development, adult physiology and disease.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200021180",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 5,
+    "pubmed_ids": [
+     "21543516"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE22032",
+   "dataset_name": "Defining Cell Fate And Embryonic Genome Activation By Global Single-Cell cDNA Analysis of Blastomeres From 5-to 8-Cell Human Embryos.",
+   "source": "NCBI GEO",
+   "public_accession": "GSE22032",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2010-10-30",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE22032",
+   "download_url": null,
+   "description": "To determine blastomere fate and embryonic genome activation (EGA) at 5- to 8-cell stage human embryos by global gene expression profile of amplified cDNA from blastomeres at the single cell level",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200022032",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 53,
+    "pubmed_ids": [
+     "21049019",
+     "23614026"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE24330",
+   "dataset_name": "Drop-on-demand single cell isolation and total RNA analysis",
+   "source": "NCBI GEO",
+   "public_accession": "GSE24330",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2010-10-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE24330",
+   "download_url": null,
+   "description": "We present a microdroplet-based method to isolate and pattern single cells from heterogeneous cell suspensions (10% target cell mixture), preserve viability of the extracted cells (97.0 ± 0.8%), and obtain genomic information from isolated cells compared to the non-patterned controls.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200024330",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 6,
+    "pubmed_ids": [
+     "21412416"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE24690",
+   "dataset_name": "Single Cell Whole Genome Amplification Technique Impacts the Accuracy of SNP Microarray Based Genotyping and Copy Number Analyses",
+   "source": "NCBI GEO",
+   "public_accession": "GSE24690",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2010-12-20",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE24690",
+   "download_url": null,
+   "description": "Methods of comprehensive microarray based analyses of single cell DNA are rapidly emerging. Whole genome amplification (WGA) remains a critical component for these methods to be successful. A number of commercially available WGA kits have been independently utilized in previous single cell microarray studies. However, direct comparison of their performance on single cells has not been conducted. The present study demonstrates that among previously published methods, a single cell GenomePlex WGA protocol provides the best combination of speed and accuracy for SNP microarray based copy number analysis when compared to a REPLI-g or GenomiPhi based protocol. Alternatively, for applications that do not have constraints on turn-around time and that are directed at accurate genotyping rather than copy number assignments, a REPLI-g based protocol may provide the best solution.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200024690",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 56,
+    "pubmed_ids": [
+     "21177337"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE27892",
+   "dataset_name": "Single-cell copy number varation detection",
+   "source": "NCBI GEO",
+   "public_accession": "GSE27892",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": "Cancer (generic)",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2011-08-24",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE27892",
+   "download_url": null,
+   "description": "Detection of genomic rearrangements from a single cell instead of a population of cells is an emerging research technique with important applications in the study of human fertility, constitutional chromosomal disorders, and tumor progression. Here, we develop a method to improve the detection of single-cell genome-wide copy number variation.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200027892",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 7,
+    "pubmed_ids": [
+     "21854607"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease"
+     ],
+     "displays": {
+      "disease": [
+       "Cancer (generic)"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE28132",
+   "dataset_name": "Affymetrix SNP 6.0 array data for single cell multiple displacement amplification",
+   "source": "NCBI GEO",
+   "public_accession": "GSE28132",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "CNV",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2011-03-25",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE28132",
+   "download_url": null,
+   "description": "Generating sufficient DNA for high-throughput genetic analysis has always been a challenge for clinical settings where the amount of source DNA is limited. Multiple displacement amplification (MDA) has been proposed as a promising candidate for such situations. Previous work with lower-resolution arrays confirmed the utility of single-cell MDA products for large-size (~30 Mb) genome variation screening. We tested the performance of single-cell MDA products on the SNP 6.0 arrays to examine the performance of single-cell MDA in SNP genotyping, copy number polymorphism, de novo copy number variation (CNV) and loss of heterozygosity (LOH) analysis. Our data show that for SNP genotyping, single-cell MDA did not obtain complete genome coverage or high sequence fidelity. For CNV calling, single-cell MDA introduced stochastic amplification artifacts in log2 ratio profiles, reducing the robustness of CNV calling; however, by adjusting smooth window size, it is still possible to analyze large chromosomal aberrations, and homozygous deletions as small as 500 kb can still be identified from the noisy log2 ratio profiles. Our results also suggest that even with a modified protocol (reduction of reaction volume, addition of a molecular crowding reagent, minimization of reaction time), single-cell MDA presented little improvement over the unmodified protocol, but by increasing the number of cells as template to 5–10 cells, SNP 6.0 array results comparable to those of 10 ng genomic DNA MDA could be obtained. Algorithms like PICNIC improved the CNV calling, suggesting that better algorithms can better utilize single-cell MDA array results.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200028132",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 11,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay"
+     ],
+     "displays": {
+      "assay": [
+       "CNV"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE29087",
+   "dataset_name": "Characterization of the single-cell (ES and MEF) transcriptional landscape by highly multiplex RNA-Seq",
+   "source": "NCBI GEO",
+   "public_accession": "GSE29087",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2011-05-25",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE29087",
+   "download_url": null,
+   "description": "Our understanding of the development and maintenance of tissues has been greatly aided by large-scale gene expression analysis. However, tissues are invariably complex, and expression analysis of a tissue confounds the true expression patterns of its constitutent cell types. Here we describe a novel strategy to access such complex samples. Single-cell RNA-Seq expression profiles were generated, and clustered to form a two-dimensional cell map onto which expression data was projected. The resulting cell map integrates three levels of organization: the whole population of cells, the functionally distinct subpopulations it contains, and the single cells themselvesâall without need for known markers to classify cell types. The feasibility of the strategy was demonstrated by analyzing the complete transcriptomes of 92 single cells of two distinct types. We believe this strategy will enable the unbiased discovery and analysis of naturally occurring cell types during development, adult physiology and disease.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200029087",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 96,
+    "pubmed_ids": [
+     "21543516"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE29281",
+   "dataset_name": "Single Cell based genomewide gene expression analysis of murine bone-marrow derived Very Small Embryonic-Like Stem Cells (VSELs)",
+   "source": "NCBI GEO",
+   "public_accession": "GSE29281",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Bone Marrow, Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2011-12-21",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE29281",
+   "download_url": null,
+   "description": "Recently, we identified a population of Oct4+Sca-1+Lin-CD45- very small embryonic-like stem-cells (VSELs) in adult tissues. Open chromatin structure of pluripotency genes and genomic imprinting-related epigenetic mechanisms maintain pluripotency and quiescence of VSELs, respectively. However, global transcriptome signature of this rare stem-cell population remains elusive. Here, we demonstrate by genomewide gene-expression analysis with a small number of highly purified murine bone-marrow (BM)-derived VSELs, that Oct4+ VSELs i) express a similar, yet nonidentical, transcriptome as embryonic stem-cells (ESCs), ii) up-regulate cell-cycle checkpoint genes, iii) down-regulate genes involved in protein turnover and mitogenic pathways, and iv) highly express Ezh2, a polycomb group protein. Furthermore, as a result of Ezh2 overexpression, VSELs, like ESCs, exhibit bivalently modified nucleosomes (trimethylated H3K27 and H3K4) at promoters of important homeodomain-containing developmental transcription factors, thus preventing their premature transcription. Notably, spontaneous or RNA interference-enforced down-regulation of Ezh2 during VSEL differentiation removes the bivalent-domain (BD) structure, which leads to de-repression of several BD-regulated genes. Therefore, we suggest that VSELs, like other pluripotent stem-cells, maintain their pluripotent state through an Ezh2-dependent BD-mediated epigenetic mechanism.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200029281",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 9,
+    "pubmed_ids": [
+     "22023227"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Bone Marrow",
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE31219",
+   "dataset_name": "Single-cell copy number varation detection: blastomeres",
+   "source": "NCBI GEO",
+   "public_accession": "GSE31219",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": "Cancer (generic)",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2011-08-10",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE31219",
+   "download_url": null,
+   "description": "Detection of genomic rearrangements from a single cell instead of a population of cells is an emerging research technique with important applications in the study of human fertility, constitutional chromosomal disorders, and tumor progression. Here, we develop a method to improve the detection of single-cell genome-wide copy number variation. Additional information about the blastomeres can be found in GSE11663.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200031219",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 21,
+    "pubmed_ids": [
+     "21854607"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease"
+     ],
+     "displays": {
+      "disease": [
+       "Cancer (generic)"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE31399",
+   "dataset_name": "Optimized amplification and single-cell analysis identify GnRH-mediated activation of Rap1b in primary rat gonadotropes.",
+   "source": "NCBI GEO",
+   "public_accession": "GSE31399",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Rattus norvegicus",
+   "tissue": "Pituitary",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2011-08-17",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE31399",
+   "download_url": null,
+   "description": "Identifying the early gene program induced by GnRH would help understand how GnRH-activated signaling pathways modulate gonadotrope secretory response. We previously analyzed GnRH-induced early genes in LbT2 cells, however these lack GnRH self-potentiation, a physiological attribute of gonadotropes. To minimize cellular heterogeneity, rat primary pituitary cultures were enriched for gonadotropes by 40-60% using a sedimentation gradient. Given the limited number of gonadotropes, RNA was amplified prior to microarray analysis. Thirty-three genes were up-regulated 40 minutes after GnRH stimulation. Real-time PCR confirmed regulation of several transcripts including fosB, c-fos, egr-2 and rap1b, a small GTPase and member of the Ras family. GnRH stimulated rap1b gene expression in gonadotropes, measured by a sensitive single cell assay. Immunocytochemistry revealed increased Rap1 protein in GnRH-stimulated gonadotropes. These data establish rap1b as a novel gene rapidly induced by GnRH and a candidate to modulate gonadotropin secretion in rat gonadotropes.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200031399",
+    "source_taxon": "Rattus norvegicus",
+    "source_n_samples": 12,
+    "pubmed_ids": [
+     "22127306"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon (verbatim)",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Pituitary"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE35682",
+   "dataset_name": "Analysis of gene expression in wildtype and Notch1 mutant retinal cells by single cell profiling",
+   "source": "NCBI GEO",
+   "public_accession": "GSE35682",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Retina",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2013-09-06",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE35682",
+   "download_url": null,
+   "description": "Loss of Notch1 in retinal progenitor cells (RPCs) during postnatal retinal development results in the overproduction of rod photoreceptors at the expense of interneurons and glia. To examine the molecular underpinnings of this observation, microarray analysis of singla retinal cells from wildtype (WT) or Notch1 conditional knockout (N1-CKO) retinas was performed. The majority of N1-CKO cells lost expression of known Notch target genes. These cells also had low levels of RPC and cell cycle genes, and robustly upregulated rod precursor genes. In addition, single WT cells, in which cell cycle marker genes were downregulated, expressed markers of both rod photoreceptors and interneurons. These results demonstrate that individual, newly postmitotic retinal cells can begin to differentiate into more than one cell type, and that this transitional state may be dependent on Notch1 signaling. We used microarrays to examine gene expression changes that occur in single cells after the removal of Notch1 during retinal development.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200035682",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 26,
+    "pubmed_ids": [
+     "23824579"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Retina"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE36552",
+   "dataset_name": "Tracing pluripotency of human early embryos and embryonic stem cells by single cell RNA-seq",
+   "source": "NCBI GEO",
+   "public_accession": "GSE36552",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2013-08-10",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE36552",
+   "download_url": null,
+   "description": "Find the casual relationship between gene expression network and cellular phenotype at single cell resolution. We collected donated human pre-implatation embryos, and the embryonic stem cells derived from them, isolate individual cells, prepared single cell cDNAs, and sequenced them by HiSeq2000. Then we analyzed the expression of known RefSeq genes.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200036552",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 124,
+    "pubmed_ids": [
+     "23934149",
+     "32968278"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE38198",
+   "dataset_name": "Tn5 transposase-mediated library preparation of single-cell cDNAs for RNA-seq",
+   "source": "NCBI GEO",
+   "public_accession": "GSE38198",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2012-05-25",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE38198",
+   "download_url": null,
+   "description": "Deep sequencing of single cell-derived genomic DNA and/or cDNAs brings novel insights into oncogenesis and embryogenesis. However, traditional library preparation for RNA-Seq requires multiple steps, including shearing the target DNA/RNA and following sequential enzymatic reactions, which result in consequent sample loss and stochastic variation at each step. Such variation may significantly affect the output from sequencing. We have found that a new technique of library preparation using hyperactive Tn5 transposase for the next-generation sequencer of Illumina's platform provided high-quality libraries from 100ng of short-length (average 700~800 bp) single-cell level cDNA. This new method reduced the number of steps in the protocol, which resulted in improved reproducibility and reduced variation among the specimens.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200038198",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 6,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE38416",
+   "dataset_name": "Single Cell Transcriptomic Analysis of Prostate Cancer Cells",
+   "source": "NCBI GEO",
+   "public_accession": "GSE38416",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Bone Marrow, Prostate",
+   "disease": "Cancer (generic)",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2013-02-19",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE38416",
+   "download_url": null,
+   "description": "The ability to interrogate circulating tumor cells (CTC) and disseminated tumor cells (DTC) is restricted by the small number detected and isolated (typically <10). We wanted to determine if a commercially available technology could provide a transcriptomic profile of a single prostate cancer (PCa) cell. We clonally selected and cultured a single passage of cell cycle synchronized C4-2B PCa cells. Ten sets of single, 5-, or 10-cells were isolated using a micromanipulator under direct visualization with an inverted microscope. Additionally, we analyzed 10 individual DTC isolated from each of 2 patients with metastatic PCa. We have shown that a transcriptomic profile can be obtained from a single cell using commercially available technology. As expected, fewer amplified genes are detected from a single-cell sample than from pooled cell samples, but this method can be used to obtain a transcriptomic profile from DTC isolated from the bone marrow of patients with PCa.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200038416",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 48,
+    "pubmed_ids": [
+     "23414343"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Cancer (generic)"
+      ],
+      "tissue": [
+       "Bone Marrow",
+       "Prostate"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE111672",
+   "dataset_name": "Integrating microarray-based spatial transcriptomics and single-cell RNA-seq reveals tissue architecture in pancreatic ductal adenocarcinomas",
+   "source": "NCBI GEO",
+   "public_accession": "GSE111672",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Pancreas",
+   "disease": "Adenocarcinoma, Pancreatic Cancer, Cancer (generic)",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-01-13",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE111672",
+   "download_url": null,
+   "description": "Single-cell RNA sequencing (scRNA-seq) enables the systematic identification of cell populations in a tissue, but characterizing their spatial organization remains challenging. We combine a microarray-based spatial transcriptomics method that reveals spatial patterns of gene expression using an array of spots, each capturing the transcriptomes of multiple adjacent cells, with scRNA-Seq generated from the same sample. To annotate the precise cellular composition of distinct tissue regions, we introduce a method for multimodal intersection analysis. Applying multimodal intersection analysis to primary pancreatic tumors, we find that subpopulations of ductal cells, macrophages, dendritic cells and cancer cells have spatially restricted enrichments, as well as distinct coenrichments with other cell types. Furthermore, we identify colocalization of inflammatory fibroblasts and cancer cells expressing a stress-response gene module. Our approach for mapping the architecture of scRNA-seq-defined subpopulations can be applied to reveal the interactions inherent to complex tissues.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200111672",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 23,
+    "pubmed_ids": [
+     "31932730"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Adenocarcinoma",
+       "Pancreatic Cancer",
+       "Cancer (generic)"
+      ],
+      "tissue": [
+       "Pancreas"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE114723",
+   "dataset_name": "Spatial Transcriptomics of C. elegans Males and Hermaphrodites Identifies Sex-Specific Differences in Gene Expression Patterns",
+   "source": "NCBI GEO",
+   "public_accession": "GSE114723",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Caenorhabditis elegans",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2018-11-03",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE114723",
+   "download_url": null,
+   "description": "To advance our understanding of the genetic programs that drive cell and tissue specialization, it is necessary to obtain a comprehensive overview of gene expression patterns. Here, we have used spatial transcriptomics to generate high-resolution, anteroposterior gene expression maps of C. elegans males and hermaphrodites. To explore these maps, we have developed computational methods for discovering region- and tissue-specific genes. We have found extensive sex-specific gene expression differences in the germline and sperm and discovered genes that are specifically expressed in the male reproductive tract. These include a group of uncharacterized genes that encode small secreted proteins that are required for male fertility. We conclude that spatial gene expression maps provide a powerful resource for identifying tissue-specific gene functions in C. elegans. Importantly, we found that expression maps from different animals can be precisely aligned, enabling transcriptome-wide comparisons of gene expression patterns.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200114723",
+    "source_taxon": "Caenorhabditis elegans",
+    "source_n_samples": 10,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon (verbatim)",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE114770",
+   "dataset_name": "Spatial transcriptomics unveils ZBTB11 as a regulator of cardiomyocyte degeneration in cardiomyopathy",
+   "source": "NCBI GEO",
+   "public_accession": "GSE114770",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Heart",
+   "disease": "Cardiomyopathy",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-05-22",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE114770",
+   "download_url": null,
+   "description": "Aims Arrhythmogenic cardiomyopathy (ACM) is an inherited cardiac disorder that is characterized by progressive fibro-fatty replacement of the myocardium, arrhythmias, and sudden death. While myocardial degeneration and fibro-fatty replacement occurs in specific locations, the underlying molecular changes remain poorly characterized. Here we aim to delineate local changes in gene expression to help identify new genes or pathways that are relevant for specific remodelling processes occurring during ACM. Methods and Results Using Tomo-Seq, a genome-wide transcriptional profiling with high spatial resolution, we created a transmural epicardial to endocardial gene expression atlas of an explanted ACM heart to gain molecular insights into disease-driving processes. This enabled us to link gene expression profiles to the different regional remodelling responses and allowed us to identify genes that are potentially relevant for disease progression. In doing we revealed BTB (broad-complex, tramtrack, bric-à-brac) domain containing 11 (ZBTB11) to be specifically enriched at sites of active fibrofatty replacement of myocardium. Immunohistochemistry indicated ZBTB11 to be enriched in cardiomyocytes flanking fibrofatty areas, which could be confirmed in multiple cardiomyopathy patients. Forced overexpression of ZBTB11 in iPS-derived cardiomyocytes showed ZBTB11 to function as a potent inducer of cardiomyocyte atrophy. Conclusion By combining spatial transcriptomics with classical histological approaches we identified gene expression changes underlying local remodelling responses in ACM. In doing so we found ZBTB11 to function as a relevant driver of cardiomyocyte atrophy. These data show the power of Tomo-Seq to unveil new molecular mechanisms and indicate ZBTB11 as a potential new target for cardiomyopathy.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200114770",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 2,
+    "pubmed_ids": [
+     "35576477"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Cardiomyopathy"
+      ],
+      "tissue": [
+       "Heart"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE123187",
+   "dataset_name": "Single-cell and spatial transcriptomics reveal somitogenesis in gastruloids",
+   "source": "NCBI GEO",
+   "public_accession": "GSE123187",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human, Mouse",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2019-12-05",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE123187",
+   "download_url": null,
+   "description": "Gastruloids are three-dimensional aggregates of embryonic stem cells (ESCs) that display key features of mammalian post-implantation development, including germ layer specification and axial organization. Gastruloids have mostly been characterized with microscopy-based approaches, limiting the number of genes that can be explored. It is therefore unclear to what extent gene expression in gastruloids reflects in vivo embryonic expression. Using both single-cell RNA-seq (scRNA-seq) and spatial transcriptomics we systematically compared cell types and spatial expression patterns between mouse gastruloids and mouse embryos.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200123187",
+    "source_taxon": "Homo sapiens; Mus musculus",
+    "source_n_samples": 92,
+    "pubmed_ids": [
+     "32076263"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE130682",
+   "dataset_name": "High-density spatial transcriptomics arrays for in situ tissue profiling",
+   "source": "NCBI GEO",
+   "public_accession": "GSE130682",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2019-09-09",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE130682",
+   "download_url": null,
+   "description": "Tissue function relies on the precise spatial organization of cells characterized by distinct molecular profiles. Single-cell RNA-Seq captures molecular profiles but not spatial organization. Conversely, spatial profiling assays to date have lacked global transcriptome information, throughput or single-cell resolution. Here, we develop High-Density Spatial Transcriptomics (HDST), a method for RNA-Seq at high spatial resolution. Spatially barcoded reverse transcription oligonucleotides are coupled to beads that are randomly deposited into tightly packed individual microsized wells on a slide. The position of each bead is decoded with sequential hybridization using complementary oligonucleotides providing a unique bead-specific spatial address. We then capture, and spatially in situ barcode, RNA from the histological tissue sections placed on the HDST array. HDST recovers hundreds of thousands of transcript-coupled spatial barcodes per experiment at 2 μm resolution. We demonstrate HDST in the mouse brain, use it to resolve spatial expression patterns and cell types, and show how to combine it with histological stains to relate expression patterns to tissue architecture and anatomy. HDST opens the way to spatial analysis of tissues at high resolution.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200130682",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 3,
+    "pubmed_ids": [
+     "31501547"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE135805",
+   "dataset_name": "Spatial Transcriptomics of Human Cardiac Tissue",
+   "source": "NCBI GEO",
+   "public_accession": "GSE135805",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Heart",
+   "disease": "Healthy/Normal, Heart Failure",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2019-08-15",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE135805",
+   "download_url": null,
+   "description": "Transplanted (healthy) and explanted human heart tissue sections (affected by different heart failure etiologies) were investigated for gene expression differences by using the Spatial Transcriptomics technology.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200135805",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 4,
+    "pubmed_ids": [
+     "31862877"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Healthy/Normal",
+       "Heart Failure"
+      ],
+      "tissue": [
+       "Heart"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE151877",
+   "dataset_name": "Parallel spatial transcriptomics, single-cell and bulk RNA-Seq analysis of the human embryonic HSC niche, the dorsal aorta",
+   "source": "NCBI GEO",
+   "public_accession": "GSE151877",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Embryo, Aorta",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-09-17",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE151877",
+   "download_url": null,
+   "description": "Haematopoietic stem cells (HSCs) first emerge in the embryonic aorta-gonad-mesonephros (AGM) region. Studies on model organisms defined intersecting signalling pathways that converge to promote HSC emergence predominantly in the ventral domain of the dorsal aorta. Much less is known about mechanisms driving HSC development in human. Here, to identify secreted signals underlying human HSC development, we combined spatial transcriptomics analysis of dorso-ventral polarised signalling in the aorta with gene expression profiling of sorted cell populations and single cells. Our analysis revealed a subset of aortic endothelial cells with downregulated arterial signature and a predicted lineage relationship with the emerging HSC/ progenitor population. Analysis of the ventrally polarised molecular landscape identified endothelin 1 as an important secreted regulator of human HSC development. The obtained gene expression datasets will inform future studies on mechanisms of HSC development in vivo and on the generation of clinically relevant HSCs in vitro.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200151877",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 44,
+    "pubmed_ids": [
+     "32946788"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo",
+       "Aorta"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE152506",
+   "dataset_name": "Spatial Transcriptomics and In Situ Sequencing to Study Alzheimer’s Disease",
+   "source": "NCBI GEO",
+   "public_accession": "GSE152506",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain",
+   "disease": "Alzheimer's Disease",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-07-22",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE152506",
+   "download_url": null,
+   "description": "While complex inflammatory-like alterations are observed around the amyloid plaques of Alzheimer disease (AD), little is known about the molecular changes and cellular interactions that characterize this response. We investigate here in an AD mouse model the transcriptional changes occurring in tissue domains of 100 μm diameter around the amyloid plaques using spatial transcriptomics. We demonstrate early alterations in a gene co-expression network enriched for myelin and oligodendrocyte genes (OLIG), while a multicellular gene co- expression network of Plaque-Induced Genes (PIGs) involving the complement system, oxidative stress, lysosomes and inflammation is prominent in the later phase of the disease. We confirm the majority of the observed alterations at the cellular level using in situ sequencing on mouse and human brain sections. Genome-wide spatial transcriptomic analysis provides an unprecedented approach to untangle the dysregulated cellular network in the vicinity of pathogenic hallmarks of AD and other brain diseases.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200152506",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 20,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Alzheimer's Disease"
+      ],
+      "tissue": [
+       "Brain"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE153424",
+   "dataset_name": "Clonal relations in the mouse brain revealed by single-cell and spatial transcriptomics",
+   "source": "NCBI GEO",
+   "public_accession": "GSE153424",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain, Hippocampus",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-06-29",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE153424",
+   "download_url": null,
+   "description": "The mammalian brain contains many specialized cells that develop from a thin sheet of neuroepithelial progenitor cells. Single-cell transcriptomics revealed hundreds of molecularly diverse cell types in the nervous system, but the lineage relationships between mature cell types and progenitor cells are not well understood. Here we show in vivo barcoding of early progenitors to simultaneously profile cell phenotypes and clonal relations in the mouse brain using single-cell and spatial transcriptomics. By reconstructing thousands of clones, we discovered fate-restricted progenitor cells in the mouse hippocampal neuroepithelium and show that microglia are derived from few primitive myeloid precursors that massively expand to generate widely dispersed progeny. We combined spatial transcriptomics with clonal barcoding and disentangled migration patterns of clonally related cells in densely labelled tissue sections. Our approach enables high-throughput dense reconstruction of cell phenotypes and clonal relations at the single-cell and tissue level in individual animals and provides an integrated approach for understanding tissue architecture.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200153424",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 37,
+    "pubmed_ids": [
+     "35210624"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain",
+       "Hippocampus"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE154107",
+   "dataset_name": "The orchestrated cellular and molecular responses of the kidney to endotoxin define a precise sepsis timeline.",
+   "source": "NCBI GEO",
+   "public_accession": "GSE154107",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Kidney",
+   "disease": "Sepsis",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-07-10",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE154107",
+   "download_url": null,
+   "description": "Clinical sepsis is a highly dynamic state that progresses at variable rates and has life-threatening consequences. Staging patients along the sepsis timeline requires a thorough knowledge of the evolution of cellular and molecular events at the tissue level. Here, we investigated the kidney, an organ central to the pathophysiology of sepsis. Single cell RNA sequencing and spatial transcriptomics revealed the involvement of various cell populations in injury and repair to be temporally organized and highly orchestrated. We identified key changes in gene expression that altered cellular functions and can explain features of clinical sepsis. These changes converged towards a remarkable global cell-cell communication failure and organ shutdown at a well-defined point in the sepsis timeline. Importantly, this time point was also a transition towards the emergence of recovery pathways. This rigorous spatial and temporal definition of murine sepsis will uncover precise biomarkers and targets that can help stage and treat human sepsis.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200154107",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 1,
+    "pubmed_ids": [
+     "33448928"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Sepsis"
+      ],
+      "tissue": [
+       "Kidney"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE156626",
+   "dataset_name": "Onco-fetal reprogramming of endothelial cells drives immunosuppressive macrophages in Hepatocellular Carcinoma (Nanostring)",
+   "source": "NCBI GEO",
+   "public_accession": "GSE156626",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Liver",
+   "disease": "Liver Cancer, Cancer (generic)",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-09-24",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE156626",
+   "download_url": null,
+   "description": "Liver dysfunction is associated with diseases ranging from metabolic disorders to hepatocellular carcinomas (HCC). Here we employed single-cell RNA-sequencing to extensively characterise the cellular landscape of human liver, from development to disease. We analysed ~212,000 cells representing human fetal liver, HCC and mouse liver. Our analysis revealed a remarkable fetal-like reprogramming of the tumor microenvironment (TME). Specifically, the HCC ecosystem displayed features reminiscent of fetal development, including the re-emergence of fetal-associated endothelial cells (PLVAP+/VEGFR2+), and fetal-like (FOLR2+) tumor-associated macrophages (TAMs). In a cross-species comparative analysis, we discovered remarkable similarity of gene expression and regulatory networks between mouse embryonically-seeded, fetal-liver and FOLR2+ tumor macrophages. Spatial transcriptomics further corroborated a shared onco-fetal ecosystem between fetal-liver and HCC. Furthermore, gene regulatory analysis, spatial transcriptomics, and in vitro functional assays implicated VEGF and NOTCH signaling in maintaining onco-fetal ecosystem. Taken together, we report a shared immunosuppressive onco-fetal ecosystem between the human fetal-liver and HCC. Our results unravel a previously unexplored onco-fetal reprogramming of tumor ecosystem, provides a novel target for therapeutic interventions in HCC and also opens up avenues for identifying similar paradigms in other cancers and disease states.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200156626",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 108,
+    "pubmed_ids": [
+     "32976798"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Liver Cancer",
+       "Cancer (generic)"
+      ],
+      "tissue": [
+       "Liver"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE156633",
+   "dataset_name": "Combined single-cell and spatial transcriptomics reveal the precise cellular states of postnatal cerebellar granule cells and connection with medulloblastoma",
+   "source": "NCBI GEO",
+   "public_accession": "GSE156633",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Cerebellum",
+   "disease": "Healthy/Normal, Medulloblastoma",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-01-18",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE156633",
+   "download_url": null,
+   "description": "The progenitor/differentiation states of cerebellum granule cells have been investigated for many years. Deregulation of granule cells development is associated with the pathogenesis of medulloblastoma (MB).Our study reveals the cellular and spatial organization of cerebellar granule cells and provide direct evidence showing the similarity and discrepancy between normal development and tumorigenesis.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200156633",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 10,
+    "pubmed_ids": [
+     "34210306"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "disease": [
+       "Healthy/Normal",
+       "Medulloblastoma"
+      ],
+      "tissue": [
+       "Cerebellum"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE158328",
+   "dataset_name": "Spatiotemporal Analysis of Human Intestinal Development at Single Cell Resolution - Spatial Transcriptomics",
+   "source": "NCBI GEO",
+   "public_accession": "GSE158328",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Colon",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-01-04",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158328",
+   "download_url": null,
+   "description": "Development of the human intestine is not well understood. Here we link single-cell RNA sequencing and spatial transcriptomics to characterize intestinal morphogenesis through time. We identify 101 cell states including novel epithelial and mesenchymal progenitor populations and programs linked to key morphogenetic milestones. We describe principles of crypt-villus axis formation; neural, vascular, mesenchymal morphogenesis and immune population of the developing gut. We identify the differentiation hierarchies of developing fibroblast and myofibroblast subtypes and describe new functions for these including as vascular niche cells. We pinpoint the origins of Peyer’s patches and gut-associated lymphoid tissue (GALT) and describe location specific immune programs. We use our resource to present an unbiased analysis of morphogen gradients that direct sequential waves of cellular differentiation and define cells and locations linked to rare developmental intestinal disorders.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200158328",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 8,
+    "pubmed_ids": [
+     "33406409"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Colon"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE158450",
+   "dataset_name": "Cell-type, single-cell, and spatial signatures of brain-region specific splicing in postnatal development",
+   "source": "NCBI GEO",
+   "public_accession": "GSE158450",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain, Hippocampus, Cortex",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-11-17",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158450",
+   "download_url": null,
+   "description": "Alternative RNA splicing varies across brain regions, but the single-cell resolution of such regional variation is unknown. Here we present the first single-cell investigation of differential isoform expression (DIE) between brain regions, by performing single cell long-read transcriptome sequencing in the mouse hippocampus and prefrontal cortex in 45 cell types at postnatal day 7. Using isoform tests for brain-region specific DIE, which outperform exon-based tests, we detect hundreds of brain-region specific DIE events traceable to specific cell-types. Many DIE events correspond to functionally distinct protein isoforms, some with just a 6-nucleotide exon variant. In most instances, one cell type is responsible for brain-region specific DIE. Cell types indigenous to only one anatomic structure display distinctive DIE, where for example, the choroid plexus epithelium manifest unique transcription start sites. However, for some genes, multiple cell-types are responsible for DIE in bulk data, indicating that regional identity can, although less frequently, override cell-type specificity. We validated our findings with spatial transcriptomics and long-read sequencing, yielding the first spatially resolved splicing map in the postnatal mouse brain (www.isoformAtlas.com). Our methods are highly generalizable. They provide a robust means of quantifying isoform expression with cell-type and spatial resolution, and reveal how the brain integrates molecular and cellular complexity to serve function.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200158450",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 11,
+    "pubmed_ids": [
+     "33469025",
+     "35301264",
+     "35604081",
+     "36593406"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain",
+       "Hippocampus",
+       "Cortex"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE158561",
+   "dataset_name": "Spatial transcriptomics of fixed tissue micro-regions using Pick-Seq [breast]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE158561",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Breast",
+   "disease": "Melanoma, Cancer (generic)",
+   "chemistry": "Pick-seq",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-09-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158561",
+   "download_url": null,
+   "description": "Spatial transcriptomics and multiplexed imaging are complementary methods for studying tissue biology. Here we describe a simple method for transcriptional profiling of formalin fixed histology specimens based on mechanical isolation of tissue micro-regions containing 5-20 cells. Sequencing micro-regions from an archival melanoma specimen having multiple distinct histologies reveals significant differences in transcriptional programs associated with tumor invasion, proliferation, and immunoediting and parallel imaging confirms changes in immuno-phenotypes and cancer cell states.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200158561",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 14,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay",
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "assay": [
+       "Pick-seq"
+      ],
+      "disease": [
+       "Melanoma",
+       "Cancer (generic)"
+      ],
+      "tissue": [
+       "Breast"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE158562",
+   "dataset_name": "Spatial transcriptomics of fixed tissue micro-regions using Pick-Seq [melanoma]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE158562",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": "Melanoma, Cancer (generic)",
+   "chemistry": "Pick-seq",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-09-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158562",
+   "download_url": null,
+   "description": "Spatial transcriptomics and multiplexed imaging are complementary methods for studying tissue biology. Here we describe a simple method for transcriptional profiling of formalin fixed histology specimens based on mechanical isolation of tissue micro-regions containing 5-20 cells. Sequencing micro-regions from an archival melanoma specimen having multiple distinct histologies reveals significant differences in transcriptional programs associated with tumor invasion, proliferation, and immunoediting and parallel imaging confirms changes in immuno-phenotypes and cancer cell states.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200158562",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 75,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay",
+      "disease"
+     ],
+     "displays": {
+      "assay": [
+       "Pick-seq"
+      ],
+      "disease": [
+       "Melanoma",
+       "Cancer (generic)"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE158563",
+   "dataset_name": "Spatial transcriptomics of fixed tissue micro-regions using Pick-Seq [tonsil]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE158563",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Tonsil",
+   "disease": "Melanoma, Cancer (generic)",
+   "chemistry": "Pick-seq",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-09-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158563",
+   "download_url": null,
+   "description": "Spatial transcriptomics and multiplexed imaging are complementary methods for studying tissue biology. Here we describe a simple method for transcriptional profiling of formalin fixed histology specimens based on mechanical isolation of tissue micro-regions containing 5-20 cells. Sequencing micro-regions from an archival melanoma specimen having multiple distinct histologies reveals significant differences in transcriptional programs associated with tumor invasion, proliferation, and immunoediting and parallel imaging confirms changes in immuno-phenotypes and cancer cell states.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200158563",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 10,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay",
+      "disease",
+      "tissue"
+     ],
+     "displays": {
+      "assay": [
+       "Pick-seq"
+      ],
+      "disease": [
+       "Melanoma",
+       "Cancer (generic)"
+      ],
+      "tissue": [
+       "Tonsil"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE158564",
+   "dataset_name": "Spatial transcriptomics of fixed tissue micro-regions using Pick-Seq",
+   "source": "NCBI GEO",
+   "public_accession": "GSE158564",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "Pick-seq",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-09-01",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE158564",
+   "download_url": null,
+   "description": "This SuperSeries is composed of the SubSeries listed below.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": true,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200158564",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 99,
+    "pubmed_ids": [],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay"
+     ],
+     "displays": {
+      "assay": [
+       "Pick-seq"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE159709",
+   "dataset_name": "Spatially resolved transcriptomics reveals the architecture of the tumor-microenvironment interface",
+   "source": "NCBI GEO",
+   "public_accession": "GSE159709",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Danio rerio",
+   "tissue": null,
+   "disease": "Melanoma, Cancer (generic)",
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-09-21",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE159709",
+   "download_url": null,
+   "description": "Cancer cells interact with a wide variety of other cell types, but our understanding of microenvironmental heterogeneity and how it influences tumor phenotypes is limited. While single-cell RNA-seq (scRNA-seq) has helped define these TME cell types, it provides limited information on the mechanisms that define how individual tumor cells interact with TME. Here, we integrate spatial transcriptomics with scRNA-seq to define the architecture and nature of nascent tumor and surrounding microenvironment cells as they come into contact through the process of invasion. Using a well-defined transgenic zebrafish model of BRAFV600E-driven melanoma, we identify a transcriptionally unique “interface” cluster localized at the boundary between tumor cells and surrounding tissues. Using an unbiased, data-driven approach, we identify spatially-patterned gene modules specific to the interface and show that the interface is a distinct transcriptional entity that histologically resembles the microenvironment but transcriptionally resembles the tumor. By complementing ST with scRNA-seq, we demonstrate that the interface is composed of specialized tumor and microenvironment cells. Both cell types in the interface upregulate a common set of cilia genes, and we find enrichment of cilia proteins only where the tumor meets the TME. Cilia gene expression is regulated by ETS-family transcription factors, which normally act to suppress their expression outside of this region. This unique ETS-driven interface transcriptional state is conserved across ten different human patient samples, suggesting this is a conserved feature of human melanoma. Taken together, our results demonstrate the power of spatial and single-cell transcriptomics techniques in uncovering novel biological mechanisms that drive tumor invasion into new tissues.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200159709",
+    "source_taxon": "Danio rerio",
+    "source_n_samples": 6,
+    "pubmed_ids": [
+     "34725363"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon (verbatim)",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "disease"
+     ],
+     "displays": {
+      "disease": [
+       "Melanoma",
+       "Cancer (generic)"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE160136",
+   "dataset_name": "Single cell- Cluster-RNA seq and Spatial Transcriptomics from the trunk of mouse embryos of different genotypes (wild type, Pax2-GFP, Pax2-GFP; Gata3 knockout) and developmental stages (E8.75, E9.5, E11.5) [single-cell RNA-seq]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE160136",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Kidney, Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-02-16",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE160136",
+   "download_url": null,
+   "description": "To study cell heterogeneity and state transitions in the developing urinary tract we isolated renal cells (single cells or clusters) by Fluorescence-activated cell sorting (FACS) from the trunk of E8.75, E9.5 and E11.5 mouse embros and performed 10X Genomics single cell and Cluster RNA sequencing",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200160136",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 5,
+    "pubmed_ids": [
+     "33976190"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Kidney",
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE160137",
+   "dataset_name": "Single cell- Cluster-RNA seq and Spatial Transcriptomics from the trunk of mouse embryos of different genotypes (wild type, Pax2-GFP, Pax2-GFP; Gata3 knockout) and developmental stages (E8.75, E9.5, E11.5) [Spatial Transcriptomics]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE160137",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Embryo",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-02-16",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE160137",
+   "download_url": null,
+   "description": "To study cell heterogeneity and state transitions in the developing urinary tract we performed spatial transcriptomics from the trunk of E9.5 Pax2GFP mouse embryos using the 10X Genomics Visium Spatial Gene Expression protocol",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200160137",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 4,
+    "pubmed_ids": [
+     "33976190"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Embryo"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE162950",
+   "dataset_name": "Mapping Human Hematopoietic Stem Cells From Hemogenic Endothelium To Birth",
+   "source": "NCBI GEO",
+   "public_accession": "GSE162950",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Liver, Aorta, Placenta",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-01-20",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE162950",
+   "download_url": null,
+   "description": "Human hematopoietic stem cell (HSC) ontogeny is poorly defined due to the inability to identify HSCs as they emerge and mature in different hematopoietic sites. We created a single-cell transcriptome map of human hematopoietic tissues from 1st trimester to birth and found that HSC signature RUNX1+HOXA9+MLLT3+MECOM+HLF+SPINK2+ distinguishes HSCs from progenitors throughout gestation. In addition to the AGM (aorta-gonad-mesonephros) region, nascent HSCs populated the placenta and yolk sac before colonizing the liver at 6 weeks. Comparison of HSCs from different maturation stages revealed the establishment of HSC transcription factor machinery upon HSC emergence, whereas their surface phenotype evolved throughout development. HSC transition to the liver marked a molecular shift evidenced by suppression of surface antigens, reflecting nascent HSC identity, and acquisition of HSC maturity markers PROM1/CD133 and HLA-DR. HSC origin was tracked to ALDH1A1+KCNK17+ hemogenic endothelial (HE) cells, which arose from IL33+ALDH1A1+ arterial endothelial subset, termed pre-HE. Spatial transcriptomics and immunofluorescence visualized this process in ventrally located intra-aortic hematopoietic clusters. The in vivo map of human HSC ontogeny validated the generation of AGM-like definitive HSPCs from human pluripotent stem cells, and serves as a guide to improve their maturation to functional HSCs.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200162950",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 28,
+    "pubmed_ids": [
+     "35418685"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Liver",
+       "Aorta",
+       "Placenta"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE165098",
+   "dataset_name": "Neuroinflammatory astrocyte subtypes in the mouse brain [Visium]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE165098",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Brain",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-06-03",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE165098",
+   "download_url": null,
+   "description": "Spatial transcriptomics of saline- and LPS-injected Aldh1l1egfp mice 24 h after injection",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200165098",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 6,
+    "pubmed_ids": [
+     "34413515"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Brain"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE165141",
+   "dataset_name": "Spatial Transcriptomics to define transcriptional patterns of zonation and structural components in the liver",
+   "source": "NCBI GEO",
+   "public_accession": "GSE165141",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Liver",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-01-20",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE165141",
+   "download_url": null,
+   "description": "Reconstruction of heterogeneity through single-cell transcriptional profiling has greatly advanced our understanding of the spatial liver transcriptome in recent years. However, global transcriptional differences across lobular units remain elusive in physical space. Here, we implement Spatial Transcriptomics to perform transcriptomic analysis across sectioned liver tissue. We confirm that the heterogeneity in this complex tissue is predominantly determined by lobular zonation. By introducing novel computational approaches, we enable transcriptional gradient measurements between tissue structures, including several lobules in a variety of orientations. Further, our data suggests the presence of previously transcriptionally uncharacterized structures within liver tissue, contributing to the overall spatial heterogeneity of the organ. This study demonstrates how comprehensive spatial transcriptomic technologies can be used to delineate extensive spatial gene expression patterns in the liver, indicating its future impact for studies of liver function, development and regeneration as well as its potential in pre-clinical and clinical pathology. Additional data to reproduce the data presented in this study with instrctions can be found at https://github.com/almaan/ST-mLiver and https://zenodo.org/record/4399655",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200165141",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 12,
+    "pubmed_ids": [
+     "34857782"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Liver"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE166120",
+   "dataset_name": "Spatial transcriptomics of healing and non-healing diabetic foot ulcers",
+   "source": "NCBI GEO",
+   "public_accession": "GSE166120",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": "Diabetes",
+   "chemistry": "GeoMx",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-10-28",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE166120",
+   "download_url": null,
+   "description": "Diabetic foot ulcers (DFUs) are a devastating complication of diabetes. To better understand the molecular mechanisms and cell types implicated in DFU healing, we used NanoString’s GeoMx Digital Spatial profiling platform on DFU tissue sections and compared gene expression of areas within the same ulcer as well as between patients who in 12 weeks following surgery healed their DFU (Healers, N=2) vs those who did not (Non-Healers, N=2).",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200166120",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 23,
+    "pubmed_ids": [
+     "35013299"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay",
+      "disease"
+     ],
+     "displays": {
+      "assay": [
+       "GeoMx"
+      ],
+      "disease": [
+       "Diabetes"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE166948",
+   "dataset_name": "Interleukin-17 governs hypoxic adaptation of injured epithelium [spatial transcriptomics]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE166948",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Skin",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-02-18",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE166948",
+   "download_url": null,
+   "description": "To define the gene signature and spatial architecture of the skin after injury, we performed spatial transcriptomics from mouse unwounded and wounded skin.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200166948",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 6,
+    "pubmed_ids": [
+     "35709248"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Skin"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE167096",
+   "dataset_name": "Spatial Transcriptomics of human fetal liver",
+   "source": "NCBI GEO",
+   "public_accession": "GSE167096",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": "Liver",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-05-08",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE167096",
+   "download_url": null,
+   "description": "We use single-cell RNA-seq technology for unbiased analysis of fetal livers over developmental time from 8 postconception weeks (PCW) and 17 PCW in humans.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200167096",
+    "source_taxon": "Homo sapiens",
+    "source_n_samples": 2,
+    "pubmed_ids": [
+     "34095116"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Liver"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE169749",
+   "dataset_name": "10X Visium Spatial transcriptomics of murine colon in steady state and during recovery after DSS colitis",
+   "source": "NCBI GEO",
+   "public_accession": "GSE169749",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Colon",
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-12-05",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE169749",
+   "download_url": null,
+   "description": "The limitation of single-cell or bulk transcriptomic profiling is the lack of spatial topographical context. Spatial transcriptomics (ST) allows sequencing of polyadenylated transcripts from a tissue section which can be spatially mapped onto the histological brightfield image using an array of barcoded oligo-dT capturing probes. Using the 10X Visium platform, here, we unbiasedly characterized the spatial transcriptomic landscape of murine colon in steady state and during mucosal healing upon dextran sodium sulfate (DSS) induced injury",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200169749",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 2,
+    "pubmed_ids": [
+     "35149721"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "tissue"
+     ],
+     "displays": {
+      "tissue": [
+       "Colon"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE172127",
+   "dataset_name": "Spatial transcriptome profiling by MERFISH reveals fetal liver hematopoietic stem cell niche architecture [scRNA-seq]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE172127",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Liver, Bone Marrow",
+   "disease": null,
+   "chemistry": "MERFISH",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-04-16",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE172127",
+   "download_url": null,
+   "description": "The hematopoietic stem cell (HSC) niche has been extensively studied in bone marrow, yet a more systematic investigation into the microenvironment regulation of hematopoiesis in fetal liver is necessary. Here we investigate the spatial organization and transcriptional profile of individual cells in both wild type and Tet2-/- fetal livers, by multiplexed error robust fluorescence in situ hybridization (MERFISH). We find that specific pairs of fetal liver cell types are preferentially positioned next to each other. Ligand-receptor singling molecule pairs such as Kitl and Kit are enriched in neighboring cell types. The majority of HSCs are directly in contact with endothelial cells (ECs) in both wild type and Tet2-/- fetal livers. Loss of Tet2 increases the number of HSCs, and upregulates Wnt and Notch signaling genes in the HSC niche. Two subtypes of ECs – arterial ECs and sinusoidal ECs – and other cell types contribute distinct signaling molecules to the HSC niche. Collectively, this study provides a comprehensive picture and bioinformatic foundation for HSC spatial regulation in fetal liver.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200172127",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 2,
+    "pubmed_ids": [
+     "34183665"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay",
+      "tissue"
+     ],
+     "displays": {
+      "assay": [
+       "MERFISH"
+      ],
+      "tissue": [
+       "Liver",
+       "Bone Marrow"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "geo:GSE172128",
+   "dataset_name": "Spatial transcriptome profiling by MERFISH reveals fetal liver hematopoietic stem cell niche architecture [bulk RNA-seq]",
+   "source": "NCBI GEO",
+   "public_accession": "GSE172128",
+   "platform_id": null,
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": "Liver, Bone Marrow",
+   "disease": null,
+   "chemistry": "MERFISH",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-04-16",
+   "url": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE172128",
+   "download_url": null,
+   "description": "The hematopoietic stem cell (HSC) niche has been extensively studied in bone marrow, yet a more systematic investigation into the microenvironment regulation of hematopoiesis in fetal liver is necessary. Here we investigate the spatial organization and transcriptional profile of individual cells in both wild type and Tet2-/- fetal livers, by multiplexed error robust fluorescence in situ hybridization (MERFISH). We find that specific pairs of fetal liver cell types are preferentially positioned next to each other. Ligand-receptor singling molecule pairs such as Kitl and Kit are enriched in neighboring cell types. The majority of HSCs are directly in contact with endothelial cells (ECs) in both wild type and Tet2-/- fetal livers. Loss of Tet2 increases the number of HSCs, and upregulates Wnt and Notch signaling genes in the HSC niche. Two subtypes of ECs – arterial ECs and sinusoidal ECs – and other cell types contribute distinct signaling molecules to the HSC niche. Collectively, this study provides a comprehensive picture and bioinformatic foundation for HSC spatial regulation in fetal liver.",
+   "filesize": null,
+   "raw_fastq_bytes": null,
+   "multiomics_claim": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi",
+    "retrieved_at": "2026-07-22T09:34:46Z",
+    "complete": false,
+    "salvage": "T35 offline re-verification against cached official ESummary (NCBI network unreachable 2026-08-05; no new fetches)",
+    "geo_uid": "200172128",
+    "source_taxon": "Mus musculus",
+    "source_n_samples": 1,
+    "pubmed_ids": [
+     "34183665"
+    ],
+    "fields": {
+     "identity": {
+      "origin": "cached GEO ESummary accession/gse/entrytype/title",
+      "complete": true
+     },
+     "species": {
+      "origin": "cached GEO ESummary taxon; common-name mapping declared in T35 build script",
+      "complete": true
+     },
+     "published_date": {
+      "origin": "cached GEO ESummary pdat",
+      "complete": true
+     },
+     "description": {
+      "origin": "cached GEO ESummary summary (source narrative, verbatim)",
+      "complete": true
+     },
+     "pubmed_ids": {
+      "origin": "cached GEO ESummary pubmedids",
+      "complete": true
+     },
+     "modality": {
+      "origin": "T09 title-based technical gate; NOT a verified platform/chemistry/10x-alignment claim",
+      "complete": false
+     },
+     "files": {
+      "origin": "not_checked: NCBI ELink gds_sra transport-incomplete in T09; NCBI unreachable in T35; ENA orphan responses excluded per T09 mapping.md",
+      "complete": false
+     }
+    },
+    "backfill": {
+     "method": "offline description alias backfill v1",
+     "dims": [
+      "assay",
+      "tissue"
+     ],
+     "displays": {
+      "assay": [
+       "MERFISH"
+      ],
+      "tissue": [
+       "Liver",
+       "Bone Marrow"
+      ]
+     }
+    }
+   }
+  }
+ ]
+}

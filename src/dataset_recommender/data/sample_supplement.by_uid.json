@@ -1,0 +1,5102 @@
+{
+ "adult-human-brain-1-cerebral-cortex-unknown-orientation-stains-anti-gfap-anti-nfh-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Human Brain 1 (Cerebral Cortex, Unknown orientation). Stains: Anti-GFAP, Anti-NFH",
+  "count": "4910",
+  "gene_count": "25285",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "73,102（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "5,362（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-human-brain-1-cerebral-cortex-unknown-orientation-stains-anti-gfap-anti-nfh-1-standard-1-1-0",
+  "dataset_name": "Adult Human Brain 1 (Cerebral Cortex, Unknown orientation). Stains: Anti-GFAP, Anti-NFH",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-human-brain-2-cerebral-cortex-unknown-orientation-stains-anti-snap-25-anti-nfh-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Human Brain 2 (Cerebral Cortex, Unknown orientation). Stains: Anti-SNAP25, Anti-NFH",
+  "count": "4972",
+  "gene_count": "25711",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "75,668（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "6,092（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-human-brain-2-cerebral-cortex-unknown-orientation-stains-anti-snap-25-anti-nfh-1-standard-1-1-0",
+  "dataset_name": "Adult Human Brain 2 (Cerebral Cortex, Unknown orientation). Stains: Anti-SNAP25, Anti-NFH",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-brain-coronal-section-fresh-frozen-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Brain Coronal Section (Fresh Frozen)",
+  "count": "2702",
+  "gene_count": "21949",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "115,569（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "28,941（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-brain-coronal-section-fresh-frozen-1-standard",
+  "dataset_name": "Adult Mouse Brain Coronal Section (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-brain-coronal-section-visium-ff-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Brain Coronal Section (Fresh Frozen)",
+  "count": "2797",
+  "gene_count": "20544",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "57,598（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "13,557（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-brain-coronal-section-visium-ff-1-standard",
+  "dataset_name": "Adult Mouse Brain Coronal Section (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-brain-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Brain (FFPE)",
+  "count": "2264",
+  "gene_count": "16876",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "28,826（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "17,614（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-brain-ffpe-1-standard-1-3-0",
+  "dataset_name": "Adult Mouse Brain (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-brain-if-stained-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Brain, IF Stained (FFPE)",
+  "count": "2438",
+  "gene_count": "16789",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "30,337（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "17,096（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-brain-if-stained-ffpe-1-standard-1-3-0",
+  "dataset_name": "Adult Mouse Brain, IF Stained (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-brain-section-1-coronal-stains-dapi-anti-neu-n-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Brain Section 1 (Coronal). Stains: DAPI, Anti-NeuN",
+  "count": "2903",
+  "gene_count": "21474",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "51,648（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "12,911（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-brain-section-1-coronal-stains-dapi-anti-neu-n-1-standard-1-1-0",
+  "dataset_name": "Adult Mouse Brain Section 1 (Coronal). Stains: DAPI, Anti-NeuN",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-brain-section-2-coronal-stains-dapi-anti-gfap-anti-neu-n-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Brain Section 2 (Coronal). Stains: DAPI, Anti-GFAP, Anti-NeuN",
+  "count": "2807",
+  "gene_count": "20993",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "56,020（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,048（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-brain-section-2-coronal-stains-dapi-anti-gfap-anti-neu-n-1-standard-1-1-0",
+  "dataset_name": "Adult Mouse Brain Section 2 (Coronal). Stains: DAPI, Anti-GFAP, Anti-NeuN",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-kidney-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Kidney (FFPE)",
+  "count": "3124",
+  "gene_count": "18162",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "53,993（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "32,310（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-kidney-ffpe-1-standard-1-3-0",
+  "dataset_name": "Adult Mouse Kidney (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-olfactory-bulb-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Olfactory Bulb",
+  "count": "1185",
+  "gene_count": "19332",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "39,560（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "16,029（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-olfactory-bulb-1-standard",
+  "dataset_name": "Adult Mouse Olfactory Bulb",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "adult-mouse-olfactory-bulb-1-standard-1": {
+  "platform": "visium",
+  "name_from_excel": "Adult Mouse Olfactory Bulb",
+  "count": "1185",
+  "gene_count": "19332",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "39,560（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "16,029（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/adult-mouse-olfactory-bulb-1-standard-1",
+  "dataset_name": "Adult Mouse Olfactory Bulb",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "aggregate-of-mouse-brain-sections-cytassist-for-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Aggregate of Mouse Brain Sections: CytAssist for FFPE",
+  "count": "4545",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "无"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "17,203（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/aggregate-of-mouse-brain-sections-cytassist-for-ffpe-2-standard",
+  "dataset_name": "Aggregate of Mouse Brain Sections: CytAssist for FFPE",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "aggregate-of-mouse-brain-sections-visium-fresh-frozen-whole-transcriptome-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Aggregate of Mouse Brain Sections: Visium Fresh Frozen, Whole Transcriptome",
+  "count": "6112",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "无"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "15,550（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/aggregate-of-mouse-brain-sections-visium-fresh-frozen-whole-transcriptome-1-standard",
+  "dataset_name": "Aggregate of Mouse Brain Sections: Visium Fresh Frozen, Whole Transcriptome",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "ffpe-human-brain-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Brain Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "count": "816769",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "157"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "63"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-brain-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard",
+  "dataset_name": "FFPE Human Brain Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-breast-using-the-entire-sample-area-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Breast using the Entire Sample Area",
+  "count": "1778489",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "280",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "97 ~ 100（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "47 ~ 49（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-breast-using-the-entire-sample-area-1-standard",
+  "dataset_name": "FFPE Human Breast using the Entire Sample Area",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-breast-with-custom-add-on-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Breast with Custom Add-on Panel",
+  "count": "940131",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "111 ~ 123（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "51 ~ 56（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-breast-with-custom-add-on-panel-1-standard",
+  "dataset_name": "FFPE Human Breast with Custom Add-on Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-breast-with-pre-designed-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Breast with Pre-designed Panel",
+  "count": "931598",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "280",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "94 ~ 105（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "44 ~ 46（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-breast-with-pre-designed-panel-1-standard",
+  "dataset_name": "FFPE Human Breast with Pre-designed Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-colorectal-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Colorectal Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "count": "388175",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "78"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "46"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-colorectal-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard",
+  "dataset_name": "FFPE Human Colorectal Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-ductal-adenocarcinoma-data-with-human-immuno-oncology-profiling-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Pancreatic Ductal Adenocarcinoma Data with Human Immuno-Oncology Profiling Panel",
+  "count": "235099",
+  "gene_count": "380",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "41"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "27"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-ductal-adenocarcinoma-data-with-human-immuno-oncology-profiling-panel-1-standard",
+  "dataset_name": "FFPE Human Pancreatic Ductal Adenocarcinoma Data with Human Immuno-Oncology Profiling Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-lung-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Lung Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "count": "161000",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "131"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "73"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-lung-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard",
+  "dataset_name": "FFPE Human Lung Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-ovarian-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Ovarian Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "count": "247636",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "56"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "39"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-ovarian-cancer-data-with-human-immuno-oncology-profiling-panel-and-custom-add-on-1-standard",
+  "dataset_name": "FFPE Human Ovarian Cancer Data with Human Immuno-Oncology Profiling Panel and Custom Add-on",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-human-pancreas-with-xenium-multimodal-cell-segmentation-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Pancreas with Xenium Multimodal Cell Segmentation",
+  "count": "140702",
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "31"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "17"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-human-pancreas-with-xenium-multimodal-cell-segmentation-1-standard",
+  "dataset_name": "FFPE Human Pancreas with Xenium Multimodal Cell Segmentation",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "ffpe-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Preservation Method Comparison on CytAssist: FFPE Mouse Brain (Sagittal), 11 mm Capture Area",
+  "count": "8462",
+  "gene_count": "19364",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "85,642（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,132（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/ffpe-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard",
+  "dataset_name": "Preservation Method Comparison on CytAssist: FFPE Mouse Brain (Sagittal), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "fixed-frozen-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Preservation Method Comparison on CytAssist: Fixed Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "count": "5123",
+  "gene_count": "19160",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "141,222（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "43,440（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fixed-frozen-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard",
+  "dataset_name": "Preservation Method Comparison on CytAssist: Fixed Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "fresh-frozen-mouse-brain-for-xenium-explorer-demo-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Fresh Frozen Mouse Brain for Xenium Explorer Demo",
+  "count": "167472",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "248",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "211 ~ 218（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "71 ~ 74（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fresh-frozen-mouse-brain-for-xenium-explorer-demo-1-standard",
+  "dataset_name": "Fresh Frozen Mouse Brain for Xenium Explorer Demo",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "fresh-frozen-mouse-brain-replicates-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Fresh Frozen Mouse Brain Replicates",
+  "count": "474734",
+  "count_note": "样本量为 3 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 3,
+  "gene_count": "248",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "250 ~ 252（3 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "80 ~ 82（3 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fresh-frozen-mouse-brain-replicates-1-standard",
+  "dataset_name": "Fresh Frozen Mouse Brain Replicates",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "fresh-frozen-mouse-colon-with-xenium-multimodal-cell-segmentation-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Fresh Frozen Mouse Colon with Xenium Multimodal Cell Segmentation",
+  "count": "219797",
+  "gene_count": "379",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "195"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "50"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fresh-frozen-mouse-colon-with-xenium-multimodal-cell-segmentation-1-standard",
+  "dataset_name": "Fresh Frozen Mouse Colon with Xenium Multimodal Cell Segmentation",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "fresh-frozen-visium-on-cytassist-human-breast-cancer-probe-based-whole-transcriptome-profiling-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Fresh Frozen Visium on CytAssist: Human Breast Cancer, Probe-Based Whole Transcriptome Profiling",
+  "count": "1657",
+  "gene_count": "16387",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "45,766（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "27,128（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fresh-frozen-visium-on-cytassist-human-breast-cancer-probe-based-whole-transcriptome-profiling-2-standard",
+  "dataset_name": "Fresh Frozen Visium on CytAssist: Human Breast Cancer, Probe-Based Whole Transcriptome Profiling",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "fresh-frozen-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Fresh Frozen Visium on CytAssist: Mouse Brain, Probe-Based Whole Transcriptome Profiling",
+  "count": "4298",
+  "gene_count": "16998",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "40,329（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "19,627（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fresh-frozen-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard",
+  "dataset_name": "Fresh Frozen Visium on CytAssist: Mouse Brain, Probe-Based Whole Transcriptome Profiling",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "fresh-frozen-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard-1": {
+  "platform": "visium",
+  "name_from_excel": "Preservation Method Comparison on CytAssist: Fresh Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "count": "6963",
+  "gene_count": "17374",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "86,740（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "23,645（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/fresh-frozen-visium-on-cytassist-mouse-brain-probe-based-whole-transcriptome-profiling-2-standard-1",
+  "dataset_name": "Preservation Method Comparison on CytAssist: Fresh Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "gene-and-protein-expression-library-of-human-breast-cancer-cytassist-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Gene and Protein Expression Library of Human Breast Cancer, IF, 6.5mm (FFPE)",
+  "count": "4169",
+  "gene_count": "17957",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "44,009（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "13,885（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/gene-and-protein-expression-library-of-human-breast-cancer-cytassist-ffpe-2-standard",
+  "dataset_name": "Visium CytAssist Gene and Protein Expression Library of Human Breast Cancer, IF, 6.5mm (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "gene-and-protein-expression-library-of-human-glioblastoma-cytassist-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Gene and Protein Expression Library of Human Glioblastoma, IF, 11mm (FFPE)",
+  "count": "5756",
+  "gene_count": "18042",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "68,906（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "26,938（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/gene-and-protein-expression-library-of-human-glioblastoma-cytassist-ffpe-2-standard",
+  "dataset_name": "Visium CytAssist Gene and Protein Expression Library of Human Glioblastoma, IF, 11mm (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "gene-protein-expression-library-of-human-tonsil-cytassist-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Gene and Protein Expression Library of Human Tonsil, H&E, 6.5 mm (FFPE)",
+  "count": "4194",
+  "gene_count": "18060",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "111,046（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "31,248（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/gene-protein-expression-library-of-human-tonsil-cytassist-ffpe-2-standard",
+  "dataset_name": "Visium CytAssist Gene and Protein Expression Library of Human Tonsil, H&E, 6.5 mm (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-bone-and-bone-marrow-data-with-custom-add-on-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Bone and Bone Marrow Data with Custom Add-on Panel",
+  "count": "354225",
+  "count_note": "样本量为 3 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 3,
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "7 ~ 27（3 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "6 ~ 21（3 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "3"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-bone-and-bone-marrow-data-with-custom-add-on-panel-1-standard",
+  "dataset_name": "Human Bone and Bone Marrow Data with Custom Add-on Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-brain-cancer-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Brain Cancer, 11 mm Capture Area (FFPE)",
+  "count": "10878",
+  "gene_count": "18076",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "74,057（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "8,339（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-brain-cancer-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Human Brain Cancer, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-block-a-section-1-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer (Block A Section 1)",
+  "count": "3813",
+  "gene_count": "22968",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "149,800（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "17,531（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-block-a-section-1-1-standard-1-0-0",
+  "dataset_name": "Human Breast Cancer (Block A Section 1)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-block-a-section-1-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer (Block A Section 1)",
+  "count": "3798",
+  "gene_count": "24923",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "150,392（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "20,762（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-block-a-section-1-1-standard-1-1-0",
+  "dataset_name": "Human Breast Cancer (Block A Section 1)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-block-a-section-2-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer (Block A Section 2)",
+  "count": "4015",
+  "gene_count": "23155",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "137,262（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "16,502（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-block-a-section-2-1-standard-1-0-0",
+  "dataset_name": "Human Breast Cancer (Block A Section 2)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-block-a-section-2-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer (Block A Section 2)",
+  "count": "3987",
+  "gene_count": "25072",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "138,226（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "18,828（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-block-a-section-2-1-standard-1-1-0",
+  "dataset_name": "Human Breast Cancer (Block A Section 2)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-ductal-carcinoma-in-situ-invasive-carcinoma-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer: Ductal Carcinoma In Situ, Invasive Carcinoma (FFPE)",
+  "count": "2518",
+  "gene_count": "17651",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "32,524（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "14,442（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-ductal-carcinoma-in-situ-invasive-carcinoma-ffpe-1-standard-1-3-0",
+  "dataset_name": "Human Breast Cancer: Ductal Carcinoma In Situ, Invasive Carcinoma (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-targeted-immunology-panel-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer: Targeted, Immunology Panel",
+  "count": "4325",
+  "gene_count": "1056",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "16,141（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "672(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-targeted-immunology-panel-1-standard-1-2-0",
+  "dataset_name": "Human Breast Cancer: Targeted, Immunology Panel",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-visium-fresh-frozen-whole-transcriptome-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer: Visium Fresh Frozen, Whole Transcriptome",
+  "count": "4898",
+  "gene_count": "24387",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "47,223（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "9,720（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-visium-fresh-frozen-whole-transcriptome-1-standard",
+  "dataset_name": "Human Breast Cancer: Visium Fresh Frozen, Whole Transcriptome",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-breast-cancer-whole-transcriptome-analysis-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Breast Cancer: Whole Transcriptome Analysis",
+  "count": "4325",
+  "gene_count": "23812",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "72,436（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "9,465（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-breast-cancer-whole-transcriptome-analysis-1-standard-1-2-0",
+  "dataset_name": "Human Breast Cancer: Whole Transcriptome Analysis",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-cerebellum-targeted-compare-neuroscience-panel-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Cerebellum: Targeted-Compare, Neuroscience Panel",
+  "count": "4992",
+  "gene_count": "1134",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "42,431（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "580(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-cerebellum-targeted-compare-neuroscience-panel-1-standard-1-2-0",
+  "dataset_name": "Human Cerebellum: Targeted-Compare, Neuroscience Panel",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-cerebellum-targeted-neuroscience-panel-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Cerebellum: Targeted, Neuroscience Panel",
+  "count": "4992",
+  "gene_count": "1186",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "10,200（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "625(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-cerebellum-targeted-neuroscience-panel-1-standard",
+  "dataset_name": "Human Cerebellum: Targeted, Neuroscience Panel",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-cerebellum-targeted-neuroscience-panel-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Cerebellum: Targeted, Neuroscience Panel",
+  "count": "4992",
+  "gene_count": "1142",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "10,200（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "625(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-cerebellum-targeted-neuroscience-panel-1-standard-1-2-0",
+  "dataset_name": "Human Cerebellum: Targeted, Neuroscience Panel",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-cerebellum-whole-transcriptome-analysis-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Cerebellum: Whole Transcriptome Analysis",
+  "count": "4992",
+  "gene_count": "23808",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "42,431（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "6,294（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-cerebellum-whole-transcriptome-analysis-1-standard-1-2-0",
+  "dataset_name": "Human Cerebellum: Whole Transcriptome Analysis",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-cervical-cancer-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Cervical Cancer (FFPE)",
+  "count": "2781",
+  "gene_count": "17871",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "73,046（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "26,050（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-cervical-cancer-1-standard",
+  "dataset_name": "Human Cervical Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-colon-preview-data-xenium-human-colon-gene-expression-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Colon Preview Data (Xenium Human Colon Gene Expression Panel)",
+  "count": "1781445",
+  "count_note": "样本量为 4 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 4,
+  "gene_count": "325",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "53 ~ 95（4 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "31 ~ 43（4 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-colon-preview-data-xenium-human-colon-gene-expression-panel-1-standard",
+  "dataset_name": "Human Colon Preview Data (Xenium Human Colon Gene Expression Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-colorectal-cancer-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Colorectal Cancer, 11 mm Capture Area (FFPE)",
+  "count": "9080",
+  "gene_count": "18077",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "100,335（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "49,282（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-colorectal-cancer-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Human Colorectal Cancer, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-colorectal-cancer-targeted-gene-signature-panel-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Colorectal Cancer: Targeted, Gene Signature Panel",
+  "count": "3138",
+  "gene_count": "1134",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "16,795（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "635(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-colorectal-cancer-targeted-gene-signature-panel-1-standard-1-2-0",
+  "dataset_name": "Human Colorectal Cancer: Targeted, Gene Signature Panel",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-colorectal-cancer-whole-transcriptome-analysis-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Colorectal Cancer: Whole Transcriptome Analysis",
+  "count": "3138",
+  "gene_count": "23233",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "112,228（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "8,906（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-colorectal-cancer-whole-transcriptome-analysis-1-standard-1-2-0",
+  "dataset_name": "Human Colorectal Cancer: Whole Transcriptome Analysis",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-glioblastoma-targeted-pan-cancer-panel-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Glioblastoma: Targeted, Pan-Cancer Panel",
+  "count": "3468",
+  "gene_count": "1198",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "16,383（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "776(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-glioblastoma-targeted-pan-cancer-panel-1-standard-1-2-0",
+  "dataset_name": "Human Glioblastoma: Targeted, Pan-Cancer Panel",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-glioblastoma-whole-transcriptome-analysis-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Glioblastoma: Whole Transcriptome Analysis",
+  "count": "3468",
+  "gene_count": "25281",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "136,128（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,596（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-glioblastoma-whole-transcriptome-analysis-1-standard-1-2-0",
+  "dataset_name": "Human Glioblastoma: Whole Transcriptome Analysis",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-heart-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Heart",
+  "count": "4235",
+  "gene_count": "19574",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "51,525（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "8,455（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-heart-1-standard-1-0-0",
+  "dataset_name": "Human Heart",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-heart-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Heart",
+  "count": "4247",
+  "gene_count": "20917",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "51,379（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "8,735（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-heart-1-standard-1-1-0",
+  "dataset_name": "Human Heart",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-heart-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Heart Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "count": "26366",
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "63"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "24"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-heart-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Heart Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-intestine-cancer-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Intestine Cancer (FPPE)",
+  "count": "2660",
+  "gene_count": "17579",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "77,288（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "25,312（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-intestine-cancer-1-standard",
+  "dataset_name": "Human Intestine Cancer (FPPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-kidney-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Kidney, 11 mm Capture Area (FFPE)",
+  "count": "5936",
+  "gene_count": "18068",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "152,554（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,548（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-kidney-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Human Kidney, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-kidney-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Kidney Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "count": "154070",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "54 ~ 57（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "27 ~ 39（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-kidney-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Kidney Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-liver-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Liver Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "count": "401953",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "80 ~ 114（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "33 ~ 60（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-liver-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Liver Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-lung-cancer-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Lung Cancer, 11 mm Capture Area (FFPE)",
+  "count": "6195",
+  "gene_count": "18077",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "136,379（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "66,268（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-lung-cancer-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Human Lung Cancer, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-lung-cancer-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Lung Cancer (FFPE)",
+  "count": "3858",
+  "gene_count": "18066",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "35,785（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "13,991（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-lung-cancer-ffpe-2-standard",
+  "dataset_name": "Human Lung Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-lung-cancer-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Lung Cancer Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "count": "150365",
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "132"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "53"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-lung-cancer-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Lung Cancer Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-lymph-node-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Lymph Node",
+  "count": "4039",
+  "gene_count": "22991",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "123,189（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "16,853（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-lymph-node-1-standard-1-0-0",
+  "dataset_name": "Human Lymph Node",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-lymph-node-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Lymph Node",
+  "count": "4035",
+  "gene_count": "25187",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "123,311（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "20,239（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-lymph-node-1-standard-1-1-0",
+  "dataset_name": "Human Lymph Node",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-lymph-node-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Lymph Node Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "count": "377985",
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "45"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "27"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-lymph-node-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Lymph Node Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-melanoma-if-stained-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Melanoma, IF Stained (FFPE)",
+  "count": "3458",
+  "gene_count": "18069",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "55,952（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "27,894（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-melanoma-if-stained-ffpe-2-standard",
+  "dataset_name": "Human Melanoma, IF Stained (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-ovarian-cancer-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Ovarian Cancer (FFPE)",
+  "count": "3455",
+  "gene_count": "17294",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "63,836（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "28,927（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-ovarian-cancer-1-standard",
+  "dataset_name": "Human Ovarian Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-ovarian-cancer-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Ovarian Cancer, 11 mm Capture Area (FFPE)",
+  "count": "4674",
+  "gene_count": "18064",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "46,109（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "32,048（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-ovarian-cancer-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Human Ovarian Cancer, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-ovarian-cancer-targeted-compare-immunology-panel-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Ovarian Cancer: Targeted-Compare, Immunology Panel. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "count": "3493",
+  "gene_count": "992",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "80,586（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "501(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-ovarian-cancer-targeted-compare-immunology-panel-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0",
+  "dataset_name": "Human Ovarian Cancer: Targeted-Compare, Immunology Panel. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-ovarian-cancer-targeted-immunology-panel-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Ovarian Cancer: Targeted, Immunology Panel. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "count": "3493",
+  "gene_count": "991",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "10,391（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "456(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-ovarian-cancer-targeted-immunology-panel-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0",
+  "dataset_name": "Human Ovarian Cancer: Targeted, Immunology Panel. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-ovarian-cancer-targeted-pan-cancer-panel-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Ovarian Cancer: Targeted, Pan-Cancer Panel. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "count": "3493",
+  "gene_count": "1198",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "20,156（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "677(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-ovarian-cancer-targeted-pan-cancer-panel-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0",
+  "dataset_name": "Human Ovarian Cancer: Targeted, Pan-Cancer Panel. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-ovarian-cancer-whole-transcriptome-analysis-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Ovarian Cancer: Whole Transcriptome Analysis. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "count": "3493",
+  "gene_count": "24019",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "80,586（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "8,095（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-ovarian-cancer-whole-transcriptome-analysis-stains-dapi-anti-pan-ck-anti-cd-45-1-standard-1-2-0",
+  "dataset_name": "Human Ovarian Cancer: Whole Transcriptome Analysis. Stains: DAPI, Anti-PanCK, Anti-CD45",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-pancreas-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Pancreas Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "count": "103901",
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "109"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "39"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-pancreas-preview-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Pancreas Preview Data (Xenium Human Multi-Tissue and Cancer Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-prostate-cancer-acinar-cell-carcinoma-ffpe-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Prostate Cancer, Acinar Cell Carcinoma (FFPE)",
+  "count": "3043",
+  "gene_count": "17350",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "50,207（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "19,828（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-prostate-cancer-acinar-cell-carcinoma-ffpe-1-standard",
+  "dataset_name": "Human Prostate Cancer, Acinar Cell Carcinoma (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-prostate-cancer-adenocarcinoma-with-invasive-carcinoma-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Prostate Cancer, Adenocarcinoma with Invasive Carcinoma (FFPE)",
+  "count": "4371",
+  "gene_count": "16907",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "23,087（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "12,844（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-prostate-cancer-adenocarcinoma-with-invasive-carcinoma-ffpe-1-standard-1-3-0",
+  "dataset_name": "Human Prostate Cancer, Adenocarcinoma with Invasive Carcinoma (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-prostate-cancer-adjacent-normal-section-with-if-staining-ffpe-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Human Prostate Cancer, Adjacent Normal Section with IF Staining (FFPE)",
+  "count": "3460",
+  "gene_count": "16979",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "29,191（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,444（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-prostate-cancer-adjacent-normal-section-with-if-staining-ffpe-1-standard",
+  "dataset_name": "Human Prostate Cancer, Adjacent Normal Section with IF Staining (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-prostate-cancer-adjacent-normal-section-with-if-staining-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Prostate Cancer, Adjacent Normal Section with IF Staining (FFPE)",
+  "count": "3460",
+  "gene_count": "16979",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "29,191（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,444（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-prostate-cancer-adjacent-normal-section-with-if-staining-ffpe-1-standard-1-3-0",
+  "dataset_name": "Human Prostate Cancer, Adjacent Normal Section with IF Staining (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-skin-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Skin Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "count": "158582",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "17 ~ 25（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "11 ~ 14（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-skin-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Skin Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-skin-preview-data-xenium-human-skin-gene-expression-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Skin Preview Data (Xenium Human Skin Gene Expression Panel)",
+  "count": "106980",
+  "gene_count": "282",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "163"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "57"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-skin-preview-data-xenium-human-skin-gene-expression-panel-1-standard",
+  "dataset_name": "Human Skin Preview Data (Xenium Human Skin Gene Expression Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-skin-preview-data-xenium-human-skin-gene-expression-panel-add-on-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Skin Preview Data (Xenium Human Skin Gene Expression Panel with Custom Add-On)",
+  "count": "87499",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "122"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "56"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-skin-preview-data-xenium-human-skin-gene-expression-panel-add-on-1-standard",
+  "dataset_name": "Human Skin Preview Data (Xenium Human Skin Gene Expression Panel with Custom Add-On)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "human-spinal-cord-targeted-neuroscience-panel-stains-dapi-anti-snap-25-anti-gfap-anti-myelin-cn-pase-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Spinal Cord: Targeted, Neuroscience Panel. Stains: DAPI, Anti-SNAP25, Anti-GFAP, Anti-Myelin CNPase",
+  "count": "2812",
+  "gene_count": "1141",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "10,761（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "611(Median Targeted UMI Counts per Spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-spinal-cord-targeted-neuroscience-panel-stains-dapi-anti-snap-25-anti-gfap-anti-myelin-cn-pase-1-standard-1-2-0",
+  "dataset_name": "Human Spinal Cord: Targeted, Neuroscience Panel. Stains: DAPI, Anti-SNAP25, Anti-GFAP, Anti-Myelin CNPase",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-spinal-cord-whole-transcriptome-analysis-stains-dapi-anti-snap-25-anti-gfap-anti-myelin-cn-pase-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Human Spinal Cord: Whole Transcriptome Analysis. Stains: DAPI, Anti-SNAP25, Anti-GFAP, Anti-Myelin CNPase",
+  "count": "2812",
+  "gene_count": "23955",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "77,754（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "4,854（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-spinal-cord-whole-transcriptome-analysis-stains-dapi-anti-snap-25-anti-gfap-anti-myelin-cn-pase-1-standard-1-2-0",
+  "dataset_name": "Human Spinal Cord: Whole Transcriptome Analysis. Stains: DAPI, Anti-SNAP25, Anti-GFAP, Anti-Myelin CNPase",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "human-tonsil-data-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Human Tonsil Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "count": "2214008",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "50 ~ 60（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "30 ~ 34（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/human-tonsil-data-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Human Tonsil Data with Xenium Human Multi-Tissue and Cancer Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "invasive-ductal-carcinoma-stained-with-fluorescent-cd-3-antibody-1-standard-1-2-0": {
+  "platform": "visium",
+  "name_from_excel": "Invasive Ductal Carcinoma Stained With Fluorescent CD3 Antibody",
+  "count": "4727",
+  "gene_count": "23678",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "40,795（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "6,314（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/invasive-ductal-carcinoma-stained-with-fluorescent-cd-3-antibody-1-standard-1-2-0",
+  "dataset_name": "Invasive Ductal Carcinoma Stained With Fluorescent CD3 Antibody",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-bone-data-with-custom-add-on-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Mouse Bone Data with Custom Add-on Panel",
+  "count": "849577",
+  "count_note": "样本量为 3 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 3,
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "65 ~ 70（3 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "31 ~ 36（3 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "3"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-bone-data-with-custom-add-on-panel-1-standard",
+  "dataset_name": "Mouse Bone Data with Custom Add-on Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "mouse-brain-coronal-section-1-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Coronal Section 1 (FFPE)",
+  "count": "2310",
+  "gene_count": "19352",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "53,479（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "24,862（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-coronal-section-1-ffpe-2-standard",
+  "dataset_name": "Mouse Brain Coronal Section 1 (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-coronal-section-2-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Coronal Section 2 (FFPE)",
+  "count": "2235",
+  "gene_count": "19306",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "51,674（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "14,491（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-coronal-section-2-ffpe-2-standard",
+  "dataset_name": "Mouse Brain Coronal Section 2 (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-section-coronal-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Section (Coronal)",
+  "count": "2702",
+  "gene_count": "21949",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "115,569（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "28,941（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-section-coronal-1-standard",
+  "dataset_name": "Mouse Brain Section (Coronal)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-section-coronal-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Section (Coronal)",
+  "count": "2698",
+  "gene_count": "20984",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "115,740（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "27,198（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-section-coronal-1-standard-1-0-0",
+  "dataset_name": "Mouse Brain Section (Coronal)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-section-coronal-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Section (Coronal)",
+  "count": "2702",
+  "gene_count": "21949",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "115,569（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "28,944（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-section-coronal-1-standard-1-1-0",
+  "dataset_name": "Mouse Brain Section (Coronal)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-1-sagittal-anterior-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 1 (Sagittal-Anterior)",
+  "count": "2696",
+  "gene_count": "20467",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "124,367（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "24,511（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-1-sagittal-anterior-1-standard-1-0-0",
+  "dataset_name": "Mouse Brain Serial Section 1 (Sagittal-Anterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-1-sagittal-anterior-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 1 (Sagittal-Anterior)",
+  "count": "2695",
+  "gene_count": "21334",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "124,414（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "25,888（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-1-sagittal-anterior-1-standard-1-1-0",
+  "dataset_name": "Mouse Brain Serial Section 1 (Sagittal-Anterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-1-sagittal-posterior-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 1 (Sagittal-Posterior)",
+  "count": "3353",
+  "gene_count": "20524",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "87,180（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "14,864（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-1-sagittal-posterior-1-standard-1-0-0",
+  "dataset_name": "Mouse Brain Serial Section 1 (Sagittal-Posterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-1-sagittal-posterior-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 1 (Sagittal-Posterior)",
+  "count": "3355",
+  "gene_count": "21363",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "87,128（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "15,783（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-1-sagittal-posterior-1-standard-1-1-0",
+  "dataset_name": "Mouse Brain Serial Section 1 (Sagittal-Posterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-2-sagittal-anterior-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 2 (Sagittal-Anterior)",
+  "count": "2823",
+  "gene_count": "21221",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "129,822（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "20,152（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-2-sagittal-anterior-1-standard",
+  "dataset_name": "Mouse Brain Serial Section 2 (Sagittal-Anterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-2-sagittal-anterior-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 2 (Sagittal-Anterior)",
+  "count": "2825",
+  "gene_count": "20368",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "129,730（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "19,274（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-2-sagittal-anterior-1-standard-1-0-0",
+  "dataset_name": "Mouse Brain Serial Section 2 (Sagittal-Anterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-2-sagittal-anterior-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 2 (Sagittal-Anterior)",
+  "count": "2825",
+  "gene_count": "21221",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "129,730（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "20,145（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-2-sagittal-anterior-1-standard-1-1-0",
+  "dataset_name": "Mouse Brain Serial Section 2 (Sagittal-Anterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-2-sagittal-posterior-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 2 (Sagittal-Posterior)",
+  "count": "3289",
+  "gene_count": "21175",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "73,558（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "14,262（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-2-sagittal-posterior-1-standard",
+  "dataset_name": "Mouse Brain Serial Section 2 (Sagittal-Posterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-2-sagittal-posterior-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 2 (Sagittal-Posterior)",
+  "count": "3293",
+  "gene_count": "20328",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "73,468（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "13,524（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-2-sagittal-posterior-1-standard-1-0-0",
+  "dataset_name": "Mouse Brain Serial Section 2 (Sagittal-Posterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-brain-serial-section-2-sagittal-posterior-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Brain Serial Section 2 (Sagittal-Posterior)",
+  "count": "3289",
+  "gene_count": "21174",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "73,558（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "14,262（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-brain-serial-section-2-sagittal-posterior-1-standard-1-1-0",
+  "dataset_name": "Mouse Brain Serial Section 2 (Sagittal-Posterior)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-embryo-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Embryo, 11 mm Capture Area (FFPE)",
+  "count": "6443",
+  "gene_count": "19404",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "129,162（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "62,780（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-embryo-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Mouse Embryo, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-kidney-section-coronal-1-standard-1-0-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Kidney Section (Coronal)",
+  "count": "1438",
+  "gene_count": "19207",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "261,122（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "31,716（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-kidney-section-coronal-1-standard-1-0-0",
+  "dataset_name": "Mouse Kidney Section (Coronal)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-kidney-section-coronal-1-standard-1-1-0": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Kidney Section (Coronal)",
+  "count": "1438",
+  "gene_count": "20100",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "261,122（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "38,308（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-kidney-section-coronal-1-standard-1-1-0",
+  "dataset_name": "Mouse Kidney Section (Coronal)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-pup-preview-data-xenium-mouse-tissue-atlassing-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Whole Mouse Pup Preview Data (Xenium Mouse Tissue Atlassing Panel)",
+  "count": "1355849",
+  "gene_count": "379",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "113"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "40"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-pup-preview-data-xenium-mouse-tissue-atlassing-panel-1-standard",
+  "dataset_name": "Whole Mouse Pup Preview Data (Xenium Mouse Tissue Atlassing Panel)",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "mouse-tissue-microarray-in-3x3-layout-with-1-mm-edge-to-edge-spacing-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Tissue Microarray in 3x3 Layout with 1 mm Edge to Edge Spacing (FFPE)",
+  "count": "4679",
+  "gene_count": "19398",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "139,348（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "36,683（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-tissue-microarray-in-3x3-layout-with-1-mm-edge-to-edge-spacing-ffpe-2-standard",
+  "dataset_name": "Mouse Tissue Microarray in 3x3 Layout with 1 mm Edge to Edge Spacing (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-tissue-microarray-in-3x3-layout-with-2-mm-edge-to-edge-spacing-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Tissue Microarray in 3x3 Layout with 2 mm Edge to Edge Spacing (FFPE)",
+  "count": "4049",
+  "gene_count": "19373",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "151,640（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "18,768（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-tissue-microarray-in-3x3-layout-with-2-mm-edge-to-edge-spacing-ffpe-2-standard",
+  "dataset_name": "Mouse Tissue Microarray in 3x3 Layout with 2 mm Edge to Edge Spacing (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "mouse-tissue-microarray-in-5x5-layout-with-1-mm-edge-to-edge-spacing-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Mouse Tissue Microarray in 5x5 Layout with 1 mm Edge to Edge Spacing (FFPE)",
+  "count": "2805",
+  "gene_count": "19399",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "226,412（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "66,412（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/mouse-tissue-microarray-in-5x5-layout-with-1-mm-edge-to-edge-spacing-ffpe-2-standard",
+  "dataset_name": "Mouse Tissue Microarray in 5x5 Layout with 1 mm Edge to Edge Spacing (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "multiomic-integration-neuroscience-application-note-visium-for-ffpe-plus-immunofluorescence-alzheimers-disease-mouse-model-brain-coronal-sections-from-one-hemisphere-over-a-time-course-1-standard": {
+  "platform": "visium",
+  "name_from_excel": "Multiomic Integration Neuroscience Application Note: Visium for FFPE Plus Immunofluorescence Alzheimer's Disease Mouse Model Brain Coronal Sections from One Hemisphere Over a Time Course",
+  "count": "36801",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "无"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "15,194(Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/multiomic-integration-neuroscience-application-note-visium-for-ffpe-plus-immunofluorescence-alzheimers-disease-mouse-model-brain-coronal-sections-from-one-hemisphere-over-a-time-course-1-standard",
+  "dataset_name": "Multiomic Integration Neuroscience Application Note: Visium for FFPE Plus Immunofluorescence Alzheimer's Disease Mouse Model Brain Coronal Sections from One Hemisphere Over a Time Course",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "normal-human-prostate-ffpe-1-standard-1-3-0": {
+  "platform": "visium",
+  "name_from_excel": "Normal Human Prostate (FFPE)",
+  "count": "2543",
+  "gene_count": "16527",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "28,464（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "5,467（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/normal-human-prostate-ffpe-1-standard-1-3-0",
+  "dataset_name": "Normal Human Prostate (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "pancreatic-cancer-with-xenium-human-multi-tissue-and-cancer-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Pancreatic Cancer with Xenium Human Multi-Tissue and Cancer Panel",
+  "count": "190965",
+  "gene_count": "97",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "114"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "59"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/pancreatic-cancer-with-xenium-human-multi-tissue-and-cancer-panel-1-standard",
+  "dataset_name": "Pancreatic Cancer with Xenium Human Multi-Tissue and Cancer Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "preservation-method-comparison-on-visium-cytassist-ffpe-mouse-brain-sagittal-11-mm-capture-area-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Preservation Method Comparison on Visium CytAssist: FFPE Mouse Brain (Sagittal), 11 mm Capture Area",
+  "count": "8470",
+  "gene_count": "19364",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "85,561（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "11,129（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/preservation-method-comparison-on-visium-cytassist-ffpe-mouse-brain-sagittal-11-mm-capture-area-2-standard",
+  "dataset_name": "Preservation Method Comparison on Visium CytAssist: FFPE Mouse Brain (Sagittal), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "preservation-method-comparison-on-visium-cytassist-fixed-frozen-mouse-brain-sagittal-11-mm-capture-area-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Preservation Method Comparison on Visium CytAssist: Fixed Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "count": "5134",
+  "gene_count": "19160",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "140,919（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "43,362（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/preservation-method-comparison-on-visium-cytassist-fixed-frozen-mouse-brain-sagittal-11-mm-capture-area-2-standard",
+  "dataset_name": "Preservation Method Comparison on Visium CytAssist: Fixed Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "preservation-method-comparison-on-visium-cytassist-fresh-frozen-mouse-brain-sagittal-11-mm-capture-area-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Preservation Method Comparison on Visium CytAssist: Fresh Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "count": "6965",
+  "gene_count": "17374",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "86,715（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "23,644（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/preservation-method-comparison-on-visium-cytassist-fresh-frozen-mouse-brain-sagittal-11-mm-capture-area-2-standard",
+  "dataset_name": "Preservation Method Comparison on Visium CytAssist: Fresh Frozen Mouse Brain (Sagittal), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "preview-data-ffpe-human-lung-cancer-with-xenium-multimodal-cell-segmentation-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Preview Data: FFPE Human Lung Cancer with Xenium Multimodal Cell Segmentation",
+  "count": "162254",
+  "gene_count": "377",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "46"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "29"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/preview-data-ffpe-human-lung-cancer-with-xenium-multimodal-cell-segmentation-1-standard",
+  "dataset_name": "Preview Data: FFPE Human Lung Cancer with Xenium Multimodal Cell Segmentation",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "preview-data-xenium-prime-gene-expression": {
+  "platform": "xenium",
+  "name_from_excel": "Preview Data: FFPE Human Lymph Node with 5K Pan Tissue and Pathways Panel",
+  "count": "708983",
+  "gene_count": "4624",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "255"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "217"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/preview-data-xenium-prime-gene-expression",
+  "dataset_name": "Preview Data: FFPE Human Lymph Node with 5K Pan Tissue and Pathways Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "visium-cytassist-gene-and-protein-expression-library-of-human-tonsil-with-add-on-antibodies-h-e-6-5-mm-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Gene and Protein Expression Library of Human Tonsil with Add-on Antibodies, H&E, 6.5 mm (FFPE)",
+  "count": "4908",
+  "gene_count": "18066",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "75,598（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "29,647（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-cytassist-gene-and-protein-expression-library-of-human-tonsil-with-add-on-antibodies-h-e-6-5-mm-ffpe-2-standard",
+  "dataset_name": "Visium CytAssist Gene and Protein Expression Library of Human Tonsil with Add-on Antibodies, H&E, 6.5 mm (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-cytassist-gene-expression-libraries-of-post-xenium-human-colon-cancer-ffpe-using-the-human-whole-transcriptome-probe-set-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Gene Expression Libraries of Post-Xenium Human Colon Cancer (FFPE)",
+  "count": "6487",
+  "gene_count": "18063",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "21,737（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "5,464（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-cytassist-gene-expression-libraries-of-post-xenium-human-colon-cancer-ffpe-using-the-human-whole-transcriptome-probe-set-2-standard",
+  "dataset_name": "Visium CytAssist Gene Expression Libraries of Post-Xenium Human Colon Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-cytassist-gene-expression-libraries-of-post-xenium-mouse-brain-ff-using-the-mouse-whole-transcriptome-probe-set-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Gene Expression Libraries of Post-Xenium Mouse Brain (FF)",
+  "count": "5254",
+  "gene_count": "16998",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "42,778（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "23,072（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-cytassist-gene-expression-libraries-of-post-xenium-mouse-brain-ff-using-the-mouse-whole-transcriptome-probe-set-2-standard",
+  "dataset_name": "Visium CytAssist Gene Expression Libraries of Post-Xenium Mouse Brain (FF)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-cytassist-mouse-embryo-11-mm-capture-area-ffpe-2-standard": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist, Mouse Embryo, 11 mm Capture Area (FFPE)",
+  "count": "6434",
+  "gene_count": "19404",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "129,343（Per spot)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "56,392（Per spot)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-cytassist-mouse-embryo-11-mm-capture-area-ffpe-2-standard",
+  "dataset_name": "Visium CytAssist, Mouse Embryo, 11 mm Capture Area (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-11mm-human-TA": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Lung Cancer, Breast Cancer and Colon Cancer Tissue Array (FFPE), 11 mm Capture Area",
+  "count": "506400",
+  "gene_count": "18072",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1394.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "202"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（1，290，617），16 µm（328,840）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-human-TA",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Lung Cancer, Breast Cancer and Colon Cancer Tissue Array (FFPE), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-11mm-human-breast-cancer-tma": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Breast Cancer Tissue Microarray (FFPE), 11 mm Capture Area",
+  "count": "117730",
+  "gene_count": "18065",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "6289.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "241"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（415,161），16 µm（106,682）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-human-breast-cancer-tma",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer Tissue Microarray (FFPE), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-11mm-human-colon-cancer-HE": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Colon Cancer (FF), 11 mm Capture Area",
+  "count": "1320549",
+  "gene_count": "18021",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "2821.9"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "557"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（1,720,912），16 µm（432,011）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-human-colon-cancer-HE",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Colon Cancer (FF), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-11mm-human-ovarian-cancer-IF": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Ovarian Cancer (FF) with Immunofluorescent staining, 11 mm Capture Area",
+  "count": "1762553",
+  "gene_count": "17692",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1703.1(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "776.4(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm(1,762,553),16 µm(442,750)"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-human-ovarian-cancer-IF",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Ovarian Cancer (FF) with Immunofluorescent staining, 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-11mm-mouse-embryo": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Embryo (FFPE), 11 mm Capture Area",
+  "count": "555179",
+  "gene_count": "19039",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "3007.8"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "1091"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm(875,109),16 µm(222,228)"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-mouse-embryo",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Embryo (FFPE), 11 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-6p5mm-human-colon-cancer": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Colon Cancer (FFPE), 6.5 mm Capture Area",
+  "count": "381174",
+  "gene_count": "18064",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "479"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "113"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（588,649），16 µm（147,526）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-6p5mm-human-colon-cancer",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Colon Cancer (FFPE), 6.5 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-6p5mm-human-heart": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Heart (FFPE), 6.5 mm Capture Area",
+  "count": "45616",
+  "gene_count": "17695",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1337.7"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "245"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（666,027），16 µm（167,161）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-6p5mm-human-heart",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Heart (FFPE), 6.5 mm Capture Area",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-human-breast-cancer-fixed-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fixed Frozen)",
+  "count": "700",
+  "gene_count": "18027",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "779.6(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "401(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（700,193），16 µm（175,095）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-breast-cancer-fixed-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fixed Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-human-breast-cancer-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fresh Frozen)",
+  "count": "472",
+  "gene_count": "17527",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1581.5(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "772.8(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（472,859），16 µm（119,082）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-breast-cancer-fresh-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-human-lung-cancer-fixed-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Lung Cancer (Fixed Frozen)",
+  "count": "617",
+  "gene_count": "18018",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "859.9(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "268(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（617,107），16 µm（154,431）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-lung-cancer-fixed-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Lung Cancer (Fixed Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-human-lung-cancer-post-xenium-expt": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Libraries, Post-Xenium, Human Lung Cancer (FFPE)",
+  "count": "448109",
+  "gene_count": "18054",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "883.1（per 8 µm bin）"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "211.7（per 8 µm bin）"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（448,109),16 µm(112,898)"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-lung-cancer-post-xenium-expt",
+  "dataset_name": "Visium HD Spatial Gene Expression Libraries, Post-Xenium, Human Lung Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-human-tonsil-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Tonsil (Fresh Frozen)",
+  "count": "701",
+  "gene_count": "18009",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1825.1(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "545.1(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（701,631），16 µm（175,448）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-tonsil-fresh-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Tonsil (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-human-tonsil-fresh-frozen-if": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Tonsil, IF (Fresh Frozen)",
+  "count": "679",
+  "gene_count": "16966",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1108(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "295.5(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（679,294），16 µm（170,034）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-human-tonsil-fresh-frozen-if",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Tonsil, IF (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-breast-cancer-ff-ultima": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fresh Frozen), Ultima Sequencing",
+  "count": "583104",
+  "gene_count": "17979",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "3464.2(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "1441.3(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（583,104），16 µm（146,057）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-breast-cancer-ff-ultima",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fresh Frozen), Ultima Sequencing",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-breast-cancer-ff-ultima-4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fresh Frozen), Ultima Sequencing",
+  "count": "38993",
+  "gene_count": "18024",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "21886"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "6637"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（583,104），16 µm（146,057）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-breast-cancer-ff-ultima-4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fresh Frozen), Ultima Sequencing",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-breast-cancer-ffpe-if": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Breast Cancer, IF (FFPE)",
+  "count": "663857",
+  "gene_count": "18010",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "557.3per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "96.9(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（663,857），16 µm（167,545）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-breast-cancer-ffpe-if",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer, IF (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-kidney-ffpe": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Kidney (FFPE)",
+  "count": "666694",
+  "gene_count": "17996",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "358.3(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "111.4(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（666,694），16 µm（166,813）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-kidney-ffpe",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Kidney (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-kidney-ffpe-v4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Kidney (FFPE)",
+  "count": "148056",
+  "gene_count": "18043",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1036.5"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "322"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（666,695），16 µm（166,813）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-kidney-ffpe-v4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Kidney (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-lymph-node-v4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Lymph Node (FFPE)",
+  "count": "300211",
+  "gene_count": "18089",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1290.1"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "71"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（351,076），16 µm（90,566）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-lymph-node-v4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Lymph Node (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-pancreas": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Pancreas (FFPE)",
+  "count": "421",
+  "gene_count": "18050",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1016.4(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "553(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（421,475），16 µm（106,574）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-pancreas",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Pancreas (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-pancreas-4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Pancreas (FFPE)",
+  "count": "50897",
+  "gene_count": "18098",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "3586"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "1984"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（421,485），16 µm（106,583）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-pancreas-4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Pancreas (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-prostate-cancer-ffpe": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Prostate Cancer (FFPE)",
+  "count": "227257",
+  "gene_count": "18109",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1700.4"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "114"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（552,642），16 µm（139,446）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-prostate-cancer-ffpe",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Prostate Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-human-tonsil-ff-ultima": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Tonsil (Fresh Frozen), Ultima Sequencing",
+  "count": "553820",
+  "gene_count": "18061",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "3614(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "1242.2(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（553,820），16 µm（139,406）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-human-tonsil-ff-ultima",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Tonsil (Fresh Frozen), Ultima Sequencing",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-human-crc": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Colorectal Cancer (FFPE)",
+  "count": "545",
+  "gene_count": "18072",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1321.1(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "488.4(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（545,913），16 µm（137,051）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-human-crc",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Colorectal Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-human-crc-v4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Colorectal Cancer (FFPE)",
+  "count": "220703",
+  "gene_count": "18118",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "2586.2"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "759"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（516,880），16 µm（131,228）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-human-crc-v4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Colorectal Cancer (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-human-lung-cancer-if": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Human Lung Cancer, IF Stained (FFPE)",
+  "count": "605",
+  "gene_count": "17796",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "598.7(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "390.9(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（605,471），16 µm（152,048）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-human-lung-cancer-if",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Human Lung Cancer, IF Stained (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-brain-he": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Brain (FFPE)",
+  "count": "393",
+  "gene_count": "18991",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "849.2(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "225.4(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（393,543），16 µm（98,917）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-brain-he",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Brain (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-brain-he-v4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Brain (FFPE)",
+  "count": "40222",
+  "gene_count": "19002",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "5161.7"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "1070"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm(393,543),16 µm(98,917)"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-brain-he-v4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Brain (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-embryo": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Embryo (FFPE)",
+  "count": "344",
+  "gene_count": "19040",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1221.3(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "714.2(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（344,021），16 µm（88,051）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-embryo",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Embryo (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-embryo-4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Embryo (FFPE)",
+  "count": "220167",
+  "gene_count": "19051",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1651.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "922"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（344,024），16 µm（88,050）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-embryo-4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Embryo (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-intestine": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Small Intestine (FFPE)",
+  "count": "351",
+  "gene_count": "19029",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "922.7(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "392.4(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（351,817），16 µm（91,033）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-intestine",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Small Intestine (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-kidney": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Kidney (FFPE)",
+  "count": "502",
+  "gene_count": "19013",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1030.7(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "466.7(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（502,009），16 µm（126,114）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-kidney",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Kidney (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-libraries-of-mouse-kidney-v4": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Kidney (FFPE)",
+  "count": "277728",
+  "gene_count": "19024",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1664"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "606"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm(502,009),16 µm(126,113)"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-kidney-v4",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Kidney (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-mouse-brain-fixed-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Brain (Fixed Frozen)",
+  "count": "435",
+  "gene_count": "19016",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1031.7(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "317.5(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（435,605），16 µm（109,332）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-mouse-brain-fixed-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Brain (Fixed Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-mouse-brain-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Brain (Fresh Frozen)",
+  "count": "453",
+  "gene_count": "17797",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "2249.2(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "1032.1(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（453,820），16 µm（113,885）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-mouse-brain-fresh-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Brain (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-mouse-lung-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD Spatial Gene Expression Library, Mouse Lung (Fresh Frozen)",
+  "count": "576",
+  "gene_count": "18743",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1720.7(per 8 µm bin)"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "642.1(per 8 µm bin)"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（576,389），16 µm（145,323）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-mouse-lung-fresh-frozen",
+  "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Lung (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-cytassist-gene-expression-ovarian-cancer-discovery-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Cross-Platform Comparison: Visium HD Spatial Gene Expression Library, Human Ovarian Cancer (Fresh Frozen)",
+  "count": "183450",
+  "gene_count": "17966",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "9337.1"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "3277"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（445,751），16 µm（113,644）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-ovarian-cancer-discovery-fresh-frozen",
+  "dataset_name": "Cross-Platform Comparison: Visium HD Spatial Gene Expression Library, Human Ovarian Cancer (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-arabidopsis": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Arabidopsis thaliana (Fresh Frozen)",
+  "count": "1630",
+  "gene_count": "18546",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "27455"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "123"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（7,356），16 µm（2,089）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-arabidopsis",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Arabidopsis thaliana (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-human-mouse-xenograft-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Human + Mouse Xenograft (Fresh Frozen)",
+  "count": "336268",
+  "gene_count": "41035",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "595.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "181"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（515,980），16 µm（129,657）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-human-mouse-xenograft-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Human + Mouse Xenograft (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-human-pancreatic-cancer-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Human Pancreatic Cancer (Fresh Frozen)",
+  "count": "252214",
+  "gene_count": "26373",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1168.1"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "148"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（479,863），16 µm（121,667）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-human-pancreatic-cancer-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Human Pancreatic Cancer (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-mouse-brain-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Mouse Brain (Fresh Frozen)",
+  "count": "84031",
+  "gene_count": "22775",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1622.8"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "524"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（376,419），16 µm（94,592）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-mouse-brain-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Mouse Brain (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-mouse-embryo-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Mouse Embryo (Fresh Frozen)",
+  "count": "449697",
+  "gene_count": "25028",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1399.8"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "213"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（543,180），16 µm（136,130）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-mouse-embryo-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Mouse Embryo (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-mouse-kidney": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Mouse Kidney (Fresh Frozen)",
+  "count": "277215",
+  "gene_count": "22016",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "1548.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "309"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（423,482），16 µm(106,302)"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-mouse-kidney",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Mouse Kidney (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-ovarian-cancer-discovery-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Cross-Platform Comparison: Visium HD 3' Gene Expression Library, Human Ovarian Cancer (Fresh Frozen)",
+  "count": "258991",
+  "gene_count": "29936",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "5482"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "983"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（475,742），16 µm（120,274）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-ovarian-cancer-discovery-fresh-frozen",
+  "dataset_name": "Cross-Platform Comparison: Visium HD 3' Gene Expression Library, Human Ovarian Cancer (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-ovarian-cancer-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Human Ovarian Cancer (Fresh Frozen)",
+  "count": "200764",
+  "gene_count": "26990",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "2407.3"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "258"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（451,466），16 µm（113,518）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-ovarian-cancer-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Human Ovarian Cancer (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-rhesus-kidney-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Rhesus Macaque Kidney (Fresh Frozen)",
+  "count": "137399",
+  "gene_count": "22307",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "4111.4"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "162"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（330,390），16 µm（83,187）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-rhesus-kidney-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Rhesus Macaque Kidney (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-soybean": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Soybean Seed (Fresh Frozen)",
+  "count": "184426",
+  "gene_count": "37648",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "2018.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "102"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（525,538），16 µm（131,623）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-soybean",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Soybean Seed (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-hd-three-prime-zebrafish-head-fresh-frozen": {
+  "platform": "visium",
+  "name_from_excel": "Visium HD 3' Gene Expression Library, Zebrafish Head (Fresh Frozen)",
+  "count": "152562",
+  "gene_count": "19307",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "3149.6"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "22"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "8 µm（287,330），16 µm（74,294）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-zebrafish-head-fresh-frozen",
+  "dataset_name": "Visium HD 3' Gene Expression Library, Zebrafish Head (Fresh Frozen)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "visium-v2-human-lymph-node": {
+  "platform": "visium",
+  "name_from_excel": "Visium CytAssist Spatial Gene Expression Library, Human Lymph Node (FFPE)",
+  "count": "4163",
+  "gene_count": "18059",
+  "extra_facts": [
+   {
+    "label": "测序深度（mean reads）",
+    "value": "73396"
+   },
+   {
+    "label": "转录本计数中位数（UMI）",
+    "value": "28425"
+   },
+   {
+    "label": "空间分辨率（bin 指标）",
+    "value": "无"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/visium-v2-human-lymph-node",
+  "dataset_name": "Visium CytAssist Spatial Gene Expression Library, Human Lymph Node (FFPE)",
+  "source_file": "Visium-10x.xlsx"
+ },
+ "xenium-comparison-fresh-frozen-human-ovarian-cancer": {
+  "platform": "xenium",
+  "name_from_excel": "Cross-Platform Comparison: FF Human Ovarian Cancer with Xenium v1 and Xenium Prime 5K",
+  "count": "405982",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "595 ~ 1283（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "116 ~ 781（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-comparison-fresh-frozen-human-ovarian-cancer",
+  "dataset_name": "Cross-Platform Comparison: FF Human Ovarian Cancer with Xenium v1 and Xenium Prime 5K",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-ffpe-human-breast-biomarkers": {
+  "platform": "xenium",
+  "name_from_excel": "Xenium v1 Human Breast FFPE with Biomarkers & Housekeeping Genes Custom Panel",
+  "count": "3442976",
+  "count_note": "样本量为 12 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 12,
+  "gene_count": "280",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "73 ~ 304（12 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "39 ~ 87（12 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "12"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-ffpe-human-breast-biomarkers",
+  "dataset_name": "Xenium v1 Human Breast FFPE with Biomarkers & Housekeeping Genes Custom Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-ffpe-human-breast-with-custom-add-on-panel-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Xenium FFPE Human Breast with Custom Add-on Panel",
+  "count": "576963",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "119"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "55"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-ffpe-human-breast-with-custom-add-on-panel-1-standard",
+  "dataset_name": "Xenium FFPE Human Breast with Custom Add-on Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-human-brain-preview-data-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Xenium Human Brain Preview Data",
+  "count": "110248",
+  "count_note": "样本量为 3 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 3,
+  "gene_count": "65",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "166 ~ 216（3 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "28 ~ 72（3 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "3"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-human-brain-preview-data-1-standard",
+  "dataset_name": "Xenium Human Brain Preview Data",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-human-lung-cancer-post-xenium-technote": {
+  "platform": "xenium",
+  "name_from_excel": "Post-Xenium Technical Note: Xenium v1 and Xenium Prime 5K for FFPE Human Lung Cancer",
+  "count": "556987",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "289",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "58 ~ 242（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "30 ~ 196（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-human-lung-cancer-post-xenium-technote",
+  "dataset_name": "Post-Xenium Technical Note: Xenium v1 and Xenium Prime 5K for FFPE Human Lung Cancer",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-human-lung-preview-data-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Xenium Human Lung Preview Data",
+  "count": "827048",
+  "count_note": "样本量为 2 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 2,
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "71 ~ 105（2 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "48 ~ 62（2 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "2"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-human-lung-preview-data-1-standard",
+  "dataset_name": "Xenium Human Lung Preview Data",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-in-situ-analysis-of-alzheimers-disease-mouse-model-brain-coronal-sections-from-one-hemisphere-over-a-time-course-1-standard": {
+  "platform": "xenium",
+  "name_from_excel": "Xenium In Situ Analysis of Alzheimer's Disease Mouse Model Brain Coronal Sections from One Hemisphere Over a Time Course",
+  "count": "351714",
+  "count_note": "样本量为 6 张切片的合计（按 10x 官方页面逐切片数值相加）",
+  "n_sections": 6,
+  "gene_count": "99",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "175 ~ 242（6 张切片）"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "65 ~ 79（6 张切片）"
+   },
+   {
+    "label": "供体数量",
+    "value": "6"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-in-situ-analysis-of-alzheimers-disease-mouse-model-brain-coronal-sections-from-one-hemisphere-over-a-time-course-1-standard",
+  "dataset_name": "Xenium In Situ Analysis of Alzheimer's Disease Mouse Model Brain Coronal Sections from One Hemisphere Over a Time Course",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-ffpe-human-breast-cancer": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Breast Cancer with 5K Human Pan Tissue and Pathways Panel plus 100 Custom Genes",
+  "count": "699110",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "51"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "47"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-ffpe-human-breast-cancer",
+  "dataset_name": "FFPE Human Breast Cancer with 5K Human Pan Tissue and Pathways Panel plus 100 Custom Genes",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-ffpe-human-cervical-cancer": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Cervical Cancer with 5K Human Pan Tissue and Pathways Panel plus 100 Custom Genes",
+  "count": "840387",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "60"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "53"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-ffpe-human-cervical-cancer",
+  "dataset_name": "FFPE Human Cervical Cancer with 5K Human Pan Tissue and Pathways Panel plus 100 Custom Genes",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-ffpe-human-ovarian-cancer": {
+  "platform": "xenium",
+  "name_from_excel": "FFPE Human Ovarian Cancer with 5K Human Pan Tissue and Pathways Panel plus 100 Custom Genes",
+  "count": "407124",
+  "gene_count": "100",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "178"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "147"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-ffpe-human-ovarian-cancer",
+  "dataset_name": "FFPE Human Ovarian Cancer with 5K Human Pan Tissue and Pathways Panel plus 100 Custom Genes",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-ffpe-human-prostate": {
+  "platform": "xenium",
+  "name_from_excel": "Preview Data: FFPE Human Prostate Adenocarcinoma with 5K Human Pan Tissue and Pathways Panel",
+  "count": "193000",
+  "gene_count": "5006",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "144"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "122"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-ffpe-human-prostate",
+  "dataset_name": "Preview Data: FFPE Human Prostate Adenocarcinoma with 5K Human Pan Tissue and Pathways Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-ffpe-human-skin": {
+  "platform": "xenium",
+  "name_from_excel": "Preview Data: FFPE Human Skin Primary Dermal Melanoma with 5K Human Pan Tissue and Pathways Panel",
+  "count": "112551",
+  "gene_count": "5006",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "306"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "234"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-ffpe-human-skin",
+  "dataset_name": "Preview Data: FFPE Human Skin Primary Dermal Melanoma with 5K Human Pan Tissue and Pathways Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-ffpe-neonatal-mouse": {
+  "platform": "xenium",
+  "name_from_excel": "Whole Mouse Pup (FFPE) with 5K Mouse Pan Tissue and Pathways Panel and Snap25a/Snap25b Add-on",
+  "count": "1298870",
+  "gene_count": "4",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "241"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "178"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-ffpe-neonatal-mouse",
+  "dataset_name": "Whole Mouse Pup (FFPE) with 5K Mouse Pan Tissue and Pathways Panel and Snap25a/Snap25b Add-on",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-fresh-frozen-human-ovary": {
+  "platform": "xenium",
+  "name_from_excel": "Fresh Frozen Human Ovarian Adenocarcinoma with 5K Human Pan Tissue and Pathways Panel",
+  "count": "1157659",
+  "gene_count": "5001",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "1401"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "818"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-fresh-frozen-human-ovary",
+  "dataset_name": "Fresh Frozen Human Ovarian Adenocarcinoma with 5K Human Pan Tissue and Pathways Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-prime-fresh-frozen-mouse-brain": {
+  "platform": "xenium",
+  "name_from_excel": "Fresh Frozen Mouse Brain Hemisphere with 5K Mouse Pan Tissue and Pathways Panel",
+  "count": "708983",
+  "gene_count": "4624",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "255"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "217"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-prime-fresh-frozen-mouse-brain",
+  "dataset_name": "Fresh Frozen Mouse Brain Hemisphere with 5K Mouse Pan Tissue and Pathways Panel",
+  "source_file": "Xenium-10x.xlsx"
+ },
+ "xenium-protein-ffpe-human-renal-carcinoma": {
+  "platform": "xenium",
+  "name_from_excel": "Xenium In Situ Gene and Protein Expression data for FFPE Human Renal Cell Carcinoma",
+  "count": "465534",
+  "gene_count": "28",
+  "seg_mode": "Cells",
+  "extra_facts": [
+   {
+    "label": "细胞分割模式",
+    "value": "Cells"
+   },
+   {
+    "label": "高质量转录本中位数",
+    "value": "70"
+   },
+   {
+    "label": "单细胞基因中位数",
+    "value": "32"
+   },
+   {
+    "label": "供体数量",
+    "value": "1"
+   }
+  ],
+  "url": "https://www.10xgenomics.com/datasets/xenium-protein-ffpe-human-renal-carcinoma",
+  "dataset_name": "Xenium In Situ Gene and Protein Expression data for FFPE Human Renal Cell Carcinoma",
+  "source_file": "Xenium-10x.xlsx"
+ }
+}

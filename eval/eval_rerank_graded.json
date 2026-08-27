@@ -1,0 +1,17 @@
+{
+  "_comment": "附加分级评测集（内部仪器 / additive / optional）。用途：量化「可选 LLM 重排」相对确定性 rule-only 排序，在存活集内的排序质量差异。**绝不改、不替**官方二元评测 eval_queries.json（那套仍是唯一发布门）。",
+  "_grading": "外部裁判打分：relevance = 0（不满足 must_match，本不该出现）；否则 1 + 满足的 ideal 维度数。ideal 是查询语义上「更贴需求」但未被硬解析成约束的次级偏好，用来考察重排能否把更贴题的存活项排到前面。",
+  "_caveat": "本机数据的 description 基本是结构化字段的模板化复述，跨语言概念信号稀薄；加之解析器 fail-closed，重排可发挥空间很小，预期增益≈0。本集意在「用尺子证明」，而非制造增益。样本小、LLM 输出不完全可复现 → 结果为描述性，非推断统计。",
+  "queries": [
+    {"id": "g01", "query": "人类乳腺的数据", "must_match": {"species": "human", "tissue": "breast"}, "ideal": {"disease": ["breast cancer", "invasive ductal carcinoma"], "technology": "visium"}},
+    {"id": "g02", "query": "人类的癌症数据", "must_match": {"species": "human", "disease": ["cancer", "carcinoma"]}, "ideal": {"has_raw_data": true, "technology": "visium"}},
+    {"id": "g03", "query": "小鼠脑的数据", "must_match": {"species": "mouse", "tissue": "brain"}, "ideal": {"technology": "visium"}},
+    {"id": "g04", "query": "人类肺的单细胞数据", "must_match": {"species": "human", "tissue": "lung", "technology": "chromium"}, "ideal": {"disease": "lung cancer"}},
+    {"id": "g05", "query": "人类黑色素瘤数据", "must_match": {"species": "human", "disease": "melanoma"}, "ideal": {"has_raw_data": true, "technology": "chromium"}},
+    {"id": "g06", "query": "人类的空间转录组数据", "must_match": {"species": "human", "technology": "visium"}, "ideal": {"tissue": "breast", "disease": ["cancer", "carcinoma"]}},
+    {"id": "g07", "query": "人类乳腺癌数据", "must_match": {"species": "human", "disease": ["breast cancer", "invasive ductal carcinoma"]}, "ideal": {"technology": "visium", "has_raw_data": true}},
+    {"id": "g08", "query": "小鼠的单细胞数据", "must_match": {"species": "mouse", "technology": "chromium"}, "ideal": {"tissue": "brain"}},
+    {"id": "g09", "query": "人类的 Xenium 数据", "must_match": {"species": "human", "technology": "xenium"}, "ideal": {"disease": ["breast cancer", "invasive ductal carcinoma"], "has_raw_data": true}},
+    {"id": "g10", "query": "人类血液数据", "must_match": {"species": "human", "tissue": "blood"}, "ideal": {"technology": "chromium"}}
+  ]
+}

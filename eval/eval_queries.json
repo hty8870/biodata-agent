@@ -1,0 +1,66 @@
+{
+  "_comment": "阶段一评测集。query=喂给解析器的中文自然语言；must_match=硬条件(外部裁判)；nice_to_have=软条件；no_result_expected=库中应为空。",
+  "queries": [
+    {"id": "sp01", "category": "species", "query": "给我一些人类的数据集", "must_match": {"species": "human"}, "nice_to_have": {}},
+    {"id": "sp02", "category": "species", "query": "小鼠的数据", "must_match": {"species": "mouse"}, "nice_to_have": {}},
+    {"id": "sp03", "category": "species", "query": "斑马鱼相关数据", "must_match": {"species": "zebrafish"}, "nice_to_have": {}},
+
+    {"id": "ti01", "category": "tissue", "query": "人脑组织的数据", "must_match": {"species": "human", "tissue": "brain"}, "nice_to_have": {}},
+    {"id": "ti02", "category": "tissue", "query": "乳腺相关数据", "must_match": {"tissue": "breast"}, "nice_to_have": {}},
+    {"id": "ti03", "category": "tissue", "query": "肺组织数据", "must_match": {"tissue": "lung"}, "nice_to_have": {}},
+    {"id": "ti04", "category": "tissue", "query": "肾脏数据集", "must_match": {"tissue": "kidney"}, "nice_to_have": {}},
+    {"id": "ti05", "category": "tissue", "query": "血液样本数据", "must_match": {"tissue": "blood"}, "nice_to_have": {}},
+
+    {"id": "di01", "category": "disease", "query": "乳腺癌数据", "must_match": {"disease": ["breast cancer", "invasive ductal carcinoma"]}, "nice_to_have": {}},
+    {"id": "di02", "category": "disease", "query": "淋巴瘤的数据集", "must_match": {"disease": "lymphoma"}, "nice_to_have": {}},
+    {"id": "di03", "category": "disease", "query": "黑色素瘤数据", "must_match": {"disease": "melanoma"}, "nice_to_have": {}},
+    {"id": "di04", "category": "disease", "query": "胶质母细胞瘤数据", "must_match": {"disease": "glioblastoma"}, "nice_to_have": {}},
+    {"id": "di05", "category": "disease", "query": "肺癌数据集", "must_match": {"disease": "lung cancer"}, "nice_to_have": {}},
+    {"id": "di06", "category": "disease", "query": "胃癌相关数据", "must_match": {"disease": "gastric cancer"}, "nice_to_have": {}},
+    {"id": "di07", "category": "disease", "query": "白血病数据", "must_match": {"disease": "leukemia"}, "nice_to_have": {}},
+
+    {"id": "te01", "category": "technology", "query": "Visium 空间转录组数据", "must_match": {"technology": "visium"}, "nice_to_have": {}},
+    {"id": "te02", "category": "technology", "query": "Xenium 数据集", "must_match": {"technology": "xenium"}, "nice_to_have": {}},
+    {"id": "te03", "category": "technology", "query": "单细胞数据", "must_match": {"modality": "single-cell"}, "nice_to_have": {}, "_note": "受控重基线 2026-07-12（已授权）：单细胞由 platform=chromium 改为 modality 维；base 里 single-cell⟺chromium，指标逐位不变，多源修召回"},
+    {"id": "te04", "category": "technology", "query": "Atera 平台数据", "must_match": {"technology": "atera"}, "nice_to_have": {}},
+    {"id": "te05", "category": "technology", "query": "ATAC 染色质可及性数据", "must_match": {"technology": "atac"}, "nice_to_have": {}},
+    {"id": "te06", "category": "technology", "query": "Multiome 多组学数据", "must_match": {"technology": "multiome"}, "nice_to_have": {}},
+
+    {"id": "fq01", "category": "fastq", "query": "有 FASTQ 原始数据的人类数据集", "must_match": {"species": "human", "has_raw_data": true}, "nice_to_have": {}},
+    {"id": "fq02", "category": "fastq", "query": "可以重新跑流程的乳腺癌数据", "must_match": {"disease": ["breast cancer", "invasive ductal carcinoma"], "has_raw_data": true}, "nice_to_have": {}},
+
+    {"id": "co01", "category": "combination", "query": "有 FASTQ 的人类乳腺癌数据", "must_match": {"species": "human", "disease": ["breast cancer", "invasive ductal carcinoma"], "has_raw_data": true}, "nice_to_have": {"technology": ["visium", "spatial"], "tissue": "breast"}},
+    {"id": "co02", "category": "combination", "query": "人类乳腺癌的 Visium 数据", "must_match": {"species": "human", "disease": ["breast cancer", "invasive ductal carcinoma"], "technology": "visium"}, "nice_to_have": {"tissue": "breast"}},
+    {"id": "co03", "category": "combination", "query": "小鼠脑的空间转录组数据", "must_match": {"species": "mouse", "tissue": "brain", "technology": "visium"}, "nice_to_have": {}},
+    {"id": "co04", "category": "combination", "query": "人类淋巴瘤的单细胞数据", "must_match": {"species": "human", "disease": "lymphoma", "modality": "single-cell"}, "nice_to_have": {}},
+    {"id": "co05", "category": "combination", "query": "人类黑色素瘤数据", "must_match": {"species": "human", "disease": "melanoma"}, "nice_to_have": {}},
+    {"id": "co06", "category": "combination", "query": "人类肺癌的单细胞数据", "must_match": {"species": "human", "disease": "lung cancer", "modality": "single-cell"}, "nice_to_have": {}},
+    {"id": "co07", "category": "combination", "query": "Xenium 的人类乳腺癌数据", "must_match": {"species": "human", "disease": ["breast cancer", "invasive ductal carcinoma"], "technology": "xenium"}, "nice_to_have": {}},
+    {"id": "co08", "category": "combination", "query": "小鼠肾脏数据", "must_match": {"species": "mouse", "tissue": "kidney"}, "nice_to_have": {}},
+    {"id": "co09", "category": "combination", "query": "人类血液的单细胞数据", "must_match": {"species": "human", "tissue": "blood", "modality": "single-cell"}, "nice_to_have": {}},
+    {"id": "co10", "category": "combination", "query": "人脑的 Visium 空间数据", "must_match": {"species": "human", "tissue": "brain", "technology": "visium"}, "nice_to_have": {}},
+    {"id": "co11", "category": "combination", "query": "有 FASTQ 的小鼠脑数据", "must_match": {"species": "mouse", "tissue": "brain", "has_raw_data": true}, "nice_to_have": {}},
+    {"id": "co12", "category": "combination", "query": "人类卵巢癌数据", "must_match": {"species": "human", "disease": "ovarian"}, "nice_to_have": {}},
+    {"id": "co13", "category": "combination", "query": "人类胃癌数据", "must_match": {"species": "human", "disease": "gastric cancer"}, "nice_to_have": {}},
+    {"id": "co14", "category": "combination", "query": "有 FASTQ 的 Xenium 人类数据", "must_match": {"species": "human", "technology": "xenium", "has_raw_data": true}, "nice_to_have": {}},
+    {"id": "co15", "category": "combination", "query": "有原始数据的人类乳腺 Visium 数据", "must_match": {"species": "human", "tissue": "breast", "technology": "visium", "has_raw_data": true}, "nice_to_have": {}},
+    {"id": "co16", "category": "combination", "query": "小鼠的单细胞数据", "must_match": {"species": "mouse", "modality": "single-cell"}, "nice_to_have": {}},
+
+    {"id": "nr01", "category": "no_result", "query": "斑马鱼乳腺癌的 FASTQ 数据", "must_match": {"species": "zebrafish", "disease": ["breast cancer", "invasive ductal carcinoma"], "has_raw_data": true}, "nice_to_have": {}, "no_result_expected": true},
+    {"id": "nr02", "category": "no_result", "query": "斑马鱼的黑色素瘤数据", "must_match": {"species": "zebrafish", "disease": "melanoma"}, "nice_to_have": {}, "no_result_expected": true},
+    {"id": "nr03", "category": "no_result", "query": "大象的单细胞数据", "must_match": {"species": "elephant"}, "nice_to_have": {}, "no_result_expected": true},
+    {"id": "nr04", "category": "no_result", "query": "斑马鱼的 Xenium 数据", "must_match": {"species": "zebrafish", "technology": "xenium"}, "nice_to_have": {}, "no_result_expected": true},
+    {"id": "nr05", "category": "no_result", "query": "小鼠乳腺癌的 Atera 数据", "must_match": {"species": "mouse", "disease": ["breast cancer", "invasive ductal carcinoma"], "technology": "atera"}, "nice_to_have": {}, "no_result_expected": true},
+
+    {"id": "adv01", "category": "adversarial", "query": "翼龙的单细胞数据", "must_match": {"species": "pterosaur"}, "nice_to_have": {}, "no_result_expected": true, "_note": "未知实体 -> fail-closed abstain"},
+    {"id": "adv02", "category": "adversarial", "query": "霍格沃茨综合征的人类数据", "must_match": {"disease": "fictional"}, "nice_to_have": {}, "no_result_expected": true, "_note": "虚构疾病 -> abstain unresolved_term"},
+    {"id": "adv03", "category": "negation", "query": "不要小鼠的人类数据", "must_match": {"species": "human"}, "must_not_match": {"species": "mouse"}, "nice_to_have": {}, "_note": "受控重基线：否定语法落地 → include human + exclude mouse。语料含 Human,Mouse 混合记录，must_not_match 有判别力（已授权 2026-07-12）"},
+    {"id": "adv04", "category": "negation", "query": "除了脑以外的人类组织数据", "must_match": {"species": "human"}, "must_not_match": {"tissue": "brain"}, "nice_to_have": {}, "_note": "受控重基线：负向环缀 → include human + exclude brain（已授权 2026-07-12）"},
+    {"id": "adv05", "category": "adversarial", "query": "人或小鼠的脑数据", "must_match": {"species": ["human", "mouse"], "tissue": "brain"}, "nice_to_have": {}, "no_result_expected": false, "_note": "2026-07-25 受控重基线：同维度多值就是「或」（retriever 正向判据逐字为『须含任一 target』），照做而不弃权"},
+    {"id": "adv06", "category": "adversarial", "query": "肺癌或肝癌的数据", "must_match": {"disease": ["lung cancer", "non-small cell lung", "liver cancer", "hepatocellular"]}, "nice_to_have": {}, "no_result_expected": false, "_note": "2026-07-25 受控重基线：同上。must_match 列的是人工判据（本库里肺癌/肝癌的 disease 字段写法），不抄解析器的展开"},
+    {"id": "adv07", "category": "adversarial", "query": "最好是 Xenium 的黑色素瘤数据", "must_match": {"disease": "melanoma"}, "nice_to_have": {"technology": "xenium"}, "no_result_expected": false, "_note": "2026-07-25 受控重基线：「最好」＝软偏好（只加权不筛掉），与「优先 Xenium…」同解。本条的 must/nice 一个字没改——nice_to_have 本来就把它建模成软偏好，旧的 abstain 反而与本文件自相矛盾"},
+    {"id": "adv08", "category": "adversarial", "query": "斑马鱼的肺癌 Xenium 数据", "must_match": {"species": "zebrafish", "disease": "lung cancer", "technology": "xenium"}, "nice_to_have": {}, "no_result_expected": true, "_note": "冲突组合 -> no_match"},
+    {"id": "adv09", "category": "adversarial", "query": "大象的乳腺癌数据", "must_match": {"species": "elephant", "disease": ["breast cancer", "invasive ductal carcinoma"]}, "nice_to_have": {}, "no_result_expected": true, "_note": "已知但库中不存在的物种 -> no_match"},
+    {"id": "adv10", "category": "adversarial", "query": "小鼠的宫颈癌 Atera 数据", "must_match": {"species": "mouse", "disease": "cervical", "technology": "atera"}, "nice_to_have": {}, "no_result_expected": true, "_note": "不可能组合 -> no_match"}
+  ]
+}

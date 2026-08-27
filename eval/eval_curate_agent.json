@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "zh": "对话式数据库管护的 execution-based 冻结金标（2026-08-09 五机制批；借鉴 BIRD EX：断言沙盒终态而非输出文本）。raw = 模拟 LLM 的原始输出（真机由 evaluate_agent_live.py 探针覆盖）；本门钉的是「utterance + raw → plan → plan/apply 两步 → 文件系统终态」的确定性链。负例必须零副作用。",
+  "cases": [
+    {
+      "id": "c01", "utterance": "把 upload_a.json 从数据库里删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "upload_a.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1", "name": "A 一号"}, {"uid": "a2", "name": "A 二号"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"}]},
+      "expect": {"plan_fields": {"record_count": 2}, "external_count": 0, "recycle_count": 1,
+                 "recycle_contains": ["upload_a.json"], "manifest_contains": ["remove"]}
+    },
+    {
+      "id": "c02", "utterance": "把 elephant 数据集删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "elephant", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"}]},
+      "expect": {"plan_error": "unknown_file", "external_count": 1, "recycle_count": 0,
+                 "external_contains": ["upload_a.json"], "manifest_absent": ["remove"]}
+    },
+    {
+      "id": "c03", "utterance": "把 base_snapshot.json 删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "base_snapshot.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"base_snapshot.json": [{"uid": "b1"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"}]},
+      "expect": {"plan_error": "not_curatable", "external_count": 1, "recycle_count": 0}
+    },
+    {
+      "id": "c04", "utterance": "别删 upload_a.json",
+      "raw": {"verb": "curate.remove", "quoted": "删", "target": "upload_a.json", "confidence": "high"},
+      "expect_verb": "curate.remove", "expect_cancelled": true,
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": []},
+      "expect": {"external_count": 1, "recycle_count": 0, "manifest_absent": ["remove"]}
+    },
+    {
+      "id": "c05", "utterance": "把那个文件删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"}]},
+      "expect": {"plan_error": "bad_param", "external_count": 1, "recycle_count": 0}
+    },
+    {
+      "id": "c06", "utterance": "把刚删掉的 upload_a.json 找回来",
+      "raw": {"verb": "curate.restore", "quoted": "找回来", "confidence": "high"},
+      "expect_verb": "curate.restore",
+      "setup": {"recycle": {"20260101_000000_000000_upload_a.json": [{"uid": "a1"}, {"uid": "a2"}]}},
+      "drive": {"steps": [{"action": "restore", "restore_target": "upload_a.json"}]},
+      "expect": {"plan_fields": {"record_count": 2, "will_conflict": false},
+                 "external_count": 1, "recycle_count": 0,
+                 "external_contains": ["upload_a.json"], "manifest_contains": ["restore"]}
+    },
+    {
+      "id": "c07", "utterance": "把回收站里的 upload_ghost.json 恢复回来",
+      "raw": {"verb": "curate.restore", "quoted": "恢复回来", "confidence": "high"},
+      "expect_verb": "curate.restore",
+      "setup": {"recycle": {"20260101_000000_000000_upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": [{"action": "restore", "restore_target": "upload_ghost.json"}]},
+      "expect": {"plan_error": "unknown_file", "external_count": 0, "recycle_count": 1}
+    },
+    {
+      "id": "c08", "utterance": "把删掉的 upload_a.json 恢复回来",
+      "raw": {"verb": "curate.restore", "quoted": "恢复回来", "confidence": "high"},
+      "expect_verb": "curate.restore",
+      "setup": {"external": {"upload_a.json": [{"uid": "new"}]},
+                "recycle": {"20260101_000000_000000_upload_a.json": [{"uid": "old"}]}},
+      "drive": {"steps": [{"action": "restore", "restore_target": "upload_a.json"}]},
+      "expect": {"plan_fields": {"will_conflict": true}, "apply_error": "bad_param",
+                 "external_count": 1, "recycle_count": 1, "manifest_absent": ["restore"]}
+    },
+    {
+      "id": "c09", "utterance": "把 upload_a.json 删掉，一会儿又后悔了",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "upload_a.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target", "tamper_before_apply": true}]},
+      "expect": {"apply_error": "token_mismatch", "external_count": 1, "recycle_count": 0,
+                 "external_contains": ["upload_a.json"]}
+    },
+    {
+      "id": "c10", "utterance": "把这份数据导入数据库",
+      "raw": {"verb": "curate.import", "quoted": "导入数据库", "confidence": "high"},
+      "expect_verb": "curate.import",
+      "setup": {},
+      "drive": {"steps": [{"action": "import", "filename": "mydata.json",
+                           "payload": [{"uid": "m1", "name": "手工一号"}, {"uid": "m2", "name": "手工二号"}]}]},
+      "expect": {"plan_fields": {"record_count": 2}, "external_count": 1,
+                 "external_contains": ["mydata.json"]}
+    },
+    {
+      "id": "c11", "utterance": "把这份数据导入数据库",
+      "raw": {"verb": "curate.import", "quoted": "导入数据库", "confidence": "high"},
+      "expect_verb": "curate.import",
+      "setup": {},
+      "drive": {"steps": [{"action": "import", "filename": "bad.json", "payload_text": "这不是 JSON"}]},
+      "expect": {"plan_error": "invalid_json", "external_count": 0}
+    },
+    {
+      "id": "c12", "utterance": "把这份数据再导入一次",
+      "raw": {"verb": "curate.import", "quoted": "导入", "confidence": "high"},
+      "expect_verb": "curate.import",
+      "setup": {"external": {"upload_20260101_000000_000000_dup.json": [{"uid": "d1", "name": "老数据"}]}},
+      "drive": {"steps": [{"action": "import", "filename": "dup.json", "payload": [{"uid": "d1", "name": "老数据"}]}]},
+      "expect": {"plan_fields": {"record_count": 1}, "apply_error": "duplicate_content", "external_count": 1}
+    },
+    {
+      "id": "c13", "utterance": "这份数据和库里重了，确认还是要导入",
+      "raw": {"verb": "curate.import", "quoted": "导入", "confidence": "high"},
+      "expect_verb": "curate.import",
+      "setup": {"external": {"upload_20260101_000000_000000_dup.json": [{"uid": "d1", "name": "老数据"}]}},
+      "drive": {"steps": [{"action": "import", "filename": "dup.json", "force": true,
+                           "payload": [{"uid": "d1", "name": "老数据"}]}]},
+      "expect": {"external_count": 2, "external_contains": ["dup.json"]}
+    },
+    {
+      "id": "c14", "utterance": "把 upload_a.json 和 upload_b.json 都删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "upload_a.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}], "upload_b.json": [{"uid": "b1"}],
+                             "base_official.json": [{"uid": "o1"}]}},
+      "drive": {"steps": [{"action": "remove", "filename": "upload_a.json"},
+                          {"action": "remove", "filename": "upload_b.json"}]},
+      "expect": {"external_count": 1, "recycle_count": 2,
+                 "external_contains": ["base_official.json"],
+                 "recycle_contains": ["upload_a.json", "upload_b.json"]}
+    },
+    {
+      "id": "c15", "utterance": "把 upload_a.json 删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "upload_a.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1", "name": "往返"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"},
+                          {"action": "restore", "restore_target": "upload_a.json"}]},
+      "expect": {"external_count": 1, "recycle_count": 0,
+                 "external_contains": ["upload_a.json"], "manifest_contains": ["remove", "restore"]}
+    },
+    {
+      "id": "c16", "utterance": "看看我上传了哪些文件",
+      "raw": {"verb": "curate.list", "quoted": "看看", "confidence": "high"},
+      "expect_verb": "curate.list",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}, {"uid": "a2"}], "upload_b.json": [{"uid": "b1"}]},
+                "recycle": {"20260101_000000_000000_upload_c.json": [{"uid": "c1"}]}},
+      "drive": {"steps": [{"action": "list"}]},
+      "expect": {"result_fields": {"file_count": 2}, "external_count": 2, "recycle_count": 1}
+    },
+    {
+      "id": "c17", "utterance": "库里现在是什么状况",
+      "raw": {"verb": "curate.db_status", "quoted": "状况", "confidence": "high"},
+      "expect_verb": "curate.db_status",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}, {"uid": "a2"}]},
+                "recycle": {"20260101_000000_000000_upload_c.json": [{"uid": "c1"}]}},
+      "drive": {"steps": [{"action": "db_status"}]},
+      "expect": {"result_fields": {"external_files_len": 1, "recycle_len": 1},
+                 "external_count": 1, "recycle_count": 1}
+    },
+    {
+      "id": "c18", "utterance": "把这份数据删掉",
+      "raw": {"verb": "curate.remove", "confidence": "high"},
+      "expect_verb": "none",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": []},
+      "expect": {"external_count": 1, "recycle_count": 0}
+    },
+    {
+      "id": "c19", "utterance": "把整个数据库清空",
+      "raw": {"verb": "curate.delete_everything", "quoted": "清空", "confidence": "high"},
+      "expect_verb": "none", "expect_rejected": ["curate.delete_everything"],
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]}},
+      "drive": {"steps": []},
+      "expect": {"external_count": 1, "recycle_count": 0}
+    },
+    {
+      "id": "c20", "utterance": "把 upload_bad.json 删掉",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "upload_bad.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external_text": {"upload_bad.json": "这不是 JSON 根本解析不了 {"}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"}]},
+      "expect": {"plan_error": "bad_param", "external_count": 1, "recycle_count": 0}
+    },
+    {
+      "id": "c21", "utterance": "先删掉 upload_a.json，再把 upload_b.json 恢复回来",
+      "raw": {"verb": "curate.remove", "quoted": "删掉", "target": "upload_a.json", "confidence": "high"},
+      "expect_verb": "curate.remove",
+      "setup": {"external": {"upload_a.json": [{"uid": "a1"}]},
+                "recycle": {"20260101_000000_000000_upload_b.json": [{"uid": "b1"}]}},
+      "drive": {"steps": [{"action": "remove", "filename_from_slot": "target"},
+                          {"action": "restore", "restore_target": "upload_b.json"}]},
+      "expect": {"external_count": 1, "recycle_count": 1,
+                 "external_contains": ["upload_b.json"], "recycle_contains": ["upload_a.json"]}
+    },
+    {
+      "id": "c22", "utterance": "把这个空文件导入数据库",
+      "raw": {"verb": "curate.import", "quoted": "导入数据库", "confidence": "high"},
+      "expect_verb": "curate.import",
+      "setup": {},
+      "drive": {"steps": [{"action": "import", "filename": "empty.json", "payload": []}]},
+      "expect": {"plan_error": "no_records", "external_count": 0}
+    }
+  ]
+}

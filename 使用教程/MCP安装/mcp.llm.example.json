@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "biodata": {
+      "type": "stdio",
+      "command": "REPLACE_WITH_MCP_VENV_PYTHON",
+      "args": ["REPLACE_WITH_PATH_TO/mcp_server.py——交付包布局在包根；GitHub 仓库克隆布局在 src/dataset_recommender/app/mcp_server.py（替换整串为实际绝对路径）"],
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUTF8": "1",
+        "BIODATA_LLM_ENV_FILE": "REPLACE_WITH_PROJECT_EXTERNAL_LLM_ENV_PATH"
+      }
+    }
+  }
+}

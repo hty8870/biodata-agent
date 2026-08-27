@@ -1,0 +1,312 @@
+{
+  "_about": "多源检索质量评测集（开发态，非冻结）。覆盖词表中的物种/组织/疾病/技术，跨 5 个来源。字段：query=中文NL；expect=期望结构化约束（外部裁判据此判命中/违规，独立于 retriever 自身逻辑）；abstain_expected=是否应弃权；no_result_expected=是否应空集；min_hits=期望至少命中数（0=不作下限要求）；note=备注。裁判：species/tissue/disease 字段子串（同冻结门）；platform/technology/assay 用 platform+assay+chemistry 并集袋子串（从宽超集、永不假违规，见 evaluate_multisource.py docstring）。",
+  "queries": [
+    {
+      "query": "人类胸腺的单细胞数据",
+      "expect": {
+        "species": "human",
+        "tissue": "thymus"
+      },
+      "min_hits": 1,
+      "note": "新组织 thymus"
+    },
+    {
+      "query": "小鼠视网膜的单细胞图谱",
+      "expect": {
+        "species": "mouse",
+        "tissue": "retina"
+      },
+      "min_hits": 1,
+      "note": "新组织 retina"
+    },
+    {
+      "query": "睾丸的单细胞测序数据",
+      "expect": {
+        "tissue": "testis"
+      },
+      "min_hits": 1,
+      "note": "新组织 testis"
+    },
+    {
+      "query": "海马体的转录组数据",
+      "expect": {
+        "tissue": "hippocamp"
+      },
+      "min_hits": 1,
+      "note": "新组织 hippocampus"
+    },
+    {
+      "query": "小脑组织的单细胞数据",
+      "expect": {
+        "tissue": "cerebell"
+      },
+      "min_hits": 1,
+      "note": "小脑≠脑 消歧"
+    },
+    {
+      "query": "回肠的单细胞数据",
+      "expect": {
+        "tissue": "ileum"
+      },
+      "min_hits": 1,
+      "note": "新组织 ileum"
+    },
+    {
+      "query": "拟南芥的单细胞数据",
+      "expect": {
+        "species": "arabidopsis"
+      },
+      "min_hits": 1,
+      "note": "新物种，仅外部库"
+    },
+    {
+      "query": "酵母的转录组数据",
+      "expect": {
+        "species": "saccharomyces"
+      },
+      "min_hits": 1,
+      "note": "新物种"
+    },
+    {
+      "query": "狨猴脑的单细胞数据",
+      "expect": {
+        "species": "marmoset",
+        "tissue": "brain"
+      },
+      "min_hits": 1,
+      "note": "新物种 marmoset"
+    },
+    {
+      "query": "斑马鱼的单细胞数据",
+      "expect": {
+        "species": "zebrafish"
+      },
+      "min_hits": 1,
+      "note": "既有物种，外部库亦有"
+    },
+    {
+      "query": "新冠患者的肺单细胞数据",
+      "expect": {
+        "disease": "covid",
+        "tissue": "lung"
+      },
+      "min_hits": 1,
+      "note": "新疾病 covid"
+    },
+    {
+      "query": "阿尔茨海默患者的脑数据",
+      "expect": {
+        "disease": "alzheimer",
+        "tissue": "brain"
+      },
+      "min_hits": 1,
+      "note": "新疾病"
+    },
+    {
+      "query": "帕金森病的单细胞数据",
+      "expect": {
+        "disease": "parkinson"
+      },
+      "min_hits": 1,
+      "note": "新疾病"
+    },
+    {
+      "query": "糖尿病肾脏的单细胞数据",
+      "expect": {
+        "disease": "diabet",
+        "tissue": "kidney"
+      },
+      "min_hits": 1,
+      "note": "新疾病 + 既有组织"
+    },
+    {
+      "query": "克罗恩病的肠道数据",
+      "expect": {
+        "disease": "crohn"
+      },
+      "min_hits": 1,
+      "note": "新疾病"
+    },
+    {
+      "query": "银屑病的皮肤单细胞数据",
+      "expect": {
+        "disease": "psoriasis",
+        "tissue": "skin"
+      },
+      "min_hits": 1,
+      "note": "新疾病"
+    },
+    {
+      "query": "神经母细胞瘤的单细胞数据",
+      "expect": {
+        "disease": "neuroblastoma"
+      },
+      "min_hits": 1,
+      "note": "新疾病"
+    },
+    {
+      "query": "Smart-seq2 的人类数据",
+      "expect": {
+        "species": "human",
+        "assay": "smart"
+      },
+      "min_hits": 1,
+      "note": "新技术 via chemistry"
+    },
+    {
+      "query": "Drop-seq 的小鼠数据",
+      "expect": {
+        "species": "mouse",
+        "assay": "drop-seq"
+      },
+      "min_hits": 1,
+      "note": "新技术"
+    },
+    {
+      "query": "Slide-seq 的数据",
+      "expect": {
+        "assay": "slide-seq"
+      },
+      "min_hits": 1,
+      "note": "新技术"
+    },
+    {
+      "query": "MERFISH 的数据",
+      "expect": {
+        "assay": "merfish"
+      },
+      "min_hits": 1,
+      "note": "新技术"
+    },
+    {
+      "query": "有 FASTQ 的人类乳腺癌数据",
+      "expect": {
+        "species": "human",
+        "disease": [
+          "breast cancer",
+          "invasive ductal carcinoma",
+          "ductal carcinoma"
+        ],
+        "has_raw_data": true
+      },
+      "min_hits": 1,
+      "note": "既有基线 FASTQ；乳腺癌受控词表映射多目标(含 IDC)，裁判用列表"
+    },
+    {
+      "query": "人脑的 Visium 空间数据",
+      "expect": {
+        "species": "human",
+        "tissue": "brain",
+        "platform": "visium"
+      },
+      "min_hits": 1,
+      "note": "既有基线 platform"
+    },
+    {
+      "query": "小鼠脑的单细胞数据",
+      "expect": {
+        "species": "mouse",
+        "tissue": "brain"
+      },
+      "min_hits": 1,
+      "note": "既有基线 多约束"
+    },
+    {
+      "query": "翼龙的单细胞数据",
+      "abstain_expected": true,
+      "note": "未知物种 → 弃权"
+    },
+    {
+      "query": "霍格沃茨综合征的人类数据",
+      "abstain_expected": true,
+      "note": "未知疾病 → 弃权"
+    },
+    {
+      "query": "不要小鼠的人类脑数据",
+      "expect": {
+        "species": "human",
+        "tissue": "brain"
+      },
+      "expect_not": {
+        "species": "mouse"
+      },
+      "min_hits": 1,
+      "note": "负向语法落地：include human+brain, exclude mouse（受控重基线）"
+    },
+    {
+      "query": "人或小鼠的脑数据",
+      "expect": {
+        "species": [
+          "human",
+          "mouse"
+        ],
+        "tissue": "brain"
+      },
+      "min_hits": 1,
+      "note": "2026-07-25 受控重基线：同维度多值就是「或」，照做而不弃权（与 eval_queries.json 的 adv05 同批）"
+    },
+    {
+      "query": "大象的单细胞数据",
+      "expect": {
+        "species": "elephant"
+      },
+      "no_result_expected": true,
+      "note": "库中无 → 空集（非弃权）"
+    },
+    {
+      "query": "拟南芥的乳腺癌数据",
+      "expect": {
+        "species": "arabidopsis",
+        "disease": [
+          "breast cancer",
+          "invasive ductal carcinoma"
+        ]
+      },
+      "no_result_expected": true,
+      "note": "组合无交集 → 空集"
+    },
+    {
+      "query": "codex 数据",
+      "expect": {
+        "assay": "codex"
+      },
+      "min_hits": 1,
+      "note": "HuBMAP 覆盖（2026-08-06 三源接入）；CODEX 多重成像"
+    },
+    {
+      "query": "mibi 数据",
+      "expect": {
+        "assay": "mibi"
+      },
+      "min_hits": 1,
+      "note": "HuBMAP 覆盖；MIBI 成像质谱"
+    },
+    {
+      "query": "phenocycler 数据",
+      "expect": {
+        "assay": "phenocycler"
+      },
+      "min_hits": 1,
+      "note": "HuBMAP 覆盖；PhenoCycler"
+    },
+    {
+      "query": "小鼠视网膜的单细胞数据",
+      "expect": {
+        "species": "mouse",
+        "tissue": "retina"
+      },
+      "min_hits": 1,
+      "note": "retina 覆盖（CELLxGENE/SCEA 为主；refine.bio 切片含 2 条 retina 记录，2026-08-14 第 11 源接入后回归零违规）"
+    },
+    {
+      "query": "人胎盘的单细胞转录组数据",
+      "expect": {
+        "species": "human",
+        "tissue": "placenta"
+      },
+      "min_hits": 1,
+      "note": "placenta 覆盖（HCA/CELLxGENE 为主；refine.bio 切片含 SRP090929 人胎盘 scRNA-seq，同批回归零违规）"
+    }
+  ],
+  "_coverage_notes_2026_08_06": "三源接入后的覆盖口径：HuBMAP 由 codex/mibi/phenocycler 三条 NL 查询真实覆盖。GEO/SCP 的 NL 检索覆盖缺口已于 2026-08-06 由 T37 补齐（reports/t37-scp-geo-nl-enrichment）：反标富化（corpus_enrich.backfill_record 用词表别名从 title+description 回填缺失的 species/tissue/disease/chemistry，SCP 830 条填充率 56.6%~74.1%、GEO 60 条 tissue 70.0%）+ 词表小补（perturb-seq/snuc-seq/div-seq/dronc-seq/pick-seq/aneuploidy/scrnaseq/snrnaseq）——两源现可进约束式 NL 检索存活集（实测 hippocampus：SCP 15+GEO 2；小鼠海马体 单细胞：SCP 1；aneuploidy：GEO 1+SCP 1）。诚实口径保留：反标值集**不穷尽**，tissue/disease 落笔记录 metadata_provenance.complete=False（诚实降级第三态据此生效）；SCP 无官方物种通道（反标即唯一来源，provenance.backfill.source_note 逐条标注）；多物种共现的 96 条 SCP 记录物种维保守留空（conservative_drops 留痕）。标识符反查（GSE/SCP/HBM 直达）与来源收窄背书不变；本护栏的 uncovered 打印对 GEO/SCP/ENCODE 仍属预期行为（本评测集未含 GEO/SCP 定向查询），不是缺陷。SCP 官方物种/日期充实（换端点补证）仍是后续已识别的改进路径。"
+}
