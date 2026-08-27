@@ -1,0 +1,3862 @@
+{
+ "source": "Zenodo",
+ "source_url": "https://zenodo.org/",
+ "note": "离线快照·外部平台库候选（opt-in），不并入官方评测语料。首批 94 条（2026-08-13 采集）：8 组 Lucene 字段限定查询（metadata.title/description 短语 OR + type=dataset，每组 relevance top 25）共产出候选 192 条（含跨查询重复），逐条人工甄别剔除软件/方法代码、教学/演示/测试材料、非组学记录、碎片化系列与重复；入库前再过公开性闸（access_right 非 open 不收）与内容级复核（镜像/纯图像/纯浏览器文件不收）；逐类剔除理由与复核表见 database/workstream/staging/zenodo/mapping.md。Zenodo 是通用开放仓储，生物数据集只占一部分；物种/组织/疾病无结构化字段，物种从标题/描述文本抠取（不全，抠不到留空），组织/疾病槽位放弃。check_updates 以本文件为水位线，与官方 API type=dataset&sort=mostrecent 最新条目比对。",
+ "record_count": 94,
+ "records": [
+  {
+   "dataset_uid": "zenodo:263694",
+   "dataset_name": "Single-cell ATAC-seq control of cross-contaminations (experiment 1)",
+   "source": "Zenodo",
+   "public_accession": "263694",
+   "collection_doi": "10.5281/zenodo.263694",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2017-01-30",
+   "url": "https://zenodo.org/records/263694",
+   "download_url": null,
+   "description": "On the Fluidigm C1 platform for single-cell analysis, the cells are captured in 96 chambers arranged serially, and then washed before further processing. Thus, debris present from the loading medium or released by captured cells upstream are a possible source of contamination. We generated a control datasets using the single-cell ATAC-seq protocol available from Fluidigm's ScriptHub. We cultivated…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:263695",
+   "dataset_name": "Single-cell ATAC-seq control of cross-contaminations (experiment 2)",
+   "source": "Zenodo",
+   "public_accession": "263695",
+   "collection_doi": "10.5281/zenodo.263695",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2017-01-30",
+   "url": "https://zenodo.org/records/263695",
+   "download_url": null,
+   "description": "On the Fluidigm C1 platform for single-cell analysis, the cells are captured in 96 chambers arranged serially, and then washed before further processing. Thus, debris present from the loading medium or released by captured cells upstream are a possible source of contamination. We generated a control datasets using the single-cell ATAC-seq protocol available from Fluidigm's ScriptHub. We cultivated…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:1490475",
+   "dataset_name": "Recovery and analysis of transcriptome subsets from pooled single-cell RNA-seq libraries",
+   "source": "Zenodo",
+   "public_accession": "1490475",
+   "collection_doi": "10.5281/zenodo.1405578",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2018-11-17",
+   "url": "https://zenodo.org/records/1490475",
+   "download_url": null,
+   "description": "Processed data files for manuscript: \"Recovery and analysis of transcriptome subsets from pooled single-cell RNA-seq libraries\" https://doi.org/10.1093/nar/gky1204 . Scripts for generating figures are found here: https://github.com/rnabioco/scrna-subsets",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:4072975",
+   "dataset_name": "Filtered Brain Cortex scRNAseq Seurat Object",
+   "source": "Zenodo",
+   "public_accession": "4072975",
+   "collection_doi": "10.5281/zenodo.4072974",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-10-08",
+   "url": "https://zenodo.org/records/4072975",
+   "download_url": null,
+   "description": "Filtered Brain Cortex scRNAseq Seurat Object",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:4087586",
+   "dataset_name": "Single cell transcriptomics of of Abedinium reveals a new early-branching dinoflagellate lineage",
+   "source": "Zenodo",
+   "public_accession": "4087586",
+   "collection_doi": "10.5061/dryad.pg4f4qrk0",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-10-13",
+   "url": "https://zenodo.org/records/4087586",
+   "download_url": null,
+   "description": "Dinoflagellates possess many unique cellular characteristics with unresolved evolutionary histories including nuclei with greatly expanded genomes and chromatin packaged using histone-like proteins and dinoflagellate-viral nucleoproteins instead of histones, highly reduced mitochondrial genomes with extensive RNA editing, a mix of photosynthetic and cryptic secondary plastids, and tertiary plastid…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:4387066",
+   "dataset_name": "Lactate Increases Stemness of CD8+ T Cells to Augment Anti-Tumor Immunity",
+   "source": "Zenodo",
+   "public_accession": "4387066",
+   "collection_doi": "10.5281/zenodo.4387065",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2020-12-23",
+   "url": "https://zenodo.org/records/4387066",
+   "download_url": null,
+   "description": "The immunological role of lactate in antitumor immunity is not well understood. In this study, we report lactate treatment significantly augments antitumor efficacy of immune checkpoint blockade or T cell vaccine therapy in multiple tumor models. Single cell transcriptomics and flow cytometry analysis revealed an increased subpopulation of stem-like TCF-1-expressing CD8 + T cells upon lactate trea…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:4708300",
+   "dataset_name": "scRNA-seq liver microtissue",
+   "source": "Zenodo",
+   "public_accession": "4708300",
+   "collection_doi": "10.5281/zenodo.4708299",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-04-23",
+   "url": "https://zenodo.org/records/4708300",
+   "download_url": null,
+   "description": "Single-cell sequencing (scRNA-seq) dataset of TGF-β1 treated and untreated liver microtissues of HepaRG, hTERT-HSC and THP-1 cells.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:6311356",
+   "dataset_name": "Single cell Iso-Sequencing enables rapid genome annotation for scRNAseq analysis",
+   "source": "Zenodo",
+   "public_accession": "6311356",
+   "collection_doi": "10.5061/dryad.0k6djhb1x",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-02-28",
+   "url": "https://zenodo.org/records/6311356",
+   "download_url": null,
+   "description": "Single cell RNA sequencing (scRNAseq) is a powerful technique that continues to expand across various biological applications. However, incomplete 3' UTR annotations can impede single cell analysis resulting in genes that are partially or completely uncounted. Performing scRNAseq with incomplete 3' UTR annotations can hinder the identification of cell identities and gene expression patterns and le…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:6578047",
+   "dataset_name": "Processed Data 1 : Spatial multi-omic map of human myocardial infarction",
+   "source": "Zenodo",
+   "public_accession": "6578047",
+   "collection_doi": "10.5281/zenodo.6578046",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-05-25",
+   "url": "https://zenodo.org/records/6578047",
+   "download_url": null,
+   "description": "We provide here the processed snRNA-seq, snATAC-seq, and visium data for the manuscript: Kuppe, Ramirez Flores, Li et al. \"Spatial multi-omic map of human myocardial infarction\", 2022",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:6910635",
+   "dataset_name": "Integrated single cell transcriptomics of cerebrospinal fluid cells in early Multiple Sclerosis",
+   "source": "Zenodo",
+   "public_accession": "6910635",
+   "collection_doi": "10.5281/zenodo.6910634",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-07-27",
+   "url": "https://zenodo.org/records/6910635",
+   "download_url": null,
+   "description": "h5ad file for \"Integrated single cell transcriptomics of cerebrospinal fluid cells in early Multiple Sclerosis\"",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:6921620",
+   "dataset_name": "Data related to \"Upper cortical layer-driven network impairment in schizophrenia\" paper, by Batiuk, Tyler et al.",
+   "source": "Zenodo",
+   "public_accession": "6921620",
+   "collection_doi": "10.5281/zenodo.5810785",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-08-09",
+   "url": "https://zenodo.org/records/6921620",
+   "download_url": null,
+   "description": "This is Data for \"Upper cortical layer-driven network impairment in schizophrenia\" paper, by Batiuk, Tyler et al., 2022 This repository contains: Supplementary Dataset Tables 1-4 (Supplementary_Dataset_Tables_1-4.xlsx). They contain DE genes and GO terms from snRNA-seq and visium analysis. Single nuclei and Visium spatial transcriptomics sequencing data (snRNA-seq_and_spatial_transcriptomics.zip) …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:6981677",
+   "dataset_name": "single-nucleus RNAseq data from female Aedes aegypti antenna",
+   "source": "Zenodo",
+   "public_accession": "6981677",
+   "collection_doi": "10.5281/zenodo.5818542",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-01-04",
+   "url": "https://zenodo.org/records/6981677",
+   "download_url": null,
+   "description": "Single-nucleus RNA sequencing data accompanying Herre*, Goldman* et al. (2022), \"Non-Canonical Odor Coding in the Mosquito\" (https://doi.org/10.1016/j.cell.2022.07.024) For further analysis see: https://github.com/VosshallLab/Younger_Herre_Vosshall2020/tree/main/snRNAseq_SupplementaryData For raw sequencing files see NCBI BioProject: PRJNA794050",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:7126364",
+   "dataset_name": "Exploring cell diversity and fidelity in crustacean limb regeneration using single-nucleus RNA sequencing",
+   "source": "Zenodo",
+   "public_accession": "7126364",
+   "collection_doi": "10.5281/zenodo.7126363",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-09-29",
+   "url": "https://zenodo.org/records/7126364",
+   "download_url": null,
+   "description": "R objects containing datasets generated by snRNA-seq on Parhyale hawaiensis limbs. These datasets have been generated during my Phd thesis.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:7199569",
+   "dataset_name": "Merged Adult Human Kidney sc & snRNA-seq dataset",
+   "source": "Zenodo",
+   "public_accession": "7199569",
+   "collection_doi": "10.5281/zenodo.4671059",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2021-04-19",
+   "url": "https://zenodo.org/records/7199569",
+   "download_url": null,
+   "description": "A merged human kidney scRNA-seq dataset made from the following scRNA-seq studies: Lake, B.B. et al. A single-nucleus RNA-sequencing pipeline to decipher the molecular anatomy and pathophysiology of human kidneys. Nat Commun 10, 2832 (2019). Liao, J., Yu, Z., Chen, Y. et al. Single-cell RNA sequencing of human kidney. Sci Data 7, 4 (2020). Menon, R. et al. Single cell transcriptomics identifies fo…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:7234828",
+   "dataset_name": "Data from: Single cell transcriptomics shows dose-dependent disruption of hepatic zonation by TCDD in mice",
+   "source": "Zenodo",
+   "public_accession": "7234828",
+   "collection_doi": "10.5061/dryad.547d7wmc5",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-10-21",
+   "url": "https://zenodo.org/records/7234828",
+   "download_url": null,
+   "description": "2,3,7,8-Tetrachlorodibenzo-p-dioxin (TCDD) dose-dependently induces the development of hepatic fat accumulation and inflammation with fibrosis in mice initially in the portal region. Conversely, differential gene and protein expression is first detected in the central region. To further investigate cell-specific and spatially resolved dose-dependent changes in gene expression elicited by TCDD, sin…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:7338746",
+   "dataset_name": "Processed Single-cell RNA-seq Data for Exercise Rejuvenation Intervention on Mouse Subventricular Zone",
+   "source": "Zenodo",
+   "public_accession": "7338746",
+   "collection_doi": "10.5281/zenodo.7338745",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2022-11-20",
+   "url": "https://zenodo.org/records/7338746",
+   "download_url": null,
+   "description": "Exercise single-cell RNA-seq data of mouse subventricular zone (in processed Seurat object) used in the publication \"Cell type-specific aging clocks to quantify aging and rejuvenation in regenerative regions of the brain\" (preprint available at https://doi.org/10.1101/2022.01.10.475747 ).",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:7789478",
+   "dataset_name": "SnRNA-seq and mRNA hybridization indicate key bud events and LcFT1 and LcTFL1-2 mRNA transportability during floral transition in litchi",
+   "source": "Zenodo",
+   "public_accession": "7789478",
+   "collection_doi": "10.5061/dryad.2fqz612s1",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-03-31",
+   "url": "https://zenodo.org/records/7789478",
+   "download_url": null,
+   "description": "In flowering plants, floral induction signals intersect at the shoot apex to modulate meristem determinacy and growth form. Herein, we reported a snRNA-seq analysis of litchi apical buds at different developmental stages. A total of 41,641 nuclei expressing 21,402 genes were analyzed, revealing 35 cell clusters corresponding to 12 broad populations. We signature genes associated with floral transi…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:7966849",
+   "dataset_name": "IL-17 signalling is critical for controlling subcutaneous adipose tissue dynamics and parasite burden during chronic Trypanosoma brucei infection",
+   "source": "Zenodo",
+   "public_accession": "7966849",
+   "collection_doi": "10.5281/zenodo.7966848",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-05-24",
+   "url": "https://zenodo.org/records/7966849",
+   "download_url": null,
+   "description": "In the skin, Trypanosoma brucei colonises the subcutaneous white adipose tissue (WAT) and harbours a pool of parasites competent for forward transmission. The interaction between parasites, adipose tissue, and the local immune system is likely to drive adipose tissue wasting and weight loss observed in cattle and humans infected with T. brucei . However, mechanistically, this process is not fully …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8190317",
+   "dataset_name": "Processed snRNA-seq data from \"Divergent single cell transcriptome and epigenome alterations in ALS and FTD patients with C9orf72 mutation\"",
+   "source": "Zenodo",
+   "public_accession": "8190317",
+   "collection_doi": "10.5281/zenodo.8190316",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-07-27",
+   "url": "https://zenodo.org/records/8190317",
+   "download_url": null,
+   "description": "Processed snRNA-seq data from \"Divergent single cell transcriptome and epigenome alterations in ALS and FTD patients with C9orf72 mutation\". All nuclei passed QC and were corrected for background noise using cellBender. Files are in R objects saved in RDS (R Data Serialization) format. This repo contains one Seurat v4 object and one gene-by-cell raw RNA count matrix in sparse matrix format (dgCMat…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8219741",
+   "dataset_name": "Olfactory bulb snRNAseq dataset for Team Schlossmacher- ASAP",
+   "source": "Zenodo",
+   "public_accession": "8219741",
+   "collection_doi": "10.5281/zenodo.8219740",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-08-06",
+   "url": "https://zenodo.org/records/8219741",
+   "download_url": null,
+   "description": "C57BL/6 mice were nasally inoculated with either a control AAV (AAV-EF1a-TdTomato, B1-4) or an experimental AAV expressing humanized mutant alpha-synuclein (AAV-EF1a-SNCA(A53T), A1-4). The mice were 8 weeks of age at the time of inoculation and the virus was expressed for 4 weeks before the mice were sacrificed and the olfactory bulbs were collected for snRNAseq. Viral transduction of olfactory se…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8242458",
+   "dataset_name": "Data from: Single-nucleus RNA-seq and ATAC-seq in outbred rats with divergent cocaine addiction behaviors reveal long-term changes in gene regulation and GABAergic inhibition in the amygdala",
+   "source": "Zenodo",
+   "public_accession": "8242458",
+   "collection_doi": "10.5281/zenodo.8242457",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-08-13",
+   "url": "https://zenodo.org/records/8242458",
+   "download_url": null,
+   "description": "This dataset accompanies our publication titled: \"Single-nucleus RNA-seq and ATAC-seq in outbred rats with divergent cocaine addiction behaviors reveal long-term changes in gene regulation and GABAergic inhibition in the amygdala.\" Files Included: 1. geno.N26.vcf.gz - Description: Contains genotypes for 26 Heterogeneous Stock rats whose gene expression was predicted. 2. pred_expr.Brain.N26.tsv - D…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8259942",
+   "dataset_name": "Single-cell Spatial Transcriptomics Data with Paired RNAseq for TISSUE spatial gene expression prediction",
+   "source": "Zenodo",
+   "public_accession": "8259942",
+   "collection_doi": "10.5281/zenodo.8259941",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-01-07",
+   "url": "https://zenodo.org/records/8259942",
+   "download_url": null,
+   "description": "Dataset folders from \"TISSUE: uncertainty-calibrated prediction of single-cell spatial transcriptomics improves downstream analyses\". If using the processed data or TISSUE algorithm, please cite: https://doi.org/10.1101/2023.04.25.538326 . The directory of datasets are compressed in tar gzip format. The top level contains folders with dataset names and within each of those folders, there are the r…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8294148",
+   "dataset_name": "Mapped data: Transcription factor stoichiometry, motif affinity and syntax regulate single cell chromatin dynamics during fibroblast reprogramming to pluripotency",
+   "source": "Zenodo",
+   "public_accession": "8294148",
+   "collection_doi": "10.5281/zenodo.8294147",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-09-01",
+   "url": "https://zenodo.org/records/8294148",
+   "download_url": null,
+   "description": "This record contains mapped sequencing data for the paper \"Transcription factor stoichiometry, motif affinity and syntax regulate single cell chromatin dynamics during fibroblast reprogramming to pluripotency\" by Nair, Ameen et al . It contains single-cell RNA-seq (scRNA) and single-cell ATAC-seq (scATAC) data from a time course of human dermal fibroblasts induced with Yamanaka factors OSKM using …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8313962",
+   "dataset_name": "Analysis Products: Transcription factor stoichiometry, motif affinity and syntax regulate single cell chromatin dynamics during fibroblast reprogramming to pluripotency",
+   "source": "Zenodo",
+   "public_accession": "8313962",
+   "collection_doi": "10.5281/zenodo.8313961",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-09-01",
+   "url": "https://zenodo.org/records/8313962",
+   "download_url": null,
+   "description": "This record contains analysis products for the paper \"Transcription factor stoichiometry, motif affinity and syntax regulate single cell chromatin dynamics during fibroblast reprogramming to pluripotency\" by Nair, Ameen et al . Please refer to the READMEs in the directories, which are summarized below. The record contains the following files: `clusters.tsv`: contains the cluster id, name and colou…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:8336489",
+   "dataset_name": "Adult adrenal gland scRNA-seq",
+   "source": "Zenodo",
+   "public_accession": "8336489",
+   "collection_doi": "10.5281/zenodo.8307276",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-10-01",
+   "url": "https://zenodo.org/records/8336489",
+   "download_url": null,
+   "description": "Adult adrenal gland scRNA-seq dataset. Gene expression matrices (in dgCMatrix format) are provided as RDS files. Cell annotations (cell types, cortex zonations, and genotypes) are provided in CSV format.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10015169",
+   "dataset_name": "Integrated PF-ILD scRNA-seq atlas",
+   "source": "Zenodo",
+   "public_accession": "10015169",
+   "collection_doi": "10.5281/zenodo.10015168",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-10-25",
+   "url": "https://zenodo.org/records/10015169",
+   "download_url": null,
+   "description": "Processed counts object of the integrated PF-ILD atlas from publicly available scRNA-seq datasets.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10103722",
+   "dataset_name": "A spatially-resolved transcriptional atlas of the murine dorsal pons at single-cell resolution",
+   "source": "Zenodo",
+   "public_accession": "10103722",
+   "collection_doi": "10.1101/2023.09.18.558047",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-11-14",
+   "url": "https://zenodo.org/records/10103722",
+   "download_url": null,
+   "description": "The \"dorsal pons\", or \"dorsal pontine tegmentum\" (dPnTg), is part of the brainstem. It is a complex, densely packed region whose nuclei are involved in regulating many vital functions. Notable among them are the parabrachial nucleus, the Kölliker Fuse, the Barrington nucleus, the locus coeruleus, and the dorsal, laterodorsal, and ventral tegmental nuclei. In this study, we applied single-nucleus R…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10261849",
+   "dataset_name": "Transcription Factor Co-Expression Mediates Lineage Priming for Embryonic and Extra-Embryonic Differentiation",
+   "source": "Zenodo",
+   "public_accession": "10261849",
+   "collection_doi": "10.5281/zenodo.10261848",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-12-05",
+   "url": "https://zenodo.org/records/10261849",
+   "download_url": null,
+   "description": "In early mammalian development, cleavage stage blastomeres and inner cell mass (ICM) cells co-express embryonic and extra-embryonic transcriptional determinants. Using a double protein-based reporter we identify an embryonic stem cell (ESC)population that co-expresses the extra-embryonic factor GATA6 alongside the embryonic factor SOX2. Based on single cell transcriptomics, we find this population…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10634153",
+   "dataset_name": "MERFISH and snRNAseq analysis of healthy and disease human liver",
+   "source": "Zenodo",
+   "public_accession": "10634153",
+   "collection_doi": "10.5061/dryad.37pvmcvsg",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-02-08",
+   "url": "https://zenodo.org/records/10634153",
+   "download_url": null,
+   "description": "Single-cell RNA sequencing (scRNA-seq) has advanced our understanding of cell types and their heterogeneity within the human liver, but the spatial organization at single-cell resolution has not yet been described. Here we apply multiplexed error robust fluorescent in situ hybridization (MERFISH) to map the zonal distribution of hepatocytes, resolve subsets of macrophage and mesenchymal population…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10782711",
+   "dataset_name": "Spatial transcriptomics identifies pathological cell type niches in IPF",
+   "source": "Zenodo",
+   "public_accession": "10782711",
+   "collection_doi": "10.5281/zenodo.10012933",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-03",
+   "url": "https://zenodo.org/records/10782711",
+   "download_url": null,
+   "description": "Processed count object of Visium spatial transcriptomics data generated for this project. Processed count object of integrated PF-ILD atlas from publicily available scRNAseq datasets. Jupyter notebooks of processing of Visium spatial transcriptomics data.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10863736",
+   "dataset_name": "Visium Spatially Resolved Transcriptomics of Glioblastoma Samples",
+   "source": "Zenodo",
+   "public_accession": "10863736",
+   "collection_doi": "10.5281/zenodo.10863735",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-03-23",
+   "url": "https://zenodo.org/records/10863736",
+   "download_url": null,
+   "description": "This repository contains samples (Visium Spatially resolved Transcriptomics) of the project entitled: Epigenetic neural glioblastoma integrates into neuron-to-glioma-networks and predicts therapeutic vulnerability",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:10901217",
+   "dataset_name": "Visium datasets of mouse liver in different time points after APAP injection",
+   "source": "Zenodo",
+   "public_accession": "10901217",
+   "collection_doi": "10.1016/j.stem.2022.04.008",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-03-31",
+   "url": "https://zenodo.org/records/10901217",
+   "download_url": null,
+   "description": "The datasets were used to analyse the spatial trascriptomics for the manuscript \"The spatiotemporal program of zonal liver regeneration following acute injury\" (DOI https://doi.org/10.1016/j.stem.2022.04.008). Mice were injected a single dose of 300 mg/kg APAP, and livers were harvested 24, 48 and 72 hours after injection. livers were sectioned for Visium spatial transcirpomics (N = 2 mice per tim…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:11402686",
+   "dataset_name": "Visium HD Human Colorectal Cancer (FFPE) data release pathologist annotation",
+   "source": "Zenodo",
+   "public_accession": "11402686",
+   "collection_doi": "10.5281/zenodo.11077885",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-05-31",
+   "url": "https://zenodo.org/records/11402686",
+   "download_url": null,
+   "description": "10X Genomics released a spatial transcriptomic dataset of human colorectal cancer collected on the Visium HD platform. The dataset was divided into different spatial domains based on the accompanying HE stain and the expression of characteristic marker genes. The pathologist's annotation was added with the help of Napari and the Spatialdata python package. Every .csv file contains the Visium HD bi…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:11619309",
+   "dataset_name": "Technology comparison (image-based spatial transcriptomics)- annotated datasets",
+   "source": "Zenodo",
+   "public_accession": "11619309",
+   "collection_doi": "10.5281/zenodo.11619308",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-06-12",
+   "url": "https://zenodo.org/records/11619309",
+   "download_url": null,
+   "description": "This repository contains all the AnnData datasets, regionally annotated, used in the comparison of image-based spatial transcriptomics technologies (Marco Salas et al. 2024)",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:12742819",
+   "dataset_name": "Human embryonic head scRNA-seq data",
+   "source": "Zenodo",
+   "public_accession": "12742819",
+   "collection_doi": "10.5281/zenodo.12742818",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-11-05",
+   "url": "https://zenodo.org/records/12742819",
+   "download_url": null,
+   "description": "These data contain scRNA-seq data of 50,059 single cells from the heads of five human embryos aged four to six weeks in Seurat object format. The data are the result of a re-analysis of primary scRNA-seq data from whole embryos (Xu et al., 2023 Nat. Cell Biol.; GEO accession number: GSE157329). The re-analysis is described in: Siewert, A., Hoeland, S., Mangold, E. et al. Combining genetic and sing…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:13269263",
+   "dataset_name": "snRNA-seq of mouse GPe after cocaine or saline administration",
+   "source": "Zenodo",
+   "public_accession": "13269263",
+   "collection_doi": "10.5281/zenodo.13269262",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-08-08",
+   "url": "https://zenodo.org/records/13269263",
+   "download_url": null,
+   "description": "Data from snRNA-seq of the mouse GPe (seurat object).",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:13385122",
+   "dataset_name": "A Pan-Cancer Single-Cell RNA-seq Atlas of Intratumoral B Cells",
+   "source": "Zenodo",
+   "public_accession": "13385122",
+   "collection_doi": "10.5281/zenodo.13385121",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-10-14",
+   "url": "https://zenodo.org/records/13385122",
+   "download_url": null,
+   "description": "Seurat object associated with publication 'A Pan-Cancer Single-Cell RNA-seq Atlas of Intratumoral B Cells' (Fitzsimons et al. Cancer Cell 2024)",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:13883320",
+   "dataset_name": "Celiac-superior mesenteric ganglia (CG-SMG) spatial transcriptomics",
+   "source": "Zenodo",
+   "public_accession": "13883320",
+   "collection_doi": "10.5281/zenodo.13883319",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-10-03",
+   "url": "https://zenodo.org/records/13883320",
+   "download_url": null,
+   "description": "We prepared the spatial transcriptomics dataset for the celiac and superior mesenteric ganglia (CG-SMG) with 5 sections of 3 mice per Right (R)-CG, SMG, Left (L)-CG).",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:13905956",
+   "dataset_name": "Data and Code from: Dysregulation of zebrin-II cell subtypes is a shared feature across polyglutamine ataxia mouse models and human patients",
+   "source": "Zenodo",
+   "public_accession": "13905956",
+   "collection_doi": "10.5281/zenodo.13905955",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-11-06",
+   "url": "https://zenodo.org/records/13905956",
+   "download_url": null,
+   "description": "Abstract Spinocerebellar ataxia type 7 (SCA7) is a genetic neurodegenerative disorder caused by a CAG- polyglutamine repeat expansion. Purkinje cells (PCs) are central to the pathology of ataxias, but their low abundance in the cerebellum underrepresents their transcriptomes in sequencing assays. To address this issue, we developed a PC enrichment protocol and sequenced individual nuclei from mice…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:14226700",
+   "dataset_name": "MTN deficient scRNA-seq",
+   "source": "Zenodo",
+   "public_accession": "14226700",
+   "collection_doi": "10.5281/zenodo.14226699",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-11-27",
+   "url": "https://zenodo.org/records/14226700",
+   "download_url": null,
+   "description": "\"3KR\" refers to scRNA-seq data from the intestinal tissues of mice fed a methionine-, tryptophan-, and niacin-deficient diet followed by recovery on a regular diet. \"3K\" refers to scRNA-seq data from the intestines of mice continuously fed a methionine-, tryptophan-, and niacin-deficient diet. \"REG\" represents scRNA-seq data from the intestinal tissues of mice maintained on a regular diet. The fil…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:14602110",
+   "dataset_name": "Colorectal cancer spatial transcriptomics and single-cell RNA-sequencing dataset",
+   "source": "Zenodo",
+   "public_accession": "14602110",
+   "collection_doi": "10.5281/zenodo.14602109",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-01-05",
+   "url": "https://zenodo.org/records/14602110",
+   "download_url": null,
+   "description": "Metadata and counts matrix (barcode and genes files also provided) for the colorectal cancer (CRC) spatial transcriptomics and scRNA-seq dataset utilized in the Crescrendo manuscript published by Millard et al. (2025). Batch column indicates whether cell is from scRNA-seq data or which spatial transcriptomics slice. The sample_id column indicates the sample the cell is from. The center_x and cente…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:14620362",
+   "dataset_name": "10x Visium Spatial Transcriptomics Dataset: Kidney (3) and Lung (5) Cancer with Tertiary Lymphoid Structures",
+   "source": "Zenodo",
+   "public_accession": "14620362",
+   "collection_doi": "10.5281/zenodo.14620361",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-01-09",
+   "url": "https://zenodo.org/records/14620362",
+   "download_url": null,
+   "description": "The kidney and lung cancer dataset with tertiary lymphoid structures (TLS) consists of 5 μm thick FFPE sections from kidney (3) and lung (5) tumors obtained from the Institute of Pathology at the University Hospital of Zurich, mounted onto Visium slides with the Human Probe Set v1. The samples were stained with hematoxylin and eosin (H&E) and subsequently processed for sequencing following the man…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:14802187",
+   "dataset_name": "scRNAseq data of NK cells from multiple myeloma patients and healthy donors",
+   "source": "Zenodo",
+   "public_accession": "14802187",
+   "collection_doi": "10.5281/zenodo.13359146",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025",
+   "url": "https://zenodo.org/records/14802187",
+   "download_url": null,
+   "description": "This repository contains nonprolif_NKs_multiple_res_clusters.RDS: the processed data containing 8 clusters of NK cells from 10 multiple myeloma patients (n=10) and 10 healthy donors (n=10) (age and sex matched) within the Seurat object format. The data is used to generate single cell transcriptomics results on our article. For the convenience of the exploration and longer term support of the tools…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:14842959",
+   "dataset_name": "Murine embryonic scRNA-seq data",
+   "source": "Zenodo",
+   "public_accession": "14842959",
+   "collection_doi": "10.5281/zenodo.14842958",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2023-04-24",
+   "url": "https://zenodo.org/records/14842959",
+   "download_url": null,
+   "description": "These data sets contain scRNA-seq data of mouse embryos in Seurat object format. The data are the result of a re-analysis of primary scRNA-seq data from: 1. The lambdoid junction (lambdoid_junction_E11.5) GEO accession number: GSM3867275 Original publication: https://journals.biologists.com/dev/article/146/12/dev174888/19494/The-molecular-anatomy-of-mammalian-upper-lip-and 2. Whole embryos from th…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:14999322",
+   "dataset_name": "Processed single-cell ATAC-seq data of CD4+ T cell subsets from skin and blood of healthy human donors",
+   "source": "Zenodo",
+   "public_accession": "14999322",
+   "collection_doi": "10.5281/zenodo.14999321",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-03-10",
+   "url": "https://zenodo.org/records/14999322",
+   "download_url": null,
+   "description": "This record contains a Seurat object of scATAC-seq data of human CD4+ T cell subsets from skin and blood (healthy donors). The following cell types are included: Blood naive (CD45RA+) Tconv cells Blood naive (CD45RA+) Treg cells Blood CCR8+ Treg cells Skin Tconv cells Skin Treg cells The object is saved in RDS format and can be used with the programming language \"R\" using the readRDS() function. T…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:15151517",
+   "dataset_name": "Multiple Sclerosis Large Human Brain Tissue (MS Sample 2-White Matter Chronic Active Lesion) with 6 Spatial Transcriptomics Captures Using 10x Genomics Visium",
+   "source": "Zenodo",
+   "public_accession": "15151517",
+   "collection_doi": "10.5281/zenodo.15151516",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-04-05",
+   "url": "https://zenodo.org/records/15151517",
+   "download_url": null,
+   "description": "This dataset was featured in the study: Scaling up spatial transcriptomics for large-sized tissues: uncovering cellular-level tissue architecture beyond conventional platforms with iSCALE. The dataset includes a large human brain tissue section from a patient with Multiple Sclerosis (MS) and contains a fully resolved chronic active white matter lesion, along with areas of active and chronic subpia…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:15274014",
+   "dataset_name": "Visium Spatial data of Brain section from Parkinson Mouse Model based on inducible expression of human a-syn constructs: 3-months",
+   "source": "Zenodo",
+   "public_accession": "15274014",
+   "collection_doi": "10.5281/zenodo.15274013",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-04-24",
+   "url": "https://zenodo.org/records/15274014",
+   "download_url": null,
+   "description": "Using 3-months old mice of a inducible expression of human a-syn constructs based Parkinson mouse model, we produced a Visium Spatial V1 platform (10x Genomics) data. Sequencing was performed on a NovaSeq 6000 with PE150. Sequences were fiducially aligned to spots using Loupe Browser ver. 8. All aligned sequences were mapped using spaceranger count 3.0.1 with a custom refence, which included seque…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:15361297",
+   "dataset_name": "Spatial Transcriptomics data (Visium 10X) of midbrain tissue in control subject",
+   "source": "Zenodo",
+   "public_accession": "15361297",
+   "collection_doi": "10.5281/zenodo.15361296",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-05-08",
+   "url": "https://zenodo.org/records/15361297",
+   "download_url": null,
+   "description": "The repository includes Spatial Transcriptomic dataset generated by Visium 10X analysis of the midbrain from a Control subject. The raw and processed counts and metadata are provided as an R Seurat object (ST_visium_Abaurre_v1.rds). The tissue sample was taken from a control without the neurological or neuropathological disease from the Sydney Brain Bank. The study was approved by the University o…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:15789211",
+   "dataset_name": "Single-cell RNA-seq mouse early embryo atlas",
+   "source": "Zenodo",
+   "public_accession": "15789211",
+   "collection_doi": "10.5281/zenodo.15789210",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-08-02",
+   "url": "https://zenodo.org/records/15789211",
+   "download_url": null,
+   "description": "h5ad file contatining single-cell rna-seq measured from two publications: 1) Pijuan-Sala B et al (Gottgens), Nature 2019 2) Mittnenzweig et al (Stelzer), Cell 2021 obs categories include cell name, dataset, and cell_type, based on the annotations in the original publications.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:16505469",
+   "dataset_name": "GBM single cell and spatial transcriptomics data",
+   "source": "Zenodo",
+   "public_accession": "16505469",
+   "collection_doi": "10.5281/zenodo.16505468",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-07-27",
+   "url": "https://zenodo.org/records/16505469",
+   "download_url": null,
+   "description": "Anndata objects with raw counts/ images for single cell and spatial transcriptomics data in glioblastoma",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:16777109",
+   "dataset_name": "Single-nucleus RNA sequencing of human post-mortem brain tissue from Parkinson's disease and control donors",
+   "source": "Zenodo",
+   "public_accession": "16777109",
+   "collection_doi": "10.5281/zenodo.16777108",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-08-30",
+   "url": "https://zenodo.org/records/16777109",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"Single-nucleus RNA sequencing of human post-mortem brain tissue from Parkinson's disease and control donors\". Description: Single-nucleus RNA-seq data from >740,000 nuclei isolated from eight brain regions of 18 Braak stage 3/4 PD donors and 20 age-matched controls. Nuclei were extracted from frozen tissue using …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:16929491",
+   "dataset_name": "Processed scRNAseq datasets for Wardenburg_McNehlen_et_al_2026",
+   "source": "Zenodo",
+   "public_accession": "16929491",
+   "collection_doi": "10.5281/zenodo.16929490",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-08-22",
+   "url": "https://zenodo.org/records/16929491",
+   "download_url": null,
+   "description": "Processed scRNAseq datasets from Wardenburg, McNehlen et al. 2026 used for analyses and machine learning approaches. Includes custom processed datasets for model training from DOI: 10.1126/sciimmunol.abj5761 and 10.1038/s41467-023-44421-6. Associated code can be found on github: https://github.com/StallingsLab/Wardenburg_McNehlen_et_al_2026",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:16995699",
+   "dataset_name": "Spatial patterning of fibroblast TGFβ signaling underlies treatment resistance in rheumatoid arthritis - Xenium data (pre-treatment RA synovium)",
+   "source": "Zenodo",
+   "public_accession": "16995699",
+   "collection_doi": "10.5281/zenodo.16995698",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-08-29",
+   "url": "https://zenodo.org/records/16995699",
+   "download_url": null,
+   "description": "RA-ILDLung_VisiumHD.tar.gz : Visium HD data of RA ILD lung sample ; RAsynovium_VisiumHD.tar.gz: Visium HD data of RA synovium sample ; Xenium_organoid_RA_359.tar.gz: Xenium data of synovium organoid RA001 ; Xenium_organoid_RA_673.tar.gz : Xenium data of synovium organoid RA002 ; Xenium_organoid_RA_707.tar.gz: Xenium data of synovium organoid RA003 ; OLINKdata.tar: 396.10 OLINK data raw NPX values …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17042145",
+   "dataset_name": "Supplementary files from snRNAseq experiments appearing in the original manuscript \"Prenatal Maternal Immune Activation Triggers Lasting Cell-Specific Transcriptomic Dysregulation in the Amygdala of Primate Offspring\"",
+   "source": "Zenodo",
+   "public_accession": "17042145",
+   "collection_doi": "10.5281/zenodo.17042144",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-12-19",
+   "url": "https://zenodo.org/records/17042145",
+   "download_url": null,
+   "description": "Supplementary files from snRNAseq experiments appearing in the original manuscript \" Prenatal Maternal Immune Activation Triggers Lasting Cell-Specific Transcriptomic Dysregulation in the Amygdala of Primate Offspring \" accepted to Molecular Psychiatry on December 2, 2025 (published December 19, 2025). Full experimental and technical details are available at https://doi.org/10.1038/s41380-025-0340…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17108059",
+   "dataset_name": "Spatial transcriptomics Chowdhury et al",
+   "source": "Zenodo",
+   "public_accession": "17108059",
+   "collection_doi": "10.5281/zenodo.17108058",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-09-12",
+   "url": "https://zenodo.org/records/17108059",
+   "download_url": null,
+   "description": "Data is spatial transcriptomics from Pancreatic Cancer PDX tissue. The mice were treated with Control or fibrinogen ASOs and tumors were collected at week 4 post-implant. Raw FASTQ files and accompanying H&E images were processed with SpaceRanger (10x Genomics). Reads were aligned to a dual-species reference (GRCh37 + mm10), after which unique molecular indices (UMIs) were assigned to individual V…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17138062",
+   "dataset_name": "Seruat v5 R object for Tuscher et al 2025 bioRxiv preprint snRNA-seq dataset",
+   "source": "Zenodo",
+   "public_accession": "17138062",
+   "collection_doi": "10.5281/zenodo.17138061",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-09-17",
+   "url": "https://zenodo.org/records/17138062",
+   "download_url": null,
+   "description": "This dataset contains single-nucleus RNA-seq results from rat ventral tegmental area brain tissue in a chronic pain model with morphine administration. This experiment contains 28 biological samples, which represent four experimental groups of rats. To assess neuropathic pain response, Complete Freund’s Adjuvant (CFA) or saline vehicle (100 µl) was injected into the plantar surface of one hind paw…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17214560",
+   "dataset_name": "Dataset used for \"Transcriptome-scale spatial reconstruction reveals microenvironmental regulation of cell states with Emerge\"",
+   "source": "Zenodo",
+   "public_accession": "17214560",
+   "collection_doi": "10.5281/zenodo.17214559",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-09-27",
+   "url": "https://zenodo.org/records/17214560",
+   "download_url": null,
+   "description": "All datasets analyzed in this study are publicly available from the following sources. For MERFISH MOp dataset, the spatial transcriptomics dataset was obtained from the https://doi.org/10.35077/g.21, and the corresponding snRNA-seq dataset was accessed through the BRAIN Initiative Cell Census Network (https://assets.nemoarchive.org/dat-ch1nqb7). For Xenium breast cancer dataset, the Xenium in sit…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17345526",
+   "dataset_name": "Single-nucleus RNA sequencing data of mice gonadal white adipose tissue (WT NCD, WT HFD, Tm4sf19 KO NCD, Tm4sf19 KO HFD)",
+   "source": "Zenodo",
+   "public_accession": "17345526",
+   "collection_doi": "10.5281/zenodo.17345525",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-03-30",
+   "url": "https://zenodo.org/records/17345526",
+   "download_url": null,
+   "description": "This Seurat object contains single-nucleus RNA-seq data from four experimental conditions: WT NCD, WT HFD, Tm4sf19 KO NCD, and Tm4sf19 KO HFD. Each condition includes two biological replicates. The object also contains cell-type annotations for all cells. Raw sequencing data are available in the Sequence Read Archive (SRA; accession SRP426501). It accompanies the publication \"TM4SF19-mediated cont…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17376961",
+   "dataset_name": "Single-cell data derived from metastatic murine liver tissues from the B16-spleen-liver melanoma liver metastasis model (three biological replicates (n1, n2, n3)).",
+   "source": "Zenodo",
+   "public_accession": "17376961",
+   "collection_doi": "10.5281/zenodo.17376960",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-10-17",
+   "url": "https://zenodo.org/records/17376961",
+   "download_url": null,
+   "description": "Approved RNAi therapeutics marked groundbreaking advances. Yet, the clinical translation of RNAi for cancer treatment remains unrealized - largely due to the predominant delivery of siRNAs to hepatocytes. Our study uncovers a previously unrecognized crosstalk mechanism that shapes the metastatic liver niche, offering a compelling opportunity to transform this apparent limitation into a therapeutic…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17402344",
+   "dataset_name": "snRNAseq of olfactory epithelium with AAV serotypes for transduction of olfactory sensory neurons in Mus musculus",
+   "source": "Zenodo",
+   "public_accession": "17402344",
+   "collection_doi": "10.5281/zenodo.17358327",
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-10-03",
+   "url": "https://zenodo.org/records/17402344",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"snRNAseq of olfactory epithelium with AAV serotypes for transduction of olfactory sensory neurons in Mus musculus\". Description: Single-nucleus RNA sequencing data of 4 mice, each inoculated with 4 AAV serotypes. The mice were all male and 8-10 weeks of age at when olfactory epithelium tissue was harvested. Sampl…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17664023",
+   "dataset_name": "Tumor Spatial Transcriptomics Atlas (TSTA)",
+   "source": "Zenodo",
+   "public_accession": "17664023",
+   "collection_doi": "10.5281/zenodo.17664022",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-11-20",
+   "url": "https://zenodo.org/records/17664023",
+   "download_url": null,
+   "description": "The Tumor Spatial Transcriptomics Atlas (TSTA) comprises 1,258 Visium samples spanning 37 cancer types, which can be explored at https://secact.ccr.cancer.gov or https://appshare.cancer.gov/SecAct . Citation: Beibei Ru, Lanqi Gong, Emily Yang, Seongyong Park, George Zaki, Kenneth Aldape, Lalage Wakefield, Peng Jiang. Inference of secreted protein activities in intercellular communication. Nature M…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17733765",
+   "dataset_name": "Dataset for article Single-Cell Multi-Omics Map of Cell Type-Specific Mechanistic Drivers of Multiple Sclerosis Lesions",
+   "source": "Zenodo",
+   "public_accession": "17733765",
+   "collection_doi": "10.5281/zenodo.17733764",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2024-06-21",
+   "url": "https://zenodo.org/records/17733765",
+   "download_url": null,
+   "description": "Background and objectives: In progressive multiple sclerosis (MS), compartmentalized inflammation plays a pivotal role in the complex pathology of tissue damage. The interplay between epigenetic regulation, transcriptional modifications, and location-specific alterations within white matter (WM) lesions at the single-cell level remains underexplored. Methods: We examined intracellular and intercel…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17937263",
+   "dataset_name": "Systematic scRNAseq screens profile neural organoid response to morphogens",
+   "source": "Zenodo",
+   "public_accession": "17937263",
+   "collection_doi": "10.5281/zenodo.17225178",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2025-12-15",
+   "url": "https://zenodo.org/records/17937263",
+   "download_url": null,
+   "description": "Supplementary data for the manuscript: Systematic scRNA-seq screens profile neural organoid response to morphogens.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:17999961",
+   "dataset_name": "A technical comparison of spatial transcriptomics platforms across six cancer types - Visium/VisiumCytAssist/VisiumHD",
+   "source": "Zenodo",
+   "public_accession": "17999961",
+   "collection_doi": "10.5281/zenodo.17999960",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-01",
+   "url": "https://zenodo.org/records/17999961",
+   "download_url": null,
+   "description": "This repository contains spatial transcriptomics data generated with Visium in three modalities: Visium v1, Visium v2/ CytAssist , and Visium HD. These data were used in the spatial platforms comparison study by Cervilla et al. (2025). If you are interested in the same samples profiled with other spatial transcriptomics technologies, see also: Xenium and CosMx : https://doi.org/10.5281/zenodo.1798…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18000256",
+   "dataset_name": "A technical comparison of spatial transcriptomics platforms across six cancer types - XeniumMT & Xenium5K",
+   "source": "Zenodo",
+   "public_accession": "18000256",
+   "collection_doi": "10.5281/zenodo.18000255",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-01",
+   "url": "https://zenodo.org/records/18000256",
+   "download_url": null,
+   "description": "This repository contains Xenium spatial transcriptomics data with multimodal cell segmentation. The data were generated using the Multi-Tissue (XeniumMT) and Human Prime 5K (Xenium5K) gene panels and were used in the spatial platforms comparison study by Cervilla et al. (2025). If you are interested in the same samples profiled with other spatial transcriptomics technologies, see also: Visium v1, …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18237749",
+   "dataset_name": "Human Heart Development snRNA-seq Data",
+   "source": "Zenodo",
+   "public_accession": "18237749",
+   "collection_doi": "10.1161/CIRCULATIONAHA.120.051921",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-14",
+   "url": "https://zenodo.org/records/18237749",
+   "download_url": null,
+   "description": "This dataset contains single-nucleus RNA sequencing (snRNA-seq) data from human heart tissue for use in the Single-Cell RNA-seq Analysis Workshop . The data spans three developmental stages (foetal, young, and adult) and is derived from the study by Sim et al. (2021). Original analysis workflow: https://bphipson.github.io/Human_Development_snRNAseq/ Sim CB, Phipson B, Ziemann M, et al. Sex-Specifi…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18265276",
+   "dataset_name": "scTELL TE Accessibility Matrices: Single-cell ATAC-seq Transposable Element Analysis Data",
+   "source": "Zenodo",
+   "public_accession": "18265276",
+   "collection_doi": "10.5281/zenodo.18265275",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-16",
+   "url": "https://zenodo.org/records/18265276",
+   "download_url": null,
+   "description": "This dataset contains single-cell transposable element (TE) accessibility matrices generated using scTELL (single-cell Transposable Element Locus-Level analysis) from the manuscript \"scTELL: A Single-Cell ATAC-seq Tool for Locus-Specific Transposable Element Identification in Chromatin Accessibility.\" The dataset includes five RDS files containing SummarizedExperiment objects with locus-level TE a…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18306028",
+   "dataset_name": "Spatial Transcriptomics Dataset of BCLM",
+   "source": "Zenodo",
+   "public_accession": "18306028",
+   "collection_doi": "10.5281/zenodo.18306027",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-19",
+   "url": "https://zenodo.org/records/18306028",
+   "download_url": null,
+   "description": "Raw data for 10X Genomics Visium spatial transcriptomics dataset of human breast cancer liver metastasis (BCLM) samples (n = 8).",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18371193",
+   "dataset_name": "Single-nucleus RNA-seq of human post-mortem primary motor cortex (M1) nuclei from ALS-FTD patients, NeuN+ (neuronal) and sorted for TDP-43 low vs. high signal",
+   "source": "Zenodo",
+   "public_accession": "18371193",
+   "collection_doi": "10.5281/zenodo.18371192",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-29",
+   "url": "https://zenodo.org/records/18371193",
+   "download_url": null,
+   "description": "This dataset comprises single-nucleus transcriptomic (RNA-seq) data from nuclei purified from the post-mortem human primary motor cortex (M1) from patients with ALS-FTD, after sorting for TDP-43 nuclear signal (NeuN+, TDP-43 low vs. high). Detailed methods and study description in the accompanying publication (tba).",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18380571",
+   "dataset_name": "Spatial IDH-mut glioma Visium dataset",
+   "source": "Zenodo",
+   "public_accession": "18380571",
+   "collection_doi": "10.5281/zenodo.18380570",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-03-01",
+   "url": "https://zenodo.org/records/18380571",
+   "download_url": null,
+   "description": "This repository provides original Visium data of GBM and IDHmut glioma samples used in Hoefflin, Greenwald, Galili Darnell, Mount, et al. \"Spatial analysis reveals the evolving organization of low-grade and high-grade IDH-mutant glioma\". Additional GBM samples were analyzed from Ravi et al. (Cancer Cell 2022, DOI: 10.1016/j.ccell.2022.05.009 ). Sample names for these samples should be converted us…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18426113",
+   "dataset_name": "Data for 'Peritumoral adipose tissue promotes ferroptosis resistance by 3-Hydroxykynurenine-mediated suppression of ferritinophagy'",
+   "source": "Zenodo",
+   "public_accession": "18426113",
+   "collection_doi": "10.5281/zenodo.18426112",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-01-30",
+   "url": "https://zenodo.org/records/18426113",
+   "download_url": null,
+   "description": "Single-nucleus RNA sequencing (snRNA-seq) on peritumoral adipose tissue from MC38 iWAT tumors",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18481930",
+   "dataset_name": "Single-Cell Profiling Decodes Patagium Development in Gliding Mammal",
+   "source": "Zenodo",
+   "public_accession": "18481930",
+   "collection_doi": "10.5281/zenodo.18481929",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-07-21",
+   "url": "https://zenodo.org/records/18481930",
+   "download_url": null,
+   "description": "This record contains processed data files and analysis code associated with the manuscript “Single-nucleus profiling of patagium development in a gliding mammal”. The uploaded files include processed Seurat objects for the full single-nucleus RNA-seq dataset and fibroblast subset analyses, together with analysis code used for downstream processing, visualization and figure generation. Raw sequenci…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18490685",
+   "dataset_name": "TLS Spatial Transcriptomics Full Dataset",
+   "source": "Zenodo",
+   "public_accession": "18490685",
+   "collection_doi": "10.5281/zenodo.18490684",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-02-05",
+   "url": "https://zenodo.org/records/18490685",
+   "download_url": null,
+   "description": "Complete Visium spatial transcriptomics data for TLS analysis across multiple cancer types",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18498335",
+   "dataset_name": "Processed single-nucleus RNA-seq anndata from paired primary and recurrent glioblastoma patients",
+   "source": "Zenodo",
+   "public_accession": "18498335",
+   "collection_doi": "10.5281/zenodo.18498334",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-02-05",
+   "url": "https://zenodo.org/records/18498335",
+   "download_url": null,
+   "description": "We generated a processed AnnData object containing integrated and annotated single-nucleus RNA-seq profiles from paired primary and recurrent glioblastoma samples obtained from a publicly available GEO dataset (accession code GSE131928).",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18765353",
+   "dataset_name": "Konnikova lab placental villi immune cell atlas",
+   "source": "Zenodo",
+   "public_accession": "18765353",
+   "collection_doi": "10.5281/zenodo.18765352",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-02-25",
+   "url": "https://zenodo.org/records/18765353",
+   "download_url": null,
+   "description": "This placental villi immune cell atlasis from a case-control study of 32 placentas, all of which were cryopreserved within 12 hours of Caesarean delivery. Placenta samples were assigned to one of four study cohorts: healthy term cases (mean gestational age, GA = 39.1 weeks), cases delivered preterm for maternal indications (structural complications) without inflammatory etiologies (mean GA = 35.5 …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18794192",
+   "dataset_name": "snRNA-seq analysis of the ventral midbrain in G2019S LRRK2 knockin mice under a specialized diet",
+   "source": "Zenodo",
+   "public_accession": "18794192",
+   "collection_doi": "10.5281/zenodo.18273808",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-02-26",
+   "url": "https://zenodo.org/records/18794192",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"snRNA-seq analysis of the ventral midbrain in G2019S LRRK2 knockin mice under a specialized diet\". Description: G2019S LRRK2 knockin mice and their wild-type littermates were maintained on a normal chow diet (23.7% kcal from fat) for the first 11 months of life. At that time, animals were randomly assigned to eit…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18863971",
+   "dataset_name": "Single-cell and spatial transcriptomic data for meningioma",
+   "source": "Zenodo",
+   "public_accession": "18863971",
+   "collection_doi": "10.5281/zenodo.17296825",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-02-09",
+   "url": "https://zenodo.org/records/18863971",
+   "download_url": null,
+   "description": "Supplementary data files for single-nucleus RNA-seq (merged Seurat RDS file) and 10x Genomics Visium transcriptomic profiling (count matrices and slide images for 42 samples) have been deposited in this dataset. Raw data files are available at the NCBI Gene Expression Omnibus (GEO) database, under accession numbers GSE313693 ( PRJNA1338118 ) and GSE313694 ( PRJNA1338697 ), respectively.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:18932473",
+   "dataset_name": "STARS decodes spatial transcriptomics across resolutions, spatial transcriptomics data of mouse lung tissue",
+   "source": "Zenodo",
+   "public_accession": "18932473",
+   "collection_doi": "10.5281/zenodo.18932472",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-03-12",
+   "url": "https://zenodo.org/records/18932473",
+   "download_url": null,
+   "description": "Current whole-genome spatial transcriptomics (ST) platforms, which range from multicellular (e.g., Visium) to subcellular resolution (e.g., Visium HD, Stereo-seq), face significant challenges in accurately decomposing or aggregating spots into single cells—the fundamental units of biological activity. To date, most existing computational methods operate at the spot level, and no method has effecti…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:19002805",
+   "dataset_name": "Single‐cell transcriptomics uncovers an instructive T‐cell receptor role in adult γδ T‐cell lineage commitment : associated single cell RNAseq R objects",
+   "source": "Zenodo",
+   "public_accession": "19002805",
+   "collection_doi": "10.5281/zenodo.19002803",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-03-13",
+   "url": "https://zenodo.org/records/19002805",
+   "download_url": null,
+   "description": "This repository provides the 3 scRNAseq R objects corresponding to the datasets shown in https://link.springer.com/article/10.15252/embj.2021110023",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:19600804",
+   "dataset_name": "iSCORE-PD: scRNA-seq of irradiated WIBR3 cortical spheroids",
+   "source": "Zenodo",
+   "public_accession": "19600804",
+   "collection_doi": "10.5281/zenodo.19600803",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-04-15",
+   "url": "https://zenodo.org/records/19600804",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"iSCORE-PD: scRNA-seq of irradiated WIBR3 cortical spheroids\". Description: Single-cell RNA sequencing of WIBR3-derived Day 25 cortical spheroids exposed to ionizing radiation at doses of 0, 0.5, 2, 5, and 10 Gy. Spheroids were dissociated and assayed 24h post-irradiation via individual 10x Chromium scRNA-seq libr…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:19600808",
+   "dataset_name": "iSCORE-PD: scRNA-seq of irradiated WIBR3 hESCs",
+   "source": "Zenodo",
+   "public_accession": "19600808",
+   "collection_doi": "10.5281/zenodo.19600807",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-04-15",
+   "url": "https://zenodo.org/records/19600808",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"iSCORE-PD: scRNA-seq of irradiated WIBR3 hESCs\". Description: Single-cell RNA sequencing of WIBR3 human embryonic stem cells (hESCs) exposed to ionizing radiation at doses of 0, 0.5, 2, 5, and 10 Gy. Cells were assayed 24h post-irradiation via multiplexed scRNASeq using MULTI-seq reagents. This dataset is made av…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:19937284",
+   "dataset_name": "PD5D_MTG_snRNAseq_hybsel",
+   "source": "Zenodo",
+   "public_accession": "19937284",
+   "collection_doi": "10.5281/zenodo.16885839",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-04-30",
+   "url": "https://zenodo.org/records/19937284",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"PD5D_MTG_snRNAseq_hybsel\". Description: This dataset contains the raw data in FASTQ format for single-nucleus RNA sequencing (snRNAseq) enriched with Agilent SureSelect for reads from a list of targeted transcripts for human middle temporal gyrus (MTG) samples from Parkinson's patients and healthy controls. This …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:19937391",
+   "dataset_name": "Single-nucleus RNAseq of the post-mortem cingulate cortex and substantia nigra from control and Parkinson's disease brains",
+   "source": "Zenodo",
+   "public_accession": "19937391",
+   "collection_doi": "10.5281/zenodo.17612853",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-04-30",
+   "url": "https://zenodo.org/records/19937391",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"Single-nucleus RNAseq of the post-mortem cingulate cortex and substantia nigra from control and Parkinson's disease brains\". Description: Samples of the Cingulate Cortex and Substantia Nigra from post-mortem brains from the New York Brain Bank were dissected and processed using 10X single-nucleus RNA sequencing o…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:19938020",
+   "dataset_name": "PD5D_MTG_snRNAseq",
+   "source": "Zenodo",
+   "public_accession": "19938020",
+   "collection_doi": "10.5281/zenodo.16751625",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-04-30",
+   "url": "https://zenodo.org/records/19938020",
+   "download_url": null,
+   "description": "This Zenodo deposit contains a publicly available description of the Dataset: Title: \"PD5D_MTG_snRNAseq\". Description: This dataset contains single-nucleus RNA sequencing (snRNAseq) raw data in FASTQ format for 94 human middle temporal gyrus (MTG) samples from Parkinson's patients and healthy controls. It's part of the PD5D atlas, where the same subjects were also profiled with other omics assays …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:20017381",
+   "dataset_name": "CD45+ cell-enriched scRNA-seq of human breast implant fibrotic capsule",
+   "source": "Zenodo",
+   "public_accession": "20017381",
+   "collection_doi": "10.5281/zenodo.20017380",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-05-04",
+   "url": "https://zenodo.org/records/20017381",
+   "download_url": null,
+   "description": "This dataset contains cells isolated from a human breast implant fibrotic capsule. CD45+ cells were enriched prior to scRNA-seq using magnetic bead separation. Cells were sequenced at a ratio of 3:1 CD45+ cells:CD45- cells using 10x 3' Chromium (2 lanes). Files represent the Cell Ranger output from each lane. Detailed methods for tissue processing prior to scRNA-seq are provided in the original pa…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:20078069",
+   "dataset_name": "Single nuclei RNA sequencing (10x) of postmortem cingulate cortex and midbrain of healthy donors and Parkinson's disease patients – 10x snRNA-seq.",
+   "source": "Zenodo",
+   "public_accession": "20078069",
+   "collection_doi": "10.5281/zenodo.18988768",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-05-31",
+   "url": "https://zenodo.org/records/20078069",
+   "download_url": null,
+   "description": "This dataset consists of raw sequencing snRNA-seq data (10x Genomics Chromium Next GEM Single Cell 3ʹ). The data is part of an overall set of samples derived from postmortem midbrain (n=140), cingulate cortex (n=190) and motor cortex (n=4) of healthy donors (n=114), patients with Parkinson's disease (n=75) or patients with other neurological disorder (n=1). The protocol followed to isolate nuclei …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:20078073",
+   "dataset_name": "PD5D midbrain single-nucleus RNA-seq hybrid selection",
+   "source": "Zenodo",
+   "public_accession": "20078073",
+   "collection_doi": "10.5281/zenodo.19124469",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-05-31",
+   "url": "https://zenodo.org/records/20078073",
+   "download_url": null,
+   "description": "This dataset contains raw FASTQ files from the midbrain single-nucleus RNA sequencing (snRNAseq) dataset with hybrid selection for the matching PMDBS samples from the PD5D chort. The same subjects were also profiled with other omics assays including genomic DNAseq, genotyping, single-cell ATACseq, and spatial transcriptomics.",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:20078306",
+   "dataset_name": "Single nuclei RNA sequencing of postmortem cingulate cortex, midbrain and motor cortex of healthy donors and Parkinson's disease patients – 10x multiome (snRNA-seq and snATAC-seq).",
+   "source": "Zenodo",
+   "public_accession": "20078306",
+   "collection_doi": "10.5281/zenodo.18988753",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-05-31",
+   "url": "https://zenodo.org/records/20078306",
+   "download_url": null,
+   "description": "This dataset consists of raw sequencing snRNA-seq data and snATAC-seq data (10x Genomics Chromium Next GEM Multiome ATAC/GEX). The data is part of an overall set of samples derived from postmortem midbrain (n=140), cingulate cortex (n=190) and motor cortex (n=4) of healthy donors (n=114), patients with Parkinson's disease (n=75) or patients with other neurological disorder (n=1). The protocol foll…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:20135166",
+   "dataset_name": "Integrated single-nucleus RNA-seq dataset of mouse brain from a multi-factorial benchmarking study",
+   "source": "Zenodo",
+   "public_accession": "20135166",
+   "collection_doi": "10.5281/zenodo.19158632",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-03-22",
+   "url": "https://zenodo.org/records/20135166",
+   "download_url": null,
+   "description": "Title: A systematic multi-factorial benchmarking reveals critical technical biases in single-nucleus RNA sequencing of the brain Author: Jin Ning Email: ningjin@stu.xjtu.edu.cn Date: 2026-05-12 Description: This dataset contains integrated Seurat objects (`.RDS` files) derived from a systematic multi-factorial benchmarking study of single-nucleus RNA sequencing (snRNA-seq) in the mouse brain. The …",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:21149645",
+   "dataset_name": "snRNA-seq of human adipose tissue",
+   "source": "Zenodo",
+   "public_accession": "21149645",
+   "collection_doi": "10.5281/zenodo.21149643",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-07-03",
+   "url": "https://zenodo.org/records/21149645",
+   "download_url": null,
+   "description": "This is processed data for snRNA-seq data of human adipose tissue",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:21401004",
+   "dataset_name": "Data: Urothelial carcinoma single-cell RNA-seq (FGFR-inhibitor resistance / NRG1)",
+   "source": "Zenodo",
+   "public_accession": "21401004",
+   "collection_doi": "10.5281/zenodo.21401003",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-07-16",
+   "url": "https://zenodo.org/records/21401004",
+   "download_url": null,
+   "description": "Processed single-cell RNA-seq objects (Seurat / CellView) supporting Hosni, Kilian et al., Cancer Research 2024 — adipocyte-precursor-derived NRG1 promotes resistance to FGFR inhibition in urothelial carcinoma. Published data; raw sequencing reads are on GEO (see the paper's data-availability statement). Analysis code: https://github.com/BaldLab/Hosni_Kilian_etal_Cancer_Research_2023. Data are pro…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:21539847",
+   "dataset_name": "HTAN 4-cohort scRNA-Seq data with annotation",
+   "source": "Zenodo",
+   "public_accession": "21539847",
+   "collection_doi": "10.5281/zenodo.21539846",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-07-24",
+   "url": "https://zenodo.org/records/21539847",
+   "download_url": null,
+   "description": "The multi-center scRNA-Seq DCIS-IBC scRNA-Seq atlas is an openly accessible, multi‑layered resource designed to support functional genomics in tumor immunology and computational oncology for breast cancer. The dataset integrates raw, processed, and annotated data modalities generated across multiple experimental platforms, enabling downstream analysis ranging from single‑cell transcriptomics to fu…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:21722584",
+   "dataset_name": "Single-nucleus RNA-seq analysis of Major Depressive Disorder(Intermediate processed objects)",
+   "source": "Zenodo",
+   "public_accession": "21722584",
+   "collection_doi": "10.5281/zenodo.21722583",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-07-31",
+   "url": "https://zenodo.org/records/21722584",
+   "download_url": null,
+   "description": "Intermediate processed objects after QC :seurat_object_snn_0.6_1142.rdata Intermediate processed objects after Cell annotation:scRNA_brsrp.rdata",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  },
+  {
+   "dataset_uid": "zenodo:21821264",
+   "dataset_name": "A spatial transcriptomics atlas of live donors reveals unique zonation patterns in the healthy human liver",
+   "source": "Zenodo",
+   "public_accession": "21821264",
+   "collection_doi": "10.5281/zenodo.14276368",
+   "species": null,
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": null,
+   "published_date": "2026-08-06",
+   "url": "https://zenodo.org/records/21821264",
+   "download_url": null,
+   "description": "Samples description The dataset includes the following human & non-human samples: Human samples: -Live healthy donors (LHD; n = 8), labeled as M -Patients with liver pathology (adjacent normal tissue sampled; n = 8), labeled as P Non-human samples: -Wild boar (n = 2), labeled as non_human_P -Cow (n = 2), labeled as non_human_C -Domesticated pig (n = 3), labeled as non_human_PD Visium: LHDs and adj…",
+   "filesize": null,
+   "metadata_provenance": {
+    "source_endpoint": "https://zenodo.org/api/records",
+    "fields": {
+     "species": {
+      "origin": "extracted from title/description free text via species vocabulary; incomplete by construction",
+      "complete": false
+     },
+     "tissue_disease": {
+      "origin": "no structured fields in Zenodo; slots abandoned",
+      "complete": false
+     },
+     "has_raw_data": {
+      "origin": "raw-data availability not derivable from record metadata",
+      "complete": false
+     },
+     "download_url": {
+      "origin": "no per-file direct link assembled; record page is the download entry",
+      "complete": false
+     }
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "biodata": {
+      "type": "stdio",
+      "command": "REPLACE_WITH_MCP_VENV_PYTHON",
+      "args": ["REPLACE_WITH_PATH_TO/agent/mcp_server.py"],
+      "env": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONUTF8": "1",
+        "BIODATA_LLM_ENV_FILE": "REPLACE_WITH_PROJECT_EXTERNAL_LLM_ENV_PATH"
+      }
+    }
+  }
+}

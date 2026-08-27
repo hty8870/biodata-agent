@@ -1,0 +1,2102 @@
+{
+ "source": "ENCODE",
+ "source_url": "https://www.encodeproject.org/",
+ "note": "离线快照·外部平台库（opt-in）。不并入官方评测语料。40 条为 Human/Mouse × RNA-seq/ATAC-seq 各 10 条的分层样本（2026-07-22 截止确定性选取）。每条 metadata_provenance 逐实验核验（experiment/replicate/library/biosample/file 五段 wire 证据 complete=true）；has_raw_data=True 表示 ENCODE 门户该实验文件清单列出 FASTQ，不等于别处无其它原始数据。",
+ "record_count": 40,
+ "records": [
+  {
+   "dataset_uid": "encode:ENCSR009WQK",
+   "dataset_name": "Homo sapiens CD14-positive monocyte nuclear fraction male adult (51 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR009WQK",
+   "platform_id": "ENCSR009WQK",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR009WQK/",
+   "download_url": null,
+   "description": null,
+   "filesize": 46031580687,
+   "raw_fastq_bytes": 22990283025,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "6039a1a643cfd17f3557b7f2e191e4588eb1532ba630d8fa1204a1b23c1f83d3",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "87b7cec1f60c11565ab20c1949fda6f0de919509ecb172014fc34366f9118365",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "9c3a54834d939e5d4f6caf6154334907a45ddbf054bb52578dc51c5f0d9a0be9"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "a908328195161dadf950087448ff7c3db325178daa612c55843b7bf6a5936cef"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "826dd3d03be0e242362510c455da23633f696fa525c0eba7502bb6d73e17ca1e",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR021QIA",
+   "dataset_name": "Homo sapiens placenta tissue nuclear fraction male embryo",
+   "source": "ENCODE",
+   "public_accession": "ENCSR021QIA",
+   "platform_id": "ENCSR021QIA",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR021QIA/",
+   "download_url": null,
+   "description": null,
+   "filesize": 28785060645,
+   "raw_fastq_bytes": 10722529086,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "9fd2d5eb77274ceb1985277739ea1c0dbb9f7a20550f72fafd66ddcf7615a5c8",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "d68ba6c5b2a5d7b20d8a67d7fad7878bc1fdcc56e2f34eb3e3c5e6290b1969f7",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "a0c5f63f655896aa30c674f9106a8e302cbe082a861449fb59445c7de6e99e03"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "f823b025d08b11beb65f2b2a340097b1f6dd01f745b808946f30a587d387d961"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "7b392a8d7849e3e184dd0d438b9db743417592f4c993d2681518332840642cd6",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR024LKR",
+   "dataset_name": "Mus musculus strain B6CASTF1/J adrenal gland tissue nuclear fraction male adult (2 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR024LKR",
+   "platform_id": "ENCSR024LKR",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR024LKR/",
+   "download_url": null,
+   "description": null,
+   "filesize": 55146881465,
+   "raw_fastq_bytes": 27420376707,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "f4b7118fdc28b2aaca5b8d28dc30833333445e2757f0f75f3c1121717a7d0910",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "dcab0261c1217ce2fef89bb7552d3cdea4304cc5750e7721d310e2594d0842f8",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "0ccb5b8c6f90c1fc7089e609854fcdd83a270062ca27b1761d995967274f46fb"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "5a6687c4f3b5fdf6282194d20c08dc6beeb2c6482daf623aad41a55caefb5de7"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "918f9e7d5ac5ff3c79478159ded38c8f82209709b9d94b7aafdb891fe90750d5",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR076ZLE",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction female adult (61 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR076ZLE",
+   "platform_id": "ENCSR076ZLE",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-07-27",
+   "url": "https://www.encodeproject.org/experiments/ENCSR076ZLE/",
+   "download_url": null,
+   "description": null,
+   "filesize": 55743868697,
+   "raw_fastq_bytes": 23041344256,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "6116d2f95fe2734403d2544240ed6e3147c9556a8d5938c4807f9ab91d2e0b81",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "830b8b3c14b107da06fd2d0aa4802389ae7252c23210c900f19ab32b3b14a503",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "21558788c99ad035bfc863053c98328b18ae3b00914fcaf450b5796e84f08fc0"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "b79e32db779cd30e8eaa5a5c7670f77bedde0b8106e4d8238fae1c80cf7eaf58"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "af05e2c0e67145062a16016e51e8e0667ce53642e66a1fc76f24a1a5dee55a23",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR163GJZ",
+   "dataset_name": "Mus musculus strain B6CASTF1/J gastrocnemius tissue nuclear fraction female adult (2 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR163GJZ",
+   "platform_id": "ENCSR163GJZ",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR163GJZ/",
+   "download_url": null,
+   "description": null,
+   "filesize": 28100727099,
+   "raw_fastq_bytes": 12631861392,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "0b189ba6a6d6ead27e34f52bcf1a50cdcdcdd6cf9487949f6b76e5c270583b1f",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "5b02b11b54d9c37c3b3e8b6262d43a9ecdc91238f76808b5fe5a324de2efee13",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "141029353cd33cc4ad1355c4eb4499dcbc102e7fd79ebba4703ec9d0665173d1"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "ea294ef54f171bbfad19c6a485687346b22ea2a972a52068aecbeaceed765040"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "0ec645813c78ddecc4140166353f17e23ba45048f97ae0fb540341fc66a01c26",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR174ZVM",
+   "dataset_name": "Mus musculus strain B6CASTF1/J heart tissue nuclear fraction male adult (8 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR174ZVM",
+   "platform_id": "ENCSR174ZVM",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR174ZVM/",
+   "download_url": null,
+   "description": "Illumina short-read B6/Cast F1 heart P8mo male 8mo 12k",
+   "filesize": 24155867564,
+   "raw_fastq_bytes": 11053911478,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "b53173592ee65006cef0492213d28a955de910b127097b1e2d96b66f8df6da53",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "87165cf123e0a2a8cb3aa5214e80cf393ca24560d1e23816a19c3e6196413ee3",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "27642675f2135c0b5dbdafda31ab0152d50b60871901c74456407ac4ff18bfc3",
+      "0f66412859918f13d3e09f68dcb9321b211e48d13b33dcc104aa3c02eae271b2",
+      "d587f6b010df99673c56866913b07b5e0aea171fb21249edfe44acc80f4df5ea",
+      "3a3280ce39bfdc1760ba5b57cd11da9cd3aa1f83df21783817058973d20c8a5f",
+      "b61310537c6f0bbd986e627c9d1386c7961b7f2466e309bd8be1ac0751896387",
+      "d74b382c628786a933de1adde6a6756ca0097f2e55f722e263e7dd0a5ceb5faa",
+      "97e0f55681ba9c147d29c62af4721c29d73470bbcf209efd7f74ca033db7cde4",
+      "a2391206f4269513e91d4020a6f666021498c7ac05ad3ec5eb9238261f322795",
+      "ff3d3809235c70ebc01087dfdcf33f897f7b27e6ca52032c14920680aac774b9",
+      "00bacd472d3e8966428bc6ba7a0b338110362d807f23294ee18611257ff8637c",
+      "db98fda7cc486e67e3912a72c4587fb648e45636aad92c6ca6636808b0470cb2",
+      "8973e638d618b17572303aa81f17aed177c9589072ee52e2cf1906e83f880762",
+      "6094ecb0f44279fa5691da424db8eff78f1d0e34199fbd81584db78ec47b1bcd",
+      "8a68dfc7bb173fa7c61186c6e33bb808ea6194c3bb6ceff165bb51494e08b928"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "bef6f3bf3643cb4f12dbcabe1ac489851c43107c42e4a6c7a1f2dcc41f1541db",
+      "c8d90d61c09e2a1d5db0a147512556670eeeb01dd2cabce62deba06982f368ad"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "74a0a42fcf68491990ebd61ee7824cba27cdab4a33ed99b85cf6eca96f6ee2a5",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR175JHG",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction male adult (39 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR175JHG",
+   "platform_id": "ENCSR175JHG",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-07-27",
+   "url": "https://www.encodeproject.org/experiments/ENCSR175JHG/",
+   "download_url": null,
+   "description": null,
+   "filesize": 105573648705,
+   "raw_fastq_bytes": 50054928625,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "552b740ce0f3da642d812181d4492edd8fa3cb63e4915d1d0420711d52122d0f",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "242e0051612a633c2e95416e494458de898029df23c01c01f7c4f229f8df8fe1",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "b9b8e0031c935194f25141234b6002176e80ad731202f685a35fe1b19e4eb100"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "fbb4320426ac27e9b86e8792547d5632eac8efbbef572c389eede3da05c1b4b8"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "ba87a815c6c4a81d0ba3aa1431efd5a50f7feb899b62720c68b086d48d3e875c",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR242ITJ",
+   "dataset_name": "Mus musculus strain B6CASTF1/J heart tissue nuclear fraction male adult (2 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR242ITJ",
+   "platform_id": "ENCSR242ITJ",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR242ITJ/",
+   "download_url": null,
+   "description": null,
+   "filesize": 61682907962,
+   "raw_fastq_bytes": 32507926685,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "3935f5c1bdf5f97b30dcfa44562d5d9000f6bbac25ad731ea34c53dd27fdceb1",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "c5d9829231500ea6d011be0e614d2d9681b2b4657c1f9379682d1f4f7637fd30",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "9676a85a4cf378822f0b63c68428d3516d5e7b739769aa42bf6701e1f1396db6"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "4baa6de221877855ad1eaacc9d4f77ff157cbddd209edfa3bf03805c5ddf1c3e"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "c1cd0f477f3961e3d5e72bc79d15d6e7a48fea41200414f057fdbaa0fa339d55",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR259VOY",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction male adult (54 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR259VOY",
+   "platform_id": "ENCSR259VOY",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR259VOY/",
+   "download_url": null,
+   "description": null,
+   "filesize": 25728500634,
+   "raw_fastq_bytes": 11165037212,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "e5240d878fbc5b2563ff6dea6847c415cdde86e008c385f4b65f20ad148fb8b1",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "c259e704ef2365e37680d20bb38efaff7d9233f8d86ba3d81fe7159868118d74",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "6ca0b10ef35ffb355465dca4dec1fed5c26562dbd445c3882d13c1f726e9cda4"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "5040cdb054b50b83df49ca47ff90895613c0b15098541780db2be7adc5bded49"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "421399e5d2033f503ba822db9b296bdee05d09bcc9263a094f088b8fcc793588",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR268GBA",
+   "dataset_name": "Homo sapiens heart tissue nuclear fraction female embryo (73 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR268GBA",
+   "platform_id": "ENCSR268GBA",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2024-02-09",
+   "url": "https://www.encodeproject.org/experiments/ENCSR268GBA/",
+   "download_url": null,
+   "description": null,
+   "filesize": 43468800125,
+   "raw_fastq_bytes": 20525745350,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "4f289c827d17ba6951b514760a57ecf8c4121d1a93c6168542179d1e6d45889a",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "a7da4dc33fc8eb4a33bc7cf6bf46d848ce9aff5c55f1851b2eb75e45c61d7be2",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "333a7c556afab2abc6b1a8a3c7ca7b3548557e7c546e1ed5790b3688eb35e7a3"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "2a064cc5bc44af51c3a4e6937724c9365c81d6da440bb7cdd391a7ee766b80d1"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "2fd694f3be70fdd791724cfb9ad5be297aabca6326707b71f2a6ba0fdfb69991",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR281NBH",
+   "dataset_name": "Homo sapiens pancreas tissue nuclear fraction female child (16 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR281NBH",
+   "platform_id": "ENCSR281NBH",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR281NBH/",
+   "download_url": null,
+   "description": "Please note that this experiment is part of 10x multiome and has a corresponding scATAC experiment (ENCSR868CRK).",
+   "filesize": 24644879521,
+   "raw_fastq_bytes": 9366248703,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "feaa4c14f38746f1cddc7bd72bab0df872bb5359e74da7ea26c90ed3cc8c5f84",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "1ed5ecbdb98d62bf9e0bfd39fead60e71ca5bc4a22d4325e827c52c8923e5e87",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "78689f449cd800cc6b9d60a69f4bb920958c5456798c9a7e75f9bf57ced155be"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "2d016dfa8a71e12a6490c380785744f60d58e3a5f454b5afe2dda0d09c1856a5"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "c351db96fc3a7be01a056a8fd1fb81773b50f02fee4bccfbecd03501ba62769c",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR302VFA",
+   "dataset_name": "Mus musculus strain B6CASTF1/J left cerebral cortex tissue nuclear fraction female postnatal (36 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR302VFA",
+   "platform_id": "ENCSR302VFA",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR302VFA/",
+   "download_url": null,
+   "description": "Illumina short-read B6/Cast F1 cortex P36 female normal 2k",
+   "filesize": 317443135,
+   "raw_fastq_bytes": 127052431,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "d12bc235face24049841c0e9dd6eb0179ab8f25f5bb8fd61271da231e797a0c7",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "b05102fa61728fd3bac2156ac1e7a97314905e1b2e91d607ac955e689183e358",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "2fa5ef65ee32f81320e3c207f040dd394ae085f058933bc1e16bc898c04e046e",
+      "fde51333c1d46ed704bfe012f17576b7a14aa1bd052c7a1177e50037356e9887"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "72272066287873659f90ee32c0e1ac26030f4b56cb5fefab39c9f9ba69abb7a2",
+      "8e45c54712e10ffe552f6f3b34ccbdd642a9e7590ed5aa468be09f84fd59cd5e"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "e4ee538c44e2fcbb1ef01099a77845ab41ff897d9e097ec6854643211efc212c",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR306UHC",
+   "dataset_name": "Mus musculus strain B6NCrl forelimb tissue embryo (15 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR306UHC",
+   "platform_id": "ENCSR306UHC",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "polyadenylated mRNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2019-11-14",
+   "url": "https://www.encodeproject.org/experiments/ENCSR306UHC/",
+   "download_url": null,
+   "description": "10X Genomics Chromium 3' single-cell RNA-Seq (v2 kit) of C57Bl6 wild-type 15.0 day embryonic mouse forelimb",
+   "filesize": 149859677883,
+   "raw_fastq_bytes": 85498462410,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "08c2d041696bb737128a91f6ffa1ca01f55dcb72e5196fe0a1c31c62d002f213",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "0c20a01c18db88fe534af021ef59ffd7ab7b215816bf71e6bf70dc6915077a8c",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "ae22063d4b837a04fa85f795901c7b5345ec7cc3ee85ffaf356160109f3a1299"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "a9d0d29cef4f7ca038f8d758f4b6f39b755ac56906664774fa011f35f62fe839"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "6e0aa9e1c271a363047bd194de43fb40ebc450504ab63e75066ae52889989026",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR318ERF",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction female adult (59 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR318ERF",
+   "platform_id": "ENCSR318ERF",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR318ERF/",
+   "download_url": null,
+   "description": "Please note that this experiment is part of 10x multiome and has a corresponding snRNA experiment (ENCSR405YKM).",
+   "filesize": 105052042903,
+   "raw_fastq_bytes": 49553344577,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "e0040557a285a97916be0d79b8df9cb8cc194167e6f3503cc2d2a0ac7745d9be",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "2b05f66179dc4d0d1ec8753a762e26d82b8823419f85cf658410f4d8765d2f80",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "2857cde0fd59f01f3f4f4529539bc7a03180ab33d29698a938f8a96990763682"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "2ea9db7a7f4f3bc889f564c2c55e0069f72728c94c3da7a8110952bf7b81bc35"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "3da50f361e9c00fe9beb65082371dd62ebad37fe61acffce2442cfa4ceaff186",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR322HGX",
+   "dataset_name": "Mus musculus strain B6CASTF1/J gastrocnemius tissue nuclear fraction female postnatal (14 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR322HGX",
+   "platform_id": "ENCSR322HGX",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR322HGX/",
+   "download_url": null,
+   "description": null,
+   "filesize": 53064522565,
+   "raw_fastq_bytes": 26436398673,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "ea2e08352401d134ac0daa4f9f5613c8191e1fc8dddef3d0f3c439111ba1364c",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "91071480de51e7774a0d9ca9ba3eb37ac4b5c2fcf17455abc5a0fea6ef78b098",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "92536b4d1466768623d19a78a6d42caf023a0633160264c5d20c3d46ad716f68"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "b07f96b12a0d6d4dab376f42a19bfde1b95f58621b83abcf298f45d05a93425e"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "95e4e07f1d4b321163e8a5cbf653924d19a8b2d72668022c7251f08104fc6492",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR374QZJ",
+   "dataset_name": "Mus musculus strain B6NCrl forebrain tissue embryo (15.5 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR374QZJ",
+   "platform_id": "ENCSR374QZJ",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2019-04-19",
+   "url": "https://www.encodeproject.org/experiments/ENCSR374QZJ/",
+   "download_url": null,
+   "description": "snATAC-seq of mouse forebrain",
+   "filesize": 60788225509,
+   "raw_fastq_bytes": 31165148515,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "f0f6e36db0ec4f5777085f0d090de66e235d78af665330e10f48eac93dd88048",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "a41b0eb64368b3d694fa7cf1ea543fd54463dc5f2d3adb6ef2aab0cad35715f1",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "ed3317ffc402aa19698908398b05573f8cee9e64cc98c145a571c50181d3d30a",
+      "ea9342713961d5607b323a4fcdf6ebfcff0328e782f0db19cc0b60c9d672ac93"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "042a8228e81d97a0340d12786290b917204b1acebf3a8cc60c035d668d523567",
+      "f91b2ec6ef2815780467f0c79543e4e0f089ae04bd3f73a00bfb2d1c058e5e6a"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "dea13367eab43828e80891a1b6a031036e9fd9facbe9a67c5cf8a12efa0f555b",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR400PXQ",
+   "dataset_name": "Mus musculus strain B6CASTF1/J adrenal gland tissue nuclear fraction female adult (2 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR400PXQ",
+   "platform_id": "ENCSR400PXQ",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR400PXQ/",
+   "download_url": null,
+   "description": null,
+   "filesize": 49609829392,
+   "raw_fastq_bytes": 25405055881,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "870bf655bfff94ac29d332a6f7bb60c2a7214359988e551bc43c244c2ee0accc",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "de89a3e2ed2c315900748d81ec5e64b5b65720f279353c437482195784a31959",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "fdc26ae1469f7b799d1fc319f0973a42c054958a4313c57493935dd6a7c8521c"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "cd793afa897739703bbea55de55c140eba5f21812e7591c6cd651b7a05d2058a"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "c61d8e65528f804fdaa0cd44e0d496b0a96b8b108679fdaff79b7fd3b5753097",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR425RRQ",
+   "dataset_name": "Mus musculus strain B6CASTF1/J layer of hippocampus tissue nuclear fraction female postnatal (14 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR425RRQ",
+   "platform_id": "ENCSR425RRQ",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR425RRQ/",
+   "download_url": null,
+   "description": null,
+   "filesize": 58691483379,
+   "raw_fastq_bytes": 29695263058,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "79b551cc0f68a1d15f50f21fb37fb09755c19533b51cd2f586908fee279208ca",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "ce2497cf6d15ebe02302f63c59a393128db24aada26a5e4d79d8df1e2ff12683",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "7cf9ef0253bc4fa944da60aed98d1f909ca8d168c01051666001604276a2a3ad"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "0543a8e3825f568309cdabc80dbdaf9b4e08a011370990a444caa79c8f356acf"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "1ebff52b7e9e2d8ac4c66d66a7076ffd78aeb216c8654d8ecaaea8b924cfe29d",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR476JWN",
+   "dataset_name": "Mus musculus strain B6NCrl forelimb tissue embryo (13 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR476JWN",
+   "platform_id": "ENCSR476JWN",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "polyadenylated mRNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2019-11-14",
+   "url": "https://www.encodeproject.org/experiments/ENCSR476JWN/",
+   "download_url": null,
+   "description": "10X Genomics Chromium 3' single-cell RNA-Seq (v2 kit) of C57Bl6 wild-type 13.0 day embryonic mouse forelimb",
+   "filesize": 139539743104,
+   "raw_fastq_bytes": 79601426589,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "52cabd1ccc4d1950da50808945e43373314b68a9d9f56a7b80535a14183eba8a",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "e8204ad10eb6fb81d66780ba85fa29c8f95bd86112b75811f557e259502dab26",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "de5327f95ec02669d45b57c2f2c42f761149e4c976fbb255729d948e48f9dd36"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "a5d5a097504764f957085d442056eeff4345a830c82a68d64988c3366d314fa8"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "11387475951bae975d1b4d788d05cde6326b83c1f7bdd4cc4c74bdae5f10567a",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR478PUL",
+   "dataset_name": "Mus musculus strain B6CASTF1/J gastrocnemius tissue nuclear fraction female postnatal (14 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR478PUL",
+   "platform_id": "ENCSR478PUL",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR478PUL/",
+   "download_url": null,
+   "description": null,
+   "filesize": 27946542893,
+   "raw_fastq_bytes": 12929505396,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "2841c4a7ca784f7bb9eae37aec2979402669c9cfff977595c4bb6f42a98ee233",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "a7ca85ac7a3fd94f2e1fc7b62f31b010890a20ccf489f39808e57c6483c7a4ba",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "a95947f4d7b07d90beb6cde0ebd67d4b4290109d7b1a7c60c9825c408aeaf5fe"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "b07f96b12a0d6d4dab376f42a19bfde1b95f58621b83abcf298f45d05a93425e"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "4a9736ae31770fcaa42591f522dc0bca5b17aff810dbeb0efecb893c4d55d52e",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR488UUT",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction female adult (68 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR488UUT",
+   "platform_id": "ENCSR488UUT",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-07-27",
+   "url": "https://www.encodeproject.org/experiments/ENCSR488UUT/",
+   "download_url": null,
+   "description": null,
+   "filesize": 55500724335,
+   "raw_fastq_bytes": 25360799676,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "465ea16b8db269eef9d2f60b0168d69a69f39f8eed29046c79119bc9bcc7cd56",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "de8cd48ce8c93984f9ebdd8a254725ab33769b213a18612feb3c01f621a31d53",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "e6e5226308d1daca28f67d8e7327dc4265ca7f034f86ff1618374ca8ef3db6e4"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "9cf6c073e2241728d60a8db3891c5c8d05c3d5fafb8d21561a0b253428175497"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "7998ac24a07e15b5d5afd1fc8e03f914353716fa89a9f634d90e0de1ececf56c",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR520ZUD",
+   "dataset_name": "Homo sapiens heart right ventricle tissue nuclear fraction male adult (73 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR520ZUD",
+   "platform_id": "ENCSR520ZUD",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR520ZUD/",
+   "download_url": null,
+   "description": "scATAC-seq on human heart right ventricle",
+   "filesize": 179384883789,
+   "raw_fastq_bytes": 93713160887,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "47abaa5e7bd013c781ad8548d17cfa8bea8e55e1e1f53d9ff8f70b082dbeb317",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "b511c18219a4dd0b8dfe73a312d876b374821b46aa814d461feb4618064d1212",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "6191df853c1b7ed592433e3bcf556b612b02e104967da306fe8db12f2cb197cd"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "ba82e12d3bb3ecccffa79eaca0fde803097788f737d52a80e86eb3587e1f674b"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "dd0b18ce1c7fc09c0aff8e22350c5d784400e5d73c59391fe792e6b431096feb",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR527LIA",
+   "dataset_name": "Mus musculus strain B6CASTF1/J left cerebral cortex tissue nuclear fraction male postnatal (10 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR527LIA",
+   "platform_id": "ENCSR527LIA",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR527LIA/",
+   "download_url": null,
+   "description": "Illumina short-read B6/Cast F1 cortex P10 male normal 12k",
+   "filesize": 30699799257,
+   "raw_fastq_bytes": 13220215963,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "0601266bb0668621e6d2cc73daa9bfc6fc444f79b96858aae6a50390ae867a97",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "915dddc9f3929012ebad1835836517594ca294f50fb4e6e36c321596c4b58385",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "e8ffade50ce7e420873cdffe081703473863c3fe201448312e51fd4f211cb080",
+      "167546409bef952f85b7bbde48ad6a3c70ad5fdb1ed9e360bd0aef2f1fc8ca04",
+      "872d5eda19eab9a0c135c177f303cc0b400eabff85b2a7f9ebe0dede6957101b",
+      "e314774d10c0cd280d39d3b2c56dc5b0763500258e7fe0bb0d04942f0162ddc0",
+      "ba61d6b679791dfcf3363968bcac08c3183660f60c06a7a7edade37804443027",
+      "bbe85832a38da6f7983c17a89f27822cf2123c298a5c12bcfb420bbfb844d6b2",
+      "c07a6703e8b4f57cc9e57047080ba65980a01bcf5142c8cc6beac818811f8cbe",
+      "3922efafa5c4230cc2e66f6f393e0ae8ba217f8bbca5c9a16c061984e2c8a2f4",
+      "90f9fe8a11acb747088b9c5f40145484edb0f611d23fe9266dcf76b8f6448019",
+      "39a3e8c2bff7fbd5dc4e80c09ba8dbf11e8122d0d985cef0d57918997810298f",
+      "cbe5e9bfbe177c6aa19ebe775a8e176837289817370082f83fdec7efeb355b83",
+      "e4c1354201e60d9e40afa81c84430d057a07d8d827b8acebb2a2673214a2b01d",
+      "cc99379db38033787b8b0cac5a306df2c6b16018708b89cc83ad923377182c93",
+      "28f640a6a9b80258d3fbab7e8455f5a6c805f76537bae487677d3ca092b42daa"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "b777f6876e2cbe4a744b404ec1e2402183e9eb396f33125eac304865ccd6d6e6",
+      "ea8ff452befc03910bf233110c1a7b52a61297d0ef3dc94e99c11ba752c90014"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "f9c147c6a1746a7c07517a87a1479f7ac531118901d360d375468c87ec588100",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR580UNE",
+   "dataset_name": "Mus musculus strain B6CASTF1/J gastrocnemius tissue nuclear fraction male postnatal (36 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR580UNE",
+   "platform_id": "ENCSR580UNE",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR580UNE/",
+   "download_url": null,
+   "description": "Illumina short-read B6/Cast F1 gastrocnemius P36 male normal 15k",
+   "filesize": 1520983977,
+   "raw_fastq_bytes": 586547443,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "5933ffbbe55987c1bf599658bd3d17976c5604fc0c9f99d1afcc3089ef50451c",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "52d209ddf52452fea41882a3da629bde8fae4a331f5015fe5df7ff76a72002dd",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "7638d9b54ba62977497a18d2d8ccd79d1ef907cbb641577c7e58ae895a814221",
+      "a728e6f8bf8f85b1641f0cbbe42b6e5886ac0da65cb8ee70e4220c429a576a9d",
+      "0ebb115c06cbc305fc3cfe5809d9e497c1c16c58e962f252f024a0ebe05c5bbb",
+      "e966f2530a38ef6c40c4b078281fad932050cee869c2f5c16bbe213366d902d8",
+      "bfa219373eacf93b4386f1bfd0b44b2163435f67990f627c3ccc99940b6a8b18",
+      "34f6ea7378d299dbb829aecac52eda6dc84988f4e6a402ef3fdebce7776c877c"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "7296f0a332b4c1f9e39479f6c6fe32b5430506f80908acb526073a6a78f7e545",
+      "c85b96492c7d7cbfd2a00a4e1269135e1e7e00f8250ea7cb9bfaf528b2259c0e"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "21b0eae10349450ce6042ee89774ff060d750de646a8db8c7578a7d63bbc67e2",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR592WYM",
+   "dataset_name": "Homo sapiens lower lobe of left lung tissue nuclear fraction female adult (59 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR592WYM",
+   "platform_id": "ENCSR592WYM",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR592WYM/",
+   "download_url": null,
+   "description": "scATAC-seq on human lower lobe of left lung",
+   "filesize": 228631682164,
+   "raw_fastq_bytes": 121953878747,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "f67197f18abfcfdc74e8a30082deb81a7f5b5fb6f65cda28a1718f6a6a87ad2c",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "aff28ff0b1a94667c76427994c6851925b5104ddf8972a5f42eaec2fa2ad7718",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "63716992ac05ae4605b3fc9101dec05a145abc0aff42b7b87f048097b04976dc"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "fa5d2b1c87e0e51587be408552ece58f5167c41b39da87ec93d2362a505d7ac3"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "37981216acda85c83fecc5c7aeacb76fffd27b6bd47bae46821ee0f81f419667",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR615TSN",
+   "dataset_name": "Homo sapiens heart right ventricle tissue nuclear fraction female adult (56 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR615TSN",
+   "platform_id": "ENCSR615TSN",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR615TSN/",
+   "download_url": null,
+   "description": "scATAC-seq on human heart right ventricle",
+   "filesize": 104086442307,
+   "raw_fastq_bytes": 54573408494,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "24405abd3042bc8b37e4207c6bca46739014fddf2070ff2290c32a06f882311e",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "da0cf34350a3561686aec47ddb755cb1c26f396fba510fb83b915857c5e7650f",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "2215f4b90c17b2764d5d2ada45adac5b99ca4284c67ab9588277862c3d068489"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "ef48ab7ddd06ea5e912842d12eec5975505a46ab99f47abe0145bf708c17d280"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "8427a91428a56ca4549c2741f6d919f3328a1154f33a2ada6a85d89392ab0477",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR641MWO",
+   "dataset_name": "Homo sapiens psoas muscle tissue nuclear fraction female adult (61 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR641MWO",
+   "platform_id": "ENCSR641MWO",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR641MWO/",
+   "download_url": null,
+   "description": null,
+   "filesize": 34071256359,
+   "raw_fastq_bytes": 15940432078,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "dc6a8859d6878f86386835476f05b557cbc8170e47dbddf29b0f20d19f079fa7",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "5bf9338310cd12aacd8a5630d6f39300c7e6e8b801a49674350af5e5ee82a5f7",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "d80f47cc9ef900ff1a36d4db22f3e0dfe6eaa47cdf927c54075b4cb48f10058b"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "6746441d777104319ab20617855e0f380751b67e7bad8914d41a11e8f0a4915f"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "743c5adc15727d335102a384310986f4c7463fb542528c07c37ef930b1f18928",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR656VWP",
+   "dataset_name": "Homo sapiens colonic mucosa tissue nuclear fraction female child (16 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR656VWP",
+   "platform_id": "ENCSR656VWP",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR656VWP/",
+   "download_url": null,
+   "description": null,
+   "filesize": 35598801096,
+   "raw_fastq_bytes": 15844545220,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "a53213aaaad216fee8e8cc0ef30a25f964e383ed77a1b682b8294ed71ab6d4c3",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "b3559cff975929760c0ea642508be7653911093cb6fef5e99afcb9ca40993f54",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "9707b8966e88c4eb10c9e7707dc847507f84e89782fb837d6222a5d5582da8ff"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "e9ff731b72bcbd1cfd1173d9820248baf27c3a87b95be7eae6d5c08b72e836bb"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "fafd514038a072822321362fd490ccee25dd54281b1758ced1e01e5667b72351",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR657LRM",
+   "dataset_name": "Mus musculus strain B6CASTF1/J left cerebral cortex tissue nuclear fraction female postnatal (14 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR657LRM",
+   "platform_id": "ENCSR657LRM",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR657LRM/",
+   "download_url": null,
+   "description": null,
+   "filesize": 54198649122,
+   "raw_fastq_bytes": 25834367844,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "3a67a5a5241afd295420522b0566ccefcc9946433d2305ba01b675ca12034428",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "b1938c2b673d8bc2ff890cbaf08799101f8e6e581d6c935a2e1a7523ece41e40",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "95945c3cd81b1211b87214ba1ceb9545599694087c9b77f69f9cbae1b74db4d4"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "3d99ee8aa22c8131b74258e3200aa7e69e2175ff09762df83fbfeb5976357f37"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "a38ac7b37d6071081a6a682986eaff2310bac6b1efd0c2e11fab0b862bb40eea",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR710NDM",
+   "dataset_name": "Homo sapiens natural killer cell nuclear fraction male adult (33 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR710NDM",
+   "platform_id": "ENCSR710NDM",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR710NDM/",
+   "download_url": null,
+   "description": null,
+   "filesize": 63015810885,
+   "raw_fastq_bytes": 34220363907,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "4fa287980c40a2c1bcd41120c764077361ecc30e5f893db7918c20a1a5d30885",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "1f98a976d0023bb5ee9d55e4402e3b4cae8e35214f9e2f1c7bd484215bbf8ae5",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "94bbf05c0832f78a6929b716a81d75e6465693e60a3b15c5c7931eaadf38eb7c"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "4b930a67baf780006dc4df7b735fd09bd1a72d897f172c7e8d4a9ab3f14c6b2b"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "b67023a9066c420bfabbd3e082dd568c867733ca85ba1cd2776d34d1d79e891e",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR718YPN",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction female adult (59 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR718YPN",
+   "platform_id": "ENCSR718YPN",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-07-27",
+   "url": "https://www.encodeproject.org/experiments/ENCSR718YPN/",
+   "download_url": null,
+   "description": null,
+   "filesize": 191470453176,
+   "raw_fastq_bytes": 88806779864,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "d2dab893c47925ebd1d812266585bbc67486ece5cf215193de5bbc085118ee49",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "5c904481188c427bf19e357f34cf048b5493508dacd5a17f33100544647e6f38",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "867cd44cc1382cb1153ae06b7bce6fa3441d83cad6787eeb71def9ca7036498e"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "1c1d97e26723da1e4d2312bb5f2982d4e541bd0757f86ed4009f42535185e568"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "174badabf470c4d4b56d3b577331d4e9de41793cb8de9ccc1d5361fd7555dba4",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR725IGH",
+   "dataset_name": "Mus musculus strain B6CASTF1/J layer of hippocampus tissue nuclear fraction male adult (8 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR725IGH",
+   "platform_id": "ENCSR725IGH",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR725IGH/",
+   "download_url": null,
+   "description": "Illumina short-read B6/Cast F1 hippocampus P8mo male 8mo 12k",
+   "filesize": 24339512994,
+   "raw_fastq_bytes": 10171915928,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "0c491742d93459f5ae4af0fdd16fad8f97380493cbf64393e335647f40d130b0",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "c92705e1689e8aca6210e81e7ddf2728d6682bdfd911abfb030cb6799e613491",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "32e2f5d6e497a25ef8fb1f16289cb44683248f8a68b65cf93fcc3a8e735b080b",
+      "d3f9f94e1a462932f0cdcef48d3c24da55765286fecf769a8c40f22b51b2209d",
+      "3af2d1fd538084bba04a4a0b6acaa67f900ccb71a74bfb81feeed69c9bdad675",
+      "510c577608e61773b6487ae8edaa18feb90c526846dd63f47c430943f8a6d8d1",
+      "954b635b42aefe57e409ed96f536c0ad7287a5410895a55a68d0e278d6b832fb",
+      "af131fa6b67ad84cb4c64fd2b7912c7b54c6f74c586f037346d53ef97173ed1c",
+      "818060f3037f6f8d68de41266719ba921cf235dcbbc85d83cb3fbc96d003bf12",
+      "5082d4be1063f09c0dea6250e2a4e16b5b0ed721dd4efee9e7d531c0b5a444d5",
+      "4a9a31f9d5c537a6f73bf228525b03b573ee17fe07636fdaa1495efe6039cfcf",
+      "436a5f627c4c7074a641a68ba26443dff05af9ac9b2c1bceae6f8d3769c54900",
+      "256dbc30680d6f7ebf5f159ef407db0b50591906e3a462a2c8d8da0dfbf88be6",
+      "d4217aec28470f94787d3964c95be3730f1d2893cf21c731799f52098372c79d",
+      "13106d859a693873af78bbe3298d4466fec6f3563b95402ba291d7dc39a9ad74",
+      "cfb3e4d590960ce4167ab5a295dd6368e6c5532d5cc6dbae06666bfa09a9e484"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "96bd1383c99f1730821b05d673a567bb34be8bb6923d28953a32b03cf36f0937",
+      "832fed45ae14536b1dfcfabade94a9db5b951c048649e6a0eb8aba4a78f2bb87"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "ac33f1fc9155a815024e88136ea7805e4fea4a8487746e6bcd7ec0ec546bd196",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR801DHT",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction male adult (41 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR801DHT",
+   "platform_id": "ENCSR801DHT",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR801DHT/",
+   "download_url": null,
+   "description": null,
+   "filesize": 44766597532,
+   "raw_fastq_bytes": 21179548322,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "6695ea5fb1f22a2f0697305c97faef357ff5a25218cf2bddaf99b55fcc8c842a",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "96b10c05a7ae68a556f533288c3896b820368781ca9e75a200f735e97dd91597",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "7816c8f275cae64f610c0edf63584a19a32cfed1485143b955f9a542fb11461f"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "666920821ddb9a14033cb09b882510484df9272b1fe7d175cd760d99cdc07982"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "bdb4db7e4a5170265057de958daf088929e1a011b903cc52c565f56fa4b67d23",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR840IWM",
+   "dataset_name": "Homo sapiens HCT116 genetically modified (insertion) using CRISPR inserting O. sativa LOC4335696, (insertion) using CRISPR targeting H. sapiens RAD21 treated with 1 μM 5-Phenyl-1H-indole-3-acetic acid for 6 hours",
+   "source": "ENCODE",
+   "public_accession": "ENCSR840IWM",
+   "platform_id": "ENCSR840IWM",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-07-27",
+   "url": "https://www.encodeproject.org/experiments/ENCSR840IWM/",
+   "download_url": null,
+   "description": null,
+   "filesize": 46820384214,
+   "raw_fastq_bytes": 21588852670,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "27fe509ac469211e6e970c456ce45e7a01a56311e586955a5f4a1ea2d6a74bc6",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "d0248d552b75f32e8a12ec84e7177a7e5702cc89370ab17710212c79a8f13cb9",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "2ae591645c10a103c17e69d30890080993e1284ce5c0144becf68a8dfa17f3f8"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "68f16f360137ffd5b4d25cb70aaf1f35c43a4ec1df9f47c97a00f5bcfbaf1127"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "36918b0c75fce64c61d5dbd4ac3f13d2d9caecf50257015da11105e0d9dcb7de",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR862WHQ",
+   "dataset_name": "Homo sapiens pancreas tissue nuclear fraction female adult (59 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR862WHQ",
+   "platform_id": "ENCSR862WHQ",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR862WHQ/",
+   "download_url": null,
+   "description": "scATAC-seq on human pancreas",
+   "filesize": 123735082626,
+   "raw_fastq_bytes": 69371856174,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "6155e1556c5a78762873ce64126d340fdf1e165f15db237b8f717604e1ffe226",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "1e8fa6052b3de80e0892a1a30c5463274a0d04309f06725c3c1cca4571bf3276",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "19bd3ea89aa4b833862ac2cc63d7d039cf053ae7395f90d237edc1174aee6377"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "3b9502925a81b9ac614f50efde23f9baabc63d434b46204528c7df27ed60b6ae"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "19fe146af1e80a6dc3df792358181c46ebaf01aec8316420ad46f016f2a15878",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR921EFB",
+   "dataset_name": "Mus musculus strain B6CASTF1/J left cerebral cortex tissue nuclear fraction male adult (2 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR921EFB",
+   "platform_id": "ENCSR921EFB",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR921EFB/",
+   "download_url": null,
+   "description": null,
+   "filesize": 63163377291,
+   "raw_fastq_bytes": 32862379392,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "4b689837a686a6ce9b647a53a1c0bceacce6a0b00e70ba8bd91f4c9cd1a166f8",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "81a0477edd4e0ea194f7c49427a08760dea9cbbe3d6ec325f2a4456029465036",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "d1c6905847a3ba667d4d1ec05fc7c6144caf0e46047eb542eafcd7de65aadba8"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "684c335c4c6c53a0cd8b9a953067913a60d21f0d1bb55c11e68ae944920706f0"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "69678240d74879a75c6e6935b7140315f044120d738f0199f54fda8e98342003",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR924ZXU",
+   "dataset_name": "Mus musculus strain B6CASTF1/J left cerebral cortex tissue nuclear fraction male postnatal (14 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR924ZXU",
+   "platform_id": "ENCSR924ZXU",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR924ZXU/",
+   "download_url": null,
+   "description": null,
+   "filesize": 55299832721,
+   "raw_fastq_bytes": 26459548859,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "49ad2222a14b182a59d1e17059df850ad539f1ca7138a892fdb4ed9d04d47c14",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "92bf16dfed8f18d13b5940770425a178c7c97b1bfccd018a6e125d4479279b57",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "ca89c0ad9313074c74318202a064f18415d707432abf3129f3493b3e97be1b54"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "1b3899d759ee36863dc347a63308e8650112c08fea87e524119146d7e716b8d6"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "d70c0e91a56ab492f6635e8b3737b7c6dec91ec98e1f5ccee91046c06a556180",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR926QCE",
+   "dataset_name": "Mus musculus strain B6CASTF1/J layer of hippocampus tissue nuclear fraction male postnatal (36 days)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR926QCE",
+   "platform_id": "ENCSR926QCE",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": null,
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR926QCE/",
+   "download_url": null,
+   "description": "Illumina short-read B6/Cast F1 hippocampus P36 male ont_match 2k",
+   "filesize": 1946100140,
+   "raw_fastq_bytes": 798050829,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "377391d9abd0983ccf8d5d6e1c36badce64130eabb0fb06a56abee18ec1d4cee",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "010043ded053b3bf49684b494b1574c5d25afd30b79fd324e7ca7a59d35b2cdd",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "0902534d40c08a684a73ef89abc4d068b91211324d07325141f25df262f84d64",
+      "86c24e3fac484cd3b5346ed456f6eeeb4d86ba378f62317fce9d09f81b277b7b"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "db564cf90948bb7bffd7d7e263c900408d9cafd4f93f1eecc200e3fd3c400c05",
+      "d54c42a64cb64aa25ebc1c287ae7c613ecb476637ec3255130ae4353ac49094b"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "575504ac96670a311eabc05147018d9b1ec12a9552be400f8092488edefbfa06",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR931EJA",
+   "dataset_name": "Mus musculus strain B6CASTF1/J left cerebral cortex tissue nuclear fraction female adult (2 months)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR931EJA",
+   "platform_id": "ENCSR931EJA",
+   "collection_doi": null,
+   "species": "Mouse",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "DNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-03-16",
+   "url": "https://www.encodeproject.org/experiments/ENCSR931EJA/",
+   "download_url": null,
+   "description": null,
+   "filesize": 42596856626,
+   "raw_fastq_bytes": 20613952183,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "7c31c84f1145431400c7c9febfc40ed8be60e7438b0e0d0f339ae04a9af51a26",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "53b42018eb4e9c00f74cbe5a359cef5345cdb275cbe6811accf7408ed521c852",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "c00aa02466b1cde526e8d3a10399cb2569764931fd99e3827241a5a93eb83ad2"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "aace9dbafd83d70a999dd55565cacd6431c7977e30bb96b2f43fdcbe00d458fe"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "83e3df669c1b10a79595d9bfe945d30ba7849417846d13ad10c34086d586ddd5",
+     "complete": true
+    }
+   }
+  },
+  {
+   "dataset_uid": "encode:ENCSR980OCK",
+   "dataset_name": "Homo sapiens heart left ventricle tissue nuclear fraction female adult (47 years)",
+   "source": "ENCODE",
+   "public_accession": "ENCSR980OCK",
+   "platform_id": "ENCSR980OCK",
+   "collection_doi": null,
+   "species": "Human",
+   "tissue": null,
+   "disease": null,
+   "chemistry": "RNA",
+   "platform": null,
+   "count": null,
+   "unit": null,
+   "has_raw_data": true,
+   "published_date": "2022-08-25",
+   "url": "https://www.encodeproject.org/experiments/ENCSR980OCK/",
+   "download_url": null,
+   "description": null,
+   "filesize": 42081761891,
+   "raw_fastq_bytes": 17862819752,
+   "multiomics_claim": false,
+   "metadata_provenance": {
+    "complete": true,
+    "name_origin": "biosample_summary",
+    "experiment": {
+     "wire_sha256": "536f2ddd766d09d3b978231135ee2d8abdb719b7f5a6369bbe51b999dff918d5",
+     "complete": true
+    },
+    "replicate": {
+     "wire_sha256": "9ee0ab896529e496db275277dee886b518e2444664417f47b8a234fc39029557",
+     "complete": true
+    },
+    "libraries": {
+     "wire_sha256": [
+      "706cfbaeef5b2a61b676a32eade26abb7066f8945e2802a6b9fdf6d9e5daf2d0"
+     ],
+     "complete": true
+    },
+    "biosamples": {
+     "wire_sha256": [
+      "43ccdf66014c8a9f995cc480b9bf8cb6d680892d198539e692e11e639dbddace"
+     ],
+     "complete": true
+    },
+    "files": {
+     "wire_sha256": "45b4d5d3c481cf4df2908f9aff365bb77ba7fe377b0453ce97c41bf73b24d224",
+     "complete": true
+    }
+   }
+  }
+ ]
+}

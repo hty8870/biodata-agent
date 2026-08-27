@@ -1,0 +1,332 @@
+[
+  {
+    "dataset_uid": "10x:flexv2-4plex-rat-liver-kidney-intest-testis",
+    "dataset_name": "Mixture of Cells Dissociated from 4 Fixed Rat Tissues using gentleMACS Dissociator",
+    "source": "10x Genomics",
+    "public_accession": "flexv2-4plex-rat-liver-kidney-intest-testis",
+    "collection_doi": null,
+    "species": "Rat",
+    "tissue": "Liver, Kidney, Large Intestine, Testis",
+    "disease": "normal",
+    "chemistry": "v2",
+    "platform": "Chromium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-08-03",
+    "url": "https://www.10xgenomics.com/datasets/flexv2-4plex-rat-liver-kidney-intest-testis",
+    "download_url": null,
+    "description": "**Biomaterials** Snap-frozen rat tissues were obtained by 10x Genomics from commercial vendors. Sprague-Dawley liver and kidney and Wistar large intestine were sourced from BioIVT, and Sprague-Dawley testis was sourced from Charles River Laboratories. All animals were adult and non-diseased. **Sample preparation** The four tissues were fixed for 24 hours at 4°C and dissociated using a gentleMACS O…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-cytassist-11mm-human-breast-cancer",
+    "dataset_name": "Visium HD Spatial Gene Expression Library, Human Breast Cancer (Fixed Frozen), 11 mm Capture Area",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-cytassist-11mm-human-breast-cancer",
+    "collection_doi": null,
+    "species": "Human",
+    "tissue": "Breast",
+    "disease": "Breast cancer",
+    "chemistry": "v1 - Protocol 2.0",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-human-breast-cancer",
+    "download_url": null,
+    "description": "**Biomaterials** A human breast cancer tissue block (Fixed Frozen) was obtained from Discovery Life Sciences. **Sample preparation** A 10 µm section was taken with a cryostat (Epredia CryoStar NX70). Sectioning, H&E staining and imaging followed the Visium HD Fixed Frozen Tissue Preparation Handbook 2.0 ([CG001678](/support/spatial-gene-expression-hd/documentation/steps/tissue-prep-for-fixed-froze…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-cytassist-11mm-human-pancreas",
+    "dataset_name": "Visium HD Spatial Gene Expression Library, Human Pancreas (FFPE), 11 mm Capture Area",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-cytassist-11mm-human-pancreas",
+    "collection_doi": null,
+    "species": "Human",
+    "tissue": "Pancreas",
+    "disease": "normal",
+    "chemistry": "v1 - Protocol 2.0",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-11mm-human-pancreas",
+    "download_url": null,
+    "description": "**Biomaterials** A human male pancreas tissue block (FFPE) was obtained from Donor Network West. - Age: 36 years **Sample preparation** A 5 µm section was taken from the FFPE tissue block by microtome (Epredia HM355S). Sectioning, deparaffinization, H&E staining and imaging followed the Visium HD FFPE Tissue Preparation Handbook 2.0 ([CG001676](/support/spatial-gene-expression-hd/documentation/ste…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-cytassist-6p5mm-human-brain-cancer",
+    "dataset_name": "Visium HD Spatial Gene Expression Library, Human Brain Cancer (FFPE), 6.5 mm Capture Area",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-cytassist-6p5mm-human-brain-cancer",
+    "collection_doi": null,
+    "species": "Human",
+    "tissue": "Brain",
+    "disease": "Brain cancer",
+    "chemistry": "v1 - Protocol 2.0",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-6p5mm-human-brain-cancer",
+    "download_url": null,
+    "description": "**Biomaterials** A human female brain cancer tissue block (FFPE) was obtained from Avaden Biosciences. The tissue was diagnosed as anaplastic oligodendroglioma (WHO grade III). - RNA quantity per cell: 0.946 pg **Sample preparation** A 5 µm section was taken from the FFPE tissue block by microtome (Epredia HM355S). Sectioning, deparaffinization, H&E staining and imaging followed the Visium HD FFPE…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-cytassist-6p5mm-mouse-brain",
+    "dataset_name": "Visium HD Spatial Gene Expression Library, Mouse Brain (FFPE), 6.5 mm Capture Area",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-cytassist-6p5mm-mouse-brain",
+    "collection_doi": null,
+    "species": "Mouse",
+    "tissue": "Brain",
+    "disease": "normal",
+    "chemistry": "v1 - Protocol 2.0",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-6p5mm-mouse-brain",
+    "download_url": null,
+    "description": "**Biomaterials** A mouse brain tissue block (FFPE) was obtained in-house. - Strain: C57BL/6 - Sex: Male - Age: 8 weeks **Sample preparation** A 5 µm section was taken from the FFPE tissue block by microtome (Epredia HM355S). Sectioning, deparaffinization, H&E staining and imaging followed the Visium HD FFPE Tissue Preparation Handbook 2.0 ([CG001676](/support/spatial-gene-expression-hd/documentati…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-cytassist-6p5mm-rat-liver",
+    "dataset_name": "Visium HD Spatial Gene Expression Library, Rat Liver (FFPE), 6.5 mm Capture Area",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-cytassist-6p5mm-rat-liver",
+    "collection_doi": null,
+    "species": "Rat",
+    "tissue": "Liver",
+    "disease": "normal",
+    "chemistry": "v1 - Protocol 2.0",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-08-03",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-cytassist-6p5mm-rat-liver",
+    "download_url": null,
+    "description": "**Biomaterials** A rat liver tissue block (FFPE) was obtained from Charles River Laboratories. - DV200: 67.77% - RNA content: 4.726 pg RNA per cell **Sample preparation** A 5 µm section was taken from the FFPE tissue block by microtome (Epredia HM355S). Sectioning, deparaffinization, H&E staining and imaging followed the Visium HD FFPE Tissue Preparation Handbook 2.0 ([CG001676](/support/spatial-g…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-three-prime-human-lymph-node-fresh-frozen",
+    "dataset_name": "Visium HD 3' Gene Expression Library, Human Lymph Node (Fresh Frozen)",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-three-prime-human-lymph-node-fresh-frozen",
+    "collection_doi": null,
+    "species": "Human",
+    "tissue": "Lymph Node",
+    "disease": "Reactive Follicular Hyperplasia",
+    "chemistry": "v1",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-human-lymph-node-fresh-frozen",
+    "download_url": null,
+    "description": "**Biomaterials** Human lymph node tissue was obtained from BioIVT. - Diagnosis: Reactive Follicular Hyperplasia **Sample preparation** A 10 µm section was taken with a cryostat (Epredia CryoStar NX70). Tissue preparation, sectioning, H&E staining, and imaging followed the Visium HD 3' Fresh Frozen Tissue Preparation Handbook ([CG000804](/support/spatial-gene-expression-hd-three-prime/documentation…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-three-prime-human-tonsil-fresh-frozen",
+    "dataset_name": "Visium HD 3' Gene Expression Library, Human Tonsil (Fresh Frozen)",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-three-prime-human-tonsil-fresh-frozen",
+    "collection_doi": null,
+    "species": "Human",
+    "tissue": "Tonsil",
+    "disease": "Hyperplasia Lymphofollicular",
+    "chemistry": "v1",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-human-tonsil-fresh-frozen",
+    "download_url": null,
+    "description": "**Biomaterials** Human tonsil tissue was obtained from BioIVT. - Diagnosis: Hyperplasia Lymphofollicular **Sample preparation** A 10 µm section was taken with a cryostat (Epredia CryoStar NX70). Tissue preparation, sectioning, H&E staining, and imaging followed the Visium HD 3' Fresh Frozen Tissue Preparation Handbook ([CG000804](/support/spatial-gene-expression-hd-three-prime/documentation/steps/…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-three-prime-mouse-ovary-fresh-frozen",
+    "dataset_name": "Visium HD 3' Gene Expression Library, Mouse Ovary (Fresh Frozen)",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-three-prime-mouse-ovary-fresh-frozen",
+    "collection_doi": null,
+    "species": "Mouse",
+    "tissue": "Ovary",
+    "disease": "normal",
+    "chemistry": "v1",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-mouse-ovary-fresh-frozen",
+    "download_url": null,
+    "description": "**Biomaterials** A mouse ovary was obtained from Charles River Laboratories. - Strain: C57BL/6 - Sex: female - Age: 8 weeks - RIN: 7 **Sample preparation** A 10 µm section was taken with a cryostat (Epredia CryoStar NX70). Tissue preparation, sectioning, H&E staining, and imaging followed the Visium HD 3' Fresh Frozen Tissue Preparation Handbook ([CG000804](/support/spatial-gene-expression-hd-thre…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  },
+  {
+    "dataset_uid": "10x:visium-hd-three-prime-rhesus-liver-fresh-frozen",
+    "dataset_name": "Visium HD 3' Gene Expression Library, Rhesus Macaque Liver (Fresh Frozen)",
+    "source": "10x Genomics",
+    "public_accession": "visium-hd-three-prime-rhesus-liver-fresh-frozen",
+    "collection_doi": null,
+    "species": "Rhesus macaque",
+    "tissue": "Liver",
+    "disease": "normal",
+    "chemistry": "v1",
+    "platform": "Visium",
+    "count": null,
+    "unit": null,
+    "has_raw_data": null,
+    "published_date": "2026-07-14",
+    "url": "https://www.10xgenomics.com/datasets/visium-hd-three-prime-rhesus-liver-fresh-frozen",
+    "download_url": null,
+    "description": "**Biomaterials** A Rhesus macaque liver was obtained from BioIVT. - RIN: 7.00 **Sample preparation** A 10 µm section was taken with a cryostat (Epredia CryoStar NX70). Tissue preparation, sectioning, H&E staining, and imaging followed the Visium HD 3' Fresh Frozen Tissue Preparation Handbook ([CG000804](/support/spatial-gene-expression-hd-three-prime/documentation/steps/tissue-prep-for-fresh-froze…",
+    "filesize": null,
+    "metadata_provenance": {
+      "source_endpoint": "https://www.10xgenomics.com/api/search",
+      "fields": {
+        "files": {
+          "origin": "not queried; private search API supplies no file manifest",
+          "complete": false
+        },
+        "collection_doi": {
+          "origin": "not supplied by private search API",
+          "complete": false
+        }
+      }
+    }
+  }
+]
