@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sys
+import time
 import uuid
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -213,6 +214,20 @@ def _unique_names(inputs: list[Path]) -> list[str]:
     return names
 
 
+def _replace_dir_with_retry(temporary: Path, target: Path) -> None:
+    """原子发布输出目录；Windows 上索引器/杀软可能短暂持有新建目录句柄，对 PermissionError 做有界退避重试。"""
+    delay = 0.05
+    for attempt in range(10):
+        try:
+            os.replace(temporary, target)
+            return
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 0.5)
+
+
 def convert(inputs: list[Path], output: Path, *, batch_size: int = DEFAULT_BATCH_SIZE) -> Path:
     """Create one Parquet file per JSONL input and atomically publish *output*."""
     _require_pyarrow()
@@ -248,7 +263,7 @@ def convert(inputs: list[Path], output: Path, *, batch_size: int = DEFAULT_BATCH
             "files": file_entries,
         }
         (temporary / "manifest.json").write_text(_canonical_json(manifest) + "\n", encoding="utf-8", newline="\n")
-        os.replace(temporary, target)
+        _replace_dir_with_retry(temporary, target)
     except Exception:
         if temporary.exists():
             shutil.rmtree(temporary)
