@@ -377,7 +377,11 @@ def _attach_window_chrome_on_show(win: object) -> None:
         events.before_show += lambda: _apply_window_chrome_win32(win, icon)  # noqa: B023
         shown = getattr(events, "shown", None)
         if shown is not None:
-            shown += lambda: _set_titlebar_colors_win32(win)  # noqa: B023
+            def _restripe_titlebar() -> None:
+                # pywebview Event.execute 把回调返回值塞进 set；_set_titlebar_colors_win32
+                # 返回 dict（HRESULT 表），直接挂 lambda 会抛 unhashable type: 'dict'，包一层吞掉返回值。
+                _set_titlebar_colors_win32(win)
+            shown += _restripe_titlebar
             events.shown = shown
     except Exception:  # noqa: BLE001
         _log.warning("订阅窗口标题栏外观事件失败，忽略。")
