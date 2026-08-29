@@ -274,6 +274,17 @@ def test_attach_window_chrome_subscribes_before_show(fake_webview, monkeypatch):
     assert applied[-1] == (no_icon, None)
 
 
+def test_shown_callback_discards_titlebar_result_dict(fake_webview, monkeypatch):
+    """pywebview Event.execute 把回调返回值塞进 set——_set_titlebar_colors_win32 返回 dict，
+    shown 回调必须吞掉返回值返回 None，否则真实壳抛 unhashable type: 'dict'。"""
+    win = _FakeWin()
+    monkeypatch.setattr(webview_shell, "icon_path_candidates", lambda: [])
+    monkeypatch.setattr(webview_shell, "_apply_window_chrome_win32", lambda w, p: None)
+    monkeypatch.setattr(webview_shell, "_set_titlebar_colors_win32", lambda w: {20: 0})
+    webview_shell._attach_window_chrome_on_show(win)
+    assert win.events.shown[0]() is None
+
+
 # ---------------------------------------------------------------- 下载中关窗（第 6 项）
 def test_download_active_flag_defaults_false_and_settable(monkeypatch):
     monkeypatch.setattr(webview_shell, "_download_active", False)
