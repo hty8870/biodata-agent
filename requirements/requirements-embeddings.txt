@@ -8,6 +8,6 @@
 # Model weights are not bundled with the project. If dependencies or weights are missing,
 # the application falls back to rule-based ordering without blocking the main workflow.
 
-sentence-transformers>=2.2,<4
+sentence-transformers>=6.0.0,<7
 # Preferred download source; the fetch script can fall back to Hugging Face.
-modelscope>=1.9
+modelscope>=1.39.1
