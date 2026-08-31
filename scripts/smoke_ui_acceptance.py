@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-""" 验收走查（/ 集成四幕，真 LLM、不 stub）：
+"""UI 验收走查（2026-08-03 真机四幕，真 LLM、不 stub）：
 
 1. **零配置开箱**：全新浏览器（无存档）→ health 探测把接入方式默认到服务端预设（DeepSeek），
    设置面板三维度布局截图（AI 执行默认开、未禁点）。
@@ -20,7 +20,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-SHOTS = ROOT / ".-shots"
+SHOTS = ROOT / ".fix-shots"
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:7973"
 
 
@@ -76,7 +76,7 @@ def main() -> int:
             check("病例句：含外部库与回收站清单", "外部库" in hist and "回收站" in hist)
             trace = page.eval_on_selector_all(
                 "#cbHistory .arx-trace", "els => els.map(e => e.textContent).join('\\n')")
-            check("病例句：行动流含 observe 步骤（读取数据库状态）", "读取数据库状态" in trace)
+            check("病例句：行动流含 observe 步骤（汇报数据库状态）", "汇报数据库状态" in trace)
             page.evaluate("document.querySelectorAll('#cbHistory .arx-trace').forEach(d => d.open = true)")
             page.wait_for_timeout(300)
             page.screenshot(path=str(SHOTS / "2-db-status.png"))

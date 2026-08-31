@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""agent 长程多步执行的确定性门。**全离线**：
+"""agent 长程多步执行（2026-08-04 设计文档）的确定性门。**全离线**：
 
 - fake chat_model + monkeypatch LOOP_TOOLS 驱动整个循环（execute → decide → validate → execute）；
 - 项目根重定向到 tmp_path：审计账本**真写真断言**（.userdata/curate_net_ledger.jsonl），
@@ -81,7 +81,7 @@ def _search_run(result):
 
 
 def _search_run_unregistered(slots, root):
-    """未注册源 fail-fast 替身（零网络）：自 10x 接入联网适配器起，
+    """未注册源 fail-fast 替身（零网络）：2026-08-08 起 10x 已接入联网适配器（W2e），
     真 `_loop_search_online` 对 10x 不再 fail-fast——agent 层要钉的是「工具抛
     source_not_registered → step ok=False 如实记」的处置路径，不再绑定「10x 未注册」
     这个会漂移的世界事实（fail-fast 本身的语义钉在 corpus 层测试）。
@@ -95,7 +95,7 @@ def _search_run_unregistered(slots, root):
 def _install_tools(monkeypatch, **runs):
     """按真动词名替换 LOOP_TOOLS 的 run（label/card_kind/只读标记保持真实形状）。"""
     table = {
-        "curate.db_status": {"label_zh": "读取数据库状态", "card_kind": "db_status",
+        "curate.db_status": {"label_zh": "汇报数据库状态", "card_kind": "db_status",
                              "readonly": True, "report": True, "observation": True},
         "curate.check_updates": {"label_zh": "检查来源更新", "card_kind": "check_updates",
                                  "readonly": True},
@@ -214,7 +214,7 @@ def test_decide_with_verb_outside_loop_tools_stops_the_loop(monkeypatch, _tmp_pr
 # ---------------------------------------------------------------- ④ decide 输出非法 JSON → 重问一次仍非法 → 停环
 
 def test_decide_with_unparsable_output_stops_the_loop(monkeypatch, _tmp_project_root):
-    """decide 散文应答 → 非法 → 重问一次 →
+    """decide 散文应答 → 非法 → 重问一次→
     重问应答仍是散文 → 照旧停环；steps 只有首步。"""
     _install_tools(monkeypatch, **{"curate.check_updates": _check_run(AE_TWO_NEW)})
     model = _FakeModel(
@@ -231,7 +231,7 @@ def test_decide_with_unparsable_output_stops_the_loop(monkeypatch, _tmp_project_
 
 def test_decide_repeat_of_an_executed_step_stops_the_loop(monkeypatch, _tmp_project_root):
     """decide 提议与已**成功**执行步骤 verb+slots 全同 → 机械去重拦下，按 done 停环
-    （去重闸只比 ok 步——失败步的同指纹重试放行，见
+    （2026-08-08 起去重闸只比 ok 步——失败步的同指纹重试放行，见
     tests/test_agent_failure_semantics.py 第 4 节）。"""
     _install_tools(monkeypatch, **{"curate.check_updates": _check_run(AE_TWO_NEW)})
     model = _FakeModel(
@@ -247,7 +247,7 @@ def test_decide_repeat_of_an_executed_step_stops_the_loop(monkeypatch, _tmp_proj
     assert any("重复" in t["detail"] for t in trace if t["node"] == "decide")
 
 
-# ---------------------------------------------------------------- sync 主题闸（混合句磁吸族）
+# ---------------------------------------------------------------- sync 主题闸（2026-08-08 磁吸族）
 
 def test_sync_topic_gate_matrix():
     """对拍钉：`_validate_raw` 对 sync_updates + 原话含主题维度值别名（物种/组织/疾病/技术，
@@ -277,7 +277,7 @@ def test_sync_topic_gate_matrix():
 
 
 def test_sync_topic_gate_pushes_repair_to_check(monkeypatch, _tmp_project_root):
-    """全链路：understand 磁吸选 sync → 主题闸拦下 → repair 改判 check →
+    """全链路（b12 族）：understand 磁吸选 sync → 主题闸拦下 → repair 改判 check →
     正常执行；sync 绝不进 execute（它不过滤主题，会把所有疑似新增都入库）。"""
     _install_tools(monkeypatch, **{"curate.check_updates": _check_run(AE_TWO_NEW)})
     model = _FakeModel(
@@ -299,34 +299,34 @@ def test_sync_topic_gate_pushes_repair_to_check(monkeypatch, _tmp_project_root):
     assert len(_ledger_rows(_tmp_project_root)) == 1, "sync 绝不执行（只跑了只读 check）"
 
 
-# ------------------------------------------------- sync 主题闸分句作用域
+# ------------------------------------------------- sync 主题闸分句作用域（坐实）
 
 def test_sync_topic_gate_branch_scoped_messages():
-    """回归：「检查CELLxGENE更新，有新增就同步，然后检查下ArrayExpress，有新的人类肺数据
+    """k11 问题：「检查CELLxGENE更新，有新增就同步，然后检查下ArrayExpress，有新的人类肺数据
     就搜来入库」——主题词「人类」属于**后面 ArrayExpress 分支**，旧版全域扫描拿它拦
     CELLxGENE 分支的 sync，理由张冠李戴把 repair 逼进死胡同（AgentPlanInvalid 0/3）。
     现按分句作用域 + 别支豁免疫苗：主题在 sync 所引片段内 → 消息 A（旧文案）；主题在别支
     且四条件齐备（本支有同步意图/填了 source/主题归属另一支）→ 放行；条件不齐 → 消息 B。"""
-    utt = "检查CELLxGENE更新，有新增就同步，然后检查下ArrayExpress，有新的人类肺数据就搜来入库，最后看看库里多少条"
+    k11 = "检查CELLxGENE更新，有新增就同步，然后检查下ArrayExpress，有新的人类肺数据就搜来入库，最后看看库里多少条"
     # 别支豁免：CELLxGENE 分支自带「同步」意图、填了 source、主题归属 ArrayExpress 支 → 放行
     v = agent_exec._validate_raw(
         {"verb": "curate.sync_updates", "quoted": "检查CELLxGENE更新，有新增就同步",
-         "source": "CELLxGENE Discover"}, utt)
+         "source": "CELLxGENE Discover"}, k11)
     assert not any("主题" in x for x in v), v
     # 主题支内的 sync 照拦（sync 的 source 正是主题归属支 ArrayExpress）→ 消息 B
     v = agent_exec._validate_raw(
-        {"verb": "curate.sync_updates", "quoted": "有新增就同步", "source": "ArrayExpress"}, utt)
+        {"verb": "curate.sync_updates", "quoted": "有新增就同步", "source": "ArrayExpress"}, k11)
     assert any("不会按主题过滤" in x for x in v), v
     # 不带 source 的全量 sync 永不豁免 → 消息 B
     v = agent_exec._validate_raw(
-        {"verb": "curate.sync_updates", "quoted": "检查CELLxGENE更新，有新增就同步"}, utt)
+        {"verb": "curate.sync_updates", "quoted": "检查CELLxGENE更新，有新增就同步"}, k11)
     assert any("不会按主题过滤" in x for x in v), v
-    # 纯检查分支被误选 sync（作用域无同步意图）不豁免 → 消息 B（假设例）
+    # 纯检查分支被误选 sync（作用域无同步意图）不豁免 → 消息 B（g04 假设例）
     v = agent_exec._validate_raw(
         {"verb": "curate.sync_updates", "quoted": "再检查一遍ENCODE", "source": "ENCODE"},
         "检查ArrayExpress更新，有新的人类肺数据就搜来入库，然后再检查一遍ENCODE，完了告诉我库里多少条")
     assert any("不会按主题过滤" in x for x in v), v
-    # 主题在 sync 所引片段内 → 消息 A（真阳性逐位保留）
+    # 主题在 sync 所引片段内 → 消息 A（b12 族真阳性逐位保留）
     v = agent_exec._validate_raw(
         {"verb": "curate.sync_updates", "quoted": "有新的人类肺数据就搜来入库"},
         "检查ArrayExpress更新，有新的人类肺数据就搜来入库")
@@ -341,20 +341,20 @@ def test_sync_topic_gate_branch_scoped_messages():
         {"verb": "curate.sync_updates", "quoted": "不存在的片段"},
         "检查更新，有新的肺癌数据就同步进来")
     assert any(x.startswith("原话限定了主题") for x in v), v
-    # 全句无主题 → 两路都静默（同族场景不回归）
+    # 全句无主题 → 两路都静默（b09/f05/d05 族不回归）
     v = agent_exec._validate_raw(
         {"verb": "curate.sync_updates", "quoted": "有的话拿回来"},
         "看看ArrayExpress有没有新数据，有的话拿回来")
     assert not any("主题" in x for x in v), v
 
 
-# ------------------------------------------------- 点名源闸：受控规范名逐字也算点名
+# ------------------------------------------------- 点名源闸：受控规范名逐字也算点名（b08 坐实）
 
 def test_named_source_verbatim_canonical_counts_as_named():
-    """回归：「检查一下ENCODE有没有更新，顺便看看库里多少条」——词表刻意不收裸 encode
+    """b08 问题：「检查一下ENCODE有没有更新，顺便看看库里多少条」——词表刻意不收裸 encode
     （普通英文动词），旧版 `spans 空 → 放行`，understand 槽位落空后无闸可拦：白跑一遍全量
     检查、decide 续步再查 ENCODE，顶超 max_steps。现逐字规范名（全大写 ENCODE）算点名，
-    缺槽位 → violation 走 repair 补 source（消息须明示「动词本身不用换」——实证
+    缺槽位 → violation 走 repair 补 source（消息须明示「动词本身不用换」——k11 坐实
     repair 会把 check 改判 sync 撞主题闸）。小写 encode（普通英文词）绝不认。"""
     utter = "检查一下ENCODE有没有更新，顺便看看库里多少条"
     v = agent_exec._named_source_violation("curate.check_updates", {}, utter)
@@ -371,15 +371,15 @@ def test_named_source_verbatim_canonical_counts_as_named():
 
 
 def test_autofill_named_source_from_quoted():
-    """连根修复：quoted 逐字点名唯一来源 + source 缺槽位 = 确定解补位（绕过
+    """b08/k11 连根修复：quoted 逐字点名唯一来源 + source 缺槽位 = 确定解补位（绕过
     repair 扯皮链）。quoted 没点名/点名多个/槽位已填/非点名动词 → 一律不动（交回
     violation 通道或保持原样）。"""
-    # quoted 含全大写 ENCODE（逐字规范名）→ 补 ENCODE
+    # b08：quoted 含全大写 ENCODE（逐字规范名）→ 补 ENCODE
     raw = {"verb": "curate.check_updates", "quoted": "检查一下ENCODE有没有更新"}
     filled = agent_exec._autofill_named_source(
         "curate.check_updates", raw, "检查一下ENCODE有没有更新，顺便看看库里多少条")
     assert filled == "ENCODE" and raw["source"] == "ENCODE", (filled, raw)
-    # quoted 含 cellxgene（别名）→ 补受控规范名
+    # k11：quoted 含 cellxgene（别名）→ 补受控规范名
     raw = {"verb": "curate.check_updates", "quoted": "检查CELLxGENE更新"}
     filled = agent_exec._autofill_named_source(
         "curate.check_updates", raw,
@@ -404,18 +404,18 @@ def test_autofill_named_source_from_quoted():
         "curate.sync_updates", raw, "检查ENCODE更新，有新增就同步") is None
 
 
-# ------------------------------------------------- 幻觉取消镜像闸
+# ------------------------------------------------- 幻觉取消镜像闸（j03 r1/r2 坐实）
 
 def test_cancelled_true_requires_denial_morpheme():
-    """reasoner 在毫无否定词的原话上幻觉 cancelled=true，把该跑的 search_online
+    """j03 问题：reasoner 在毫无否定词的原话上幻觉 cancelled=true，把该跑的 search_online
     标成「你说了不做」整步取消。铁律 3 的机械镜像：原话无否定语素 + cancelled=true →
     violation 走 repair。语素表宁宽勿窄；「要不要/是不是」是征询不是叫停，刻意排除。"""
-    marathon_utt = ("帮我看看库里多少条数据然后顺便检查一下ArrayExpress有没有更新"
-                   "有新增的人类肺数据就搜来入库最后再告诉我一遍库里多少条")
+    j03 = ("帮我看看库里多少条数据然后顺便检查一下ArrayExpress有没有更新"
+           "有新增的人类肺数据就搜来入库最后再告诉我一遍库里多少条")
     # 幻觉取消 → 拦
     v = agent_exec._validate_raw(
         {"verb": "curate.search_online", "quoted": "有新增的人类肺数据就搜来入库",
-         "keywords": "人类肺", "cancelled": True}, marathon_utt)
+         "keywords": "人类肺", "cancelled": True}, j03)
     assert any("否定语素" in x for x in v), v
     # 合法取消（算了/别）→ 静默
     v = agent_exec._validate_raw(
@@ -443,7 +443,7 @@ def test_cancelled_true_requires_denial_morpheme():
 
 def test_max_steps_forces_done_without_asking_the_llm(monkeypatch, _tmp_project_root):
     """decide 连续提出合法新步 → 真跑满 MAX_STEPS=8 后 decide **不再调 LLM**、强制 done。
-    （上界历经 3→6→8，本钉同步扩到 8 步；
+    （2026-08-08 约束放松批：上界 3→6；2026-08-15：6→8，本钉同步扩到 8 步；
     8 步里只排 1 次写步，不触发写步预算闸——那条闸有自己的专项钉。
     本钉同时是「到顶未结清→如实标注没做完」的钉：9 件诉求只跑成 8 件，
     库容步被截断 → 结算闸判未决 → 汇报缀「剩下的没有执行」。）"""
@@ -503,7 +503,7 @@ def test_max_steps_forces_done_without_asking_the_llm(monkeypatch, _tmp_project_
 
 
 def test_max_steps_settled_does_not_lie(monkeypatch, _tmp_project_root):
-    """到顶结算闸：恰好跑满 8 步且原话交代
+    """2026-08-15 到顶结算闸：恰好跑满 8 步且原话交代
     的事全部结清（6 源检查 + 条件搜索 + 库容）→ truncated 旗标本真，但汇报**不许**缀
     「剩下的没有执行」——改缀「预算刚好用完、事已做完」的机械事实。"""
     _install_tools(
@@ -664,12 +664,12 @@ def test_max_steps_checklist_unavailable_degrade_is_traced(monkeypatch, _tmp_pro
     # 降级发生处可观测：到顶 trace 如实标注清单对账缺席
     assert "checklist_unavailable" in decide_entries[-1]["detail"]
     assert "清单对账缺席" in decide_entries[-1]["detail"]
-    # 语义不变（只留痕）：结算口径不动，结清时汇报照旧缀「已全部完成」
+    # 语义不变（本批只留痕）：结算口径不动，结清时汇报照旧缀「已全部完成」
     assert "已全部完成" in (plan.get("report_zh") or "")
 
 
 def test_sync_empty_source_all_online_scope_is_reported(monkeypatch, _tmp_project_root):
-    """点名单源场景下 sync 空槽 = 按全部在线源
+    """2026-08-15 （exec-gates M5）：点名单源场景下 sync 空槽 = 按全部在线源
     同步（半闸刻意放行，语义不动）——validate trace 与最终汇报都必须明说全量口径，
     不让「只同步了点名的那个源」成为可误读的默认。"""
     sync_result = {
@@ -702,10 +702,10 @@ def test_sync_empty_source_all_online_scope_is_reported(monkeypatch, _tmp_projec
 
 
 def test_search_online_zero_write_is_ok_and_reported_honestly(monkeypatch, _tmp_project_root):
-    """search_online 候选全部撞重**零写入**（record_count=0、
+    """search_online 候选全部撞重**零写入**（record_count=0
     filename=None——corpus 层既有契约，test_corpus_curation.py 钉死）是合法结果：
     形状闸不许误判 bad_result_shape、不许谎称"不符合形状契约"；trace 与兜底汇报如实说
-    "未重复入库"，不拼"已入库到 外部库"占位词。"""
+    "未重复入库"，不拼"已入库到 外部库"占位词（连带 exec-tools L7）。"""
     zero = dict(SEARCH_OK, record_count=0, filename=None,
                 warnings=["候选共 2 条全部已在库中（同编号或同链接），未重复入库。"])
     _install_tools(monkeypatch, **{"curate.search_online": _search_run(zero)})
@@ -772,7 +772,7 @@ def test_write_step_budget_rejects_third_write_but_keeps_reads(monkeypatch, _tmp
 
 
 def test_write_budget_rejection_reenters_and_trailing_readonly_runs(monkeypatch, _tmp_project_root):
-    """（验证头条）：写步预算拦下第三次写 ≠ 整条请求完成——
+    """（对抗评审头条）：写步预算拦下第三次写 ≠ 整条请求完成——
     拒绝回灌重问一次，模型改提尾随的只读 db_status → 必须照常执行。"""
     _install_tools(
         monkeypatch,
@@ -801,7 +801,7 @@ def test_write_budget_rejection_reenters_and_trailing_readonly_runs(monkeypatch,
                         "告诉我库里多少条", model)
     assert [s["verb"] for s in plan.get("steps") or []] == [
         "curate.search_online", "curate.search_online", "curate.db_status"], \
-        "写预算拦下第三次写后，尾随的只读 db_status 必须照常执行（重入）"
+        "写预算拦下第三次写后，尾随的只读 db_status 必须照常执行（P0-1 重入）"
     trace_text = "；".join(t.get("detail", "") for t in trace)
     assert "被系统拒绝" in trace_text and "回灌重问" in trace_text
 
@@ -847,7 +847,7 @@ def test_failed_step_is_recorded_and_reported_honestly(monkeypatch, _tmp_project
 # ---------------------------------------------------------------- ⑥b LLM 汇报谎称未发生的写动作 → 机械后检弃用
 
 def test_llm_report_claiming_an_undone_write_is_discarded(monkeypatch, _tmp_project_root):
-    """机械后检（集成抓到的幻觉）：decide 判 done、steps 里没有成功的入库步，
+    """机械后检（2026-08-04 真机抓到的幻觉）：decide 判 done、steps 里没有成功的入库步，
     narrate 的 LLM 却写「已执行下载」→ 该汇报弃用，回退确定性拼接（同一批事实）。"""
     _install_tools(monkeypatch, **{"curate.check_updates": _check_run(AE_TWO_NEW)})
     model = _FakeModel(
@@ -889,7 +889,7 @@ def test_report_naming_an_untouched_source_is_discarded(monkeypatch, _tmp_projec
 
 
 def test_report_denying_import_with_exotic_wording_is_discarded(monkeypatch, _tmp_project_root):
-    """入库步成功（20 条落盘），LLM 汇报却写
+    """批A D1 P0（2026-08-06 真机）：入库步成功（20 条落盘），LLM 汇报却写
     「结果已保存。未执行导入操作。」——旧穷举否认词表漏「导入」词族整句透传。
     模式化否认后检（写动作词 × 否认语素）必须弃用该汇报。"""
     _install_tools(
@@ -915,10 +915,10 @@ def test_report_denying_import_with_exotic_wording_is_discarded(monkeypatch, _tm
 
 
 def test_decide_with_fabricated_keywords_is_stopped(monkeypatch, _tmp_project_root):
-    """原话零主题词（「看看有没有什么新数据，有的话拿回来」），
+    """批A D5（2026-08-06 真机）：原话零主题词（「看看有没有什么新数据，有的话拿回来」），
     decide 却臆造 keywords="single cell" 触发真入库。keywords 接地校验必须把这一步拦下——
     写操作的参数不许发明，loop 停在这一步、绝不真跑。
-     对称化：violation 先带检查意见重问一次（模型认错停手），重问不改才停环——
+    2026-08-08 对称化：violation 先带检查意见重问一次（模型认错停手），重问不改才停环——
     「臆造写步绝不真跑」的不变量一字不变。"""
     _install_tools(
         monkeypatch,
@@ -970,9 +970,9 @@ def test_translated_keywords_from_utterance_pass(monkeypatch, _tmp_project_root)
 
 
 def test_decide_keywords_grounded_in_step_results_pass(monkeypatch, _tmp_project_root):
-    """策略（依据是三模型 A/B 验证）：
+    """批C（依据是三模型 A/B 实测，.fix-shots/model_ab/）：
     原话零主题词的「若有则下载」，decide 把检查步骤**真实发现**的条目标题逐字拿来当
-    keywords——出处之二（步骤结果）接地，校验放行、两步链真跑。分界线：
+    keywords——出处之二（步骤结果）接地，校验放行、两步链真跑。与 D5 的分界线：
     出处必须是实有结果，臆造依旧拦死。"""
     _install_tools(
         monkeypatch,
@@ -996,9 +996,9 @@ def test_decide_keywords_grounded_in_step_results_pass(monkeypatch, _tmp_project
 
 
 def test_decide_keywords_mismatched_with_step_results_still_stopped(monkeypatch, _tmp_project_root):
-    """上述策略的护栏侧：步骤结果里没有的条目照样不许搜——检查步骤发现的是 human lung 系列，
+    """批C 的护栏侧：步骤结果里没有的条目照样不许搜——检查步骤发现的是 human lung 系列，
     decide 却提议 keywords="human heart"（两头无出处）→ 拦下、写步绝不真跑。
-     对称化：violation 先带检查意见重问一次（模型认错停手），重问不改才停环。"""
+    2026-08-08 对称化：violation 先带检查意见重问一次（模型认错停手），重问不改才停环。"""
     _install_tools(
         monkeypatch,
         **{"curate.check_updates": _check_run(AE_TWO_NEW),
@@ -1023,7 +1023,7 @@ def test_decide_keywords_mismatched_with_step_results_still_stopped(monkeypatch,
 
 
 def test_llm_report_denying_a_done_write_is_discarded(monkeypatch, _tmp_project_root):
-    """机械后检的另一侧（集成抓到）：入库步明明成功（文件已写），LLM 汇报却说
+    """机械后检的另一侧（2026-08-04 真机抓到）：入库步明明成功（文件已写），LLM 汇报却说
     「未执行入库操作」→ 该汇报弃用，回退确定性拼接（兜底如实说「已入库到 …」）。"""
     _install_tools(
         monkeypatch,
@@ -1087,7 +1087,7 @@ def test_non_loop_verb_never_enters_execute(monkeypatch, _tmp_project_root):
     assert _ledger_rows(_tmp_project_root) == []
 
 
-# ---------------------------------------------------------------- ⑨ 多点名源的续步不被护栏误杀（批B）
+# ---------------------------------------------------------------- ⑨ 多点名源的续步不被护栏误杀（批B P1）
 
 def test_multi_named_sources_continuation_is_not_blocked(monkeypatch, _tmp_project_root):
     """原话点名两个来源（「先检查10x和ArrayExpress…」）时，decide 续步检查**第二个**点名源
@@ -1131,9 +1131,9 @@ def test_cancelled_plan_gets_a_deterministic_report(monkeypatch, _tmp_project_ro
 
 
 def test_understand_json_fallback_writes_audit_row(monkeypatch, _tmp_project_root):
-    """understand 两级 tools 通道都被拒 → 跌 JSON-in-prompt 兜底时，必须往
+    """2026-08-06 B4：understand 两级 tools 通道都被拒 → 跌 JSON-in-prompt 兜底时，必须往
     .userdata/agent_fallbacks.jsonl 落一行抓现场账（生产偶发「直连通道不可用」离线复现不了，
-    落账让下次集成发生即自动留证）；账本与联网账本同目录、审计失败不掀翻主流程。"""
+    落账让下次真机发生即自动留证）；账本与联网账本同目录、审计失败不掀翻主流程。"""
 
     class _RejectingModel(_FakeModel):
         def invoke(self, messages):
@@ -1177,7 +1177,7 @@ def _rank_run(slots, root, ctx=None):
 def _install_mixed_tools(monkeypatch, **runs):
     """混合 e2e 用假注册表：在 _install_tools 三件套外加 rank（形状同真表）。"""
     table = {
-        "curate.db_status": {"label_zh": "读取数据库状态", "card_kind": "db_status",
+        "curate.db_status": {"label_zh": "汇报数据库状态", "card_kind": "db_status",
                              "readonly": True, "report": True, "observation": True},
         "curate.check_updates": {"label_zh": "检查来源更新", "card_kind": "check_updates",
                                  "readonly": True},

@@ -12,8 +12,9 @@
  * 系统到底干了什么、结果对不对」——为 benchmark 制作供数。所以这里记的是**全量**：
  * 用户原话、路由应答（含 agent plan.trace 逐步执行记录）、检索请求与完整响应
  * （results 全字段 + search_trace 全步骤）、工具执行回执、耗时、环境（模型名/端点主机）、
- * 用户评分（完成度三选 + 可选原因 + 逐条有用标注 + 自由评语；
- * 此前的星级已退役——三选对 benchmark 的判定价值高于 1-5 连续分）。记录口径：宁多勿少。
+ * 用户评分（2026-08-22 起：完成度三选 + 可选原因 + 逐条有用标注 + 自由评语；
+ * 此前的星级已退役——三选对 benchmark 的判定价值高于 1-5 连续分）。产品方原话：
+ * 「信息量充足，宁多勿少」。
  *
  * ## 脱敏是结构性的，不靠记性
  *
@@ -38,7 +39,7 @@ export const BENCHFB_MAX_CHARS = 3200000;
 
 export const BENCHFB_MAX_COMMENT = 500;   // 评语上限（字）
 
-/* 完成度三选（评分结构改版，取代星级）：记录里存机器可读 token，
+/* 完成度三选（2026-08-22 评分结构改版，取代星级）：记录里存机器可读 token，
    界面文案（完成 / 部分完成 / 未完成）由 benchfb.js 映射。 */
 export const BENCHFB_COMPLETIONS = ["done", "partial", "failed"];
 
@@ -46,17 +47,19 @@ export const BENCHFB_COMPLETIONS = ["done", "partial", "failed"];
    选择是可选的、可多选；不选不代表「没有原因」，只代表用户没填。 */
 export const BENCHFB_REASONS = ["条件理解错", "排序不对", "缺关键文件", "下载失败", "执行没完成", "解释不可信", "其他"];
 
-/* 会话级评分降频（派发口径「就你最关注的地方出现两次就行」）：
+/* 会话级评分降频（2026-08-22 派发口径「就你最关注的地方出现两次就行」）：
    每 tab 会话主动完整评分卡 ≤ BENCHFB_PROACTIVE_CAP 张；收起/不评分连续
    BENCHFB_IGNORE_CAP 次 → 本会话不再主动出卡。状态存 sessionStorage
    （与 biodata_sid_v1 同生命周期）：**刷新页面会话重置是可接受的会话语义**——
    刷新后被降频的用户会重新看到主动卡，这是刻意选择而非缺陷。none/error 轮的
    折叠「评价」按钮不计配额、不受降频影响（它本来就不是主动卡）。 */
+import { usagePad2 } from "#usage_core";
+
 export const BENCHFB_RATE_SESSION_KEY = "biodata_benchfb_rate_v1";
 export const BENCHFB_PROACTIVE_CAP = 2;
 export const BENCHFB_IGNORE_CAP = 2;
 
-export function benchfbPad2(n) { return String(n).padStart(2, "0"); }
+/* 两位补零唯一定义在 usage_core.usagePad2（usage/benchfb 日期戳同族），本模块直接 import 用。 */
 
 /* base_url → 主机名。非法/空 → ""。只留主机（api.deepseek.com 这一级），
    路径/查询串可能带用户私有代理信息，整段不采。 */
@@ -86,7 +89,7 @@ export function benchfbMakeId(ts, rand) {
 }
 
 /* 评分合并：返回**新记录对象**（旧记录不被改——导出与提示卡各拿各的快照，不漂移）。
-    起记录形状（additive，不再写 stars）：
+   2026-08-22 起记录形状（additive，不再写 stars）：
      rating = {completion, reasons, useful_idx, comment, rated_at}
    patch.completion："done"/"partial"/"failed" 入库；null/"" 显式清除；undefined/非法值保留旧值。
    patch.reasons：原因标签数组（限 BENCHFB_REASONS 白名单，去重、按白名单序）；undefined 保留旧值。
@@ -216,7 +219,7 @@ export function benchfbResolveUseful(record) {
 }
 
 /* 单条记录的导出形态：原记录 + rating.useful_resolved（标注名次 → 数据集）
-   + rating.useful_uids（同一解析的纯 uid 清单，随新评分形状带出）。
+   + rating.useful_uids（同一解析的纯 uid 清单，2026-08-22 起随新评分形状带出）。
    响应/轨迹全字段原样带上（采什么发什么，所见即所发在导出弹窗里有原文预览兜底）。 */
 export function benchfbForExport(record) {
     const out = Object.assign({}, record);
@@ -249,18 +252,18 @@ export function benchfbBuildPackage(records, opts) {
     };
 }
 
-/* 导出文件名：biodata-反馈包-.json。UTC（同 usage_core 的纪律：
+/* 导出文件名：biodata-反馈包-2026-08-13.json。UTC（同 usage_core 的纪律：
    本地时区会让同一份包在不同机器上文件名不同，node 规格无法逐字节断言）。 */
 export function benchfbFileName(date) {
     const d = date instanceof Date ? date : new Date(0);
     return "biodata-反馈包-"
-        + d.getUTCFullYear() + "-" + benchfbPad2(d.getUTCMonth() + 1) + "-" + benchfbPad2(d.getUTCDate())
+        + d.getUTCFullYear() + "-" + usagePad2(d.getUTCMonth() + 1) + "-" + usagePad2(d.getUTCDate())
         + ".json";
 }
 
 /* 包内容统计（导出弹窗的「大白话清单」数据源）。
    返回 {turns, search, tool, none, error, rated, comp_done, comp_partial, comp_failed, marked, first_ts, last_ts}。
-   完成度计数取代星级均值（星级已退役）；旧形状记录（带 stars 无 completion）
+   2026-08-22：完成度计数取代星级均值（星级已退役）；旧形状记录（带 stars 无 completion）
    仍计入 rated，只是不贡献完成度分项。 */
 export function benchfbPackageSummary(records) {
     const s = { turns: 0, search: 0, tool: 0, none: 0, error: 0, rated: 0, comp_done: 0, comp_partial: 0, comp_failed: 0, marked: 0, first_ts: 0, last_ts: 0 };

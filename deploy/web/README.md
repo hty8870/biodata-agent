@@ -43,14 +43,15 @@ ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-ip> "mkdir -p <deploy-dir>/build/$
 
 `requirements/requirements.txt` 只有下界约束；镜像必须按**精确锁定**安装。网页版镜像额外装
 「AI 执行」扩展链 `langgraph` + `langchain-openai`（版本与 requirements/requirements-ci.lock 对齐），
-本机形态不受影响（扩展在本地仍可选装）。锁定文件在目标服务器上用与镜像完全相同的基础环境生成：
+本机形态不受影响（扩展在本地仍可选装）。在线 MCP 形态再装 `mcp`（webapp 顶层挂载
+`/mcp`，版本与 requirements/requirements-ci.lock 的 `mcp==1.28.1` 对齐）。锁定文件在目标服务器上用与镜像完全相同的基础环境生成：
 
 ```bash
 # $CTX = <deploy-dir>/build/$TAG（构建上下文已按 §2 同步）
 ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-ip> "
   sudo docker run --rm -v $CTX:/ctx -w /ctx python:3.12-slim bash -lc \
     'pip install --no-cache-dir -q -r requirements/requirements.txt \
-       langgraph==<ci锁版本> langchain-openai==<ci锁版本> && pip freeze' \
+       langgraph==<ci锁版本> langchain-openai==<ci锁版本> mcp==<ci锁版本> && pip freeze' \
     | sudo tee $CTX/deploy/web/requirements-web.lock >/dev/null
 "
 scp -i ~/.ssh/<ssh-key> <deploy-user>@<server-ip>:<deploy-dir>/build/$TAG/deploy/web/requirements-web.lock deploy/web/requirements-web.lock

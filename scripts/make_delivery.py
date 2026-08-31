@@ -63,31 +63,8 @@ def _user_home_path_tokens() -> tuple[str, ...]:
 
 
 GENERIC_FORBIDDEN_TOKENS: tuple[str, ...] = _user_home_path_tokens()
-# 内部研发叙事代号基线清单（内置、随仓库走）：历史迭代用的批次/波次/任务代号与内部流程词
-# 一律不许进入交付包。只收**高区分度**的词：短字母数字代号（k3/S1/C4/ux1/ob2/tu1/rfb1 等）
-# 会与数据文件里的真实 accession、md5 哈希、生物学术语碰撞（已实证误报），不收——它们由评审
-# 与契约测试把关；「Phase C」裸词会撞 "Phase Contrast" 等显微术语，只收带编号的完整形。
-# 遥测 ingest token 等功能性字符串不在此列（SECRET 扫描层覆盖真凭据，ingest token 已声明为
-# 非秘密滥用过滤凭据）。
-INTERNAL_NARRATIVE_TOKENS: tuple[str, ...] = (
-    "SEC-C02", "SEC-C03", "验证裁决", "挂账项", "借鉴批", "强化版默认", "支线版", "夜班",
-    "隔离副本", "权威主线", "遗留项", "批C", "fb1：", "Phase C0", "Phase C1", "Phase C4",
-    # 夜批叙事、连字符批号、优先级标签（防再引入的常驻门）
-    "夜验证", "夜批", "（夜）", "SUP-M", "cross-trace", "（高1）", "高1：",
-    "高-2", "中-3", "中-4", "中-6a", "中-6b", "低-9",
-    "约束放松批", "压榨点", "原案", "旧钉", "旧闸", "；：",
-    # 修订时态与断代叙事（评测用例 note/注释曾是重灾区；只收零碰撞的具体词形——
-    # 裸 cr1/rf1/ov1 会撞基因名 Uhrf1/Brf1，只收带全角括号/「修补」的完整形；
-    # 「探针」「旧版」「口径」是仓内功能词，不收）
-    "从此计败", "（调整前：", "删恒过", "上一批刚", "当年的", "（改造后）", "live 校准",
-    "真机曾", "四工具批", "单结局版", "旧 expect", "旧 max_steps", "补 must", "补 check_sources",
-    "rf1（", "ov1-", "cr1 修补", "ov1 修补",
-    # 轮次叙事与内部备案措辞（「本轮」裸词是产品语言——「本轮没有可回滚的写操作」，
-    # 只收后接修订动词的完整形；「口径分裂」在 test_scea_enrichment 是功能警告，不收）
-    "本轮实测", "本轮初稿", "本轮修", "本轮补的", "记录在案", "加固批", "上一批漏了",
-    "schema 加固",
-)
-GENERIC_FORBIDDEN_TOKENS = GENERIC_FORBIDDEN_TOKENS + INTERNAL_NARRATIVE_TOKENS
+# 历史迭代代号清单已退役：批次/波次标注（日期+机制）是仓库注释的正常形态，门禁聚焦
+# 个人路径形态（上方）与 secret 值锚定模式（扫描层），个人化 token 走 .delivery-tokens.local。
 # - **个人层**（本机加载）：真名 / 邮箱前缀 / 内部称谓等个人化 token 一律不进源码，由仓库根
 #   `.delivery-tokens.local` 提供（gitignored、与 .env 同级处理；每行一个 token，`#` 起始为注释，
 #   空行忽略）。文件缺失时跳过并打印提示——交付安全检查不因此失效（通用层仍在），干净 clone
@@ -362,7 +339,7 @@ def collect_delivery_files(root: Path = REPO_ROOT) -> list[Path]:
 
 def scan_forbidden(files: list[Path], root: Path = REPO_ROOT) -> list[dict]:
     """对交付文件集里的文本文件扫敏感词，返回违规列表 [{path, line, token}]（不含整行内容，避免二次泄漏）。"""
-    # 本文件是词表的法定存放点（INTERNAL_NARRATIVE_TOKENS 字面量必然命中自身），自豁免；
+    # 本文件是词表的法定存放点（检测词字面量必然命中自身），自豁免；
     # 真凭据层（scan_secret_values）不豁免本文件。root 不在仓库内（单测临时目录）时跳过自豁免。
     try:
         self_rel: str | None = Path(__file__).resolve().relative_to(root.resolve()).as_posix()

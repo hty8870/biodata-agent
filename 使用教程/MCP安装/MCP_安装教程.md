@@ -21,7 +21,7 @@
 - **项目应保持完整**：`mcp_server.py` 必须和同项目的 `src/`、数据与下载索引放在一起，不能只复制单个脚本。
 - **不会污染系统 Python**：下文把依赖装进项目外的专用虚拟环境。
 - **运行要求**：Python 3.10+。项目脚本安装固定版本的 MCP Python SDK；Codex 或 Claude Code 请使用各自当前可用的版本，具体命令以 `codex mcp --help` / `claude mcp --help` 的输出为准。
-- **版本口径（别混）**：本文里的 `mcp==1.28.1` 指 MCP **SDK**（Python `mcp` 包）的钉版；BioData MCP **服务**自身的版本是 **1.34.0**（`--version` 会打印 `biodata-mcp 1.34.0 | MCP SDK …`）。两者是两个不同的数——安装/升级 SDK 用 1.28.1，看服务版本用 1.34.0。
+- **版本口径（别混）**：本文里的 `mcp==1.28.1` 指 MCP **SDK**（Python `mcp` 包）的钉版；BioData MCP **服务**自身的版本是 **1.35.0**（`--version` 会打印 `biodata-mcp 1.35.0 | MCP SDK …`）。两者是两个不同的数——安装/升级 SDK 用 1.28.1，看服务版本用 1.35.0。
 
 安装只需要记住两个绝对路径：
 
@@ -56,7 +56,7 @@
 & "$env:LOCALAPPDATA\Programs\BioData Agent\BioDataAgentMCP.exe" --selfcheck
 ```
 
-末行出现 `SELFCHECK_OK tools=19 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；`--version` 可打印 `biodata-mcp 1.34.0 | MCP SDK …`。
+末行出现 `SELFCHECK_OK tools=19 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；`--version` 可打印 `biodata-mcp 1.35.0 | MCP SDK …`。
 
 ### 3. 注册到客户端（命令直接指向 exe）
 
@@ -570,7 +570,7 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
   JSON 文本；内容 hash 去重，撞重默认拒绝、`force=true` 覆盖）；`search_online` 联网搜官方源（`query` 必填，
   `source` 默认 arrayexpress；apply 时把 plan 返回的整个 JSON 原样作为 `payload_json` 回传）；`remove`
   把上传文件**移入回收站**（`.userdata/recycle/`，可逆、不是真删除）；`restore` 移回。
-- 管护对象**仅限** `database/external/` 的 `upload_*` 文件（你自己上传或联网入库的）；官方十源快照
+- 管护对象**仅限** `database/external/` 的 `upload_*` 文件（你自己上传或联网入库的）；官方十一源快照
   与冻结基准 `database/base/` 不可经此删改（报 `not_curatable` / 结构性不可达）。
 
 ```text
@@ -581,7 +581,7 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 
 ## 6. 更新、项目移动与重复安装
 
-重复运行环境安装块会复用同一个虚拟环境。升级 MCP **SDK**（Python `mcp` 包）前应先查看项目的已验证版本；本教程当前固定 SDK 为 `mcp==1.28.1`（BioData MCP **服务**版本是 1.34.0，见「安装前先知道」的版本口径）。
+重复运行环境安装块会复用同一个虚拟环境。升级 MCP **SDK**（Python `mcp` 包）前应先查看项目的已验证版本；本教程当前固定 SDK 为 `mcp==1.28.1`（BioData MCP **服务**版本是 1.35.0，见「安装前先知道」的版本口径）。
 
 如果项目移动了位置，客户端中保存的绝对路径会失效。先重新运行第 1 节的变量与环境安装块，使 `$Python` 和 `$Server` 指向当前真实路径；再查看旧配置，确认后移除并重新添加：
 

@@ -21,7 +21,7 @@ curate_datasets 管护外部库 upload_* 与回收站），
      只整理现有元数据、不调用 LLM。给 browse/recommend 拿到 uid 后按需取介绍。
   6. upload_dataset(records|path, filename=None, source=None)  —— 【写工具 ①】把一份数据集 JSON
      摄取进外部库 database/external/（对齐网页 `/api/upload`），即时可被 browse/recommend(sources=[…])
-     检索到。写入**只进** database/external/、**绝不**碰冻结基准 database/base/ → 784 评测不受影响。
+     检索到。写入**只进** database/external/、**绝不**碰冻结基准 database/base/ → 774 评测不受影响。
      按用户明确授权补入：打破「只读」但保「离线 / 永不崩 / base 不动」；写盘=非确定性（时间戳文件名）。
   7. biodata_status()  —— 健康自检 + 库存清单（各来源计数、下载索引是否就绪、快照日期）。
      装完照着教程让 agent 调一次这个，就知道服务器活没活、数据挂没挂。
@@ -63,7 +63,7 @@ curate_datasets 管护外部库 upload_* 与回收站），
      search_online 联网搜索官方源 / remove 回收站式删除 / restore 恢复，管护对象限
      database/external/ 的 upload_* 命名空间。**plan 默认（dry_run=True）零写盘，apply 才写盘/联网**
      且必须回传 confirm_token（重算比对，不一致零写入）。search_online 的 plan 会真实联网并记请求账本。
-     **check_updates / sync_updates**：只读检查来源更新 / 检查+自动
+     **check_updates / sync_updates**（2026-08-22 补齐）：只读检查来源更新 / 检查+自动
      入库复合流（sync 有整任务文件锁，冲突 → `sync_busy`；返回 operation receipt，可经 Web
      `/api/curate/recall` 整次撤回），修复 plan_action 已宣称而工具不接的 plan→execute 断链。
 
@@ -78,7 +78,7 @@ curate_datasets 管护外部库 upload_* 与回收站），
   * 只有三个写盘工具：upload_dataset（按用户授权补入，**只写** database/external/、绝不碰 database/base/）
     与 provision_dataset（**只写**调用方显式给定的 dest_dir，executor 对 database/base 与在仓数据目录
     fail-closed 拒绝）、curate_datasets（管护写工具，apply 才写 database/external/ 的 upload_* 命名空间
-    与 .userdata/recycle/ 回收站；search_online apply 时联网）；其余工具调用不写语料/冻结基准。默认路径不启用 LLM，784 冻结评测的确定性与
+    与 .userdata/recycle/ 回收站；search_online apply 时联网）；其余工具调用不写语料/冻结基准。默认路径不启用 LLM，774 冻结评测的确定性与
     硬违规 0% 不受影响（官方评测走 base-only、永不读外部库，故上传即便入库也不影响基准）。
   * 工具调用留痕：每次调用 append 一行脱敏 JSON 到 .userdata/mcp_calls.jsonl（gitignored、零网络、
     写失败静默降级绝不影响调用；env BIODATA_MCP_CALL_LOG=off 关闭，默认开）。
@@ -114,10 +114,10 @@ for _k, _v in {
 # ──────────────────────────────────────────────────────────────────────────────
 
 # 包未安装（无 pyproject / venv，主线一贯以 src 注入方式运行）→ 把 agent/src 放上 sys.path。
-# 锚定到本文件所在目录，与客户端 spawn 时的 cwd 无关。双场景（一级目录整理）：
+# 锚定到本文件所在目录，与客户端 spawn 时的 cwd 无关。双场景（2026-08-27 一级目录整理）：
 # 仓库克隆里本文件在 src/dataset_recommender/app/（parents[2] 即 src/）；交付包里本文件按
 # 历史布局落在包根、src/ 是同层兄弟目录（build_release 的 SOURCE_PATH_OVERRIDES 映射）。
-# sys.path 必须指向**真实源码位置**（`__file__` 所在目录；frozen 下解释器已含打包路径，
+# W1：sys.path 必须指向**真实源码位置**（`__file__` 所在目录；frozen 下解释器已含打包路径，
 # 此注入自然空过）；install_root 的运行时语义见 `runtime_paths.get_app_paths()`。
 _HERE = Path(__file__).resolve()
 _SRC = _HERE.parents[2] if (_HERE.parents[2] / "dataset_recommender").is_dir() else _HERE.parent / "src"
@@ -126,7 +126,8 @@ if str(_SRC) not in sys.path:
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.fastmcp.exceptions import ToolError  # noqa: E402
-from pydantic import StrictBool, StrictInt  # noqa: E402 # 严格类型：拒绝 "3"/True/"yes" 的宽松强转
+from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
+from pydantic import StrictBool, StrictInt  # noqa: E402  # 严格类型：拒绝 "3"/True/"yes" 的宽松强转
 from dataset_recommender.content.introduction import build_dataset_introduction  # noqa: E402
 # 上传摄取的共用真源（与 Web /api/upload 同一套逻辑）。纯模块、import 期零 I/O（只拉 corpus/data_loader/
 # normalizer 的函数定义，不加载语料）→ 顶层导入安全，且让 upload_dataset 的 `except UploadError` 稳定可绑。
@@ -137,10 +138,11 @@ from dataset_recommender.corpus.uploads import (  # noqa: E402
 )
 from dataset_recommender.secret_patterns import redact as _redact_secret_values  # noqa: E402
 from dataset_recommender.app.runtime_paths import get_app_paths, instance_data_dir_for  # noqa: E402
+from dataset_recommender.app import mcp_tokens  # noqa: E402  # 在线形态令牌库（轻量，import 零 I/O）
 # 全库浏览分页上限单一真源（收口批）：
 # Web /api/datasets 与本服务器 browse_datasets 同源，值 100（本服务器原硬上限 200 收窄）。
 from dataset_recommender.app.limits import MAX_DATASETS_LIMIT  # noqa: E402
-# 检索入参校验单一真源：query 四道闸/ISO 日期/倒挂窗口/来源校验与 Web 同一份，
+# 检索入参校验单一真源（批）：query 四道闸/ISO 日期/倒挂窗口/来源校验与 Web 同一份
 # 本文件的原五段手写闸体改为薄委托（见 _require_query 等的 docstring）。
 from dataset_recommender.app.request_validation import (  # noqa: E402
     ParamValidationError,
@@ -150,7 +152,7 @@ from dataset_recommender.app.request_validation import (  # noqa: E402
     validate_sources,
 )
 
-# ── 禁止未知参数（验证反馈 -d）──────────────────────────────────────────────
+# ── 禁止未知参数（反馈-d）──────────────────────────────────────────────
 # FastMCP 为每个工具用 `create_model(__base__=ArgModelBase)` 生成入参模型，默认 extra="ignore"
 # → 拼错的参数名（如 `topk` 之于 `top_k`）被静默丢弃、悄悄退回默认值，调用方误以为筛选已生效。
 # 给 SDK 的入参基模型补 extra="forbid"（必须在 @mcp.tool() 装饰器执行、即各工具入参模型被 create_model
@@ -174,7 +176,7 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 # 1.2.0：get_file_manifest 逐文件附活台账实测状态(status)+问题文件清单(problems)+provisioning 摘要。
 # 1.3.0：非法请求（空 query/枚举越界/非正 top_k/未知来源/坏 uid）改为 raise → isError=true（合法业务
 #        结果仍 ok=true）；候选/清单加数据一致性 caveats；相对时间（近N年/今年…）现可解析。
-# 1.4.0：入参加固——top_k/rerank_top_n 上限 100（防响应放大）+ 严格整数（拒 "3"/True 强转）；
+# 1.4.0：入参加固（二轮反馈）——top_k/rerank_top_n 上限 100（防响应放大）+ 严格整数（拒 "3"/True 强转）；
 #        无检索内容查询（纯符号/emoji/零宽·双向控制符）拒绝；未知参数名 extra=forbid 报错；非法日期
 #        （近0/负年、非法日历日、并列年份歧义）改弃权而非静默放宽；get_file_manifest 自动 strip uid。
 # 1.5.0：recommend_datasets 加 strategy 参数（fixed/auto）——auto=按查询复杂度（存活集大小）自动选检索后端：
@@ -195,7 +197,7 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        JSON 进外部库 database/external/，对齐网页 `/api/upload`；records 传结构化数组/对象，不传字符串）。
 #        摄取核心与 Web 共用 uploads.ingest_dataset
 #        （单一真源）。**打破「只读」不变量**：这是本服务器唯一有磁盘写副作用的工具；但写入**只进**
-#        database/external/、**绝不**碰冻结基准 database/base/（官方 784 评测走 base-only、永不读外部库 →
+#        database/external/、**绝不**碰冻结基准 database/base/（官方 774 评测走 base-only、永不读外部库 →
 #        基准恒定）。其余不变量（离线、永不崩、非法→isError、base 不动）保持；上传本身**非确定性**
 #        （时间戳文件名，写操作固有）。新错误码：empty_input / too_large / not_found（+ 摄取层 bad_file /
 #        bad_encoding / invalid_json / no_records）。工具 7→8。
@@ -208,47 +210,47 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        /api/fair 共用 fair.build_fair_report 单一真源）。纯只读、确定性、按已有字段判定，不联网不猜。工具 8→9。
 # 1.13.0：复用出处清单——新增第 10 工具 build_reuse_pack（把选中数据集整理成投稿材料：英文出处段 +
 #        数据集清单 + 待核实项 + RIS/BibTeX 导出；对齐网页 /api/reuse-pack）。只读 additive。工具 9→10。
-# 1.14.0：静默丢词诚实层——recommend_datasets 响应 additive 回显 **unused_query_terms**：用户输入了
+# 1.14.0：N1 静默丢词诚实层——recommend_datasets 响应 additive 回显 **unused_query_terms**：用户输入了
 #        结构上无对应筛选维度的实义描述词（性别/年龄/受试者/功能类，如「免疫」「儿童」「男性」），系统既不
 #        落维、又不入 free_text_terms（ASCII-only）、也不弃权 → 原本静默丢弃零信号，现显式回显「未作为筛选
-#        维度」。纯只读 additive 字段，无新参/新工具/新错误码；默认查询与冻结 784 逐位不变。工具仍 8。
-# 1.15.0：样本量语义提醒——共享确定性介绍生成器 introduction.build_dataset_introduction additive
+#        维度」。纯只读 additive 字段，无新参/新工具/新错误码；默认查询与冻结 774 逐位不变。工具仍 8。
+# 1.15.0：N6 样本量语义提醒——共享确定性介绍生成器 introduction.build_dataset_introduction additive
 #        加 **sample_size_caveats**（list[str]，units.sample_size_note 单一真源）：细胞数≠生物学重复 /
 #        文件数≠样本数 / 单位不明不横向比较 / 仅元数据不判统计功效，按记录状态条件生成。经此工具的
 #        recommend_datasets 每条候选 introduction 与 get_dataset_introduction 同步获得；与 Web /api/introduction
 #        逐字段同源。纯只读 additive、无新参/新工具/新错误码；冻结评测不经介绍层，结构性不变。
-# 1.16.0：快照可复现——build_reuse_pack 的产物 additive 加 **retrieval**（复现出处）：确定性语料快照
+# 1.16.0：N9 快照可复现——build_reuse_pack 的产物 additive 加 **retrieval**（复现出处）：确定性语料快照
 #        `snapshot_id`（全部 dataset_uid 的 SHA-256 前 12 位，同库同 id）+ 检索日期 + 语料条数 + 来源分布，
 #        并给出可放进 Methods 的 note_en 与用户复现提示 note_zh。与 Web /api/reuse-pack 共用
 #        reuse_pack.build_pack_for_uids 单一真源（快照由被检索语料 corpus.corpus_snapshot 算）。纯只读
-#        additive、无新参/新工具/新错误码；reuse_pack 不被检索/评测 import，冻结 784 结构性不变。
-# 1.17.0：引文导出——build_reuse_pack 响应 additive 加 **ris** + **bibtex**（数据集引文串）。
+#        additive、无新参/新工具/新错误码；reuse_pack 不被检索/评测 import，冻结 774 结构性不变。
+# 1.17.0：N10 引文导出——build_reuse_pack 响应 additive 加 **ris** + **bibtex**（数据集引文串）。
 #        坑：collection_doi 指向「产出这批数据的论文」、非数据集本身 → 条目一律**数据集类型**
 #        （RIS `TY-DATA` / BibTeX `@misc`，绝不 `@article`），DOI 只作「关联论文 DOI」放 note，
 #        不当数据集自己的 DOI 挂条目。与 Web /api/reuse-pack 共用 reuse_pack.to_ris/to_bibtex 单一真源。
-# 1.18.0：标识符精确反查——新增第 11 个工具 **lookup_identifier**（对齐 Web /api/recommend 的
+# 1.18.0：N8 标识符精确反查——新增第 11 个工具 **lookup_identifier**（对齐 Web /api/recommend 的
 #        additive 字段 identifier_lookup）：贴 CELLxGENE/HCA UUID、ArrayExpress/SCEA E-XXXX-N、关联论文 DOI
 #        → 直达本目录记录；贴 GSM/SRA 号 → **诚实 fail-closed**（不在本目录收录范围、指向来源库、
 #        不静默返回 0）。与 Web 共用 identifiers.lookup 单一真源。只读/离线/确定性；空 identifier → empty_query。
 #        工具 10→11。冻结评测不经 identifiers/lookup，结构性不变。
-# （三源接入后：GSE 与 HBM/SCP 编号同样直达本目录记录；fail-closed 只剩 GSM/SRA。）
-# 1.19.0：元数据兼容分组——新增第 12 个工具 **find_compatible_datasets**（对齐 Web /api/compatible）：
+#        （2026-08-06 三源接入后：GSE 与 HBM/SCP 编号同样直达本目录记录；fail-closed 只剩 GSM/SRA。）
+# 1.19.0：N13 元数据兼容分组——新增第 12 个工具 **find_compatible_datasets**（对齐 Web /api/compatible）：
 #        给一个数据集找同物种 + 兼容 chemistry/platform 的其它数据集。**诚实边界**：只回「元数据兼容」
 #        （可整合的必要非充分条件），结果始终附带 caveat，绝不说「可整合」。与 Web 共用 compatibility.find_compatible
 #        单一真源。只读/离线/确定性；空 uid→empty_key、查不到→not_found。工具 11→12。冻结评测不经 compatibility。
-# 1.20.0：可行性概览——新增第 13 个工具 **assess_feasibility**（对齐 Web /api/feasibility）：研究问题→
+# 1.20.0：N12 可行性概览——新增第 13 个工具 **assess_feasibility**（对齐 Web /api/feasibility）：研究问题→
 #        通过硬过滤的全部候选聚合成候选数/总细胞量**下限**/物种·平台·年份·来源分布/可下载率/缺口。诚实约束
-#        AE 无研究级细胞数、全库 31% 无细胞数 → 总细胞量必然是下限、显式标注、绝不当总量。与 Web 共用
+#        （N14）：AE 无研究级细胞数、全库 31% 无细胞数 → 总细胞量必然是下限、显式标注、绝不当总量。与 Web 共用
 #        feasibility.build_report 单一真源。只读/离线/不调 LLM；空 query→empty_query。工具 12→13。冻结评测不经 feasibility。
-# 1.21.0：国内可达性启发——recommend/browse 候选与 introduction item additive 加 **reachability**
+# 1.21.0：N11 国内可达性启发——recommend/browse 候选与 introduction item additive 加 **reachability**
 #        （`reachability.classify(download_url)`：按托管 host 推断国内可达性档 + 下载建议，`heuristic=True`
 #        恒真——**按托管位置推断、非实测速度**；未识别 host 不臆造）。workflow 序列化与 item_view 共用同一
 #        classify 单一真源。纯只读 additive、无新参/新工具/新错误码；冻结评测不经 reachability，结构性不变。
-# 1.22.0：两项——(a) get_dataset_introduction 加 opt-in `llm` 参：True 且服务端 ENABLE_LLM 开才在
+# 1.22.0：N5 + N15 两项——(a) get_dataset_introduction 加 opt-in `llm` 参：True 且服务端 ENABLE_LLM 开才在
 #        确定性介绍上 additive 叠 LLM 中文导读（`intro_llm.enrich_introduction_with_llm`，fail-open、短路 mock、
 #        只译 prose/title）；默认 False→逐字不变。(b) 新增第 14 工具 **verify_local_assets**——扫本地目录树、
 #        与 10x 文件清单（15119 md5）比对成资产台账（lab_ledger 单一真源；只算 md5 不读内容、只读不联网）。
-#        工具 13→14。两者都不经检索/评测路径，冻结 784 结构性不变。
+#        工具 13→14。两者都不经检索/评测路径，冻结 774 结构性不变。
 # 1.23.0：连续对话检索——新增第 15 个工具 **plan_query_edit**（对齐 Web /api/board/plan）：把「再说一句话
 #        改条件」（换成小鼠 / 再加一条：要有 FASTQ / 去掉组织限制 / 放宽疾病）规划成一次具体改动。
 #        **只规划、不检索**：返回的 next_request 才是拿去调 recommend_datasets 的东西。无状态、纯计算、
@@ -268,14 +270,14 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        recommend_datasets / parse_constraints 的 understood 里 additive 多出 preferred_* 与
 #        `prefer:<维度>` 极性的 active_filters 项；`prefer:*` 同时进 suppressed_constraints 白名单
 #        （可单独停用某条排序偏好，且不会误删同名的硬条件）。默认不写「优先」→ 全部字段为空 →
-#        打分走原分支、逐位不变，冻结 784 结构性不受影响。
+#        打分走原分支、逐位不变，冻结 774 结构性不受影响。
 # 1.26.0：规则模型覆盖批次 + 未收录词降级建议。词表按语料实证补了 34 组织 / 52 疾病概念，
 #        并修掉一整类**静默错筛**（中文别名裸子串：「高血压」命中「血」→ 组织=Blood、「骨髓瘤」→
 #        组织=Bone Marrow、「肺炎/肾炎/肝炎/胃炎」→ 各自退化成器官）；无法登记的复合词
 #        （单核细胞/胸腺嘧啶）走 ALIAS_PROTECTED_COMPOUNDS 整体屏蔽 + 如实回显。
 #        recommend_datasets 响应 additive 新增 **degraded_search**：规则因未收录词弃权时，
 #        「先忽略这几个词能搜到什么」的**建议**（含条数与忽略后真正生效的条件）。**不自动应用**。
-#        无新工具、无新错误码；冻结 784 逐项不变（评测走 retriever.retrieve、不经编排层）。
+#        无新工具、无新错误码；冻结 774 逐项不变（评测走 retriever.retrieve、不经编排层）。
 #        另加一个 opt-in 参 **degrade_with_llm**（默认 False）：让 LLM 判「这几个未收录词能不能忽略」，
 #        判可以才真降级（resolution_status="degraded"）；判不可以 / LLM 缺席 / 解析失败 → 保持弃权。
 # 1.29.0：provisioning 闭环进 MCP + 调用留痕——(a) 新增第 18 个工具 **provision_dataset**（对齐 CLI
@@ -291,8 +293,8 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        经 item_view 单一真源与 Web 同口径；introduction facts 同步增「检测基因数」与次要补充指标行。
 #        工具数/入参/错误码/冻结评测不变（纯 additive）。
 # 1.30.0：对话式数据库管护进 MCP——新增第 19 个工具 **curate_datasets**（写工具 ③；对齐 Web
-#        /api/curate/* 与 CLI scripts/curate_datasets.py；
-# 用户明确授权：管护动作内允许显式联网调官方公开 API）。action = list / import /
+#        /api/curate/* 与 CLI scripts/curate_datasets.py；设计蓝本 设计文档，
+#        2026-08-01 用户明确授权：管护动作内允许显式联网调官方公开 API）。action = list / import /
 #        search_online / remove / restore 五动作共用 corpus_curation 单一真源（三入口同一分发函数
 #        run_curate_action，各入口不各写一份）：**plan 默认（dry_run=True）零写盘**（search_online
 #        的 plan 会真实联网查官方源并记 .userdata/curate_net_ledger.jsonl 请求账本），**apply 才
@@ -302,8 +304,8 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        bad_param / unknown_file / not_curatable / token_mismatch / duplicate_content /
 #        source_not_registered / network_error / no_candidates（+摄取层 bad_file/bad_encoding/
 #        invalid_json/no_records 原码透传）。工具 18→19。检索/编排/冻结评测不 import
-#        corpus_curation（tests/test_curation_isolation.py AST 机械门钉死），784 结构性不变。
-# 1.32.0：日期口径拉齐——recommend_datasets /
+#        corpus_curation（tests/test_curation_isolation.py AST 机械门钉死），774 结构性不变。
+# 1.32.0：日期口径拉齐（登记册清零，2026-08-08 产品方拍板）——recommend_datasets /
 #        build_task_pack 的 date_from/date_to 由宽松档（非「年份打头」忽略＝不限、日历非法按字面
 #        值透传）改为与 Web `_require_iso_date` 同一严格档：非法格式/日历不存在 → bad_param 点名
 #        参数，from>to 倒挂窗口 → bad_param（措辞与 Web 400 一致）。无新错误码、工具数/入参不变；
@@ -311,19 +313,107 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 # 1.32.1：curate search_online docstring 源列表补齐 hca/10x/geo（动态注册表早已生效，文案滞后
 #        清扫；行为零变化）。
 # 1.33.0：① browse_datasets 硬上限 200 → 100，与 Web /api/datasets 同源同一常量
-#        `app/limits.MAX_DATASETS_LIMIT`（与 Web /api/datasets 同源；超限错误
+#        `app/limits.MAX_DATASETS_LIMIT`（收口交接 kimi-sec-s3-webapp-遗留.md 第 4 项；超限错误
 #        语义与 Web 对齐，入参形状/工具数不变）；② 调用留痕 schema v0 → v1（每行新增 call_id，
 #        additive），并作为 Web `/api/telemetry/mcp-calls` 埋点中继的数据源。
-# 1.34.0：curate_datasets 补齐
+# 1.34.0（2026-08-22 统一收口 bump）：curate_datasets 补齐
 #        **check_updates / sync_updates** 两个执行动作（修复 plan_action 已宣称而工具不接的
-# plan→execute 断链，验证#9）：薄封装到 corpus_curation 能力真源（与 Web
+# plan→execute 断链，评审①#9）：薄封装到 corpus_curation 能力真源（与 Web
 #        /api/curate/check-updates、/api/curate/sync-updates 同一函数），不走 plan→apply 两步；
 #        sync_updates 返回 operation receipt（operation_id / created_files[] / failed_sources[] /
 #        skipped_existing），整次撤回走 Web POST /api/curate/recall。工具数/其余动作/错误码不变
 #        （additive）；sync 新增错误码 sync_busy（整任务文件锁冲突，fail-closed）。
-_SERVER_VERSION = "1.34.0"
+# 1.35.0：**在线形态**——同一 FastMCP 实例可被 webapp 挂载为 streamable-HTTP
+#        `/mcp`（Bearer 令牌鉴权，令牌库 app/mcp_tokens.py 单一真源；账户级补丁作用域与网页端
+#        同机制）。在线策略：provision_dataset / verify_local_assets 两个本机文件系统语义工具
+#        显式拒绝（online_tool_disabled）；显式 LLM 参数推离安全档显式拒绝（online_llm_disabled，
+#        成本闸——在线调用消耗服务端 key）；隐式 LLM 路径经 scope_gate.force_llm_off 降级规则版。
+#        stdio 本地形态逐字节不变；工具数/入参/错误码对本地不变。
+_SERVER_VERSION = "1.35.0"
 
-mcp = FastMCP("biodata")
+
+# ============================ 在线形态（网页版挂载 /mcp，2026-08-28）============================
+# 同一份 FastMCP 实例两用：本地 stdio（`mcp.run()`，行为逐字节不变）与在线 streamable-HTTP
+# （webapp 挂载，本块末尾 `build_online_mcp_app()`）。在线差异全部收口在 `_ScopedFastMCP.call_tool`
+# 一处：Bearer 令牌 → 账户补丁作用域（bind_patch_scope，语料读写落在该账户补丁包，与网页端
+# 同机制）+ 在线工具策略（下两表，显式拒绝、绝不静默偏离）+ LLM 成本闸（scope_gate.force_llm_off：
+# 隐式 LLM 路径降级规则版，结果 source 字段如实反映）。contextvar 随 anyio worker 线程传播
+# （run_sync_in_worker_thread 的 copy_context 实读确认），与网页试用通道互不串扰。
+#
+# 在线禁用的工具：本机文件系统语义，挂到服务器上既无意义也不安全。
+_ONLINE_DISABLED_TOOLS: dict[str, str] = {
+    "provision_dataset": "它把文件下载到 dest_dir——这是调用方**本机**路径语义；在线形态下写到的是服务器磁盘，无意义且绝不开放",
+    "verify_local_assets": "它扫描调用方**本机**目录树与本地资产比对；在线形态下扫到的是服务器文件系统，无意义且绝不开放",
+}
+
+#: 在线强制安全档的显式 LLM 参数（成本闸：在线调用消耗的是服务端 key）。仅当调用方把参数
+#: 推离安全档才显式 ToolError（客户端可见、去掉后重试即可；纯确定性管线本身就是完整能力）。
+_ONLINE_LLM_SAFE: dict[str, dict[str, object]] = {
+    "recommend_datasets": {
+        "use_llm": False, "rerank": "off", "rerank_top_n": None, "rerank_audit": False,
+        "degrade_with_llm": False, "auto_allow_llm": False, "strategy": "fixed",
+    },
+    "get_dataset_introduction": {"llm": False},
+    "biodata_llm_status": {"check_connection": False},
+}
+
+
+def _enforce_online_policy(name: str, arguments: dict) -> None:
+    """在线形态工具策略：禁用工具 / LLM 参数被推离安全档 → 显式 ToolError（不静默偏离）。"""
+    reason = _ONLINE_DISABLED_TOOLS.get(name)
+    if reason is not None:
+        raise ToolError(f"online_tool_disabled: {name} 在线形态不可用——{reason}。")
+    for param, safe_value in (_ONLINE_LLM_SAFE.get(name) or {}).items():
+        value = arguments.get(param, safe_value)
+        if value is None or value == safe_value:
+            continue
+        raise ToolError(
+            f"online_llm_disabled: 在线 MCP 形态为纯确定性服务（不消耗服务端 LLM 额度），参数 "
+            f"{param}={value!r} 不被接受；请去掉该参数后重试，或改用本地版获得完整能力。")
+
+
+class _ScopedFastMCP(FastMCP):
+    """两用 FastMCP：stdio 直通；在线（HTTP request 在调用上下文里）执行账户作用域绑定与在线策略。"""
+
+    async def call_tool(self, name, arguments):
+        request = None
+        try:
+            ctx = self.get_context()
+            request = ctx.request_context.request if ctx.request_context else None
+        except ValueError:
+            request = None
+        if request is None:                      # stdio 本地形态：逐字节历史行为
+            return await super().call_tool(name, arguments)
+        _enforce_online_policy(name, arguments)
+        account_id = request.scope.get("biodata.mcp_account_id", "")  # build_online_mcp_app 注入
+        from dataset_recommender.corpus.patch_package import bind_patch_scope  # 惰性：零新顶层边
+        from dataset_recommender.llm.scope_gate import force_llm_off
+        with bind_patch_scope(account_id or None), force_llm_off():
+            return await super().call_tool(name, arguments)
+
+    async def list_tools(self):
+        """在线形态的 tools/list 直接摘掉禁用工具——客户端连「看得到但一调就错」的机会都没有；
+        stdio（无请求上下文）返回全集，与历史一致。"""
+        tools = await super().list_tools()
+        request = None
+        try:
+            ctx = self.get_context()
+            request = ctx.request_context.request if ctx.request_context else None
+        except ValueError:
+            request = None
+        if request is None:
+            return tools
+        return [t for t in tools if t.name not in _ONLINE_DISABLED_TOOLS]
+
+
+mcp = _ScopedFastMCP("biodata", stateless_http=True, json_response=True,
+                     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+# stateless + json_response：在线形态是「挂在 webapp 里的无状态工具端点」——无长会话、
+# 无服务器推送，单次 POST 单次 JSON 应答；两个开关只影响 HTTP 应用构建，stdio 路径不读。
+# transport_security 显式关闭：SDK 在默认 host=127.0.0.1 下自动开启 DNS-rebinding 防护且
+# allowed_hosts 只认 127.0.0.1:*/localhost:*——会把生产域名与不带端口的 Host 一律 421。
+# Host/Origin 闸在 webapp 前置 middleware（本机 loopback 闸 / 护栏受信主机闸）已执行，
+# SDK 这层是重复且口径错误的检查，故显式关闭；纵深不丢。
 
 # ---- 懒加载单例：import 期零 I/O，首次调用时才构建/读盘并缓存 ----
 _WF = None
@@ -359,7 +449,7 @@ if _DEFAULT_RECALL not in _RECALL_CHOICES:
 
 
 # ── 非法请求 → 抛 ToolError（FastMCP 置 isError=true）──────────────────────────
-# 设计（试用反馈驱动）：**非法请求**（空 query / 枚举越界 / 非正 top_k / 未知来源）
+# 设计（试用反馈）：**非法请求**（空 query / 枚举越界 / 非正 top_k / 未知来源）
 # 抛 ToolError → 客户端拿到 isError=true 的**协议错误位**，不必埋在业务 JSON 里靠自己查 ok。
 # 反之，**合法请求的业务结果**（无匹配 / fail-closed 弃权 / 需澄清）仍是正常返回、ok=true、
 # isError=false——那不是错误。这条界线让「调用出错」与「有效但空/需澄清」对调用方一目了然。
@@ -371,17 +461,17 @@ def _bad_request(code: str, hint: str) -> ToolError:
 
 
 def _clip(value: object, limit: int = 120) -> str:
-    """错误消息回显入参的统一截断：调用方贴多长的输入，
+    """错误消息回显入参的统一截断，2026-08-21）：调用方贴多长的输入，
     错误串曾原样回多长（超长 uid/枚举值→响应放大器）。统一截到 120 字符加省略号；
     非字符串先取 repr（与历史 {value!r} 口径一致）。"""
     text = value if isinstance(value, str) else repr(value)
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-# 单细胞检索查询通常几十字；超长上限的真源自 批起在 app/request_validation.MAX_QUERY_CHARS，
+# 单细胞检索查询通常几十字；超长上限的真源自批起在 app/request_validation.MAX_QUERY_CHARS
 # 此处保留别名供本文件历史引用。
 _MAX_QUERY_CHARS = 2000
-# top_k / rerank_top_n 硬上限：防响应放大（验证反馈 ：top_k=999999999 → 155 万字符响应，吃爆上下文/token）。
+# top_k / rerank_top_n 硬上限：防响应放大（反馈：top_k=999999999 → 155 万字符响应，吃爆上下文/token）。
 # 默认 5；100 对 agent 消费已足够大，需要更多请缩小查询范围而非拉爆单次返回。
 _MAX_TOP_K = 100
 
@@ -389,10 +479,10 @@ _MAX_TOP_K = 100
 def _require_query(query: str) -> None:
     """query 四道闸（空/控制字符/纯符号/超长）。
 
-     批起闸体下沉为薄委托：真源在 ``app/request_validation.validate_query``
+    批起闸体下沉为薄委托：真源在 ``app/request_validation.validate_query``
     （与 Web /api/recommend·/api/interpret 同一份，两端口径同源同措辞）；此处只做
     ParamValidationError → ToolError 的 MCP 翻译。历史裁决记录见该模块 docstring
-    （验证反馈：\0/零宽/双向字符可混入、纯符号输入被包装成推荐、无长度上限）。"""
+    （反馈：\0/零宽/双向字符可混入、纯符号输入被包装成推荐、无长度上限）。"""
     try:
         validate_query(query)
     except ParamValidationError as exc:
@@ -412,7 +502,7 @@ def _validate_positive(name: str, value: "int | None") -> None:
         return
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise _bad_request("bad_param", f"{name} 必须是正整数（≥1）或省略，收到「{_clip(value)}」。")
-    # 上限：防响应放大（验证反馈）。超限即非法请求，而非静默返回全量。
+    # 上限：防响应放大（反馈）。超限即非法请求，而非静默返回全量。
     if value > _MAX_TOP_K:
         raise _bad_request(
             "bad_param",
@@ -437,9 +527,9 @@ def _validate_sources(sources: "list[str] | None") -> None:
 def _require_iso_date(value: "str | None", *, name: str) -> str:
     """发表时间入参：空 → ""（不限）；否则必须是格式与日历都合法的 YYYY-MM-DD，非法 → bad_param。
 
-    MCP 与 Web 日期口径**拉齐为严格档**——
+    2026-08-08 产品方拍板：MCP 与 Web 日期口径**拉齐为严格档**（登记册清零）——
     旧宽松口径「非年份打头一律忽略＝不限」把用户给了的条件悄悄丢掉；日历不存在的日期
-    （如「2025-02-30」）曾按字面值透传检索层。闸体下沉：真源在
+    （如 2026-02-30）曾按字面值透传检索层。批起闸体下沉：真源在
     ``app/request_validation.validate_iso_date``（与 Web 同一份，原两份实现逐行同构）。"""
     try:
         return validate_iso_date(value, name=name)
@@ -449,7 +539,7 @@ def _require_iso_date(value: "str | None", *, name: str) -> str:
 
 def _validate_date_window(date_from: str, date_to: str) -> None:
     """倒挂窗口（from > to）→ bad_param 当场点名（真源在 app/request_validation.validate_date_window，
-     批起 Web 的 recommend/feasibility/task-pack 与本端同一份闸）。"""
+    批起 Web 的 recommend/feasibility/task-pack 与本端同一份闸）。"""
     try:
         validate_date_window(date_from, date_to)
     except ParamValidationError as exc:
@@ -477,21 +567,21 @@ def _enrich_candidates(candidates: list[dict]) -> None:
 # 每个工具入口统一记一行 JSON 到 .userdata/mcp_calls.jsonl（该目录已 gitignored、永不入库）。
 # 用途：需求分析——真实任务里在问什么、含文件级约束（FASTQ/raw/文件类型等）的 query 占比
 # （kill-criteria「20 个真实任务 <5 个需要文件级约束」的证据源；统计脚本 scripts/summarize_mcp_calls.py）；
-# 起**也是**埋点中继的数据源（Web `/api/telemetry/mcp-calls` 按行号增量读取，
+# 起**也是**埋点中继的数据源（Web `/api/telemetry/mcp-calls` 按行号增量读取
 # 见 webapp.py「MCP 遥测与接入引导」；路径一致性回归钉在 tests/test_mcp_call_log.py）。
 # 约束：零网络；日志写失败绝不拖累工具调用本身；env BIODATA_MCP_CALL_LOG=off 关闭（默认开）。
 # mcp 1.28.1 的 FastMCP **没有中间件钩子**（已实读确认：无 add_middleware/middleware）→ 选最贴合的
 # 函数装饰器：逻辑单点封装在本块，每个工具只加一行 `@_logged`（置于 @mcp.tool() 之下，
 # functools.wraps 透传签名/docstring，入参加固与工具描述不受影响）。
-# schema 版本：v0 → v1（**additive**：每行新增 `call_id`=uuid4().hex 随机唯一；
+# schema 版本：v0 → v1（**additive**：每行新增 `call_id`=uuid4.hex 随机唯一
 # `ts`（ISO8601 UTC）自 v0 起已有、不重加；旧行无 call_id，消费方按缺省处理）。
 _CALL_LOG_SCHEMA = "biodata-mcp-calls/v1"   # 日志行 schema 常量（单一真源；summarize 脚本与之对齐）
 _CALL_LOG_ENV = "BIODATA_MCP_CALL_LOG"
-# 调用留痕是**写盘**侧运行产物 → 实例 userdata 层（frozen = data_root/.userdata；
+# W1：调用留痕是**写盘**侧运行产物 → 实例 userdata 层（frozen = data_root/.userdata；
 # source/portable = 项目根/.userdata，历史逐字节一致）。经 runtime_paths 单一真源解析。
 _CALL_LOG_FILE = instance_data_dir_for(get_app_paths().data_root, ".userdata") / "mcp_calls.jsonl"
 # 脱敏双层（单一真源）：①参数名命中下列任一模式 → 值一律不落盘；②字符串**值**过共享锚定
-# redactor（secret 被误粘进 query/自由文本时按值兜住——src 公共安全模块
+# redactor（2026-08-10：secret 被误粘进 query/自由文本时按值兜住——src 公共安全模块
 # dataset_recommender.secret_patterns，与交付扫描/质量门同一真源，强锚定近零误报，
 # benign query 原文钉照绿）。api key / token / LLM 配置类字段绝不进日志；
 # query 原话要记——它是需求分析的核心证据，只按长度截断。
@@ -512,7 +602,7 @@ def _param_snapshot(fn, args: tuple, kwargs: dict) -> dict:
             out[str(name)] = "<redacted>"
             continue
         if isinstance(value, str):
-            v = _redact_secret_values(value) or ""   #  值级脱敏，先于截断
+            v = _redact_secret_values(value) or ""   # P0-2 值级脱敏，先于截断
             out[str(name)] = v if len(v) <= _MAX_PARAM_CHARS else v[:_MAX_PARAM_CHARS] + "…"
             continue
         try:
@@ -537,7 +627,8 @@ def _log_error_code(exc: BaseException) -> str:
 def _internal_error(exc: Exception) -> ToolError:
     """内部异常 → 客户端可见的 ToolError（**脱敏**：只报异常类型名，不带异常正文）。
 
-    为什么脱敏：异常正文常带本机绝对路径（如 PermissionError 的 Errno 13 附带语料目录全路径），MCP 客户端不该看到。完整堆栈打到本进程 stderr
+    为什么脱敏：异常正文常带本机绝对路径（如 PermissionError 的 Errno 13 附带语料目录全路径，
+    对抗评审 p0-record -c 实测外泄），MCP 客户端不该看到。完整堆栈打到本进程 stderr
     （stdio 协议里 stderr 只在服务器侧可见，不进协议帧）——排查看服务器日志，客户端只见通用提示。
     机器码保持 internal_error 不变：`_log_error_code` 与客户端按码分类的逻辑不受影响。
     """
@@ -552,7 +643,7 @@ def _record_tool_call(tool: str, params: dict, start: float, *, ok: bool, error:
             return
         record = {
             "schema": _CALL_LOG_SCHEMA,
-            "call_id": uuid.uuid4().hex,   # ：随机唯一调用 ID（中继/去重用；additive）
+            "call_id": uuid.uuid4().hex,   # 随机唯一调用 ID（中继/去重用；additive）
             "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
             "tool": tool,
             "params": params,
@@ -680,7 +771,7 @@ def recommend_datasets(
                默认 None＝不宽容（官方评测/旧调用逐位不变）。
       date_from / date_to: 发表时间范围（ISO YYYY-MM-DD，含端点；对齐网页年份选择器）。**显式传入优先**，
                覆盖从 query 自然语言解析出的相对时间；不传则保留 query 里解析出的范围（如「近三年」）。
-               严格校验（与网页端同口径）：给了就
+               严格校验（与网页端同口径，2026-08-08 产品方拍板拉齐、登记册清零）：给了就
                必须是格式与日历都合法的日期，非法 → bad_param 点名参数；from > to 倒挂窗口同样
                bad_param，不再静默忽略或按字面值执行。
 
@@ -796,7 +887,7 @@ def recommend_datasets(
         eff_facet_filters = sanitize_facet_filters(facet_filters)
         eff_suppressed = sanitize_suppressed(suppressed_constraints)
         eff_lenient = sorted(sanitize_lenient_dims(lenient_dims))   # 诚实降级宽容维度（默认空 → no-op）
-        # 发表时间范围校验（与 Web 严格档同口径——
+        # 发表时间范围校验（2026-08-08 产品方拍板拉齐为 Web 严格档，登记册清零——
         # 与 Web `_require_iso_date` 同口径同措辞）：给了就必须是格式与日历都合法的 YYYY-MM-DD，
         # 非法 → bad_param 点名参数；from > to 倒挂窗口同样 bad_param。空串 → run_with_meta
         # 里**保留** query 自然语言解析出的相对时间（近三年等）；显式传入则覆盖之。
@@ -910,7 +1001,7 @@ def recommend_datasets(
             # 诚实降级：缺元数据无法核验的覆盖缺口 [{dim,label,count,by_source}]（本可能相关却被静默判负）；
             # applied_lenient=本次真正宽容的维度（净化后回显；空=未宽容）。回传 caveat.dim 给 lenient_dims 即纳入。
             "coverage_caveats": res.coverage_caveats,
-            # 静默丢词诚实层：无对应筛选维度、被静默丢弃的实义描述词（性别/年龄/受试者/功能类）——回显。
+            # N1 静默丢词诚实层：无对应筛选维度、被静默丢弃的实义描述词（性别/年龄/受试者/功能类）——回显。
             "unused_query_terms": getattr(res, "unused_query_terms", []),
             # 用户在查询里说出的执行类诉求（打包/下载脚本/导出引文…）：本工具**只检索**，
             # 打包走 build_task_pack、文件清单走 get_file_manifest。空=没提。
@@ -965,7 +1056,7 @@ def get_file_manifest(dataset_uid: str) -> dict:
                 "empty_uid",
                 "dataset_uid 不能为空；取自 recommend_datasets 返回的 candidates[*].dataset_uid。",
             )
-        # 复制粘贴常带首尾空白 → 自动 strip 再查（验证反馈：合法 uid 带空格误报 bad_uid）。
+        # 复制粘贴常带首尾空白 → 自动 strip 再查（反馈：合法 uid 带空格误报 bad_uid）。
         dataset_uid = str(dataset_uid).strip()
         rec = downloads.get(dataset_uid)
         if not rec:
@@ -1064,7 +1155,7 @@ def parse_constraints(
     encode project / encodeproject / encode portal / encode 数据库 等复合写法，刻意不收裸
     encode——它是普通英文动词，收了会把无关查询静默改成只查 ENCODE）；返回 source_resolution
     和 effective_sources。
-    弃权（abstain）规则（大幅收窄）：
+    弃权（abstain）规则（2026-07-25 大幅收窄）：
       · 「或」组合与「最好 / 尽量 / 如果可以」这类倾向说法**照做**——同一维度多个值本来就是「或」，
         倾向说法按软偏好执行（只加权、不筛掉任何数据）；`or_handling` 会如实说明实际执行方式。
       · 仍然弃权的只有两类：① 句子里剩下**系统未收录的实义词**（此时同时给出「先忽略这几个词」
@@ -1098,15 +1189,15 @@ _MAX_BROWSE_LIMIT = MAX_DATASETS_LIMIT   # 与 Web /api/datasets 单一真源（
 
 
 def _browse_facet(counter: dict[str, int]) -> list[dict]:
-    """高频在前、同频按名字——与 webapp._facet 同序，供分面消费。"""
-    ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
-    return [{"value": value, "count": count} for value, count in ordered]
+    """分面计数投影：单一真源 `item_view.facet_list`（与 Web 共用一份，不再各抄）。"""
+    from dataset_recommender.content.item_view import facet_list
+    return facet_list(counter)
 
 
 def _browse_item(record, include_introduction: bool = False) -> dict:
     """归一化记录 → 浏览卡片字段。**与网页共用 `item_view.build_item` 单一真源。**
 
-     之前这里是一份**手抄的平行投影**，docstring 声称与 webapp「同口径」，
+    2026-07-17 之前这里是一份**手抄的平行投影**，docstring 声称与 webapp「同口径」，
     实际缺 `modality` / `collection_doi`——于是 `assess_dataset_fair` 在 Web 修好之后、
     在 MCP 依旧 5667/5667 印泛泛的 "dataset"，DOI 句永远印不出。两份手抄的东西迟早漂移，
     且漂移时没有任何测试会响。现在只有一处实现，想漂移都没地方漂。
@@ -1116,24 +1207,10 @@ def _browse_item(record, include_introduction: bool = False) -> dict:
 
 
 def _interleave_by_source(records: list) -> list:
-    """按来源轮转交错，让浏览首屏就同时看到各库（与 webapp 同策略）。各库内部保持原顺序。"""
-    from collections import OrderedDict
-    from dataset_recommender.corpus.corpus import source_of
-    buckets: "OrderedDict[str, list]" = OrderedDict()
-    for r in records:
-        buckets.setdefault(source_of(r), []).append(r)
-    lists = [iter(v) for v in buckets.values()]
-    out: list = []
-    exhausted = 0
-    while exhausted < len(lists):
-        exhausted = 0
-        for it in lists:
-            nxt = next(it, None)
-            if nxt is None:
-                exhausted += 1
-            else:
-                out.append(nxt)
-    return out
+    """按来源轮转交错，让浏览首屏就同时看到各库：单一真源 `item_view.interleave_by_source`
+    （与 Web 共用一份）。各库内部保持原顺序。"""
+    from dataset_recommender.content.item_view import interleave_by_source
+    return interleave_by_source(records)
 
 
 def _browse_matches(item: dict, species, platform, source, year) -> bool:
@@ -1427,7 +1504,7 @@ def build_reuse_pack(uids: list[str]) -> dict:
 
     **这不是 Data Availability Statement 的主句**。主句讲的是你自己产出的数据去向；
     那句本工具帮不上也不会写——它需要你未发表的实验信息，本工具按设计不接收
-    （这条边界是**结构性的**：入参 keys-only，见下。 起产物里不再另附一段
+    （这条边界是**结构性的**：入参 keys-only，见下。2026-07-29 起产物里不再另附一段
     重复陈述它的中文 `boundary` 字段）。
 
     入参 **keys-only**：`uids` = dataset_uid 列表（取自 recommend_datasets /
@@ -1464,8 +1541,8 @@ def build_reuse_pack(uids: list[str]) -> dict:
             "ok": True,
             "pack": pack,
             "markdown": to_markdown(pack),
-            "ris": to_ris(pack),        # 数据集引文（RIS，非论文类型）
-            "bibtex": to_bibtex(pack),  # 数据集引文（BibTeX @misc，非 @article）
+            "ris": to_ris(pack),        # N10：数据集引文（RIS，非论文类型）
+            "bibtex": to_bibtex(pack),  # N10：数据集引文（BibTeX @misc，非 @article）
         }
     except ToolError:
         raise
@@ -1678,7 +1755,7 @@ def build_task_pack(
         eff_date_from = _require_iso_date(date_from, name="date_from")
         eff_date_to = _require_iso_date(date_to, name="date_to")
         _validate_date_window(eff_date_from, eff_date_to)
-        # facet/suppressed/lenient 此前**原样透传** run_with_meta，而
+        # 审计 C-2（2026-08-21）：facet/suppressed/lenient 此前**原样透传** run_with_meta，而
         # recommend_datasets 先过共用 sanitize——sanitize 会 casefold（workflow._FACET_CASEFOLD）
         # 而 retriever.record_passes_facets 不做小写归一 → 同一 facet 值在 recommend 生效、在
         # task-pack 静默 0 命中；12 项上限也未应用。收敛为同一套 sanitize（单一真源），
@@ -1750,7 +1827,7 @@ def build_task_pack(
 
         if mode == "build":
             # 指纹三件套缺一即拒：「if 给了才比」的短路会把「根本没核对」当成「核对通过」
-            # （Web 侧同族病，这里同型收口）。文档口径本就是 build 必须带全。
+            # （Web 侧同族病 T2，这里同型收口）。文档口径本就是 build 必须带全。
             missing_fp = [name for name, value in (("plan_token", plan_token),
                                                    ("snapshot_id", snapshot_id),
                                                    ("content_digest", content_digest))
@@ -2014,7 +2091,7 @@ def verify_local_assets(directory: str, max_files: int = 20000) -> dict:
             mf = lab_ledger.MAX_SCAN_FILES
         if mf <= 0:
             mf = lab_ledger.MAX_SCAN_FILES
-        # 硬上限——此前仅挡 <=0，调用方传 10**9 可对任意目录逐文件算
+        # 审计 S-2（2026-08-21）：硬上限——此前仅挡 <=0，调用方传 10**9 可对任意目录逐文件算
         # md5（磁盘 I/O DoS；单文件 8 GiB 以内不跳哈希）。钳到 lab_ledger.MAX_SCAN_FILES
         # （模块自身的扫描上限语义），超限静默钳位与 <=0 同口径（探测性调用不报错）。
         if mf > lab_ledger.MAX_SCAN_FILES:
@@ -2159,8 +2236,8 @@ def provision_dataset(
 
 
 # ============ 工具 19：对话式数据库管护（写工具 ③；对齐 Web /api/curate/* 与 CLI）============
-# 授权口径（用户明确授权）：管护动作内允许显式联网调官方公开 API；
-# 删除类以回收站式可逆删除为前提。
+# 设计蓝本：设计文档（2026-08-01 用户明确授权：管护动作内允许显式联网
+# 调官方公开 API；推翻 action_plan.py 删除类排除决策，以回收站式可逆删除为前提）。
 # 单一真源 corpus_curation（三入口共用 run_curate_action 分发）：plan 零写盘、apply 才写盘/联网、
 # token 重算比对不一致零写入；管护对象限 database/external/ 的 upload_* 命名空间，
 # database/base/ 冻结基准结构性不可达（只接受叶子文件名、写入恒在 external / .userdata/recycle 下）。
@@ -2183,7 +2260,7 @@ def curate_datasets(
     """管护写工具（写工具 ③）：**plan 默认（dry_run=True）零写盘，apply（dry_run=False + confirm_token）才写盘/联网**。
 
     对话式数据库管护（对齐 Web `/api/curate/*` 与 CLI `scripts/curate_datasets.py`），管护对象限
-    `database/external/` 的 `upload_*` 命名空间（用户上传 + 联网搜索入库文件；官方十源快照
+    `database/external/` 的 `upload_*` 命名空间（用户上传 + 联网搜索入库文件；官方五源快照
     `not_curatable`，仍走人工流水线），**绝不**碰冻结基准 `database/base/`。
 
     action（必填，未知动作 → `bad_action`）：
@@ -2223,7 +2300,7 @@ def curate_datasets(
     from dataset_recommender.corpus import corpus_curation as cc
     try:
         action_name = str(action or "").strip()
-        # plan→execute 断链修复：`plan_action` 的封闭动词表
+        # plan→execute 断链修复（2026-08-22 评审①#9）：`plan_action` 的封闭动词表
         # 早已宣称 curate.check_updates / curate.sync_updates 可执行，但 curate_datasets 只认
         # run_curate_action 的五个动作——「计划说能做、工具不接」。这两个动作**不走** plan→apply
         # 两步（check_updates 只读、无 apply 形态；sync_updates 原子调用、无信任边界要跨），
@@ -2298,7 +2375,7 @@ def curate_datasets(
 # 摄取核心与 Web 共用 `uploads.ingest_dataset`（单一真源）；写盘=**非确定性**（时间戳文件名，写操作固有）。
 _MAX_UPLOAD_BYTES = 64 * 1024 * 1024   # 64 MB：单细胞**元数据** JSON 远小于此；防超大输入吃爆内存/上下文。
 
-# path 入参的敏感位置闸：upload 的读取面必须是调用方显式提供的**数据**
+# path 入参的敏感位置闸，2026-08-21）：upload 的读取面必须是调用方显式提供的**数据**
 # 文件，不是本仓库/本机的状态文件——此前任意路径可读，一次被诱导的调用即可把
 # `.userdata/sessions.json`（明文会话 token）这类合法 JSON 摄入外部库、再经 browse_datasets 读回
 # （跨信任边界外泄链）。fail-closed：路径解析失败同样拒绝；判定在 is_file() 之前（探测敏感位置
@@ -2614,16 +2691,14 @@ def _parse_intent(
     return payload
 
 
-_DIM_CN = {"species": "物种", "tissue": "组织", "disease": "疾病", "platform": "平台", "assay": "技术", "modality": "模态"}
-
-
 def _advisory(intent: dict, result_total: int) -> str | None:
     """诚实提示：查询未被有效约束时，明确告知结果是通用/宽泛的，而非精确匹配。
 
-    背景：受控词表不建模细胞类型等维度，故「人类免疫细胞」这类查询里的「免疫」
+    背景（试跑发现）：受控词表不建模细胞类型等维度，故「人类免疫细胞」这类查询里的「免疫」
     会被当填充词丢掉，只剩「物种+平台」这类宽泛约束 → 命中面极大、靠前结果排序可能与用户真实
     意图无关。此提示把这种「宽泛/未精确筛选」的情形**显式**告诉父 agent，不改动管线、不影响确定性。
     仅依据已抽取的约束判断（纯函数，便于单测）。"""
+    from dataset_recommender.retrieval.query_parser import _DIM_LABEL_CN  # 维度中文名单一真源（惰性 import）
     # 弃权 / 需澄清：answer_markdown 已解释，无需再提示
     if intent.get("abstain") or intent.get("parse_status") in ("abstained", "clarification_required"):
         return None
@@ -2637,7 +2712,7 @@ def _advisory(intent: dict, result_total: int) -> str | None:
         return ("未从查询中识别到任何可过滤条件（物种/组织/疾病/平台/技术/原始数据），"
                 "以下为通用结果、未按你的查询精确筛选；请补充条件以获得相关结果。")
     if set(dims) <= {"species", "platform", "modality"} and not has_raw and result_total >= 100:
-        named = "、".join(_DIM_CN.get(d, d) for d in dims)
+        named = "、".join(_DIM_LABEL_CN.get(d, d) for d in dims)
         return (f"查询较宽泛：仅按 {named} 过滤，命中 {result_total} 条，靠前结果排序可能并不精确；"
                 "建议追加 组织/疾病/技术 等条件收窄（本工具没有「细胞类型」这类筛选维度，这类词不会参与过滤）。")
     return None
@@ -2683,6 +2758,79 @@ _USAGE = """biodata-mcp —— BioData Agent 本地 stdio MCP 服务器
 """
 
 
+def _tokens_store() -> Path:
+    """在线接入令牌库路径（单一真源 mcp_tokens.default_tokens_path；根与 webapp 账户/会话库
+    同一 PROJECT_ROOT = get_app_paths().data_root，两端读写同一份文件）。"""
+    return mcp_tokens.default_tokens_path(get_app_paths().data_root)
+
+
+class _OnlineMcpAsgi:
+    """在线形态 ASGI 包装：Bearer 令牌闸 → 账户注入 scope → 内层 streamable-HTTP 应用。
+
+    为什么自写而不用 SDK 的 token_verifier：SDK 认证链要求 AuthSettings（issuer_url /
+    resource_server_url 都是必填的 URL）——本项目没有授权服务器，填假 URL 是捏造。自写
+    30 行、401 形状自控、账户直接进 scope 供 `_ScopedFastMCP.call_tool` 读取，零假配置。
+    类形态（而非闭包函数）是因为 Starlette `Route` 按 inspect.isfunction 判定——函数会被
+    当成 request-response 端点再包一层，ASGI 三参签名会被调崩。
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self._inner(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        auth = headers.get(b"authorization", b"").decode("latin-1")
+        raw = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        rec = mcp_tokens.resolve_token(raw, store_path=_tokens_store())
+        if rec is None:
+            from starlette.responses import JSONResponse
+            resp = JSONResponse(
+                {"ok": False, "error": "invalid_token",
+                 "detail": "缺少或无效的在线接入令牌；请到网页版「接入 AI 助手」生成。"},
+                status_code=401,
+                headers={"WWW-Authenticate": 'Bearer realm="biodata-mcp"'},
+            )
+            await resp(scope, receive, send)
+            return
+        scope["biodata.mcp_account_id"] = rec["account_id"]
+        scope["biodata.mcp_username"] = rec["username"]
+        await self._inner(scope, receive, send)
+
+
+_online_asgi: _OnlineMcpAsgi | None = None
+
+
+def reset_online_runtime() -> None:
+    """重建在线运行时（session manager + 内层 ASGI 应用）。
+
+    `StreamableHTTPSessionManager.run()` 每个实例只能进一次（SDK 实读：`_has_started`
+    守卫，二次进入抛 RuntimeError）。宿主应用每次 lifespan 进入前必须调本函数——
+    测试反复进出 lifespan、进程内重挂都靠它幂等。做法是把 `mcp._session_manager`
+    置 None 触发 `streamable_http_app()` 的惰性重建（同一份 settings，语义不变），
+    再把新内层应用换进稳定的路由包装器（Route 持有的 `_OnlineMcpAsgi` 实例不变）。
+    """
+    global _online_asgi
+    mcp._session_manager = None  # SDK 惰性初始化挂钩：None → 下次 streamable_http_app() 重建
+    inner = mcp.streamable_http_app()
+    if _online_asgi is None:
+        _online_asgi = _OnlineMcpAsgi(inner)
+    else:
+        _online_asgi._inner = inner
+
+
+def build_online_mcp_app():
+    """在线形态 ASGI 应用（/mcp 单端点）。调用方负责：①把返回值挂到路由（Path 保持 /mcp 不变，
+    内层 Starlette 的路由就是 settings.streamable_http_path="/mcp"）；②在宿主应用 lifespan 里
+    先 `reset_online_runtime()` 再驱动 `mcp.session_manager.run()`（挂载不走子应用 lifespan，
+    stateless 模式也需要任务组）。返回的是模块级稳定实例，重复调用返回同一个。"""
+    reset_online_runtime()
+    assert _online_asgi is not None
+    return _online_asgi
+
+
 def _mcp_sdk_version() -> str:
     try:
         import importlib.metadata as _md
@@ -2713,7 +2861,7 @@ def _selfcheck() -> int:
     调用 biodata_status，验证全部工具（`_EXPECTED_TOOLS`）可见且库存就绪。一条命令、零拷贝、**不写项目**
     （子进程带 -B + PYTHONDONTWRITEBYTECODE=1，不落 __pycache__）。
 
-    设计为教程里那段手抄 Python 验证的「零依赖内置替身」：装完或排错时
+    设计为教程里那段手抄 Python 探针的「零依赖内置替身」：装完或排错时
       <venv-python> mcp_server.py --selfcheck
     即可，无需把多行脚本粘进 PowerShell（规避引号/编码坑）。退出码 0=通过 / 1=失败；
     人读结论走 stdout，逐项 PASS/FAIL 与子进程 stderr 一并可见。
@@ -2745,7 +2893,7 @@ def _selfcheck() -> int:
         # 自检承诺「不改动项目文件」：调用留痕属运行期用户数据，自检不制造日志噪音。
         env.setdefault(_CALL_LOG_ENV, "off")
         if getattr(sys, "frozen", False):
-            # frozen（PyInstaller onedir）：源码脚本不在磁盘上，__file__ 不可传。
+            # frozen（PyInstaller onedir，安装器工程 W3）：源码脚本不在磁盘上，__file__ 不可传。
             # 直接自 spawn 本 exe（无参数 = stdio 服务器模式），子进程经管道走 initialize→tools/list。
             command, args = sys.executable, []
         else:
@@ -2829,7 +2977,7 @@ def _selfcheck() -> int:
 
 
 if __name__ == "__main__":
-    # 流守卫：windowed/无控制台宿主下 sys.stdout/stderr 可能为 None，
+    # 流守卫（安装器工程 W3）：windowed/无控制台宿主下 sys.stdout/stderr 可能为 None，
     # 下方 CLI 打印会 AttributeError。换成 devnull 空流：打印落空流不抛；正常 console
     # （本 exe 即 console 模式）下 streams 恒为真、零开销。服务器模式（argv 空）的
     # MCP stdio 传输在管道/控制台宿主下 stdin/stdout 都是真流，不受影响。
@@ -2866,7 +3014,7 @@ if __name__ == "__main__":
 
     # 若配置了服务器级 recall（env BIODATA_MCP_RECALL），在**启动期、主线程**预热本地模型：
     # 这是 piped-stdio 下唯一不死锁的加载时机；预热后 per-call 命中缓存、只打分不加载。
-    # 预热约 10-20s（实现 首启超时默认 10s → 用 recall 时记得在配置里调大 startup_timeout_sec）。
+    # 预热约 10-20s（Codex 首启超时默认 10s → 用 recall 时记得在配置里调大 startup_timeout_sec）。
     if _DEFAULT_RECALL != "off":
         try:
             from dataset_recommender.retrieval.vector_recall import warm_recall_backend
@@ -2874,6 +3022,6 @@ if __name__ == "__main__":
             print(f"[biodata-mcp] 预热 recall='{_DEFAULT_RECALL}' → ready={_ready}", file=sys.stderr, flush=True)
         except Exception as _e:  # 预热失败绝不阻断启动，退回 off（护栏会让请求回退规则序）
             print(f"[biodata-mcp] 预热 recall 失败（{_e}）→ 回退 off", file=sys.stderr, flush=True)
-    # 默认 stdio 传输：由 MCP 客户端（实现 Code / 实现）本地 spawn；默认工具路径离线，
+    # 默认 stdio 传输：由 MCP 客户端（Claude Code / Codex）本地 spawn；默认工具路径离线，
     # 只有显式 LLM 参数 / 连通性检查会访问已配置 API。
     mcp.run()

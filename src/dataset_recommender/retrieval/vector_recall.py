@@ -35,7 +35,7 @@ from ..app.runtime_paths import get_app_paths
 
 RECALL_BACKENDS = ("off", "dense", "cross_encoder")
 DEFAULT_RECALL_ALPHA = 0.5
-#: dense 融合法：
+#: dense 融合法（2026-08-09 五机制批，调研-检索质量与RAG评测 §候选2）：
 #: "linear" = min-max 归一化 + α 线性融合（历史默认，字节等价保留）；
 #: "rrf" = Reciprocal Rank Fusion——只用两路**名次**、不看分值尺度（余弦 ∈[0,1]、词面分
 #: 无上界，min-max 跨分布不稳定是被文献点名的那类；RRF 尺度无关、零调参，k=60 自
@@ -44,7 +44,7 @@ RECALL_FUSIONS = ("linear", "rrf")
 DEFAULT_RECALL_FUSION = "linear"
 RRF_K = 60
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-# cross-encoder 重排器：MIT 许可、短中文查询表现好、可审计。
+# 经基准+held-out 选型胜出（详见开发日志）：cross-encoder 重排器，MIT、短中文查询甜区、可审计。
 DEFAULT_CROSS_ENCODER_MODEL = "bge-reranker-v2-m3"
 
 # 嵌入器 = 把一批文本编码成（已 L2 归一化的）向量列表的可调用对象。
@@ -53,19 +53,19 @@ Embedder = Callable[[Sequence[str]], "list[list[float]]"]
 CrossScorer = Callable[["Sequence[tuple[str, str]]"], "list[float]"]
 
 # 已加载模型缓存：键=解析后的本地模型目录字符串。避免每次请求/每条查询重复加载。
-# 纪律：只缓存**成功**加载的模型（正缓存）；加载失败
+# 纪律（2026-08-15 触发点只缓存**成功**加载的模型（正缓存）；加载失败
 # （缺目录/缺依赖/异常）**不入缓存**——负缓存会把一次瞬时故障永久化成"必须重启进程才
 # 能恢复"。失败路径每次调用都重试，代价仅是一次目录存在性检查/导入探测，可忽略。
 _EMBEDDER_CACHE: "dict[str, Embedder]" = {}
 _CROSS_CACHE: "dict[str, CrossScorer]" = {}
 _WARNED: "set[str]" = set()
 _DETERMINISM_DONE = False
-#: （并发分流）：模块级单飞锁——`_setup_determinism`（写全局
+#: cr1（并发分流 r3 /）：模块级单飞锁——`_setup_determinism`（写全局
 #: os.environ）与两个模型缓存的 check-then-load 全程持锁。该竞态今天多请求并发即存在
 #: （顺带修）；配合 turn 层预热闭合，flight 线程从此不触碰 os.environ。
 _MODEL_LOCK = threading.Lock()
 
-# P-1（审计）：**候选文本 → 文档向量** LRU 缓存（键含模型目录）。
+# P-1（2026-08-21 CLM-20260821-0530 审计）：**候选文本 → 文档向量** LRU 缓存（键含模型目录）。
 # 动机：dense 召回原来每查询把静态语料的候选文本全量重新编码——嵌入恰是最贵的一步，而
 # 候选文本与查询无关、语料基本静态 → 按文本缓存即省下重复嵌入。设计要点（why）：
 # - **只缓存默认加载路径**（embedder 参数为 None、经 load_embedder 取得编码器）：注入
@@ -99,7 +99,7 @@ def default_cross_encoder_dir(model_name: str = DEFAULT_CROSS_ENCODER_MODEL) -> 
 def _setup_determinism() -> None:
     """best-effort 可复现（幂等）：eval 语义 + 关 TF32 + cudnn 确定。不启用会崩的严格算法开关，
     因为向量召回只做**排列**，确定性关乎结果可复现而非 0% 违规不变量（那由终检结构性保证）。
-    check-then-set 全程持模块级单飞锁（并发下只有第一个线程执行初始化与 os.environ
+    cr1：check-then-set 全程持模块级单飞锁（并发下只有第一个线程执行初始化与 os.environ
     写入，其余线程看到 _DETERMINISM_DONE 即返回——flight 线程零 env 触碰）。"""
     global _DETERMINISM_DONE
     if _DETERMINISM_DONE:
@@ -120,11 +120,17 @@ def _setup_determinism() -> None:
         _DETERMINISM_DONE = True
 
 
-def _warn_once(key: str, message: str) -> None:
-    """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求。"""
+def _warn_once_prefixed(prefix: str, key: str, message: str) -> None:
+    """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求。
+    本模块 / rerank / recall_api 三处共享上方 _WARNED 集合与这套判定，prefix 区分来源。"""
     if key not in _WARNED:
         _WARNED.add(key)
-        print(f"[vector_recall] {message}", file=sys.stderr)
+        print(f"{prefix} {message}", file=sys.stderr)
+
+
+def _warn_once(key: str, message: str) -> None:
+    """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求。"""
+    _warn_once_prefixed("[vector_recall]", key, message)
 
 
 def load_embedder(
@@ -146,10 +152,10 @@ def load_embedder(
     if cache_key in _EMBEDDER_CACHE:
         return _EMBEDDER_CACHE[cache_key]
 
-    # （并发分流）：check-then-load 全程持模块级单飞锁——并发请求/线程
+    # cr1（r3 /）：check-then-load 全程持模块级单飞锁——并发请求/线程
     # 首次加载模型时只有第一个线程真加载，其余等待后命中缓存（避免重复加载与
     # _setup_determinism 的 os.environ 写入竞态）。
-    # 修复（死锁）：`_setup_determinism` **先无锁调用**（它自带模块级
+    # cr1 修复（2026-08-19 死锁）：`_setup_determinism` **先无锁调用**（它自带模块级
     # 单飞锁、check-then-set 全程持锁）再持 `_MODEL_LOCK`——修复前若锁内再调它，会对
     # 不可重入的 `threading.Lock` 二次 acquire 自锁死锁（run_web.py 冷启动 warm 路径
     # 实测：CPU 0、>8 分钟无响应）。单飞语义逐位不变：并发首载仍只有一个线程真加载。
@@ -195,7 +201,7 @@ def load_embedder(
             embedder = None
 
         if embedder is not None:
-            # 失败不缓存：None 落缓存 = 负向永久缓存，一次瞬时故障就须重启才恢复。
+            # 失败不缓存（D-06）：None 落缓存 = 负向永久缓存，一次瞬时故障就须重启才恢复。
             _EMBEDDER_CACHE[cache_key] = embedder
         return embedder
 
@@ -214,8 +220,8 @@ def load_cross_encoder(
     if cache_key in _CROSS_CACHE:
         return _CROSS_CACHE[cache_key]
 
-    # （并发分流）：同 load_embedder，check-then-load 全程持单飞锁。
-    # 修复（死锁）：`_setup_determinism` 先无锁调用（自带单飞锁），
+    # cr1（r3 /）：同 load_embedder，check-then-load 全程持单飞锁。
+    # cr1 修复（2026-08-19 死锁）：`_setup_determinism` 先无锁调用（自带单飞锁），
     # 再持 `_MODEL_LOCK` 做 check-then-load——锁内不再有对 `_MODEL_LOCK` 的二次 acquire
     # （threading.Lock 不可重入，修复前此处锁内调 `_setup_determinism` 必自锁死锁）。
     _setup_determinism()
@@ -242,7 +248,7 @@ def load_cross_encoder(
                     try:
                         model = CrossEncoder(str(resolved), max_length=512, local_files_only=True)
                     except TypeError:
-                        model = CrossEncoder(str(resolved), max_length=512)  # 默认 、eval：可复现
+                        model = CrossEncoder(str(resolved), max_length=512)  # 默认 fp32、eval：可复现
 
                     def _score(pairs: "Sequence[tuple[str, str]]") -> "list[float]":
                         scores = model.predict(list(pairs), batch_size=32, show_progress_bar=False)
@@ -265,7 +271,7 @@ def load_cross_encoder(
             scorer = None
 
         if scorer is not None:
-            # 失败不缓存：同 _EMBEDDER_CACHE 纪律，见上。
+            # 失败不缓存（D-06）：同 _EMBEDDER_CACHE 纪律，见上。
             _CROSS_CACHE[cache_key] = scorer
         return scorer
 
@@ -324,7 +330,7 @@ def warm_recall_backend(backend: str) -> bool:
 
 
 def expand_query_bilingual(query: str, intent: object) -> str:
-    """确定性双语扩展：中文原 query 后附受控词表解析出的英文 display 术语，
+    """确定性双语扩展（消融证明有效）：中文原 query 后附受控词表解析出的英文 display 术语，
     **仅进重排打分文本，不回灌硬过滤**。帮 cross-encoder 对齐「中文查询 ↔ 英文文档」。"""
     dm = getattr(intent, "display_map", None) or {}
     terms: "list[str]" = []
@@ -339,7 +345,7 @@ def expand_query_bilingual(query: str, intent: object) -> str:
 
 def _candidate_text(cand: RetrievedCandidate) -> str:
     """候选序列化为打分文本：题名 + **带标签**的结构化字段 + 截断描述（≤400）。
-    该序列化格式（带标签字段 + desc≤400）是评测基准的输入形态。"""
+    该序列化格式经消融确认（带标签 + desc≤400 明显优于裸串 + desc≤240），是基准选型胜出的输入形态。"""
     r = cand.record
     desc = (r.description or "").strip().replace("\n", " ")
     if len(desc) > 400:
@@ -452,7 +458,7 @@ def recall_rerank(
                                为 min-max 归一化 + alpha 线性融合（历史行为字节等价）；
                                `fusion="rrf"` 为 RRF 名次融合（k=60，尺度无关、零调参）。
     backend="cross_encoder"  → 本地 cross-encoder 对全存活集逐对打分，按**纯分**排序（词面原序仅同分 tie-break）；
-                               中文 query 附英文别名（双语扩展）以对齐英文文档。**默认路径**。
+                               中文 query 附英文别名（双语扩展）以对齐英文文档。**基准选型胜出的默认路径**。
 
     任一后端：模型缺失/依赖未装/任何异常/畸形输出 → 回退传入顺序（永不报错、永不违规、永不阻塞）。
     embedder / cross_scorer 可注入（便于单测/评测共享一次加载）。intent 用于双语扩展（cross_encoder）。
@@ -513,7 +519,7 @@ def recall_rerank(
                 _warn_once("ce_bad_scores", "cross_encoder 打分畸形（长度不符或含 NaN/Inf）—— 回退规则序。")
                 _mark("fallback", "invalid_scores")
                 return _cut(items)
-            # 纯 cross-encoder 分排序（实现）：词面原序只作完全同分时的稳定 tie-breaker。
+            # 纯 cross-encoder 分排序（Codex）：词面原序只作完全同分时的稳定 tie-breaker。
             order = sorted(range(len(items)), key=lambda i: (-float(scores[i]), i))
             _mark("used", "completed")
             return _cut([items[i] for i in order])

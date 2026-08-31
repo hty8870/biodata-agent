@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""运行时路径**单一真源**：resource/data 双根解析与全部路径派生。
+"""运行时路径**单一真源**（安装器工程 W1）：resource/data 双根解析与全部路径派生。
 
 背景与动机
 ----------
@@ -37,14 +37,23 @@ resource 层读，用户数据（.userdata、上传、models、trace、日志、
   （frozen 布局实例根 → resource_root/rel；其余 → root/rel）。
 - `uses_split_layout(root)`           ：该调用方项目根是否启用双根分离（frozen 布局
   且 root == 实例 data_root）。
+- `atomic_write_json(path, payload)`  ：JSON 落盘唯一原子写通道（随机 tmp 后缀 +
+  os.replace）；账户/会话/配额/令牌/补丁库共用。
+- `repo_database_dir()`               ：仓库 `database/` 目录单一真源（路径守卫共用）。
+- `assert_runtime_path(path, error_cls)`：运行时状态文件绝不落进仓库 `database/` 的守卫
+  （2026-08-10 架构评审裁决；各存储模块以自己的异常类型薄委托）。
 """
 from __future__ import annotations
 
+import json
 import os
+import secrets
 import sys
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 RESOURCE_ROOT_ENV = "BIODATA_RESOURCE_ROOT"
 DATA_ROOT_ENV = "BIODATA_DATA_ROOT"
@@ -86,7 +95,7 @@ def default_data_root_frozen() -> Path:
     """frozen 下 data_root 的缺省：%LOCALAPPDATA%/BioDataAgent。LOCALAPPDATA 缺失的
     防御兜底 = exe 目录旁（Windows 环境变量异常的罕见情形，保证可写目录仍可解析）。
 
-    公开供启动器做「旧根 .env 未随 BIODATA_DATA_ROOT 重定向」的检测。"""
+    公开供启动器做「旧根 .env 未随 BIODATA_DATA_ROOT 重定向」的检测（A2-L5）。"""
     local = os.getenv("LOCALAPPDATA") or os.getenv("LOCAL_APPDATA")
     if local:
         return Path(local) / "BioDataAgent"
@@ -198,6 +207,53 @@ def resource_file_for(project_root: Path, rel: str) -> Path:
     return Path(project_root) / rel
 
 
+def atomic_write_json(path: Path, payload: Any, *, indent: "int | None" = 2) -> None:
+    """JSON 落盘唯一原子写通道：同目录随机 tmp 后缀 + os.replace（rename 原子性），
+    防半路崩溃留半截文件。账户/会话/配额/令牌/补丁库共用本函数。
+
+    `indent` 默认 2（账户库/令牌库历史格式）；紧凑格式传 ``indent=None``（会话库/
+    配额账本/补丁包历史格式）。文本模式默认换行翻译（Windows 下 CRLF）——与各模块
+    历史落盘字节逐字节一致，刻意不 fsync、不固定 ``newline``（desktop_launcher 那款
+    带 fsync + LF 的 `_atomic_write_json` 语义不同，不属于本通道）。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=indent)
+    # Windows 瞬时锁容错：os.replace 的目标被杀毒/索引器瞬时光顾时偶发
+    # PermissionError（全量测试的 tmp_path 落盘曾因此 flaky）。仅对 PermissionError
+    # 做短重试，落盘字节语义不变；重试耗尽或其它异常照常抛。
+    for _attempt in range(4):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            if _attempt == 3:
+                raise
+            time.sleep(0.05)
+
+
+def repo_database_dir() -> Path:
+    """仓库 `database/` 目录单一真源（冻结基准与元数据库所在）；路径守卫共用。"""
+    return _SOURCE_PROJECT_ROOT / "database"
+
+
+def assert_runtime_path(path: Path, error_cls: "type[Exception]") -> Path:
+    """运行时状态文件绝不许落进仓库 `database/`——那里是冻结基准与元数据库，环境变量
+    误配也不许把运行时写引进来。
+
+    `error_cls` 须为 ``(code, message)`` 构造的异常类型（AccountError / McpTokenError
+    同款约定）；patch_package 的守卫文案保留补丁包语境，不走本函数（仅共用目录真源）。"""
+    resolved = Path(path).expanduser().resolve()
+    try:
+        resolved.relative_to(repo_database_dir())
+    except ValueError:
+        return resolved
+    raise error_cls(
+        "bad_store_path",
+        f"运行时状态文件不许落在仓库 database/ 目录内（收到 {resolved}）；请改用 .userdata/ 或仓库外路径。")
+
+
 __all__ = [
     "RESOURCE_ROOT_ENV",
     "DATA_ROOT_ENV",
@@ -207,4 +263,7 @@ __all__ = [
     "instance_data_dir_for",
     "resource_file_for",
     "uses_split_layout",
+    "atomic_write_json",
+    "repo_database_dir",
+    "assert_runtime_path",
 ]

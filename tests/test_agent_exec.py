@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""agent_exec（langgraph 执行侧编排）的确定性门。**全离线**：
+"""agent_exec（langgraph 执行侧编排，2026-08-03）的确定性门。**全离线**：
 
 - fake chat_model 注入（tools 模式 / JSON 降级模式双通道）驱动全路由表——
   与 action_plan 的 llm_call 注入同纪律：注入即跳过 should_use_llm 闸，零网络；
@@ -34,7 +34,7 @@ def _stub_loop_tools(monkeypatch):
         "curate.db_status": {
             "run": lambda slots, root: {"total_records": 0, "sources": [],
                                         "external_files": [], "recycle": [], "ledger": {}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True,
         },
         "curate.check_updates": {
@@ -116,7 +116,7 @@ def test_tool_table_is_generated_from_verb_specs():
     plan, _ = _plan("今天天气怎么样", fake)
     assert plan["verb"] == "none"
     names = {t["function"]["name"] for t in fake.bound_tools}
-    # 转正：understand 首步面 = 全部 EXEC + none（general 套件安全地板）——
+    # 2026-08-17 nl1 转正：understand 首步面 = 全部 EXEC + none（general 套件安全地板）——
     # ROUTE 投影（search.new/refine.conditions/lookup.identifier）退役、route.request 不进首步面。
     assert names == ({s.verb.replace(".", "_") for s in AP.VERB_SPECS if s.kind == AP.EXEC}
                      | {"none"})
@@ -136,7 +136,7 @@ def test_check_updates_routes_with_source_slot():
     assert plan["source"] == "agent"
     assert plan["llm_status"] == "ok"
     assert plan["trace"] is trace
-    # check_updates 已进 LOOP_TOOLS：图内真跑（此处是替身）→ execute/decide 进 trace
+    # check_updates 已进 LOOP_TOOLS（2026-08-04）：图内真跑（此处是替身）→ execute/decide 进 trace
     assert [t["node"] for t in trace] == ["route_consensus", "understand", "validate", "execute", "decide", "narrate"]
 
 
@@ -182,7 +182,7 @@ def test_negated_action_is_cancelled_by_the_mechanical_gate():
 
 
 def test_search_sentence_routes_with_rank(monkeypatch):
-    """ 转正：agent 环内 search.new 投影退役——检索诉求在环内由 rank
+    """2026-08-17 nl1 转正：agent 环内 search.new 投影退役——检索诉求在环内由 rank
     承接（search.new 本体保留给保底 plan_action 面，见 turn.py ROUTE 分支）。"""
     monkeypatch.setitem(agent_exec.LOOP_TOOLS, "rank", {  # 本文件 LOOP_TOOLS 是替身字典
         "run": lambda slots, root: {"query": str((slots or {}).get("query") or ""), "total": 1},
@@ -215,7 +215,7 @@ def test_trace_entries_carry_the_full_contract():
     for entry in trace:
         expected = {"node", "label_zh", "detail", "ok", "ms"}
         if entry["node"] == "route_consensus":
-            expected = expected | {"route_votes"}  # 共识全部原始投票随 trace 留痕
+            expected = expected | {"route_votes"}  # M1：共识全部原始投票随 trace 留痕
         assert set(entry) == expected
         assert isinstance(entry["ms"], int) and entry["ms"] >= 0
     assert [t["label_zh"] for t in trace] == [
@@ -235,7 +235,7 @@ def test_json_fallback_mode_when_tool_calling_unsupported():
     assert plan["verb"] == "pack.download"
     assert plan["slots"]["limit"] == 3
     assert len(fake.invocations) == 1, "降级后一次即解析成功，不该多调"
-    assert "换一种问法" in trace[1]["detail"]  # [0] 是常驻环首 route_consensus
+    assert "换一种问法" in trace[1]["detail"]  # [0] 是常驻环首 route_consensus（nl1）
 
 
 # ---------------------------------------------------------------- repair / AgentPlanInvalid
@@ -260,12 +260,12 @@ def test_repair_recovers_from_a_guardrail_violation():
     plan, trace = _plan("检查10x是否有更新", fake)
     assert plan["verb"] == "curate.check_updates"
     assert plan["quoted"] == "检查10x是否有更新"
-    # understand 一次 + repair 一次 + decide 一次 + narrate 一次（多步循环新增后两次）
+    # understand 一次 + repair 一次 + decide 一次 + narrate 一次（2026-08-04 多步循环新增后两次）
     assert len(fake.invocations) == 4
     assert [t["node"] for t in trace] == [
         "route_consensus", "understand", "validate", "repair", "validate", "execute", "decide", "narrate",
     ]
-    assert trace[2]["ok"] is False and "逐字" in trace[2]["detail"]  # 索引随环首 +1
+    assert trace[2]["ok"] is False and "逐字" in trace[2]["detail"]  # 索引随环首 +1（nl1）
     assert trace[3]["label_zh"] == "让大模型改一版"
 
 
@@ -364,7 +364,7 @@ def test_route_turn_never_uses_agent_when_llm_call_injected(monkeypatch):
 
 def test_route_turn_use_agent_false_skips_the_agent(monkeypatch):
     """请求级关掉「AI 执行」（/api/utterance 的 agent:false）→ 规则直达：langgraph agent 与
-    LLM 分流器**双双不启动**（agent 标志 = 分流器总闸，
+    LLM 分流器**双双不启动**（2026-08-03 起 agent 标志 = 分流器总闸，
     不再是「跳过 langgraph、照走单次分类」）。"""
     called: list = []
     llm_called: list = []
@@ -403,7 +403,7 @@ def test_route_turn_marks_via_agent_when_agent_planned(monkeypatch):
 # ---------------------------------------------------------------- 点名源一致性护栏
 
 def test_named_source_mismatch_is_repaired_to_the_named_source():
-    """集成问题回放：「检查10x」首轮被填 source=ArrayExpress → 机械校验记 violation
+    """真机病灶回放：「检查10x」首轮被填 source=ArrayExpress → 机械校验记 violation
     （点名的是 10x Genomics）→ repair 修正为规范名 → 正常出 plan。"""
     fake = _FakeToolsModel(
         _tool_call("curate.check_updates", quoted="检查10x是否有更新", source="ArrayExpress",
@@ -414,14 +414,14 @@ def test_named_source_mismatch_is_repaired_to_the_named_source():
     plan, trace = _plan("检查10x是否有更新", fake)
     assert plan["verb"] == "curate.check_updates"
     assert plan["slots"]["source"] == "10x Genomics"
-    # understand 一次 + repair 一次 + decide **两次**（decide 的 tools 通道
+    # understand 一次 + repair 一次 + decide **两次**（2026-08-07 换装：decide 的 tools 通道
     # 异常时跌 JSON 兜底再问一次——本用例 fake 剧本耗尽触发 IndexError，等价于 provider
-    # 全断的罕见路径）+ narrate 一次（多步循环新增后两次）
+    # 全断的罕见路径）+ narrate 一次（2026-08-04 多步循环新增后两次）
     assert len(fake.invocations) == 5
     assert [t["node"] for t in trace] == [
         "route_consensus", "understand", "validate", "repair", "validate", "execute", "decide", "narrate",
     ]
-    assert trace[2]["ok"] is False  # validate：索引随环首 +1
+    assert trace[2]["ok"] is False  # validate：索引随环首 +1（nl1）
     # violation 要同时点名「用户说的是谁」和「你填的是谁」——repair 靠这句话自修
     assert "10x Genomics" in trace[2]["detail"] and "ArrayExpress" in trace[2]["detail"]
 
@@ -480,14 +480,14 @@ def _check_updates_model():
 
 def test_events_arrive_in_node_order_with_labels():
     """on_event 的 step 事件序 = 节点执行序，条目与 trace 元素同形（含 label_zh）。
-    同一条回调通道还有 tool_start 即时帧：understand/narrate
+    prelim1（2026-08-16）起同一条回调通道多了 tool_start 即时帧：understand/narrate
     节点档（verb="node"）与 execute 工具档都**先于**对应 step 落帧，label_zh 逐字一致
     （前端 pending 行按 label 匹配改行）。"""
     events: list = []
     plan, trace = _plan_events("检查10x是否有更新", _check_updates_model(),
                                lambda kind, entry: events.append((kind, entry)))
     assert [(kind, entry["label_zh"]) for kind, entry in events] == [
-        ("tool_start", "分流共识"), ("step", "分流共识"),  # 常驻环首
+        ("tool_start", "分流共识"), ("step", "分流共识"),  # 常驻环首（nl1）
         ("tool_start", "理解意图"), ("step", "理解意图"),
         ("step", "合规检查"),
         ("tool_start", "执行工具 · 检查来源更新"), ("step", "执行工具 · 检查来源更新"),
@@ -501,7 +501,7 @@ def test_events_arrive_in_node_order_with_labels():
     for entry in entries:
         expected = {"node", "label_zh", "detail", "ok", "ms"}
         if entry["node"] == "route_consensus":
-            expected = expected | {"route_votes"}  # 共识全部原始投票随 trace 留痕
+            expected = expected | {"route_votes"}  # M1：共识全部原始投票随 trace 留痕
         assert set(entry) == expected
     # 事件条目就是 trace 的元素（同一批 dict，不另造一份）
     assert entries == trace
@@ -543,7 +543,7 @@ def test_events_cover_the_repair_loop_in_order():
     plan, _ = _plan_events("检查10x是否有更新", fake,
                            lambda kind, entry: events.append((kind, entry)))
     assert plan["slots"]["source"] == "10x Genomics"
-    # 事件流里混有 tool_start 即时帧——节点序钉只看 step 帧。
+    # prelim1（2026-08-16）起事件流里混有 tool_start 即时帧——节点序钉只看 step 帧。
     assert [e["node"] for kind, e in events if kind == "step"] == [
         "route_consensus", "understand", "validate", "repair", "validate", "execute", "decide", "narrate",
     ]

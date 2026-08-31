@@ -1,6 +1,6 @@
 """可选「API 向量召回」数据源（默认关；网页版服务器形态用，本机形态逐字节不变）。
 
-方案A（智谱单厂商）：
+方案A（智谱单厂商，2026-08-25 选型拍板）：
 - dense 后端的向量 = **语料向量文件**（离线一次性嵌入、随部署物分发、带 model+dims
   元数据，启动校验不匹配拒启用）+ **查询侧 API 嵌入**（文件未覆盖的条目——如用户上传——
   现场 API 补嵌）；
@@ -23,11 +23,12 @@ import gzip
 import hashlib
 import json
 import os
-import sys
 import threading
 import time
 from pathlib import Path
 from typing import Sequence
+
+from .vector_recall import _WARNED, _warn_once_prefixed
 
 # ------------------------------------------------------------------ 配置（全 env，缺省 off）
 
@@ -48,21 +49,18 @@ _DEFAULT_EMBED_DIMS = 1024
 _DEFAULT_RERANK_MODEL = "rerank"
 _DEFAULT_EMBED_QPM = 60
 _DEFAULT_RERANK_QPM = 30
-#: 红线（方案A 设计约定）：API 超时上限——超时即回退规则序，检索主路永不阻塞。
+#: 红线（方案A §4.4）：API 超时上限——超时即回退规则序，检索主路永不阻塞。
 _EMBED_TIMEOUT_S = 5.0
 _RERANK_TIMEOUT_S = 10.0
 #: API 批次上限（智谱官方：embeddings 单次数组 ≤64；rerank documents ≤128）。
 _EMBED_BATCH = 64
 _RERANK_BATCH = 128
 
-_WARNED: "set[str]" = set()
-
-
+# _WARNED 集合与判定收编进 vector_recall._warn_once_prefixed（三模块共享同一集合，
+# reset_caches_for_test 的 _WARNED.clear() 经共享集合仍生效），此处只留带前缀的薄 wrapper。
 def _warn_once(key: str, message: str) -> None:
     """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求（不留查询明文/key）。"""
-    if key not in _WARNED:
-        _WARNED.add(key)
-        print(f"[recall_api] {message}", file=sys.stderr)
+    _warn_once_prefixed("[recall_api]", key, message)
 
 
 def _env_flag(name: str) -> bool:
@@ -165,7 +163,7 @@ def _usage_log_path() -> "Path | None":
 
 
 def _record_usage(kind: str, model: str, usage: object) -> None:
-    """逐调用累计 tokens 落账（成本监控）。只记 tokens/模型/时间，绝不记查询文本。"""
+    """逐调用累计 tokens 落账（灰度期成本监控）。只记 tokens/模型/时间，绝不记查询文本。"""
     tokens = None
     if isinstance(usage, dict):
         raw = usage.get("total_tokens")
@@ -385,7 +383,7 @@ def api_rerank_scores(query: str, texts: "Sequence[str]") -> "list[float] | None
     """rerank-API 打分：documents 分批 ≤128，relevance_score 直接做排序键。
 
     失败 → None（回退规则序）。分批间分数口径同为 query-doc 绝对相关度，
-    可横向比较。"""
+    灰度期可接受（bake-off 验证后再放量）。"""
     if not texts:
         return []
     scores: "list[float | None]" = [None] * len(texts)

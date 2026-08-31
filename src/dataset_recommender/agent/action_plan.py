@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-""" · 一句话执行层：把用户随口说的一句话归一化成**封闭动词表里的一个动作**。
+"""P2 · 一句话执行层：把用户随口说的一句话归一化成**封闭动词表里的一个动作**。
 
     「人类肺癌数据，打包前5条」 → pack.download{limit:5}
     「存成压缩包给我」           → pack.download          （规则表认不到，这是本层的净增能力）
@@ -23,7 +23,7 @@
    于是回执里那行「依据你说的『…』」结构上不可能是编的；同时极性门永远有锚点可查。
 3. **极性门**：执行词前 ≤4 字内出现否定语素（「不要打包」「别打包了」）→ **动词照判但标
    `cancelled: true`**——执行层据此不执行、只回音（「好，不打包」），而不是整计划降 none
-   装没听懂（定稿语义）。
+   装没听懂（2026-08-01 NLU 实验定稿语义，见 `eval/curate_nlu/FINDINGS.md` §5③）。
    不加这道门，`quoted="打包"` 会通过字面子串校验，回执就会把**用户明确否定的词**
    当成授权证据引用给他看。门带**征询掩码**：「能不能/要不要」是征询不是否定
    （「能不能上网检索一下」里的「不」不许误触发），掩码词表见 `_QUESTION_HEDGES`。
@@ -52,10 +52,9 @@ from typing import Any, Callable, Literal
 from ..retrieval import vocabulary as V
 from ..llm.llm_client import (
     LLMConfig,
-    _normalize_provider,
-    call_openai_compatible,
-    call_zhipuai,
+    call_llm,
     load_llm_config,
+    should_use_llm as _should_use_llm,
 )
 from ..retrieval.query_parser import detect_action_verbs, detect_operation_markers
 # 容错 JSON 提取复用 rerank 那一份（本仓库在两份手抄上栽过多次，不开第三份）。
@@ -68,7 +67,7 @@ MAX_UTTERANCE_CHARS = 500
 #: 只在生产路径（未注入 caller）发生，测试替身的调用次数仍是断言对象。
 _RETRY_BACKOFF_SECONDS = 0.4
 #: 一次最多打包多少条。与 `task_pack.ALLOWED_LIMITS` 的最高档一致（前端用「取上一档池子 +
-#: 只勾前 N 条」精确兑现 1..50）。
+#: 只勾前 N 条」精确兑现 1..50，见 P0 的 L1 决策记录）。
 MAX_LIMIT = 50
 #: `rejected[]` 是**大模型自由生成的文本**，会原样渲染进回执那一行。上限只是不让一次跑飞的
 #: 输出把回执刷成一屏（已 escapeHtml，不是 XSS 面）。
@@ -79,7 +78,7 @@ EXEC = "exec"
 ROUTE = "route"
 
 
-#: `ActionPlanError.code` 的机器码全集（从本模块**实际 raise 点**
+#: `ActionPlanError.code` 的机器码全集（2026-08-06 schema 加固顺手项：从本模块**实际 raise 点**
 #: 逐处收集——empty_input=空句；too_large=超 MAX_UTTERANCE_CHARS）。纯类型标注：收窄
 #: `__init__` 形参，运行时行为零变化。
 ActionPlanCode = Literal["empty_input", "too_large"]
@@ -103,6 +102,11 @@ class VerbSpec:
     when_zh: str                #: 什么时候该选它——**这段话会原样进 prompt**
     slots: tuple[str, ...]      #: 允许携带的槽位
     requires_results: bool      #: 屏上必须先有检索结果才谈得上做
+    #: 前端直派面：True = 本动词有前端 ACT_RUNNERS runner（act.js）、
+    #: **不在** agent 图 LOOP_TOOLS 环内注册表、命中时由 turn 单次分类直派前端自动执行。
+    #: `turn._FRONTEND_EXEC_PLANE` 从本属性词表派生（不再私藏第二份 frozenset）；
+    #: 直派旁路本体的删除留待后续拍板（改变执行路径）。
+    frontend_dispatch: bool = False
 
 
 #: 执行类 `zh` 允许的开头动词。加新动作时如果你的词不在这儿，先想清楚「已」+ 它读不读得通，
@@ -110,13 +114,13 @@ class VerbSpec:
 _LEAD_VERBS: tuple[str, ...] = ("打包", "打开", "导出", "整理", "统计", "生成", "下载",
                                 "清点", "导入", "联网搜索", "移入", "移回", "检查", "汇报",
                                 "检索",
-                                # 优化（转正）：rerank 中文名「优化检索词重查」，
+                                # 优化（转正）：rerank 中文名「优化检索词重查」
                                 # 回执「已优化检索词重查」读得通，按测试指引补录开头动词。
                                 "优化",
-                                # 回滚：curate.rollback 中文名「回滚写操作」，
+                                # 回滚（2026-08-17 rb1）：curate.rollback 中文名「回滚写操作」，
                                 # 回执「已回滚写操作」读得通，按测试指引补录开头动词。
                                 "回滚",
-                                # 对比/查找（环内结果处理）：compare.datasets
+                                # 对比/查找：compare.datasets
                                 # 「对比两个数据集」→ 回执「已对比两个数据集」；compat.find
                                 # 「查找兼容数据集」→ 回执「已查找兼容数据集」。
                                 "对比", "查找")
@@ -133,16 +137,20 @@ _LEAD_VERBS: tuple[str, ...] = ("打包", "打开", "导出", "整理", "统计"
 #:     `download_script.primary_only_sentence()` 不看 scope、硬编码「只列 1 个代表性主文件」
 #:     且四处必现。放开会让交付物内部出现写死的假话。v1 钉死 primary。
 #:   · `upload_dataset` / `verify_local_assets` / 账户类 —— 不可逆或注入面。
-#: 删除类以**回收站式可逆删除**为前提纳入管护动词（curate.remove 移动进 `.userdata/recycle/` +
-#: manifest 账本，curate.restore 可移回——不可逆前提不再成立）。
-#: 历史教训保留：不可逆的删除类仍不得进表，
+#: 【决策变更记录】删除类原在此排除（2026-07 初版，理由：不可逆）。2026-08-01 经用户**明确授权
+#: 推翻**：以**回收站式可逆删除**为前提纳入管护动词（curate.remove 移动进 `.userdata/recycle/` +
+#: manifest 账本，curate.restore 可移回——不可逆前提不再成立）。蓝本：
+#: 设计文档 §0 决策 2。历史教训保留：不可逆的删除类仍不得进表，
 #: 管护对象的删除只准走回收站真源（corpus_curation），且本层依旧只出 plan、不执行。
-#: rank / rerank / route.request / 多批结果已**转正常驻**：
-#: rank / rerank / route.request 常驻动词表，原三个环境开关连同 OFF 分支一并摘除。
+#: （scoped 路由 / RAG 工具组 / 多批结果；蓝本
+#: 设计文档）已**转正**：
+#: rank / rerank / route.request 常驻动词表，原三个环境开关连同 OFF 分支一并摘除
+#:（开关全名与旧逻辑快照见归档 `docs/归档/旧逻辑_scoped路由替代_2026-08-17/`，
+#: 基线 tag oldlogic-final）。
 
 
 def _local_library_sources_zh() -> str:
-    """本地库已收录来源名单（误调用修复：动态注入「联网搜索数据集」的 when_zh）。
+    """本地库已收录来源名单（2026-08-18 误调用修复：动态注入「联网搜索数据集」的 when_zh）。
 
     与 check/sync 的 source 候选**同一真源**（`corpus_curation.CHECK_UPDATE_SOURCES`）——
     名单变自动跟随，不手抄第二份拷贝。惰性 import：corpus_curation 体量大，只在生成
@@ -155,7 +163,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
     VerbSpec(
         "pack.download", "打包下载", EXEC,
         "用户要**拿到文件**：打包、下载、存下来、生成压缩包、导出成 zip、发我一份。",
-        ("limit",), True,
+        ("limit",), True, frontend_dispatch=True,
     ),
     VerbSpec(
         "pack.preview", "打开打包清单", EXEC,
@@ -174,7 +182,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
     VerbSpec(
         "reuse.pack", "整理投稿材料", EXEC,
         "用户要**投稿要用的那段出处说明**：数据可用性声明、复用出处清单、投稿材料、写进论文的那段。",
-        ("limit",), True,
+        ("limit",), True, frontend_dispatch=True,
     ),
     VerbSpec(
         "feasibility.run", "统计可行性概览", EXEC,
@@ -210,7 +218,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
         "用户贴了一个**数据集编号或直链**（GSE… / E-MTAB… / DOI / 来源页链接），要查那一条。",
         (), False,
     ),
-    # ---- 管护动词（删除类以回收站可逆为前提）----
+    # ---- 管护动词（2026-08-01 用户授权纳入；删除类以回收站可逆为前提，见上方决策变更记录）----
     # 只出 plan、不执行：真正执行由调用方走 `/api/curate/*` / MCP `curate_datasets` /
     # CLI `scripts/curate_datasets.py`（plan → confirm_token → apply 两步确认）。
     VerbSpec(
@@ -224,7 +232,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
         (), False,
     ),
     VerbSpec(
-        "curate.search_online", "联网搜索数据集", EXEC,
+        "curate.search_online", "联网搜索入库", EXEC,
         "用户要**在线搜官方源**找新数据：上网搜一下、在线找找 ArrayExpress 有没有、"
         "看看 GEO 有没有新的人类肺数据。**检查已有来源有没有更新**不是它——"
         "那是 curate.check_updates（只读比对，不搜关键词也不入库）/ curate.sync_updates"
@@ -234,7 +242,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
         ("source", "keywords", "species"), False,
     ),
     # curate.check_updates：「检查更新」语义从 search_online 剥出、各自专职——
-    # 若并入 search_online 的 when_zh，「检查10x是否有更新」会被判成联网搜数据集，
+    # 此前动词表把它并进 search_online 的 when_zh，「检查10x是否有更新」被判成联网搜数据集，
     # 前端只能靠正则剥词打补丁。
     # 对应能力是只读的 corpus_curation.check_updates（在线比对限有适配器的源，离线快照源如实报告）。
     # 主题问句（「那个肺癌的网上有新的吗」）误选它——
@@ -251,14 +259,18 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
         "不是它——那是 curate.search_online；问**来源**有没有更新才选它。",
         ("source",), False,
     ),
-    # curate.sync_updates（「工作流即工具」复合流）：「检查更新，若有则下载/入库」这类
+    # curate.sync_updates：「检查更新，若有则下载/入库」这类
     # 固定两步流折叠成的复合工具——步骤顺序写死在 corpus_curation.sync_updates 里（先只读比对、
     # 再把能闭环来源的疑似新增逐编号搜回入库），LLM 只负责选它，不负责编排步骤。
-    # 集成验证坐实它有「磁吸效应」——
+    # 2026-08-07 性能批：真机探针（eval/agent_live_report_v1/v2）坐实它有「磁吸效应」——
     # 限定主题的条件下载也被它抢（它不过滤主题，会把所有疑似新增都入库），when_zh 划清边界。
     # 劣质指令（无标点五件事）里「有新增的人类肺数据就搜来入库」
     # 仍被它抢——机械判定口径前置进**首句**（复跑坐实缀在句尾时模型在 JSON 兜底档
     # 只读首句样例就磁吸）：原话出现任何主题词就是限定主题，一律两步流。
+    # 互指：sync 主题限定判定句共三语境变体——此处 when_zh（动词选择表、
+    # 第三人称）、agent_exec LOOP_TOOLS["curate.sync_updates"].decide_zh（decide 工具描述、
+    # 第一人称）、check_updates/search_online 的 decide_zh（反向边界句）；loop_action.md
+    # 已改指针式引用、不持第四份。改判定时三处变体须同步评估。
     VerbSpec(
         "curate.sync_updates", "检查更新并同步入库", EXEC,
         "用户要**检查更新、有新增就直接收进库**（**仅限不限定主题**——原话里出现任何主题词"
@@ -283,7 +295,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
     ),
     # curate.db_status：通用化 agent 的第一个非更新检查用例——
     # 只读状态工具（corpus_status.db_status），agent 在 langgraph 图内经 LOOP_TOOLS 直接调用
-    # （execute 节点；同份产出挂 plan.observation）；未装扩展时前端 runner 走
+    # （2026-08-04 起 execute 节点；同份产出挂 plan.observation）；未装扩展时前端 runner 走
     # `/api/curate/status` 端点取同一份事实。
     VerbSpec(
         "curate.db_status", "汇报数据库状态", EXEC,
@@ -291,7 +303,7 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
         "各来源各有多少条、最近有什么变动、外部库和回收站里有什么。只读汇报，不改动任何文件。",
         (), False,
     ),
-    # curate.rollback（回滚动词化）：环内专属写动词——把 trace 快照回退
+    # curate.rollback（2026-08-17 rb1 回滚动词化）：环内专属写动词——把 trace 快照回退
     # （`_run_one` 快照锚 + `trace/rollback.py` 的 CLI 回退）接进 agent 环。
     # 零槽位：回退目标由工具内机械闸定（本轮 steps 里最新一条带 snapshot_id 且未回滚的
     # 写步），模型不许、也无法发明快照 id。
@@ -303,11 +315,11 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
         "不硬来。不支持『回滚回滚』；重复调用只会继续回退更早的正向写步骤。",
         (), False,
     ),
-    # search.rerun：「换一组查询词重跑检索」从 prompt 背稿
+    # search.rerun（2026-08-16 检索工具化 Phase 1）：「换一组查询词重跑检索」从 prompt 背稿
     # 升级为可调用工具——跑的是与主检索同一条本地管线（规则检索 + ride-along 重排），
     # 采纳与否由机械闸裁定（结果集与现状同集、或载荷弄丢已生效筛选条件才如实拒绝、保留
-    # 原结果；设计决定：命中 0 条也采纳上屏——空结果集就是新条件的诚实答案，
-    # 绝不「结果不如当前就否决、保持不变」）。
+    # 原结果；设计决定：命中 0 条也采纳上屏——空结果集就是新条件的诚实答案
+    # 绝不「结果不如当前就否决、保持不变」）。详见 设计文档。
     VerbSpec(
         "search.rerun", "检索新查询", EXEC,
         "当前结果**零命中或明显跑偏**、或用户要**换个说法/换条件重查**时，换一组查询词把本地库"
@@ -340,7 +352,7 @@ VERB_SPECS = VERB_SPECS + (
     ),
 )
 
-# route.request（逃生口）：decide 环内元动词——
+# route.request（2026-08-17 逃生口；常驻）：decide 环内元动词——
 # 执行中发现路线走错了请求换一条处理路线（search/action/general）。kind=ROUTE：它不是
 # 执行诉求（无 quoted 要求），且只会出现在 decide 续步（understand 各套件面不装它），
 # 首步 plan 永不命中——turn 的 ROUTE 分支因此不会被它触到。
@@ -353,7 +365,7 @@ VERB_SPECS = VERB_SPECS + (
     ),
 )
 
-# 环内「结果处理」四工具（蓝本 rank/rerank 的登记方式）：
+# 环内「结果处理」四工具（2026-08-18 蓝本 rank/rerank 的登记方式）：
 # compare.datasets / cite.export（由 plan-only 补上环内执行）/ compat.find / fair.check。
 # 三者新增工具环内专属（compare/compat/fair 无前端 runner，见 FRONTEND_UNWIRED_EXEC_VERBS
 # 与 PLAN_ACTION_EXCLUDED_VERBS；cite.export 双通道：环内执行 + 保底通道仍走前端 runner）。
@@ -361,7 +373,7 @@ VERB_SPECS = VERB_SPECS + (
 # 做判断**，不重跑检索找新数据；要找新数据是 rank / search.rerun。
 VERB_SPECS = VERB_SPECS + (
     VerbSpec(
-        "compare.datasets", "对比两个数据集", EXEC,
+        "compare.datasets", "对比数据集", EXEC,
         "用户要把**两个数据集放在一起对比**（对比前两条、比较这两个、它们有什么不同/"
         "区别、哪个更适合）：只做**元数据字段**的确定性对比（名称/来源/物种/组织/疾病/"
         "平台/技术/chemistry/模态/样本量/发表时间/文件数），结论由系统按字段差异生成，"
@@ -393,22 +405,22 @@ VERB_SPECS = VERB_SPECS + (
 
 #: EXEC 类里**前端 act.js 尚无派发器**的动词：此表是 `tests/test_act_frontend.py` 派发表闸的
 #: 显式豁免清单——**只准加有独立执行入口的动词**。curate.* 六动词已全部「毕业」：
-#: 前四动词已接线，`curate.restore` 随统一对话窗口接线毕业，
-#: `curate.check_updates`（新增）亦随后接线毕业
+#: 前四动词 2026-08-01 接线，`curate.restore` 同日随统一对话窗口接线毕业，
+#: `curate.check_updates`（2026-08-03 新增）随同批前端改动接线毕业
 #: （act.js `actRunCurateCheckUpdates`：只读、无问卷，POST /api/curate/check-updates → 结果卡）。
 #: 豁免机制本身保留：常量仍在、必须是 EXEC 子集——将来新动词可凭独立执行入口加回，
 #: 理由写进 `tests/test_action_curate_verbs.py`。
 #: search.rerun：独立执行入口 = langgraph 图内 LOOP_TOOLS 工具 +
-#: `/api/agent/search-rescue` 端点。**永久豁免、不毕业**：
+#: `/api/agent/search-rescue` 端点。**永久豁免、不毕业**（2026-08-16 Phase 2 定）：
 #: 前端只接了步骤卡渲染（act.js actSearchRerunCardHtml），**刻意不写前端 runner**——
-#: 本工具的采纳与否由后端机械闸裁定（同集/条件丢失如实拒绝；改空也采纳），
+#: 本工具的采纳与否由后端机械闸裁定（同集/条件丢失如实拒绝；2026-08-23 起改空也采纳），
 #: 前端 runner 直接打 /api/recommend 会绕过这道闸，等于让 LLM 的改写跳过裁决直接换屏。
 #: 环内专属动词，前端无任何独立触发路径。
-#: rank / rerank：同为环内专属检索工具——上屏
-#: 与否由 display 槽与后端批次机制裁决，前端 runner 会绕过这层口径，同哲学豁免。
-#: curate.rollback：回滚目标由机械闸从**本轮 steps 实录**里的快照锚
+#: rank / rerank（转正常驻）：同为环内专属检索工具——上屏
+#: 与否由 display 槽与后端批次机制（M3）裁决，前端 runner 会绕过这层口径，同哲学豁免。
+#: curate.rollback（2026-08-17 rb1）：回滚目标由机械闸从**本轮 steps 实录**里的快照锚
 #: 现定——前端单步 runner 没有这个现场（也没有快照锚可传），同哲学永久豁免。
-#: compare.datasets / compat.find / fair.check（四工具组）：环内专属「结果
+#: compare.datasets / compat.find / fair.check：环内专属「结果
 #: 处理」工具——默认对象是「当前结果第 N 条/前两条」，前端单步 runner 没有当前结果集
 #: 这个现场（后端经 ctx 重跑标准管线取数），同哲学永久豁免。cite.export 不上此表：
 #: 它双通道（环内执行 + 保底通道前端 runner 仍可用，仅 .ris 缺口由环内执行补上）。
@@ -428,7 +440,7 @@ ROUTE_QUERY_VERBS: tuple[str, ...] = ("search.new", "refine.conditions", "lookup
 #: plan_action 保底通道的排除表：闭环动词表里的
 #: **环内专属**动词——search.rerun / rank / rerank（环内检索工具，前端无独立触发路径，
 #: 见 FRONTEND_UNWIRED_EXEC_VERBS）、route.request（换线元动词，只存在于多步环的 decide
-#: 裁决层）与 curate.rollback（回滚目标依赖本轮 steps 实录的快照锚，
+#: 裁决层）与 curate.rollback（2026-08-17 rb1：回滚目标依赖本轮 steps 实录的快照锚，
 #: 单次分流没有这个现场）。plan_action 是单次分流分类（/api/action/plan、MCP plan_action、
 #: agent 不可用兜底），没有环内上下文：这些动词进它的提示词就是教模型选一条这里没有
 #: 执行面的路，选出来就是「计划说要做、没有任何一端会做」。提示词按 PLAN_ACTION_VERBS
@@ -436,7 +448,7 @@ ROUTE_QUERY_VERBS: tuple[str, ...] = ("search.new", "refine.conditions", "lookup
 #: 并降 none，与未知 verb 同一条「不做，但要说」渠道）——提示不是围栏，闸才是。
 PLAN_ACTION_EXCLUDED_VERBS: tuple[str, ...] = (
     "search.rerun", "rank", "rerank", "route.request", "curate.rollback",
-    # compare.datasets / compat.find / fair.check 是环内专属结果
+    # 2026-08-18 四工具批：compare.datasets / compat.find / fair.check 是环内专属结果
     # 处理工具——默认对象依赖环内现场（当前结果集 / steps 实录），单次分流没有这个
     # 现场；cite.export 不进此表（保底通道前端 runner 仍在，双通道各司其职）。
     "compare.datasets", "compat.find", "fair.check")
@@ -445,7 +457,7 @@ PLAN_ACTION_VERBS: tuple[str, ...] = tuple(
 _PLAN_ACTION_SPECS: tuple[VerbSpec, ...] = tuple(
     s for s in VERB_SPECS if s.verb not in PLAN_ACTION_EXCLUDED_VERBS)
 
-#: ============ 下一步行动 suggested_recipe allowlist ============
+#: ============ 下一步行动 suggested_recipe allowlist============
 #:
 #: **单一真源**：结果页阶梯 chips（web/static/js/search/ladder_core.js 的 LADDER_RECIPES）携带
 #: 的 recipe id 必须在本表内（前端 ⊆ 本表，契约门 `tests/test_suggested_recipe.py` 钉死）。
@@ -480,10 +492,10 @@ def resolve_suggested_recipe(recipe: str | None) -> "frozenset[str] | None":
 #: `renderResults` 无条件调 `resetTaskPack()`，勾选在每次检索后必被清空，判据不成立。
 TARGET_DEFAULT = "results"
 
-#: 恒带的不确定标注。**与 LLM 自评的 confidence 无关**——结论逐字是
+#: 恒带的不确定标注。**与 LLM 自评的 confidence 无关**——2026-07-16 的结论逐字是
 #: 「填了字段 ≠ 已核验」：槽值不是本工具核对出来的，就必须说出来。
 #:
-#: 但**由谁读出来的必须说对**。集成测试抓到：同一张回执上半句写着
+#: 但**由谁读出来的必须说对**。2026-07-26 在真机截图里抓到：同一张回执上半句写着
 #: 「大模型这次没有接上，这一步是按关键词猜的」，下半句写着「以上这几项是**大模型**从你这句话里
 #: 读出来的」——因为这行标注当时无条件挂在所有执行类 plan 上，没看 `source`。
 #: 一份回执里两句互相打架的话，比没有这句话更糟。
@@ -539,7 +551,7 @@ _CONSTRAINT_RULE_BODIES_ZH: tuple[str, ...] = (
     # 多事项句的首步排序——模型偶发跳过原话第一件事直接做后面的。
     "一句话里说了**好几件事**（「搜X数据入库，然后检查Y更新，再告诉我库里多少条」）时，"
     "先做原话里**最前面**的那件事；后面的事会有后续步骤接着做，不用一次做完。",
-    # repeat-10 复测坐实「缺现场」边界双向抖动——
+    # 2026-08-07 repeat-10 实测坐实「缺现场」边界双向抖动——
     # a18（无结果要导出引文）2/10 被误判 none（以为没结果就不是执行诉求），
     # a21（无现场说「只看 X 的」）4/10 被误判 refine.conditions（以为改条件无前提）。
     # 规则 10 + 下方两条示例把不对称说破：缺结果不挡动作类；改条件必须有现场。
@@ -553,32 +565,51 @@ _CONSTRAINTS_ZH = (
     + "".join(f"{i}. {body}\n" for i, body in enumerate(_CONSTRAINT_RULE_BODIES_ZH, 1))
 )
 
-#: 收窄面变体（高2）：面里没有 ROUTE_QUERY 动词时，铁律 5/7/10 换不引用退役动词的
+#: 收窄面变体：面里没有 ROUTE_QUERY 动词时，铁律 5/7/10 换不引用退役动词的
 #: 口径、铁律 8 整条退役（面里没有携带 effective_query 的动词，规则留着只会教模型填
 #: 一个没有任何动词消费的槽）。与全表条体同段落维护——同源哲学，禁手抄第二份漂移。
-_RULE_RETRIEVAL_TOOL_ZH = (
+_RULE5_RETRIEVAL_TOOL_ZH = (
     "只是在**描述要找什么数据**（哪怕句子里出现「下载量」「文件」「清单」这类词）"
     "→ 那是检索需求，不是执行诉求——选表里的检索动词。"
 )
-_RULE_NONE_ONLY_ZH = (
+_RULE5_NONE_ONLY_ZH = (
     "只是在**描述要找什么数据**（哪怕句子里出现「下载量」「文件」「清单」这类词）"
     "→ 那是检索需求，不是执行诉求，verb 填 none。"
 )
-_RULE_NO_SEARCH_NEW_ZH = (
+_RULE7_NO_SEARCH_NEW_ZH = (
     "规则匹配零命中或整句弃权 **不等于** 这句话无效——工具调用句往往零命中"
     "（「检查10x数据库是否有更新」里没有一个检索词）。按语义判断它到底是不是执行诉求，"
     "**不许**因为零命中就把一句执行/管护的话误判成检索需求。"
 )
-_RULE_NO_REFINE_ZH = (
+_RULE10_NO_REFINE_ZH = (
     "现场**没有检索结果**不改变动作类动词的选择：「把这批结果打包/导出引文/看看有哪些文件」"
     "照样选对应动作——没有结果由系统如实交代，不由你改判 none。"
+)
+
+#: 工具通道铁律条体（scoped understand 的系统提示 `_SCOPED_TOOLS_SYSTEM_ZH` 的唯一天源，
+#: agent_exec 只程序组装、禁手抄第二份）。与 `_CONSTRAINT_RULE_BODIES_ZH` 同段落维护：
+#: 条体 1/2/3/4 是全表铁律 1/2/3/4 的工具通道变体（每次应答是一组工具调用而非单个 verb
+#: JSON，故措辞另写：1 扩写多调用规则、2/3/4 缩短）；条体 5/6 与收窄面口径同语义
+#:（5≈`_RULE5_RETRIEVAL_TOOL_ZH`、6＝`_RULE7_NO_SEARCH_NEW_ZH` 首句）。条体间语义重叠
+#: 是刻意的；缩短体是否向全表条体收敛留待拍板。
+_TOOLS_CHANNEL_RULE_BODIES_ZH: tuple[str, ...] = (
+    "从工具表里挑工具调用；表里没有对应动作时选 none。原话一口气要求多件"
+    "**彼此独立且只读**的事（如「检查 A、B、C 有没有更新」）时，一次为每件事各发"
+    "一个调用（同一工具可发多次，每个来源一个）；其余情况恰好一个。",
+    "quoted 必须是用户原话里**逐字出现**的一段连续文字，不要改写、不要加字、不要翻译；"
+    "选了执行类动作却给不出原文依据时，改选 none。",
+    "用户**明确说不做**某个动作时 → 动词照选，并填 cancelled=true；「能不能/要不要…吧」是征询，照常执行。",
+    "limit 只在用户**明确说了条数**时填，否则不填；不要把年份、编号、版本号当条数。",
+    "只是在**描述要找什么数据** → 那是检索需求：表里有检索工具（rank）就选它"
+    "（用户等着看结果时 display=true），没有就选 none。",
+    "规则匹配零命中或整句弃权 **不等于** 这句话无效——工具调用句往往零命中。",
 )
 
 
 def _constraints_zh(verbs: Any = None) -> str:
     """铁律段。缺省 None = 全表 10 条（`_CONSTRAINTS_ZH`，与历史输出**逐位一致**）；
     显式给 VerbSpec 子集（scoped 收窄面）时按面生成——面里没有的动词不出现在铁律里
-    （高2：scoped 的 JSON 兜底壳曾原样带全表铁律，铁律 5/7/8/10 指着
+    （2026-08-17：scoped 的 JSON 兜底壳曾原样带全表铁律，铁律 5/7/8/10 指着
     search.new / refine.conditions / lookup.identifier 三个面内不存在的动词下指令，
     规则与动词表自相矛盾）。裁剪后重新编号，序不留洞。"""
     if verbs is None:
@@ -588,19 +619,19 @@ def _constraints_zh(verbs: Any = None) -> str:
     bodies: list[str] = []
     for i, body in enumerate(_CONSTRAINT_RULE_BODIES_ZH, 1):
         if i == 5 and not has_route_query:
-            body = _RULE_RETRIEVAL_TOOL_ZH if "rank" in face else _RULE_NONE_ONLY_ZH
+            body = _RULE5_RETRIEVAL_TOOL_ZH if "rank" in face else _RULE5_NONE_ONLY_ZH
         elif i == 7 and "search.new" not in face:
-            body = _RULE_NO_SEARCH_NEW_ZH
+            body = _RULE7_NO_SEARCH_NEW_ZH
         elif i == 8 and not has_route_query:
             continue                    # 面里没有携带 effective_query 的动词，整条退役
         elif i == 10 and "refine.conditions" not in face:
-            body = _RULE_NO_REFINE_ZH
+            body = _RULE10_NO_REFINE_ZH
         bodies.append(body)
     return ("铁律（违反任一条都是错误）：\n"
             + "".join(f"{n}. {b}\n" for n, b in enumerate(bodies, 1)))
 
-#: 两条 few-shot 示例（规则 10 的具象化）。**刻意不用验证原句**（a18「把这批结果的引用格式
-#: 导出来」/ a21「只看小鼠的」的同义改写）——验证是唯一的集成基准，示例逐字等于泄题。
+#: 两条 few-shot 示例（规则 10 的具象化）。**刻意不用探针原句**（a18「把这批结果的引用格式
+#: 导出来」/ a21「只看小鼠的」的同义改写）——探针是唯一的真机基准，示例逐字等于泄题。
 _EXAMPLES_ZH = (
     "示例一（没有现场检索时，「改条件」不成立）：\n"
     "现场情况：当前屏幕上**还没有**检索结果，也没有当前查询。\n"
@@ -617,7 +648,7 @@ _EXAMPLES_ZH = (
 
 def _verb_table_zh(verbs: Any = None) -> str:
     """动词表的 prompt 文本。**由 `VERB_SPECS` 程序生成**——手抄一份必漂移。
-    `verbs`（scoped 路由）：显式给 VerbSpec 子集时按子集出表
+    `verbs`（2026-08-17 scoped 路由）：显式给 VerbSpec 子集时按子集出表
     （understand 的套件收窄面用）；缺省 None = 全表，与历史输出**逐位一致**。"""
     lines = []
     for spec in (verbs if verbs is not None else VERB_SPECS):
@@ -670,19 +701,19 @@ def build_action_prompt(utterance: str, *, has_results: bool, result_total: int,
 
     护栏**写进 user prompt**、不是 system slot：`llm_client._call_chat_completions` 的
     system 消息是写死的通用策展人设、会覆盖任何自定义 system，把护栏放那儿就是不会发出去的死代码
-    （第一版的真 bug，被确定性测试当场抓到）。
+    （那一层第一版的真 bug，被确定性测试当场抓到）。
 
     `retrieval` 是规则匹配概览（turn.rule_match_summary 的产出）：统一管线的第一段
     （关键词匹配）**为检索服务、但一切指令都过**——它的产出连同原始查询一起喂给 LLM 分流，
     零命中/弃权绝不直接判死刑（工具调用句往往零命中）。
 
-    `examples_zh`（成功经验库，默认空串）非空时在静态示例段后追加「历史成功操作」
+    `examples_zh`（2026-08-09 成功经验库，默认空串）非空时在静态示例段后追加「历史成功操作」
     动态样例（agent_exec 从 `.userdata/curate_examples.jsonl` 检索注入）；空串时输出与历史
     **逐位一致**（离线钉与既有断言零漂移）。
 
-    `verbs`（scoped 路由）：显式给 VerbSpec 子集时「可选动作」段按子集出表
+    `verbs`（2026-08-17 scoped 路由）：显式给 VerbSpec 子集时「可选动作」段按子集出表
     （understand 的套件收窄面）；缺省 None = 全表，与历史输出**逐位一致**。
-    铁律段与 JSON 模板的 effective_query 行也随 `verbs` 按面生成
+    2026-08-17：起铁律段与 JSON 模板的 effective_query 行也随 `verbs` 按面生成
     （`_constraints_zh`）——面里没有的动词不出现在规则里；缺省 None 仍逐位一致。
     """
     if has_results:
@@ -695,7 +726,7 @@ def build_action_prompt(utterance: str, *, has_results: bool, result_total: int,
         filters_zh = _filters_zh(current_filters)
         ctx += f"\n当前生效条件：{filters_zh or '（无）'}。"
     elif not has_results:
-        # none 边界抖动在「规则+示例」后仍 ~7-8/10——
+        # 2026-08-07 的 none 边界抖动在「规则+示例」后仍 ~7-8/10——
         # 把同一条边界**就近**放在现场事实旁边（模型读到现场时立刻看到判据），
         # 比埋在文末铁律里更拦得住「没结果→不是执行诉求」的先验。
         ctx += ("\n此时「改条件」无从谈起（选 none）；但对结果的动作类请求"
@@ -703,7 +734,7 @@ def build_action_prompt(utterance: str, *, has_results: bool, result_total: int,
     retrieval_zh = _retrieval_zh(retrieval)
     if retrieval_zh:
         ctx += "\n**这句话**过规则匹配（关键词检索第一段）的结果：" + retrieval_zh
-    # 高2：effective_query 的模板行同按面生成——面里没有 ROUTE_QUERY 动词时
+    # effective_query 的模板行同按面生成——面里没有 ROUTE_QUERY 动词时
     # 不再点名 search.new/refine.conditions/lookup.identifier（面内不存在，点了就是矛盾指令）。
     route_query_in_face = verbs is None or bool(
         set(ROUTE_QUERY_VERBS) & {s.verb for s in verbs})
@@ -752,7 +783,7 @@ def parse_action_response(text: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- 极性门
 
-#: **动作词不是否定语素**（模拟剧本当场抓到的真 bug）：`NEGATION_GUARDS_CN`
+#: **动作词不是否定语素**（2026-08-03 模拟剧本当场抓到的真 bug）：`NEGATION_GUARDS_CN`
 #: 是**检索查询**的弃权守卫表（「删掉 X」在检索句里意味着排除 X），里面因此收了
 #: 「删掉/移除/过滤掉/拒收」。可极性门问的是另一件事——「这个**执行诉求**有没有被否定」——
 #: 「删掉我上传的 10x 数据」里 quoted 锚在「我上传的…」，紧邻窗里只有动作词「删掉」本身，
@@ -782,8 +813,9 @@ _NEG_WINDOW_CN = 4
 _NEG_WINDOW_EN = 12
 
 #: **征询掩码**：「能不能/要不要」是征询不是否定——「能不能上网检索一下」里的「不」
-#: 不是否定语素，不掩掉它极性门会把一句征询误判成取消（NLU 规则验证侧
-#: 曾当场抓到这个盲区；实验验证侧的孪生表是同型掩码，两处同步改）。
+#: 不是否定语素，不掩掉它极性门会把一句征询误判成取消（2026-08-01 NLU 选型实验在规则探针
+#: 上当场抓到这个盲区，见 `eval/curate_nlu/FINDINGS.md` §5①；实验探针侧的孪生表是
+#: `eval/curate_nlu/rule_parser.py::_QUESTION_HEDGES`，两处同步改）。
 #: 按长度降序：「要不要」含「要不」，先消费长词。
 _QUESTION_HEDGES: tuple[str, ...] = ("可不可以", "能不能", "要不要", "该不该", "行不行",
                                      "好不好", "可否", "要不")
@@ -795,16 +827,16 @@ _QUESTION_HEDGES: tuple[str, ...] = ("可不可以", "能不能", "要不要", "
 #: ①「有没有 / 有没」疑问格式（「有没有更新」＝是否有）；
 #: ②「了没（有）」（「查了没」＝查了没有）；
 #: ③分句末尾的「没（有）」——后随标点/语气词/句尾（「更新没，要是…」＝更新了没有）。
-#: 实验验证侧的孪生掩码同型，两处同步改。
+#: 实验探针侧的孪生掩码是 `eval/curate_nlu/rule_parser.py::_INTERROGATIVE_MEI_RE`，两处同步改。
 _INTERROGATIVE_MEI_FIXED: tuple[str, ...] = ("有没有", "了没有", "有没", "了没")
 _INTERROGATIVE_MEI_RE = re.compile(
     r"没(?:有)?(?=[，。；！？!?、…~哈嘛吗吧呢呀啊喔哦啦]|$)")
 
-#: 顺承/条件句的「没」：「没找到就联网搜」「没有就导出来」里
+#: 顺承/条件句的「没」（2026-08-15 触发点「没找到就联网搜」「没有就导出来」里
 #: 「没」修饰的是**前一个**动词（找到/有），从不否定「就/才」后面的动作——上面三族疑问掩码
 #: 盖不住这类句子，窗口里的「没」会把一句正向指令误判成 cancelled（前端只回「好，不做了」）。
 #: 等长掩码整段「没（有）…就/才」（标点不跨段），锚点索引照常可用。
-#: 实验验证侧的孪生掩码是同型规则，两处同步改。
+#: 实验探针侧的孪生掩码是 `eval/curate_nlu/rule_parser.py::_SEQUENTIAL_MEI_RE`，两处同步改。
 _SEQUENTIAL_MEI_RE = re.compile(r"没(?:有)?[^，。；！？!?、…~]{0,5}?[就才]")
 
 
@@ -887,7 +919,7 @@ def _limit_was_said(utterance: str, value: int) -> bool:
     单一真源，后端再写一份必然漂移。这里只回答一个更弱、但足以支撑回执诚实性的问题——
     「系统用的这个数，是用户说过的，还是大模型替他填的」。
 
-    判据是**数字边界**而不是裸子串：裸子串会把「2025」里的「25」、
+    判据是**数字边界**而不是裸子串（2026-08-15 裸子串会把「2025」里的「25」、
     「GSE123456」里的「34」、「五月」里的「五」当成用户说过的条数——这是把系统的错算到
     用户头上的谎报方向。阿拉伯数字两侧不得再是数字、右侧不得是日期义项字（月/日/号）；
     中文数字两侧不得再是中文数字（「二十五」里的「五」不算）、右侧同样排除月/日/号。
@@ -954,7 +986,7 @@ def _blank_plan(**over: Any) -> dict[str, Any]:
         "caveat_zh": "",
         "blocked_reason": "",
         "uncertainty_zh": "",
-        #: 取消态（定稿语义）：否定取消时**动词照留**、此标记为 true，
+        #: 取消态（2026-08-01 NLU 实验定稿语义）：否定取消时**动词照留**、此标记为 true，
         #: 执行层（act.js / MCP 调用方）据此**不执行、只回音**（「好，不导入」）。
         #: 只对 EXEC 类成立；路由类恒 false（见 `_finalize` 机械派生）。
         "cancelled": False,
@@ -965,7 +997,8 @@ def _blank_plan(**over: Any) -> dict[str, Any]:
 
 
 def raw_shape_violations(raw: dict[str, Any], utterance: str) -> list[str]:
-    """公共 raw 形状校验（单一真源：`agent_exec._validate_raw` 消费本函数，避免私拷两份漂移）。
+    """公共 raw 形状校验（此前 `agent_exec._validate_raw`
+    自称与本模块「口径一一对应」，实际那份镜像校验是私拷+私改，两路径已漂移）。
 
     这三条与 `build_plan_from_raw`/`_finalize` 的降级处置**一一对应**：
     缺 verb / 词表外 verb（→ 降 none 进 rejected）、quoted 非用户原话逐字子串（→ 清空）、
@@ -1006,7 +1039,7 @@ def _finalize(
         plan["cancelled"] = False
     else:
         # ① 极性门：把用户明确否定的词当授权证据引用给他看，是本层最恶劣的一种谎。
-        # 起不再整计划降 none 装没听懂：**动词照判 + cancelled 标记**，
+        #    2026-08-01 起不再整计划降 none 装没听懂：**动词照判 + cancelled 标记**，
         #    执行层据此不执行、只回音（「好，不导入」）。机械门与 LLM 自报取**或**——
         #    门测到否定而 LLM 没标，以门为准（安全侧）；LLM 标了取消而门测不到，照收
         #    （取消只意味着「不做」，错收的最坏结果是用户再说一次，不是做错）。
@@ -1023,7 +1056,7 @@ def _finalize(
                     source=plan.get("source", ""), llm_status=plan.get("llm_status", ""),
                     reason_zh="没能在你这句话里找到对应的原文依据，这一步没有执行。",
                     rejected=list(plan.get("rejected") or []),
-                    # 这是「读懂了但缺原文依据」的**降级 none**，不是真 none——
+                    # 2026-08-15 这是「读懂了但缺原文依据」的**降级 none**，不是真 none——
                     # additive 记下被降掉的 verb，路由层据此如实回音，不许谎称「没听懂」。
                     downgraded_from=str(plan.get("verb") or ""),
                 ),
@@ -1054,7 +1087,7 @@ def rule_fallback_plan(
     交付没有被收回去，也不会在他没确认的情况下往硬盘写文件。
 
     动作词检出与 `rule_operation_marker` 共用同一道名词用法反向闸
-    （`_action_verb_noun_usage` 同源收敛）：「下载量大的
+    （`_action_verb_noun_usage`，2026-08-15 审计收敛，与同根）：「下载量大的
     数据集有哪些」「只保留能下载的」里的「下载」是名词/能愿语境，不许在这一档被
     裸子串开成打包面板；真操作句（「下载 GSE123456」）照旧命中。
     """
@@ -1076,7 +1109,7 @@ def rule_fallback_plan(
             source="rule", llm_status=llm_status,
             slots={"target": TARGET_DEFAULT}, slot_sources={"target": "default"},
             reason_zh=f"按关键词认到「{quoted}」。",
-            # 集成测试抓到的静默丢参：用户说「人类肺癌数据，打包前5条」，
+            # 2026-07-26 真机截图抓到的静默丢参：用户说「人类肺癌数据，打包前5条」，
             # 规则档只认出「打包」这个动作，「前5条」一个字都没读，面板照自己的默认口径开了 10 条，
             # 而回执里没有任何一行提到这件事。后端刻意不在这里再抄一份条数解析器
             #（前端 `tpCountFromUtterance` 是那一问的单一真源，抄第二份必漂移），
@@ -1085,7 +1118,7 @@ def rule_fallback_plan(
                 "大模型这次没有接上，这一步是按关键词猜的：只认出了你要做哪件事，"
                 "句子里的条数、范围这些参数一概没读。所以只打开清单给你看、不直接生成文件，"
                 "条数和勾选请在面板里自己定。"
-                # 规则兜底只兜得到 pack.preview 这一类，
+                # 2026-08-01 NLU 实验结论（FINDINGS §3）：规则兜底只兜得到 pack.preview 这一类，
                 # 管护动词（导入/删除/联网搜/恢复/检查更新）这一档**结构性够不到**——词表里没有它们，
                 # 认不到更做不了。这不是「这次没发挥好」，是这条路径的固有能力边界，如实说出。
                 "另外按关键词只能认出「打包」这一类：导入、删除、联网搜、恢复、检查更新这些操作"
@@ -1096,7 +1129,7 @@ def rule_fallback_plan(
     )
 
 
-#: 动作词的**名词用法**语境尾随字：ACTION_VERBS 是裸子串，
+#: 动作词的**名词用法**语境尾随字（2026-08-15 触发点ACTION_VERBS 是裸子串，
 #: 「下载量大的数据集有哪些」「只保留能下载的」里的「下载」是名词/能愿语境，不是操作指令——
 #: 裸子串把这类检索句拦成「需开启 AI 执行」气泡，检索永不可达（本模块 docstring 第 6 行
 #: 自己就拿它当误报反面教材）。闸只作用于动作词那半：管护短语（CURATE_OP_MARKERS）的
@@ -1109,10 +1142,10 @@ _VOCAB_ACTION_VERBS = frozenset(m.lower() for m in V.ACTION_VERBS)
 
 
 def _action_verb_noun_usage(low: str, marker: str) -> bool:
-    """公共匹配助手：小写动作词 `marker` 在 `low`（小写原话）里
+    """公共匹配助手（2026-08-15 审计收敛）：小写动作词 `marker` 在 `low`（小写原话）里
     **首次出现处**紧跟「量/的」→ 名词/能愿用法，是检索语境不是操作意图。
 
-    修 agent_off 气泡时建的反向闸，与 `rule_fallback_plan` 的 detect_action_verbs 裸子串
+    C-1 修 agent_off 气泡时建的反向闸，与 `rule_fallback_plan` 的 detect_action_verbs 裸子串
     同根；现收敛成这一处判定，两处（`rule_operation_marker` / `rule_fallback_plan`）共用，
     只许收窄误触，不许放过真操作意图（「下载 GSE123456」的「下载」后随空格，照旧命中）。
     """
@@ -1126,9 +1159,10 @@ def rule_operation_marker(utterance: str) -> str:
     判据 = 执行动作词 ∪ 管护操作短语（`query_parser.detect_operation_markers` 单一真源，
     按出现位置保序——命中即返回**最靠左**那段标记原文，供降级气泡逐字引用）；没命中返回 ""。
     一道反向闸：**动作词**紧跟「量/的」是名词用法（「下载量」「能下载的」），是检索句不是
-    操作指令，不算命中（判定本体在 `_action_verb_noun_usage`）。
+    操作指令，不算命中（2026-08-15 判定本体在 `_action_verb_noun_usage`）。
     用在 turn.route_turn 的两处：agent_off 分支检出的句子回「这是操作指令，需开启 AI 执行」
-    降级气泡（降级语义）；LLM 缺席兜底用它拦住管护句，不许 fail-open 成检索。
+    降级气泡（2026-08-03 降级语义）；LLM 缺席兜底用它拦住管护句，不许 fail-open 成检索
+    。
     """
     hits = detect_operation_markers(utterance)
     if not hits:
@@ -1147,7 +1181,7 @@ def rule_curate_op_marker(utterance: str) -> str:
     """**管护操作短语**那半的检出（CURATE_OP_MARKERS，不含执行动作词）；没命中返回 ""。
 
     与 `rule_operation_marker` 同一扫描真源、同一「最靠左命中」口径，只过滤掉动作词那半。
-    用在 turn.route_turn 的编号快速道闸：「编号 + 管护操作」
+    用在 turn.route_turn 的编号快速道闸（2026-08-15 「编号 + 管护操作」
     （「把 GSE123456 从我上传的里删掉」「GSE123456 那套有没有更新」）不是检索诉求，
     不许被编号快速道静默吃掉。管护短语是**短语**（收录口径排除检索句裸词），
     不需要动作词那道名词用法反向闸。
@@ -1209,7 +1243,7 @@ def build_plan_from_raw(
             continue
         raw_value = raw.get(slot)
         if slot == "display":
-            # display 布尔槽（rank/rerank）：认 JSON 布尔 true 与字符串
+            # display 布尔槽（2026-08-17 rank/rerank）：认 JSON 布尔 true 与字符串
             # "true"（大小写不敏感——decide 的 JSON 兜底壳实测会给字符串），其余一律
             # 不进 slots（缺省 = 不上屏）。上屏与否是模型的判断、不是原话槽值 → guessed。
             if raw_value is True or str(raw_value or "").strip().lower() == "true":
@@ -1217,7 +1251,7 @@ def build_plan_from_raw(
                 slot_sources[slot] = "guessed"
             continue
         if slot == "uids":
-            # uids 数组槽：cite.export 的编号清单——保留
+            # uids 数组槽（2026-08-20 批）：cite.export 的编号清单——保留
             # **列表形状**（逐个清洗/去空/去重，上限 20），不许走下方「列表拍平成字符串」
             # 的旧逻辑（那是为 keywords 等字符串槽加的；拍平会把 uids 数组毁成空格拼接串，
             # 依赖占位的数组元素也会被一并毁形）。数组元素可为字面量编号或占位引用——
@@ -1235,7 +1269,7 @@ def build_plan_from_raw(
                     "said" if all(x in utterance for x in uid_items) else "guessed")
             continue
         if isinstance(raw_value, (list, tuple)):
-            # 模型偶发把字符串槽给成列表（A/B 验证：v4-pro 约 2% 把 keywords
+            # 模型偶发把字符串槽给成列表（2026-08-06 A/B 实测：v4-pro 约 2% 把 keywords
             # 给成 ["..."]）——拍平成空格连接的字符串再走统一口径；直接 str() 会把
             # Python 列表语法（引号、方括号）灌进 keywords，污染联网搜索词。
             raw_value = " ".join(
@@ -1246,12 +1280,12 @@ def build_plan_from_raw(
             slot_sources[slot] = "said" if value in utterance else "guessed"
     if spec.kind == EXEC and spec.requires_results:
         # target="results" 只对「在当前这批结果上执行」的动词成立；curate.* 管护动词作用对象是
-        # 外部库/回收站，与屏上结果无关，不带 target（管护动词纳入时细分）。
+        # 外部库/回收站，与屏上结果无关，不带 target（2026-08-01 管护动词纳入时细分）。
         slots["target"] = TARGET_DEFAULT
         slot_sources["target"] = "default"
         raw_scope = str(raw.get("scope") or "").strip().lower()
         if raw_scope and raw_scope != "primary":
-            # 验证：旧文案「还不支持取全部文件」是假话（Web/MCP/provision
+            # 旧文案「还不支持取全部文件」是假话（Web/MCP/provision
             # 的 scope=all 早已是公开能力）——对话入口这版按主文件打包是**入口口径**，
             # 不是产品能力边界；如实说清差别，不许把入口限制说成产品不支持。
             deltas.append({
@@ -1295,15 +1329,15 @@ def should_use_llm(config: LLMConfig) -> tuple[bool, str]:
     """是否调用**真** LLM。返回 (是否, 原因短标签)。
 
     mock 一律判否：`llm_client.call_mock_llm` **忽略 prompt**、直吐 curator markdown 表，
-    让执行层走它会「荒谬通过」——产出根本不是 plan。
+    让执行层走它会「荒谬通过」——产出根本不是 plan（同款结论）。
+    判定实现单一真源在 llm_client.should_use_llm，本函数是保名的薄封装。
     """
-    if config.mock_llm or _normalize_provider(config.provider) == "mock":
-        return False, "mock_not_used"
-    if not config.enable_llm:
-        return False, "disabled"
-    if not config.api_key:
-        return False, "no_key"
-    return True, "ready"
+    # 在线 MCP 成本闸：调用上下文被标记时一律判否 → 隐式 LLM 路径降级规则版
+    # （plan 结果的 source 字段如实反映为 rule，不静默）。惰性 import：顶层零新边。
+    from ..llm.scope_gate import llm_forced_off
+    return _should_use_llm(
+        config, pre=lambda _c: (False, "online_forced_off") if llm_forced_off() else None,
+    )
 
 
 def _error_label(exc: BaseException) -> str:
@@ -1317,8 +1351,7 @@ def _error_label(exc: BaseException) -> str:
 
 
 def _default_llm_call(prompt: str, config: LLMConfig) -> str | None:
-    provider = _normalize_provider(config.provider)
-    result = call_zhipuai(prompt, config) if provider == "zhipuai" else call_openai_compatible(prompt, config)
+    result = call_llm(prompt, config)
     return result.text if result.succeeded else None
 
 

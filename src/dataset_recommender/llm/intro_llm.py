@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
-"""LLM 中文介绍层（**默认随 key（已决策）· fail-open · 只在单数据集介绍端点**）。
+""" · LLM 中文介绍层（**默认随 key（已决策）· fail-open · 只在单数据集介绍端点**）。
 
 在确定性介绍（`introduction.build_dataset_introduction`）之上，**可选**叠加一段 LLM 生成的中文导读。
 它 additive、绝不替换确定性证据（facts / caveat 恒在），出任何岔子都无缝回退到确定性版。
 
 ## 为什么这样设计（把这一层的红线钉死在代码结构里）
 
-- **默认随 key（产品决策：「如果填了apikey就默认开启，否则默认关闭」）**：
+- **默认随 key（产品方 2026-07-19 已决策：「如果填了apikey就默认开启，否则默认关闭」）**：
   `ENABLE_LLM` 未显式设置时，当前 provider 有真实（非 placeholder）API key 即默认开、否则默认关；
   显式 true/false 恒优先。判定单一真源在 `llm_client.resolve_enable_llm`（`config.get_settings` 同源
   复用），本层只消费 `load_llm_config` 的结果。关时零成本直返、不构造 prompt、不联网。
 - **必须短路 mock**：`llm_client.call_mock_llm` **忽略 prompt**、直吐 curator markdown 表
   （见其实现）。若让介绍层走 `call_llm` 的 mock 分支，mock 测试会「荒谬通过」——产出根本不是导读。
-  故 `should_use_llm` 里 `mock` 一律判否，只调**真** provider（`call_openai_compatible`/`call_zhipuai`）。
+  故 `should_use_llm` 里 `mock` 一律判否，只调**真** provider（调用核心复用 act_summary_llm
+  `_summarize_with_prompt`：同一闸、同一通道、同一份 fail-open 纪律）。
 - **只译可译的体裁**：`summary_genre` 已把「有真散文可译」（prose/title）与「机器拼装」（scaffold/
   factor_list/absent）分开。只有 `TRANSLATABLE` 才喂 LLM；CXG 的 title 明确是**关联论文标题、不是摘要**，
   prompt 里说清，绝不让 LLM 据标题编数据集实验细节。
@@ -27,7 +28,7 @@
 
 结构 / 护栏 / 回退 / mock 短路 全部有**确定性**测试（monkeypatch 掉真 provider，无网络即可证明）。
 但「真 LLM 产出的中文质量」只能靠真 provider + 网络复验——那不在 `quality_gate`（清空密钥、指向空
-LLM env、设网络 tripwire）能覆盖的范围内。本层 fail-open；无 key 的部署默认关、不受影响。
+LLM env、设网络 tripwire）能覆盖的范围内。本层 fail-open；无 key 的部署按 P1 默认关、不受影响。
 """
 from __future__ import annotations
 
@@ -35,25 +36,21 @@ import re
 from typing import Any
 
 from ..content.introduction import build_dataset_introduction, meaningful_metadata_text
+from . import prompts
+from .act_summary_llm import _summarize_with_prompt
 from .llm_client import (
     LLMConfig,
-    _normalize_provider,
-    _sanitize_provider_error,
-    call_openai_compatible,
-    call_zhipuai,
-    load_llm_config,
+    should_use_llm as _should_use_llm,
 )
 from ..content import summary_genre
 from ..retrieval.vocabulary import CATALOG
 
 
-# 铁律**写进 user prompt**（不是 system slot）：`llm_client._call_chat_completions` 的 system 消息是
-# 写死的通用策展人设、会覆盖任何自定义 system——把护栏放 system 就成了不会发出去的死代码。放进
-# 确定发送的 user prompt 才真正接地。（这也是本层第一版的真 bug，被确定性测试当场抓到。）
+# 铁律写进 user prompt 而非 system slot 的理由：见 llm_client._call_chat_completions 的 system 引用处注释。
 _RULES_ZH = (
     "你是单细胞数据集目录的中文导读助手。任务：把下面给出的**公开元数据**改写成一段简洁、准确的"
     "中文导读，帮中文研究者快速判断该数据集是否与其研究相关。\n"
-    "铁律（违反任一条都是错误）：\n"
+    f"{prompts.ANTI_FABRICATION_HEADER_ZH}\n"
     "1. 只使用给出的元数据。绝不补充、推断或编造任何未给出的事实、数字、结论或方法细节。\n"
     "2. 元数据里标为「未说明/未标注」的字段，不要替它填值，也不要暗示它有值。\n"
     "3. 不要对该研究下任何『开创性 / 独占性 / 学界领先』判断——这是公开数据集目录、不是文献库，"
@@ -73,16 +70,12 @@ def should_use_llm(config: LLMConfig, genre: str) -> "tuple[bool, str]":
     """判定是否对该体裁调用**真** LLM。返回 (是否, 原因短标签)。
 
     mock 一律判否（它忽略 prompt、吐 curator 表，绝不用于介绍）；enable 关、无 key、不可译 都判否。
+    判定实现单一真源在 llm_client.should_use_llm，体裁可译性档经 post 钩子叠加。
     """
-    if config.mock_llm or _normalize_provider(config.provider) == "mock":
-        return False, "mock_not_used"
-    if not config.enable_llm:
-        return False, "disabled"
-    if not config.api_key:
-        return False, "no_key"
-    if genre not in summary_genre.TRANSLATABLE:
-        return False, "not_translatable"
-    return True, "ready"
+    return _should_use_llm(
+        config,
+        post=lambda _c: None if genre in summary_genre.TRANSLATABLE else (False, "not_translatable"),
+    )
 
 
 # ---------------------------------------------------------------- 硬校验 #2 满分化：受控词表随 prompt 接地
@@ -244,41 +237,19 @@ def enrich_introduction_with_llm(
     result["llm_summary"] = None
     result["llm_summary_source"] = None
 
-    # 载 config（含 .env）。**刻意不做 `os.getenv("ENABLE_LLM")` 快路径**：.env 里的 ENABLE_LLM 只有
-    # `load_llm_config`→`load_env_candidates` 才会灌进 `os.environ`，抢在它之前读 os.getenv 会在**新进程**
-    # 里把「.env 已开」误判成「关」→ LLM 层在真 webapp 里静默失效（集成浏览器 E2E 当场抓到的 bug）。
-    # 单数据集介绍端点不是热循环（recommend 循环走确定性 build_dataset_introduction、不经本函数），
-    # 每请求载一次 config 可接受。
-    try:
-        cfg = config or load_llm_config()
-    except Exception as exc:  # 配置加载异常也 fail-open
-        # 经脱敏层（防万一异常文本里带凭据；defense-in-depth，与 llm.error 同口径）。
-        result["llm_status"] = f"config_error:{_sanitize_provider_error(exc)[:80]}"
-        return result
-
     genre = str(result.get("genre") or "")
-    ok, reason = should_use_llm(cfg, genre)
-    result["llm_status"] = reason
-    if not ok:
-        return result
-
-    prompt = build_intro_prompt(result, item, genre)
-    provider = _normalize_provider(cfg.provider)
-    try:
-        if provider == "zhipuai":
-            llm = call_zhipuai(prompt, cfg)
-        else:
-            llm = call_openai_compatible(prompt, cfg)
-    except Exception as exc:  # provider 层任何异常 → 回退（脱敏，defense-in-depth）
-        result["llm_status"] = f"error:{_sanitize_provider_error(exc)[:80]}"
-        return result
-
-    if llm.succeeded and llm.text and llm.text.strip():
-        result["llm_summary"] = llm.text.strip()
-        result["llm_summary_source"] = "llm"
-        result["llm_status"] = "ok"
-        result["llm_model"] = llm.model
-    else:
-        # fail-open：确定性介绍原样保留，只记原因（脱敏由 llm_client 负责）。
-        result["llm_status"] = f"failed:{(llm.error or 'empty')[:80]}"
+    # 调用核心（载 config / 闸 / provider 通道 / fail-open）单一实现在
+    # act_summary_llm._summarize_with_prompt；本层只提供体裁附加闸与 prompt 构造器，
+    # 并把通用返回键映射回本层命名。
+    out = _summarize_with_prompt(
+        result,
+        config=config,
+        build_prompt=lambda _f: build_intro_prompt(result, item, genre),
+        gate=lambda cfg: should_use_llm(cfg, genre),
+    )
+    result["llm_summary"] = out["summary_zh"]
+    result["llm_summary_source"] = out["summary_source"]
+    result["llm_status"] = out["llm_status"]
+    if out["llm_model"] is not None:  # llm_model 仅成功时存在（additive 钉）
+        result["llm_model"] = out["llm_model"]
     return result

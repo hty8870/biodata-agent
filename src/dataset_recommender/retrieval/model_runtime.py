@@ -20,6 +20,7 @@ from typing import Sequence
 
 from ..app.runtime_paths import AppPaths, get_app_paths
 from .model_worker import MODEL_ID, model_files_ready
+from .vector_recall import DEFAULT_CROSS_ENCODER_MODEL
 
 READY_SCHEMA = "biodata-model-runtime/v1"
 STARTUP_TIMEOUT_S = 300.0
@@ -46,7 +47,7 @@ def worker_script(paths: "AppPaths | None" = None) -> Path:
 
 
 def model_dir(paths: "AppPaths | None" = None) -> Path:
-    return (paths or get_app_paths()).model_root / "cross_encoders" / "bge-reranker-v2-m3"
+    return (paths or get_app_paths()).model_root / "cross_encoders" / DEFAULT_CROSS_ENCODER_MODEL
 
 
 def read_ready_manifest(paths: "AppPaths | None" = None) -> dict:

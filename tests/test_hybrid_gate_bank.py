@@ -2,11 +2,11 @@
 """ 混合诉求闸 · 对抗负例库 + 能力账核销链 + 保底弃权（**全确定性、零 LLM**）。
 
 覆盖实测坐实的两处病形：
-- 【 混合句完成度】闸命中后 finish 的机械 checklist 不认 rank/rerank 作检索半核销、
+- 【P0 混合句完成度】闸命中后 finish 的机械 checklist 不认 rank/rerank 作检索半核销、
   也没有动作半的强制账 → 混合句静默只做一半。修复：`required_capabilities` 能力账
   （route_consensus 产出 → state/trace）+ `_capabilities_unsettled` 零信任对账 +
   `_finish_veto_all` 第五路否决 + 清单 expect=rank 接受 `_SEARCH_SETTLE_VERBS` 核销。
-- 【 误判】入库链否决 v1 是全句级（「检查更新，有新的就入库，再帮我找乳腺癌数据」
+- 【P1 误判】入库链否决 v1 是全句级（「检查更新，有新的就入库，再帮我找乳腺癌数据」
   反而不闸）；「帮我找可下载数据」因裸「下载」误判动作。修复：子句级判定
   （`_split_hybrid_clauses`；动作/检索信号须落在**不同子句**才闸，否决只对同子句生效）。
 - plan_action 保底通道（单次单动词）对混合句**明确弃权**（route=none + 如实回音），
@@ -29,7 +29,7 @@ from dataset_recommender.llm.llm_client import LLMConfig
 #: 纯检索句（含 v1 误判族：裸「下载」/产物名词/名词用法/存在性问句）——一律不闸。
 PURE_SEARCH_NOT_GATED = [
     "帮我找乳腺癌单细胞数据集",
-    "帮我找可下载数据",                    # 历史误判：裸「下载」与「找」同子句，产物形容词
+    "帮我找可下载数据",                    # v1 误判实锤：裸「下载」与「找」同子句，产物形容词
     "找找能下载 FASTQ 的人类肺癌数据",      # 同上族
     "最近更新的人类肺数据集",              # 「最近更新的」是检索条件
     "我上传的肺数据帮我找找",              # 「我上传的…」名词用法
@@ -59,9 +59,9 @@ PURE_ACTION_NOT_GATED = [
     "同步一下10x，顺便检查下ENCODE有没有更新",
 ]
 
-#: 真混合句（动作子句 ∧ 独立检索子句）——必须闸。含历史漏闸病形与既有 8 正例。
+#: 真混合句（动作子句 ∧ 独立检索子句）——必须闸。含 v1 漏闸坐实与既有 8 正例。
 MIXED_GATED = [
-    # —— 既有 正例（子句化后必须仍闸，防回归）——
+    # —— 既有正例（子句化后必须仍闸，防回归）——
     "检查数据库是否有更新，然后帮我找乳腺癌单细胞数据集",
     "检查10x更新，然后帮我找人类肺数据集",
     "帮我找乳腺癌数据，顺便看看数据库状态",
@@ -71,7 +71,7 @@ MIXED_GATED = [
     "帮我搜乳腺癌数据集，再把结果导出引文",
     "看看库里有多少条数据，再找斑马鱼的",
     # —— 新增 ——
-    "检查更新，有新的就入库，再帮我找乳腺癌数据",   # 历史漏闸病形（全句级入库链否决误赦）
+    "检查更新，有新的就入库，再帮我找乳腺癌数据",   # v1 漏闸实锤（全句级入库链否决误赦）
     "检查10x更新，再帮我找小鼠脑数据",
     "先检查ENCODE更新，再帮我找小鼠脑数据，顺便看看库里多少条",  # 三段式
     "帮我找肺癌数据，再导出引文",                   # 检索 + 环外动作（generic 能力）
@@ -117,7 +117,20 @@ def test_bank_size_and_version_pinned():
     total = (len(PURE_SEARCH_NOT_GATED) + len(PURE_ACTION_NOT_GATED)
              + len(MIXED_GATED) + len(AMBIGUOUS_NOT_GATED))
     assert total >= 40
-    assert AX._HYBRID_LEXICON_VERSION == "v2-2026-08-22"
+    assert AX._HYBRID_LEXICON_VERSION == "v3-2026-08-31"
+
+
+def test_action_res_derived_from_families():
+    """结构恒等：动作闸正则表 = 族表并集 + EXTRA 程序派生——族表是唯一手写清单，
+    闸正则不手抄第二份（两份清单必漂移）；EXTRA 恰为「安装」一条（无能力族可归）。"""
+    assert AX._HYBRID_ACTION_RES == tuple(
+        pat for _, pat, _, _ in AX._HYBRID_ACTION_FAMILIES) + AX._HYBRID_ACTION_RES_EXTRA
+    assert all(a is b for a, b in zip(
+        AX._HYBRID_ACTION_RES,
+        tuple(pat for _, pat, _, _ in AX._HYBRID_ACTION_FAMILIES)
+        + AX._HYBRID_ACTION_RES_EXTRA))
+    assert len(AX._HYBRID_ACTION_RES_EXTRA) == 1
+    assert AX._HYBRID_ACTION_RES_EXTRA[0].pattern == "安装"
 
 
 def test_clause_split_is_deterministic():
@@ -410,3 +423,44 @@ class TestHybridAbstainFallback:
         assert len(calls) == 1
         assert out["route"] == "search"
         assert "hybrid_abstain" not in out["plan"]
+
+
+@pytest.mark.usefixtures("_deterministic_turn")
+class TestHybridAbstainAgentDown:
+    """2026-08-30 bug3：agent 路径已启用但当轮大模型调用失败（401/超时等）时，
+    混合句弃权回音必须说真实原因（大模型没接上、设置是开着的），
+    绝不误导用户去「设置」里开已开着的「AI 执行」。"""
+
+    def _agent_boom(self, monkeypatch):
+        monkeypatch.setattr(AX, "agent_available", lambda: True)
+
+        def boom(*a, **k):
+            raise AX.AgentError("llm 401")
+
+        monkeypatch.setattr(AX, "plan_with_agent", boom)
+        monkeypatch.setattr(AX, "plan_with_agent_events", boom)
+        # 并发路径的 plan_action 前端直派探测：探测失败按未知处理走 agent 图
+        monkeypatch.setattr(AP, "plan_action",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("probe off")))
+
+    def test_concurrent_agent_down_echo(self, monkeypatch):
+        self._agent_boom(monkeypatch)
+        out = turn.route_turn(
+            _HYBRID_UTTERANCE, config=LLMConfig(enable_llm=True, api_key="sk-t"))
+        assert out["route"] == "none"
+        assert out["plan"]["hybrid_abstain"] is True
+        assert out["plan"].get("agent_fallback") is True
+        assert "什么都没有执行" in out["echo_zh"]
+        assert "没能接得上" in out["echo_zh"]
+        assert "是开着的，不用改设置" in out["echo_zh"]
+        assert "确认「AI 执行」已开启" not in out["echo_zh"]
+
+    def test_serial_agent_down_echo(self, monkeypatch):
+        monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
+        self._agent_boom(monkeypatch)
+        out = turn.route_turn(
+            _HYBRID_UTTERANCE, config=LLMConfig(enable_llm=True, api_key="sk-t"))
+        assert out["route"] == "none"
+        assert out["plan"]["hybrid_abstain"] is True
+        assert "没能接得上" in out["echo_zh"]
+        assert "确认「AI 执行」已开启" not in out["echo_zh"]

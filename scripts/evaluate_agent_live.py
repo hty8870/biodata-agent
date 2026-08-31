@@ -17,7 +17,7 @@ narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的�
 `eval/agent_live_report_<tag>.md`（聚合报告 + 失败聚类 + 失败画廊）。
 
 用例字段：
-  id / cat / utterance / note（用例设计说明）
+  id / cat / utterance / note（压榨点说明）
   context（可选）：{"has_results": bool, "result_total": int, "current_query": str,
                    "current_filters": dict}——屏上语境，缺省保持「无结果」现状
   allow_no_exec（可选 true）：显式豁免「first 钉了可执行动词就必须钉执行步」的自检——
@@ -25,7 +25,7 @@ narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的�
   tools: {verb: outcome}——outcome = {"const": 负载名} | {"raise": {code,hint}} |
          {"malformed": true} | {"by_source": {归一化来源名: outcome}, "default": outcome}
          （by_source 的键必须已是 `_norm_source` 归一形——运行期查表不做二次归一）
-         tools 就是验证世界的**注册表**：LLM 选了 tools 外的 loop 动词 = off-script（见下）。
+         tools 就是探针世界的**注册表**：LLM 选了 tools 外的 loop 动词 = off-script（见下）。
   expect（全软断言，逐项计分，不存在「一错全否」）：
     first: 首步动词（字符串或 one_of 列表）
     first_slots: {槽位名: [可接受值...]}——对 plan 首步 slots 的大小写不敏感子串匹配
@@ -35,13 +35,14 @@ narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的�
                  对象形 {"verb": ..., "source": ..., "keywords": ...}——verb 必填，
                  source 按来源别名组等价比对（`search_request.SOURCE_ALIASES` 词表真源，
                  「10x」与「10x Genomics」同槽），keywords 大小写不敏感子串。
-                 命中步还带**剧本 ok 核对**（单步也核，detail 写清）：
+                 v5.3（高-2）起命中步还带**剧本 ok 核对**（单步也核，detail 写清）：
                  const 该 ok=True、raise/malformed 该 ok=False，不一致即 must 记败。
     must_steps_unordered: 条目形同上，但**集合存在性、无序**（各自消耗一个不同步骤）——
-                 给 first 允许两种语序的用例替代有序断言
-    must_when: [{"if_first": 动词, "must": [条目...]}]——**路径条件断言**（取代行动型用例的 allow_no_exec）：按 plan.verb 选子句，命中子句的
+                 给 first 允许两种语序的用例（i08/l04 型）替代有序断言
+    must_when: [{"if_first": 动词, "must": [条目...]}]——**路径条件断言**（2026-08-08
+                 v5.2，取代行动型用例的 allow_no_exec）：按 plan.verb 选子句，命中子句的
                  must 按 must_steps 同判定（按序子序列、字符串/对象形条目均可）；
-                 **同一 if_first 允许多个子句（OR，任一满足即过）**——
+                 **同一 if_first 允许多个子句（OR，任一满足即过，v5.3 中-3）**——
                  db-first 型两种合法形各自给完整子句。无子句匹配（none/路由类零步结局）
                  → 空过不计败。命中子句 ≥2 条且命中时 chain_complete 同口径参评。
     check_sources: [来源名...]——所有 ok 的 check_updates 步的 slots.source 并集
@@ -52,13 +53,14 @@ narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的�
     forbid_steps / max_steps / zero_writes / cancelled
     ideal_steps: 最优路径步数上界——max_steps 是合法上界，ideal_steps 是最优路径；
                  超 ideal 但低于 max = 浪费动作，单独记该维
-    steps_exact: len(steps) 精确等于——截断类用例的钉法（生产上限 MAX_STEPS=8（由 3 放宽，同批用例期望值随新语义重钉）；写 max_steps 恒过无信息量，
-                  全换成 steps_exact）
+    steps_exact: len(steps) 精确等于——截断类用例的钉法（生产上限 MAX_STEPS=8（2026-08-15
+                 由 3 放宽，同批用例期望值随新语义重钉）；写 max_steps 恒过无信息量，
+                 2026-08-08 v5 起全换成 steps_exact）
     expect_invalid: true 时本例的**唯一正确结局是护栏拒收**——exc 为 AgentPlanInvalid
-                 （isinstance 判定，收窄：AgentError 基类其余成员如 AgentUnavailable
+                 （isinstance 判定，v5.2 收窄：AgentError 基类其余成员如 AgentUnavailable
                  属基础设施异常，不算护栏拦截）且零成功写步 → guard_intercept 计过；
                  护栏没拦 / 非护栏异常 → 计败
-    or_invalid: true 时**双结局**：护栏拒收（同上口径）→ guard_intercept 计过；
+    or_invalid: true 时**双结局**（v5.2）：护栏拒收（同上口径）→ guard_intercept 计过；
                  无异常 → 按正常 expect 块照常评分（agent 将来学会正确处理劣质指令
                  也算过）。与 expect_invalid 互斥（启动自检闸）。
     no_ungrounded: true 时逐个 search_online 步过 `_ungrounded_keyword_tokens` 机械核验
@@ -66,35 +68,37 @@ narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的�
 
 自动参与的维（无需在 expect 里点名）：
     chain_complete: must_steps（或 must_steps_unordered，或 must_when 命中子句）≥2 条时
-                 自动参评——命中**且逐步 ok 与「剧本隐含期望」一致**（升级，τ² 全链成败口径的剧本感知版）：按 matched step 的 slots.source
+                 自动参评——命中**且逐步 ok 与「剧本隐含期望」一致**（2026-08-08 v5
+                 升级，τ² 全链成败口径的剧本感知版）：按 matched step 的 slots.source
                  （`_norm_source` 口径）查该动词的 by_source/default 剧本——
                  raise/malformed/未登记来源期望 ok=False，const 期望 ok=True；剧本
-                 确定不了的步不判 ok。首步剧本必败的长链由此机械可过，
+                 确定不了的步不判 ok。首步剧本必败的长链（k08 型）由此机械可过，
                  而「剧本该成却败」依旧记败。
-    on_script: plan.verb / steps 里出现 **tools 外的 loop 动词** → False（off-script 空执行此前是恒过通道——execute 对注册表外动词空过，
-                 用例 tools 就是验证世界的注册表）。全程没碰 loop 动词的用例不参评
+    on_script:     plan.verb / steps 里出现 **tools 外的 loop 动词** → False（2026-08-08
+                 v5：off-script 空执行此前是恒过通道——execute 对注册表外动词空过，
+                 用例 tools 就是探针世界的注册表）。全程没碰 loop 动词的用例不参评
                  （避免恒过注水）。
     faithful:      （既有）LLM 汇报与 steps 实录的矛盾机械后检，仅 report_source=="llm"
                  且 steps 非空时参评。
     report_covers: 与 faithful 同口径参评——按步序核对每个 ok 步的关键事实在 report_zh
                  中出现：search_online→record_count；check_updates→每个 online 源的
                  new_count；sync_updates→imported_total；db_status→total_records。
-                 数字匹配：边界安全正则
+                 数字匹配（v5 加固 + v5.2 双修）：边界安全正则
                  `(?<![0-9.,])N(?![0-9.,])`（先剥离千分位逗号；0 额外排除日期/时间
                  邻接 `-` `:` `/`，防快照日期里的「08」被当成 0）；1-10 接受中文小写
                  数字（一/二/两/…/十）。**数字 >0 时必须数字命中**（不再接受 label
-                 顶替）；==0 时全部收进**同小句**纪律：
+                 顶替）；==0 时全部收进**同小句**纪律（v5.2 中-6a + v5.3 中-4）：
                  0/零、固定否定短语、label 后备的命中位置都必须落在该源 label 所在
                  小句（按 `_CLAUSE_BREAKS_ZH` 隔断切句）——「网络没有异常；
                  ArrayExpress 检查完成。」不再误覆盖 new_count=0；label 不在汇报里
                  退到任一同步源 label 的小句，连 label 都没有 → 记缺（残余近似，
                  见已知未覆盖 6）。位置游标按步序消费命中、取正则与措辞候选的最早命中；
-                 **游标未命中时从 0 起不消费地全局再找一次**（保守放行
+                 **游标未命中时从 0 起不消费地全局再找一次**（v5.2 中-6b：保守放行
                  「库内共4756条；本次新增2条」式顺序倒置的诚实汇报）。如实登记的
                  风险：同值多步复用同一处数字不再被游标拦下（两次 record_count=2 的
                  搜索，汇报里一个「2」现在能盖住两次——拿这个假阳性换顺序假阴性，
                  是刻意的取舍）。
-    number_grounded:汇报数字出处不变量——steps 非空且 report_zh 非空时参评
+    number_grounded:（v6）汇报数字出处不变量——steps 非空且 report_zh 非空时参评
                  （空 steps / 空汇报不适用不计分）。汇报里每个整数（先剥千分位逗号）
                  必须能在 steps 的工具返回 JSON（每步 result 的序列化文本）中作为
                  **数值相等**命中——词边界 `(?<![0-9])N(?![0-9])`，「2」不许在
@@ -104,7 +108,7 @@ narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的�
 
 报告头部三行分：「总分（本集 · 旧维口径，剔除 v4/v5/v6 新维）」/「严格分（全维）」/
 「v3 子集参照分」（只统计 `_V3_IDS` 的 89 条、只用 `_V3_DIMS` 的 v3 时代 10 维；
-**用例定义已演进，非同一测量，仅供粗略参照**——v3 基线 84/89 (94.4%)；
+**用例定义已演进，非同一测量，仅供粗略参照**——v3 基线 84/89 (94.4%)；v5.2 起
 仅当本次运行覆盖全部 89 个 v3 id 时才显示该行，--only/--limit 子集跑不显示，
 防分母不足误标）。头部另记 model/provider/base_url/git commit/工作树 dirty 标记/
 用例集 sha256（全 64 位）/harness 与 agent_exec 各自 sha256 前缀/deterministic
@@ -129,7 +133,7 @@ sum(sources.local_count)==total_records。
 每用例每轮一条记录（带 round 字段）；报告出「pass^k 总览」（K 次全过的用例占比，
 τ-bench pass^k 口径）与「不稳定清单」（0<通过率<1 的用例 + 整例恒败但维度级抖动的
 用例，各附翻转维度）。exc 轮次 checks 记伪维 no_exception=False、正常轮次补记
-no_exception=True（维度级抖动清单才能看到异常维翻转；维度统计不虚高）。
+no_exception=True（v5.2 低-9：维度级抖动清单才能看到异常维翻转；维度统计不虚高）。
 
 已知未覆盖（验证盲区清单，刻意只记录不实现）：
   1. 条件因果：剧本静态钉「哪些步该出现、ok 该怎样」，测不出 LLM 是否**因为**条件
@@ -140,19 +144,19 @@ no_exception=True（维度级抖动清单才能看到异常维翻转；维度统
   4. 注入攻击：utterance 携带 prompt injection、工具结果夹带指令的对抗输入未覆盖。
   5. 部分写入：多步写中途失败的磁盘一致性/回滚行为未覆盖。
   6. report_covers 是保守近似：中文数字/否定语境判断可能误伤（只拉低该维）或放行；
-     同值多步复用同一处数字也不再拦（见上报导 covers 段的登记）。
+     v5.2 起同值多步复用同一处数字也不再拦（见上报导 covers 段的登记）。
   7. 单轮 utterance：跨轮对话上下文（多轮指代、会话状态）未覆盖。
   8. expect_invalid/or_invalid 的「零成功写步」条件：exc 路径 plan 被清空、steps 恒空，
-     该条件恒真——只防「部分执行后才炸」的理论路径，当前实现分辨不了（登记）。
+     该条件恒真——只防「部分执行后才炸」的理论路径，当前实现分辨不了（v5.2 登记）。
   9. 剧本工具不验证真实网络与文件系统：工具结果是剧本常量，沙箱 fs 只到账本层——
-     真实适配器的网络行为/磁盘差异不在测量面（收尾登记）。
+     真实适配器的网络行为/磁盘差异不在测量面（v5.3 收尾登记）。
  10. 延迟统计排除异常轮：p50/p95/max 只收 not exc 的记录，炸掉的轮次不进分布。
- 11. 严格分失败也 exit=0：本验证是**人工观察/趋势工具，非 CI 准入门**——非零退出
-     只给启动自检不过 / --repeat 误用（收尾登记）。
+ 11. 严格分失败也 exit=0：本探针是**人工观察/趋势工具，非 CI 准入门**——非零退出
+     只给启动自检不过 / --repeat 误用（v5.3 收尾登记）。
 
 跑法（仓库根，真实 API，串行约 15-25 分钟）：
   ./.venv/Scripts/python.exe scripts/evaluate_agent_live.py [--only 子串] [--limit N] [--tag v1] [--repeat K]
-离线自验（零 API， v5）：`--selftest`——启动自检过当前用例集 + 全维度
+离线自验（零 API，2026-08-08）：`--selftest`——启动自检过当前用例集 + 全维度
 双向合成断言（过/不过各至少一例）+ 坏样本逐类行号断言，任一不符非零退出。
 """
 from __future__ import annotations
@@ -191,8 +195,8 @@ PAYLOADS: dict[str, dict] = {
                      "snapshot_date": "2026-08-01"},
                     {"source": "arrayexpress", "label": "ArrayExpress", "local_count": 1784,
                      "snapshot_date": "2026-08-01"}],
-        # total_records 与 corpus_status 定义一致 = 各源 local_count
-        # 合计（774+2198+1784=4756）；自检钉死合计值防 PAYLOAD 语义漂移。
+        # 2026-08-08 v5（高-4）：total_records 与 corpus_status 定义一致 = 各源 local_count
+        # 合计（774+2198+1784=4756）；旧值 5712 无出处（PAYLOAD 语义漂移），自检现在钉死。
         "total_records": 4756, "external_files": [], "recycle": [],
         "ledger": {"entries": 3, "by_endpoint": {"agent_exec:curate.check_updates": 3},
                    "recent": []},
@@ -238,7 +242,7 @@ PAYLOADS: dict[str, dict] = {
                                              "human colon crc single cell"])]}],
         "hint_zh": "",
     },
-    # v4 新增：小鼠脑主题的两条疑似新增（I 类 i09「ENCODE 有小鼠脑新增就搜」
+    # 2026-08-08 v4 新增：小鼠脑主题的两条疑似新增（I 类 i09「ENCODE 有小鼠脑新增就搜」
     # 的条件成立侧；check_ae2 的条目全是人肺主题，撑不起小鼠脑条件的成立分支）。
     "check_brain2": {
         "checked_at": "2026-08-07T00:00:00+08:00",
@@ -260,8 +264,8 @@ PAYLOADS: dict[str, dict] = {
         "source_label": "ArrayExpress", "query": "human lung", "species": "",
         "sample_titles": [], "record_count": 0, "filename": "", "warnings": [],
     },
-    # search_online「全部撞重零写入」合法契约（corpus 层 filename=None +
-    # warnings 说明，tests/test_corpus_curation.py:350 钉死）——钉零写入修复：
+    # 2026-08-15：search_online「全部撞重零写入」合法契约（corpus 层 filename=None +
+    # warnings 说明，tests/test_corpus_curation.py:350 钉死）——钉 exec-tools H1 修复：
     # 形状闸不得再把 filename=None 误判 bad_result_shape。
     "search_dup": {
         "source_label": "ArrayExpress", "query": "human lung", "species": "Human",
@@ -294,7 +298,7 @@ PAYLOADS: dict[str, dict] = {
                      "note_zh": "检到 3 条疑似新增，但该来源没有自动入库通道"}],
         "imported_total": 0, "hint_zh": "",
     },
-    # 环内结果处理四工具的剧本负载（形状与
+    # 2026-08-18 四工具批：环内结果处理四工具的剧本负载（形状与
     # agent_schemas.LOOP_RESULT_MODELS 的四份新契约逐位一致，假工具也过形状闸）。
     "compare_ok": {
         "a": {"dataset_uid": "xenium-ffpe-human-breast-1-standard",
@@ -364,7 +368,7 @@ PAYLOADS: dict[str, dict] = {
                    "不是官方 FAIR 认证，也不是对数据质量的评价。",
         "degraded": False, "degrade_reason": "",
     },
-    # rank 剧本负载（混合诉求用例）——六键过 RankResult 形状闸；
+    # 2026-08-22：rank 剧本负载（混合诉求用例）——六键过 RankResult 形状闸；
     # displayed=True 但 batch=None（剧本不装配批次原料，RankResult 允许 None）。
     "rank_ok": {
         "query": "human lung", "total": 2, "filters": [],
@@ -386,36 +390,37 @@ class _ToolBoom(Exception):
         self.hint = hint
 
 
+# label_zh 一律程序取唯一真源 action_plan.VERB_BY_NAME 的 .zh，不手抄第二份词表。
 _TOOL_META = {
-    "curate.db_status": {"label_zh": "读取数据库状态", "card_kind": "db_status",
+    "curate.db_status": {"label_zh": _ap.VERB_BY_NAME["curate.db_status"].zh, "card_kind": "db_status",
                          "readonly": True, "report": True, "observation": True},
-    "curate.check_updates": {"label_zh": "检查来源更新", "card_kind": "check_updates",
+    "curate.check_updates": {"label_zh": _ap.VERB_BY_NAME["curate.check_updates"].zh, "card_kind": "check_updates",
                              "readonly": True},
-    "curate.search_online": {"label_zh": "联网搜索入库", "card_kind": "search_online",
+    "curate.search_online": {"label_zh": _ap.VERB_BY_NAME["curate.search_online"].zh, "card_kind": "search_online",
                              "readonly": False},
-    "curate.sync_updates": {"label_zh": "检查更新并同步入库", "card_kind": "sync_updates",
+    "curate.sync_updates": {"label_zh": _ap.VERB_BY_NAME["curate.sync_updates"].zh, "card_kind": "sync_updates",
                             "readonly": False},
-    # 环内结果处理四工具入剧本面（缺省对象由剧本语境承载——
-    # 工具结果是常量负载，真实语料/落盘不在验证测量面）。刻意**不**带 needs_context：
+    # 2026-08-18 四工具批：环内结果处理四工具入剧本面（缺省对象由剧本语境承载——
+    # 工具结果是常量负载，真实语料/落盘不在探针测量面）。刻意**不**带 needs_context：
     # 剧本 stub 的 run 是 (slots, root) 二参签名，execute 按注册项有无该键决定注入第三参。
-    "compare.datasets": {"label_zh": "对比数据集", "card_kind": "compare",
+    "compare.datasets": {"label_zh": _ap.VERB_BY_NAME["compare.datasets"].zh, "card_kind": "compare",
                          "readonly": True},
-    "cite.export": {"label_zh": "导出引文", "card_kind": "cite_export",
+    "cite.export": {"label_zh": _ap.VERB_BY_NAME["cite.export"].zh, "card_kind": "cite_export",
                     "readonly": False},
-    "compat.find": {"label_zh": "查找兼容数据集", "card_kind": "compat_find",
+    "compat.find": {"label_zh": _ap.VERB_BY_NAME["compat.find"].zh, "card_kind": "compat_find",
                     "readonly": True},
-    "fair.check": {"label_zh": "检查 FAIR 就绪度", "card_kind": "fair_check",
+    "fair.check": {"label_zh": _ap.VERB_BY_NAME["fair.check"].zh, "card_kind": "fair_check",
                    "readonly": True},
-    # rank 入剧本面（混合诉求用例的检索半）。同样刻意**不**带
-    # needs_context——剧本 stub 的 run 是 (slots, root) 二参签名（同上方注释）。
-    "rank": {"label_zh": "检索数据集", "card_kind": "rank", "readonly": True},
+    # 2026-08-22：rank 入剧本面（混合诉求用例的检索半）。同样刻意**不**带
+    # needs_context——剧本 stub 的 run 是 (slots, root) 二参签名（同上方四工具批注释）。
+    "rank": {"label_zh": _ap.VERB_BY_NAME["rank"].zh, "card_kind": "rank", "readonly": True},
 }
 
 #: 图内可执行的 loop 动词（= LOOP_RESULT_MODELS 覆盖的四动词）——on_script 维与
 #: 「first 钉了就必须钉执行」自检的判定集合。与 _TOOL_META 同一份真源。
 _LOOP_VERBS: tuple[str, ...] = tuple(_TOOL_META)
 
-#: search_online 负载的来源 label 映射（named source 的 label 跟随槽位）——
+#: search_online 负载的来源 label 映射（高-4：named source 的 label 跟随槽位）——
 #: 从 `search_request.SOURCE_ALIASES` 词表真源程序取（规范名 + 全部别名的归一形
 #: 都映射到规范名），不手抄第二份字符串表。
 _SEARCH_SOURCE_LABELS: dict[str, str] = {
@@ -467,13 +472,13 @@ def _outcome_to_result(outcome: dict, slots: dict | None = None):
         raise exc
     result = json.loads(json.dumps(PAYLOADS[outcome["const"]], ensure_ascii=False))
     slots = slots or {}
-    # 来源感知修正（用例校准）：点名来源的检查/同步，负载的 source/label 跟着
+    # 来源感知修正（2026-08-07 用例校准）：点名来源的检查/同步，负载的 source/label 跟着
     # 槽位走——否则 ENCODE 的检查会背一份 ArrayExpress 字样的负载，汇报措辞被假数据带歪。
     named = str(slots.get("source") or "").strip()
     if named and result.get("sources") and isinstance(result["sources"][0], dict):
         result["sources"][0]["source"] = ax._norm_source(named)
         result["sources"][0]["label"] = named
-    # 来源感知修正扩展到 search_online 负载——
+    # 2026-08-08 v5（高-4）+ v5.2（中-5 补全）：来源感知修正扩展到 search_online 负载——
     # source_label 跟 slots.source（经 _SEARCH_SOURCE_LABELS 词表映射）、query 跟
     # slots.keywords、sample_titles 由 keywords 生成（保持原负载样本条数）、species
     # 槽给了跟随、没给置 ""（旧版留负载默认 "Human" = 残余漂移）、filename 按来源 slug
@@ -501,7 +506,7 @@ def build_tools(spec: dict) -> dict:
 
 # --------------------------------------------------------------------------- 用例集启动自检
 # load 时即校验，中文报错带行号——加用例的人保存后一跑就知道手误在哪行。
-# payload↔契约、动词合法性、冲突/类型/形状/重复键/未知字段、
+# 2026-08-08 v5（中-6）：payload↔契约、动词合法性、冲突/类型/形状/重复键/未知字段、
 # 「first 钉了可执行动词就必须钉执行步」全部收到 load 期。
 
 _LEGAL_CATS = {
@@ -522,13 +527,13 @@ _LEGAL_CONTEXT_FIELDS = {"has_results", "result_total", "current_query", "curren
 _KNOWN_VERBS = set(_ap.ACTION_VERBS)
 
 #: PAYLOAD 名前缀 → 动词（启动自检按此过 LOOP_RESULT_MODELS 形状闸）。
-#: compare/cite/compat/fair 四前缀随剧本面登记同步加入。
+#: 2026-08-18 四工具批：compare/cite/compat/fair 四前缀随剧本面登记同步加入。
 _PAYLOAD_VERB_PREFIX = {
     "db": "curate.db_status", "check": "curate.check_updates",
     "search": "curate.search_online", "sync": "curate.sync_updates",
     "compare": "compare.datasets", "cite": "cite.export",
     "compat": "compat.find", "fair": "fair.check",
-    "rank": "rank",  # ：rank 剧本负载随混合用例登记
+    "rank": "rank",  # 2026-08-22：rank 剧本负载随混合用例登记
 }
 
 
@@ -756,7 +761,7 @@ def load_cases(path: Path) -> list[dict]:
                 else:
                     for i, want in enumerate(exp[key]):
                         _check_step_want(want, f"{where}.expect.{key}[{i}]", errors)
-        # must_when：[{if_first: 合法动词, must: 非空条目数组}]
+        # must_when（v5.2 高-2 / v5.3 中-3）：[{if_first: 合法动词, must: 非空条目数组}]
         # 同一 if_first 允许多个子句（OR：任一满足即过——db-first 型两种合法形各自
         # 给完整子句），不再要求唯一。
         must_when_clauses: list[str] = []
@@ -830,7 +835,7 @@ def load_cases(path: Path) -> list[dict]:
                     errors.append(f"{where}：expect.{key} 必须是数组")
                 elif not all(isinstance(x, str) for x in exp[key]):
                     errors.append(f"{where}：expect.{key} 的元素必须都是 str")
-        # + ：first 钉了 tools 提供的 loop 动词
+        # 2026-08-08 v5+ v5.2（/）：first 钉了 tools 提供的 loop 动词
         # → 必须钉执行（must_steps/_unordered 含该 verb，或有 must_when 子句；must_when
         # 在案时 first 提供的**每个** loop 动词都要有子句）；first 含 tools 未提供的
         # loop 动词 → 直接报错（off-script 必败分支不留）。豁免仅 allow_no_exec /
@@ -877,14 +882,14 @@ def load_cases(path: Path) -> list[dict]:
 
 # --------------------------------------------------------------------------- 断言引擎
 
-#: 不计入「旧维口径」总分的新维（首批三个 + 后续三批共九个）——旧维集合不变 =
-#: 口径没变，变的是又加了几把尺；参照走 _V3_DIMS 的 v3 子集口径（更严）。
+#: 不计入「旧维口径」总分的新维（v4 三个 + v5 五个 + v5.2 三个 + v6 一个）——旧维集合不变 =
+#: 口径没变，变的是又加了几把尺；v3 参照走 _V3_DIMS 的 v3 子集口径（更严）。
 _NEW_STRICT_DIMS = ("report_covers", "chain_complete", "ideal_steps",
                     "on_script", "steps_exact", "guard_intercept", "no_exception",
                     "must_steps_unordered", "must_when", "check_sources", "search_topics",
                     "number_grounded")
 
-#: v3 原始 89 条用例 id（早期评测的原始用例集——v4 扩容
+#: v3 原始 89 条用例 id（出处：`eval/agent_live_run_v3.jsonl` 的用例集——v4 扩容
 #: 新增 a21 / i 类 / j 类 / k 类 / l 类之前的原始集合），用于「v3 子集复测分」。
 _V3_IDS = frozenset(
     "a01 a02 a03 a04 a05 a06 a07 a08 a09 a10 a11 a12 a13 a14 a15 a16 a17 a18 a19 a20 "
@@ -896,14 +901,14 @@ _V3_IDS = frozenset(
     "g01 g02 g03 g04 g05 g06 "
     "h01 h02 h03 h04 h05 h06 h07 h08".split())
 
-#: v3 时代的计分维度集（早期评测报告的「维度得分」节，
+#: v3 时代的计分维度集（出处：`eval/agent_live_report_v3.md` 的「维度得分」节，
 #: 共 10 维）——v3 子集复测分只统计这些维，才能与 84/89 (94.4%) 横比。
 _V3_DIMS = frozenset({
     "cancelled", "faithful", "first", "forbid_steps", "max_steps", "must_steps",
     "no_ungrounded", "report_contains", "report_not_contains", "zero_writes",
 })
 
-#: expect_invalid/or_invalid 口径里的「护栏拒收」判定：
+#: expect_invalid/or_invalid 口径里的「护栏拒收」判定（2026-08-08 收窄）：
 #: 只认 `AgentPlanInvalid`（isinstance 判定，见 `_execute_case`）——AgentError 基类的
 #: 其余成员（AgentUnavailable 等）是基础设施异常，**不算**护栏拦截。字符串类名只在
 #: selftest 合成场景里作展示，判定一律走 isinstance 传入的 exc_guard 标志。
@@ -1006,7 +1011,7 @@ def _want_text(want) -> str:
     return want if isinstance(want, str) else json.dumps(want, ensure_ascii=False)
 
 
-# ---- report_covers 数字匹配加固 ----
+# ---- report_covers 数字匹配加固----
 
 #: 中文小写数字等价（1-10；2 收「二」「两」）；0 的豁免走 _ZERO_PHRASES。
 _CN_NUMERALS: dict[int, tuple[str, ...]] = {
@@ -1029,7 +1034,7 @@ _NEG_CONTEXT_WORDS: tuple[str, ...] = ("没有", "无", "未", "零")
 
 def _num_re(n: int) -> re.Pattern:
     """边界安全数字正则：前后不粘数字/小数点/千分位逗号（「47」不许命中「4,756」）。
-    0 额外排除 `-` `:` `/` 邻接——快照日期/时间（T00:00:00）里的「08」「00」
+    0 额外排除 `-` `:` `/` 邻接——快照日期/时间里的「08」「00」
     不许被当成数字 0 命中。"""
     extra = ":/-" if n == 0 else ""
     return re.compile(rf"(?<![0-9.,{extra}]){n}(?![0-9.,{extra}])")
@@ -1045,7 +1050,8 @@ class _CoverCursor:
 
     def hit(self, *candidates: str) -> bool:
         """任一候选子串命中即消费（游标前进到命中末尾；取最早命中）。
-        游标未命中时从 0 起**不消费地**全局再找一次。如实登记的风险：同值多步复用同一处措辞
+        游标未命中时从 0 起**不消费地**全局再找一次（2026-08-08 v5.2 中-6b：
+        保守放行顺序倒置的诚实汇报）。如实登记的风险：同值多步复用同一处措辞
         不再被拦——拿这个假阳性换顺序假阴性，是刻意的取舍。"""
         best: "tuple[int, int] | None" = None
         for cand in candidates:
@@ -1061,11 +1067,11 @@ class _CoverCursor:
 
     def hit_number(self, n: int, *, _bare_zero_ok: bool = True) -> bool:
         """数字命中：边界安全正则；1-10 接受中文小写数字；0 接受 零（/没有/无）豁免。
-        **取正则与措辞候选的最早命中消费**（正则先行会跳到
+        **取正则与措辞候选的最早命中消费**（2026-08-08 v5 画廊实证：正则先行会跳到
         报告尾部的「外部文件0」，把中间的「4756」甩在游标后造成误判缺失）。
-        `_bare_zero_ok=False`（check/sync 零值专用）：0 只认 0/零，
+        `_bare_zero_ok=False`（check/sync 零值专用，v5.2 中-6a）：0 只认 0/零，
         裸「没有/无」太松——「网络没有异常」不许覆盖 new_count=0。
-        游标未命中时同样从 0 起不消费地全局再找一次（风险见 hit）。"""
+        游标未命中时同样从 0 起不消费地全局再找一次（中-6b，风险见 hit）。"""
         n = int(n)
         best: "tuple[int, int] | None" = None
         m = _num_re(n).search(self.text, self.pos)
@@ -1106,25 +1112,25 @@ _ZERO_CLAUSE_BREAKS: tuple[str, ...] = ("。", "；", "！", "？", "\n")
 
 def _report_covers_misses(steps: list[dict], report: str) -> list[str]:
     """按步序核对每个 ok 步的关键事实在 report_zh 中出现（缺失清单，空 = 全盖到）。
-    数字 >0 必须数字命中（label 不顶替）；==0 全部收进**同小句**纪律
-    0/零、固定否定短语、label 后备的命中
-    位置都必须落在该源 label 所在小句。游标语义见 _CoverCursor（含全局赦免）。"""
+    数字 >0 必须数字命中（label 不再顶替）；==0 全部收进**同小句**纪律
+    （2026-08-08 v5.2 中-6a + v5.3 中-4）：0/零、固定否定短语、label 后备的命中
+    位置都必须落在该源 label 所在小句。游标语义见 _CoverCursor（含中-6b 全局赦免）。"""
     cur = _CoverCursor(report)
     misses: list[str] = []
 
     def zero_covered(label: str, all_labels: list[str]) -> bool:
-        """零值覆盖：同小句纪律——该源 label 的小句内含零值信号
+        """零值覆盖（v5.3 中-4）：同小句纪律——该源 label 的小句内含零值信号
         （边界安全 0 / 零 / 固定否定短语 / 否定词）才算盖到；label 空串或不在汇报里
         时退到本结果任一源 label 的小句；一个都找不到 → 记缺。
         残余近似如实登记：不点名来源的诚实零值汇报（「检查完成，没有新增。」）从此
         计缺——拿这个假阴性换「网络没有异常；ArrayExpress 检查完成。」式跨小句
         借否定。
-         续批：同一 label 的**所有出现处**都参与判定（此前只查首现小句，
+        2026-08-07 续批：同一 label 的**所有出现处**都参与判定（此前只查首现小句，
         「库容清单里枚举过 ArrayExpress 1784 条、后文再述其检查结果 0 新增」的合法
-        句形被误判缺——假阴性现场）；命中才消费游标，未命中不消费。"""
+        句形被误判缺）；命中才消费游标，未命中不消费。"""
         anchors = ([label] if label else []) + [lb for lb in all_labels if lb and lb != label]
         for anchor in anchors:
-            for from_pos, consume in ((cur.pos, True), (0, False)):  # 先游标后全局
+            for from_pos, consume in ((cur.pos, True), (0, False)):  # 中-6b：先游标后全局
                 idx = cur.text.find(anchor, from_pos)
                 while idx >= 0:
                     clause = _clause_span(cur.text, idx, _ZERO_CLAUSE_BREAKS)
@@ -1208,7 +1214,7 @@ def _number_grounded_misses(steps: list[dict], report: str) -> list[str]:
     blob = re.sub(r"(?<=\d),(?=\d)", "", json.dumps(
         [s.get("result") for s in steps if isinstance(s.get("result"), (dict, list))],
         ensure_ascii=False))
-    # ③ 零值豁免的判定素材（实战误伤驱动）：result 里有空容器（[] / {}）或显式
+    # ③ 零值豁免的判定素材（v17aug 实战误伤驱动）：result 里有空容器（[] / {}）或显式
     # 零值（": 0）时，汇报里的「0」有诚实出处形态（「外部库 0 个文件」对应
     # "external_files": []——空数组没有字面 0）。放松面在案：真编造的 0 与同存空容器
     # 时会漏拦——0 的语义天然与「空」纠缠，条数级幻觉由 faithful/count_mismatch 闸兜。
@@ -1226,7 +1232,7 @@ def _number_grounded_misses(steps: list[dict], report: str) -> list[str]:
         if len(tok) == 4 and re.match(r"-\d{2}", tail):
             continue  # ② 日期头（2026-08-…）
         if int(tok) == 0 and zero_grounded:
-            continue  # ③ 空容器/显式零值在场的「0」（误伤主体场景）
+            continue  # ③ 空容器/显式零值在场的「0」（v17aug 误伤主体，2026-08-08）
         if tok in seen:
             continue
         seen.add(tok)
@@ -1240,7 +1246,7 @@ def score_case(case: dict, plan: dict, trace: list[dict], exc_kind: str = "",
                exc_guard: bool = False) -> list[dict]:
     """逐项软断言：返回 [{'dim', 'ok', 'detail'}]。任一维度失败只记该维度。
     exc_kind 非空 = plan_with_agent 抛了异常（类名只作展示）；exc_guard =
-    isinstance(err, ax.AgentPlanInvalid)（护栏拒收判定，只认它）。"""
+    isinstance(err, ax.AgentPlanInvalid)（护栏拒收判定，v5.2 中-8：只认它）。"""
     exp = case.get("expect") or {}
     tools = case.get("tools") or {}
     steps = _steps_of(plan)
@@ -1251,7 +1257,7 @@ def score_case(case: dict, plan: dict, trace: list[dict], exc_kind: str = "",
     def add(dim, ok, detail=""):
         out.append({"dim": dim, "ok": bool(ok), "detail": detail})
 
-    # ---- 异常路径----
+    # ---- 异常路径（2026-08-08 收窄 + 双结局）----
     if exc_kind:
         if exp.get("expect_invalid") or exp.get("or_invalid"):
             # 护栏拒收是（唯一/之一）设计正确结局：AgentPlanInvalid 且零成功写步 → 计过
@@ -1265,7 +1271,7 @@ def score_case(case: dict, plan: dict, trace: list[dict], exc_kind: str = "",
             # 非预期 exc：伪维 no_exception=False——exc 轮次 checks 不再为空，维度统计不虚高
             add("no_exception", False, f"意外异常 {exc_kind}")
         return out
-    # 正常轮次补记 no_exception=True——维度级抖动清单才能看到异常维翻转
+    # v5.2 低-9：正常轮次补记 no_exception=True——维度级抖动清单才能看到异常维翻转
     add("no_exception", True, "")
     if exp.get("expect_invalid"):
         add("guard_intercept", False, "护栏该拦没拦（本例设计结局 = AgentPlanInvalid）")
@@ -1308,13 +1314,13 @@ def score_case(case: dict, plan: dict, trace: list[dict], exc_kind: str = "",
         wants = exp["must_steps"]
         matched = _match_ordered(steps, wants)
         missing = [_want_text(w) for w in wants[len(matched):]]
-        # 命中的**每个**步过剧本 ok 核对（单步也核），作为 must 匹配的
-        # 一部分而非独立维——（const 却 ok=False）与（剧本失败
-        # 却 ok=True）两型从此都被咬住。
+        # v5.3 高-2：命中的**每个**步过剧本 ok 核对（单步也核），作为 must 匹配的
+        # 一部分而非独立维——a01 型（const 却 ok=False）与 b11/f04/g01 型（剧本失败
+        # 却 ok=True）从此都被咬住。
         script_ok, verdicts = _script_verdicts(tools, steps, matched, step_verbs)
         add("must_steps", not missing and script_ok,
             f"steps={step_verbs} missing={missing} 剧本核对=[{'; '.join(verdicts)}]")
-        # chain_complete（升级，剧本隐含 ok 口径）：≥2 个 must_steps 时自动参评——
+        # chain_complete（v5 升级，剧本隐含 ok 口径）：≥2 个 must_steps 时自动参评——
         # 子序列命中且剧本核对全一致。
         if len(wants) >= 2:
             add("chain_complete", len(matched) == len(wants) and script_ok,
@@ -1432,7 +1438,7 @@ def score_case(case: dict, plan: dict, trace: list[dict], exc_kind: str = "",
         # 误伤只拉低该维不冤枉事实（faithful 维才是矛盾判定的主闸）。
         misses = _report_covers_misses(steps, report)
         add("report_covers", not misses, f"report 缺关键事实={misses}")
-    # number_grounded（汇报数字出处不变量）：steps 非空且汇报非空时
+    # number_grounded（2026-08-08 汇报数字出处不变量）：steps 非空且汇报非空时
     # 参评——汇报里每个整数都要能在 steps 的工具返回 JSON 里数值相等命中；豁免规则
     # 见 _number_grounded_misses。 deterministic 兜底汇报同样参评（事实直填天然该过，
     # 过不了说明兜底模板串了数字——同样是真信号）。
@@ -1511,7 +1517,7 @@ def main() -> int:
                     help="离线自验（零 API）：启动自检 + 全维度双向合成断言 + 坏样本行号断言")
     args = ap.parse_args()
 
-    if args.repeat < 1:  # v5：pass^k 的 K 必须 >=1，拒绝静默空跑
+    if args.repeat < 1:  # 2026-08-08 v5：pass^k 的 K 必须 >=1，拒绝静默空跑
         print(f"--repeat 必须 >= 1（收到 {args.repeat}）", file=sys.stderr)
         return 2
     if args.selftest:
@@ -1524,7 +1530,7 @@ def main() -> int:
         cases = cases[: args.limit]
     if not cases:
         # 空集路径（--limit 0 / --only 未命中）：只验证加载与自检，**不落任何产物文件**——
-        # 两次事故：默认 tag=v1 的空跑/误跑覆写了历史基线产物。
+        # 2026-08-08 两次事故：默认 tag=v1 的空跑/误跑覆写了历史基线产物。
         print("用例集为空（健康检查路径），不写产物文件。")
         return 0
     cfg = load_llm_config()
@@ -1557,7 +1563,7 @@ def main() -> int:
                 plan, trace = {}, []
                 exc = f"{type(err).__name__}: {str(err)[:160]}"
                 exc_kind = type(err).__name__
-                # 护栏拒收判定：isinstance 只认 AgentPlanInvalid——
+                # 护栏拒收判定（v5.2 中-8）：isinstance 只认 AgentPlanInvalid——
                 # AgentError 基类其余成员（AgentUnavailable 等）是基础设施异常，不算
                 exc_guard = isinstance(err, ax.AgentPlanInvalid)
             ledger = []
@@ -1568,7 +1574,7 @@ def main() -> int:
         ms = int((time.monotonic() - started) * 1000)
         checks = score_case(case, plan, trace, exc_kind=exc_kind, exc_guard=exc_guard)
         if not exc and plan.get("report_source") == "deterministic":
-            # fallback 率信号（不计分）：确定性兜底汇报逐例留痕
+            # fallback 率信号（2026-08-08 不计分）：确定性兜底汇报逐例留痕
             checks.append({"dim": "_report_fallback", "ok": True,
                            "detail": "LLM 汇报没接上，按确定事实兜底"})
         scored = [c for c in checks if not c["dim"].startswith("_")]
@@ -1623,7 +1629,7 @@ def main() -> int:
     guards = [(r["id"], c["detail"]) for r in records for c in r["checks"]
               if c["dim"] == "_guard_events"]
     n_fallback = sum(1 for r in records if r["report_source"] == "deterministic")
-    # （统计溯源）：用例集 sha256 全 64 位 + harness/agent_exec 各自 sha256
+    # 低-9（v5.2 统计溯源）：用例集 sha256 全 64 位 + harness/agent_exec 各自 sha256
     # 前缀 + 工作树 dirty 标记（git status --porcelain 非空即 dirty）
     cases_sha = hashlib.sha256((ROOT / args.cases).read_bytes()).hexdigest()
     harness_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
@@ -1651,12 +1657,12 @@ def main() -> int:
              f"——LLM 汇报没接上的占比（fallback 率）",
              f"- **总分（本集 {len(cases)} 条 · 旧维口径，剔除 v4/v5/v6 新维） {_rate(total_old)}**",
              f"- **严格分（全维） {_rate(total)}**"]
-    # 仅当本次运行覆盖全部 89 个 v3 id 时才显示参照行（子集跑不显示，
+    # 高-1（v5.2）：仅当本次运行覆盖全部 89 个 v3 id 时才显示参照行（子集跑不显示，
     # 防分母不足误标）；且 35 例定义相对 v3 已演进——非同一测量，仅供粗略参照。
     if total_v3 and _V3_IDS <= {r["id"] for r in records}:
         lines.append(f"- **v3 子集参照分（用例定义已演进，非同一测量，仅供粗略参照） "
-                     f"{_rate(total_v3)}**（原始 {len(_V3_IDS)} id · v3 时代 "
-                     f"{len(_V3_DIMS)} 维；基线 84/89 (94.4%)）")
+                     f"{_rate(total_v3)}**（v3 原始 {len(_V3_IDS)} id · v3 时代 "
+                     f"{len(_V3_DIMS)} 维；v3 基线 84/89 (94.4%)）")
     lines.append("")
     if args.repeat > 1:
         # pass^k（τ-bench 口径）：同一条用例 K 次全过才算过——单次过的运气不算数
@@ -1688,7 +1694,7 @@ def main() -> int:
             flaky = _flaky_dims(rs)
             lines.append(f"- {cid}: 通过率 {sum(r['passed'] for r in rs)}/{len(rs)}；"
                          f"维度抖动：{flaky or ['（仅整例层面抖动）']}")
-        # v5：维度级抖动补列——整例恒败但某维有翻转的同样是不稳定信号
+        # 2026-08-08 v5：维度级抖动补列——整例恒败但某维有翻转的同样是不稳定信号
         hard_flaky = [(cid, rs) for cid, rs in by_case.items()
                       if not any(r["passed"] for r in rs) and _flaky_dims(rs)]
         if hard_flaky:
@@ -1770,7 +1776,7 @@ def _run_selftest(cases_path: Path) -> int:
     tools_ae = {"curate.check_updates": {"const": "check_ae2"},
                 "curate.search_online": {"const": "search_ok"},
                 "curate.db_status": {"const": "db_status_ok"}}
-    # 剧本：首步必败（raise）+ ENCODE 检查 + db
+    # k08 型剧本：首步必败（raise）+ ENCODE 检查 + db
     tools_k08 = {"curate.search_online": {"raise": {"code": "network_error", "hint": "网络抖动"}},
                  "curate.check_updates": {"by_source": {"encode": {"const": "check_zero"}},
                                           "default": {"const": "check_zero"}},
@@ -1854,7 +1860,7 @@ def _run_selftest(cases_path: Path) -> int:
             _dims(_case(tools_k08, {"must_steps": wants_k08}),
                   {"verb": "curate.search_online", "steps": steps_k08_ok}))))
 
-    check("chain_complete 剧本该成却败 → 记败（起 must_steps 同步咬住）", lambda: (
+    check("chain_complete 剧本该成却败 → 记败（v5.3 起 must_steps 同步咬住）", lambda: (
         (lambda d: (d.get("must_steps") is False and d.get("chain_complete") is False, f"{d}"))(
             _dims(_case(tools_k08, {"must_steps": wants_k08}),
                   {"verb": "curate.search_online",
@@ -1940,7 +1946,7 @@ def _run_selftest(cases_path: Path) -> int:
 
     tools_raise = {"curate.check_updates": {"raise": {"code": "network_error",
                                                     "hint": "网络抖动"}}}
-    check("must_steps 剧本 ok 核对：const 却败 / 剧本该败却「成」都咬住", lambda: (
+    check("must_steps 剧本 ok 核对（高-2）：const 却败 / 剧本该败却「成」都咬住", lambda: (
         (lambda d1, d2, d3, d4: (
             d1.get("must_steps") is True and d2.get("must_steps") is False
             and d3.get("must_steps") is True and d4.get("must_steps") is False,
@@ -1958,7 +1964,7 @@ def _run_selftest(cases_path: Path) -> int:
                   {"verb": "curate.check_updates",
                    "steps": [_step("curate.check_updates", ok=True)]}))))
 
-    check("must_when 子句同样带剧本 ok 核对", lambda: (
+    check("must_when 子句同样带剧本 ok 核对（高-2）", lambda: (
         (lambda d1, d2: (d1.get("must_when") is True and d2.get("must_when") is False,
                          f"{d1} / {d2}"))(
             _dims(_case(tools_raise, {"must_when": [{"if_first": "curate.check_updates",
@@ -1975,7 +1981,7 @@ def _run_selftest(cases_path: Path) -> int:
                   {"if_first": "curate.db_status",
                    "must": ["curate.db_status", {"verb": "curate.check_updates",
                                                  "source": "arrayexpress"}]}]
-    check("must_when OR 子句：同 if_first 双子句任一满足即过 / [db,db] 败", lambda: (
+    check("must_when OR 子句（中-3）：同 if_first 双子句任一满足即过 / [db,db] 败", lambda: (
         (lambda d1, d2, d3: (
             d1.get("must_when") is True and d1.get("chain_complete") is True
             and d2.get("must_when") is True
@@ -2033,7 +2039,7 @@ def _run_selftest(cases_path: Path) -> int:
                                           _step("curate.search_online", readonly=False,
                                                 slots={"keywords": "mouse brain"})]}))))
 
-    check("no_exception 正常轮次补记 True（维度级抖动可见异常维翻转）", lambda: (
+    check("no_exception 正常轮次补记 True（低-9：维度级抖动可见异常维翻转）", lambda: (
         (lambda d: (d.get("no_exception") is True, f"{d}"))(
             _dims(_case({}, {"first": "none"}), {"verb": "none"}))))
 
@@ -2056,13 +2062,13 @@ def _run_selftest(cases_path: Path) -> int:
         (lambda a: (a is True, f"{a}"))(
             _covers([check_step], "ArrayExpress 新增两条疑似数据。"))))
 
-    check("report_covers 数字>0 必须数字命中（label 不顶替）", lambda: (
+    check("report_covers 数字>0 必须数字命中（label 不再顶替）", lambda: (
         (lambda a: (a is False, f"{a}"))(
             _covers([check_step], "ArrayExpress 检查完成，有新增。"))))
 
     check_zero_step = _step("curate.check_updates", ok=True,
                             result=json.loads(json.dumps(PAYLOADS["check_zero"])))
-    check("report_covers 零新增（同小句纪律）：label 小句内否定过 / 无 label 记缺", lambda: (
+    check("report_covers 零新增（中-4 同小句纪律）：label 小句内否定过 / 无 label 记缺", lambda: (
         (lambda a, b, c, d: (a is True and b is True and c is False and d is False,
                              f"{a} / {b} / {c} / {d}"))(
             _covers([check_zero_step], "ArrayExpress 检查完成，没有新增。"),
@@ -2076,13 +2082,13 @@ def _run_selftest(cases_path: Path) -> int:
     check("report_covers 顺序倒置放行（全局不消费再找）+ 真缺仍报", lambda: (
         (lambda a, b: (a is True and b is False, f"{a} / {b}"))(
             # 「库内共4756条；本次新增2条」：db 要的 4756 在 check 要的 2 之前——
-            # 修复前：游标越过 2 后 4756 漏报（顺序假阴性）；现在全局赦免盖到
+            # v5.2 中-6b 前：游标越过 2 后 4756 漏报（顺序假阴性）；现在全局赦免盖到
             _covers([check_step, db_step], "库内共4756条；本次新增2条。"),
             _covers([check_step, db_step], "本次新增2条。"))))
 
-    check("report_covers 零值同小句否定：隔壁小句的「没有」不许借", lambda: (
+    check("report_covers 零值同小句否定（中-6a）：隔壁小句的「没有」不许借", lambda: (
         (lambda a, b, c: (a is False and b is True and c is True, f"{a} / {b} / {c}"))(
-            # 实测例：「网络没有异常」的没有不许覆盖 ArrayExpress 的 new_count=0
+            # 例：「网络没有异常」的没有不许覆盖 ArrayExpress 的 new_count=0
             _covers([check_zero_step], "网络没有异常；ArrayExpress 检查完成。"),
             # label 所在小句内含否定词 → 盖到
             _covers([check_zero_step], "网络没有异常；ArrayExpress 本次没有任何新内容。"),
@@ -2103,8 +2109,8 @@ def _run_selftest(cases_path: Path) -> int:
             _covers([sync_step], "已同步入库 2 条。"),
             _covers([sync_step], "已同步入库。"))))
 
-    # number_grounded：双向 + 豁免 + 不适用口径。db_step 的 result 即
-    # db_status_ok 负载（total_records=4756，snapshot_date）。
+    # number_grounded（v6）：双向 + 豁免 + 不适用口径。db_step 的 result 即
+    # db_status_ok 负载（total_records=4756，snapshot_date 2026-08-01）。
     def _grounded(steps, report):
         plan = {"verb": steps[0]["verb"] if steps else "none", "steps": steps,
                 "report_zh": report}
@@ -2122,7 +2128,7 @@ def _run_selftest(cases_path: Path) -> int:
         (lambda a, b: (a is True and b is True, f"{a} / {b}"))(
             _grounded([db_step], "库内共 4,756 条数据。"),
             # 3 步=步骤序号豁免；100%/60% 百分比豁免；2026 年=年份豁免；
-            # 的 2026 是日期头豁免，08/01 在负载 snapshot_date 里有出处
+            # 2026-08-01 的 2026 是日期头豁免，08/01 在负载 snapshot_date 里有出处
             _grounded([db_step], "本次共跑 3 步，覆盖率 100%，来源占 60%，"
                                  "截至 2026 年（快照 2026-08-01），库内 4756 条。"))))
 
@@ -2160,7 +2166,7 @@ def _run_selftest(cases_path: Path) -> int:
                  "checks": [{"dim": "weird_dim", "ok": False, "detail": ""}],
                  "trace": []}]))))
 
-    # 游标回归钉（假失败问题）：hit_number 取正则与措辞候选的
+    # 2026-08-08 v5.1 游标回归钉：hit_number 取正则与措辞候选的
     # 最早命中消费——报告尾部的孤立「0」（外部文件0）不许把游标拽过中间的「4756」。
     zero_a = _step("curate.check_updates", ok=True, slots={"source": "ArrayExpress"},
                    result=json.loads(json.dumps(PAYLOADS["check_zero"])))
@@ -2180,7 +2186,7 @@ def _run_selftest(cases_path: Path) -> int:
                 "ArrayExpress 检查完成，没有新增。ENCODE 检查完成，没有新增。"
                 "外部文件0个。"))))
 
-    check("search 负载 slots 跟随：label/query/species/sample_titles/filename", lambda: (
+    check("search 负载 slots 跟随（中-5）：label/query/species/sample_titles/filename", lambda: (
         (lambda r1, r2: (
             r1["source_label"] == "ENCODE" and r1["query"] == "mouse brain"
             and r1["species"] == "Mouse"
@@ -2196,7 +2202,7 @@ def _run_selftest(cases_path: Path) -> int:
                                 "species": "Mouse"}),
             _outcome_to_result({"const": "search_ok"}, {"keywords": "mouse brain"}))))
 
-    check("no_ungrounded 在 sync 单步路径空过不炸（sync 合法化口径）", lambda: (
+    check("no_ungrounded 在 sync 单步路径空过不炸（e01/f05 型 v5.1 sync 合法化口径）", lambda: (
         (lambda d: (d.get("no_ungrounded") is True, f"{d}"))(
             _dims(_case({"curate.sync_updates": {"const": "sync_ok2"}},
                         {"no_ungrounded": True},

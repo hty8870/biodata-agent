@@ -14,9 +14,9 @@
  *
  * 本文件是 ES Module：core/cards 经 import 取。cards/dataset_page（openFavPopover）、
  * shell/accounts（resetFavFolderState）、browse（renderFavFolderBar/renderFavFolderGroups/setFavRerender）、
- * interactions（toggleFavFolderManage）经 import 取本文件导出。
+ * interactions（toggleFavFolderManage）经 import 取本文件导出（绞杀桥已全退役）。
  *
- * 验证：原「import { renderFavorites } from "#browse"」与 browse→fav_folders
+ * 2026-08-10：原「import { renderFavorites } from "#browse"」与 browse→fav_folders
  * 的 import 互调成环。沿 core.js setHistHooks 同一范式改注册反转：browse 在模块求值期把
  * renderFavorites 注册进来，本文件只在函数体内调 _fireFavRerender，环结构性消失；未注册时
  * （dataset.html 等不加载 browse 的页面——那里本就没有收藏视图，各调用点本来也不可达）
@@ -29,19 +29,21 @@ import { buildCard } from "#cards";
 let _rerenderFavs = null;
 export function setFavRerender(fn) { _rerenderFavs = typeof fn === "function" ? fn : null; }
 function _fireFavRerender() { if (_rerenderFavs) _rerenderFavs(); }
-/*收藏「在对话中使用」→ 设置数据集上下文 chip。projects.js 经 setCtxDataSetHandler 注册
+/* 取消收藏成功的 toast：popover 与确认按钮两处共用，字面量只留一份。 */
+const FAV_UNFAVED_COPY = "已取消收藏";
+/* 收藏「在对话中使用」→ 设置数据集上下文 chip。projects.js 经 setCtxDataSetHandler 注册
    （注册反转防 fav_folders→projects 新环——projects→browse→fav_folders 已存在，直连 projects 成环）。 */
 let _ctxSetData = null;
 export function setCtxDataSetHandler(fn) { _ctxSetData = typeof fn === "function" ? fn : null; }
 function _ctxSetDataset(card) { if (_ctxSetData) _ctxSetData(card); }
-/*收藏从一级视图迁进「我的库」浮窗收藏页签——「是否在收藏视图」改判本机状态（libWin 开 + favs 页签）。 */
+/* 收藏从一级视图迁进「我的库」浮窗收藏页签——「是否在收藏视图」改判本机状态（libWin 开 + favs 页签）。 */
 function _inLibFavs() { const w = $("libWin"); return !!(w && !w.hidden && w.dataset.libActive === "favs"); }
-/* 目录三态访问器（browse.js 模块求值期经 setCatalogLookup 注册——注册反转防 browse↔fav_folders 循环依赖）。
-   未注册时（dataset.html 等不加载 browse 的页面）空值守卫安全空转。 */
+/* 目录三态访问器（browse.js 模块求值期经 setCatalogLookup 注册——regist 反转防 browse↔fav_folders 环回退，
+   与收藏视图重渲钩子同范式）。未注册时（dataset.html 等不加载 browse 的页面）空值守卫安全空转。 */
 let _catalogLookup = null;
 export function setCatalogLookup(fn) { _catalogLookup = typeof fn === "function" ? fn : null; }
 function _catalogOf(uid) { try { return _catalogLookup ? _catalogLookup(uid) : null; } catch (_e) { return null; } }
-/*目录加载器同范式注册（browse.js ensureDatasetsLoaded）——「更新」遇 load_error 先拉目录再重查。 */
+/* 目录加载器同范式注册（browse.js ensureDatasetsLoaded）——「更新」遇 load_error 先拉目录再重查。 */
 let _catalogEnsure = null;
 export function setCatalogEnsure(fn) { _catalogEnsure = typeof fn === "function" ? fn : null; }
 
@@ -105,7 +107,7 @@ function _renderFavPopoverPick(pop, anchorBtn, it) {
     });
     // `preventScroll` 不是可有可无的：本 popover 在**任何**滚动上自动收起（锚点已漂移）。
     // 裸 focus() 会把默认项滚进视口 → 触发 scroll → popover 刚开就把自己关了。
-    //  心形靠近视口边缘时必然复现； 的验证验收里正是这么扑空的。
+    // 心形靠近视口边缘时必然复现；2026-07-29 的真机验收里正是这么扑空的。
     setTimeout(() => { const d = pop.querySelector(".fav-pop-default"); if (d) d.focus({ preventScroll: true }); }, 0);
 }
 
@@ -128,7 +130,7 @@ function _favNavLanded() {
 }
 
 function _favPopoverAdd(anchorBtn, it, folderId) {
-    toggleFav(it, folderId, anchorBtn);   //  anchorBtn 供遥测算名次（fav 带 uid/pos）
+    toggleFav(it, folderId, anchorBtn);   // anchorBtn 供遥测算名次（fav 事件带 uid/pos）
     anchorBtn.classList.add("active");
     _favFlash(anchorBtn, "fav-pop");
     _favNavLanded();
@@ -153,7 +155,7 @@ function _renderFavPopoverManage(pop, anchorBtn, it) {
         toggleFav(it, undefined, anchorBtn);   // 取消收藏当前不打点；anchorBtn 传入保持签名一致
         anchorBtn.classList.remove("active");
         _favFlash(anchorBtn, "fav-unpop");   // 回落一下；**不给光环**——光环是「加入成功」的语汇
-        toast("已取消收藏");
+        toast(FAV_UNFAVED_COPY);
         closeFavPopover();
         // 就在收藏视图里取消：让这张卡自己退场再重排，而不是整格瞬间跳变（用户会怀疑点错了哪张）。
         // 退场动效走 GSAP（要在动画结束后才重排，纯 CSS 拿不到这个回调）→ 经 MOTION 门控，
@@ -289,7 +291,7 @@ function renderFavFolderManage() {
     newInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); doAdd(); } });
 }
 
-/* 收藏卡片运维条（卡片级动作用文字 .btn——更新 / 在对话中使用 / 删除）：
+/* 收藏卡片运维条（视觉 spec §4.1：卡片级动作用文字 .btn——更新 / 在对话中使用 / 删除）：
    由调用方 buildCard 外包 .lib-card-wrap；**不动卡片工厂 API**（buildCard 只加 variant:"library"）。 */
 function _favCardNode(it) {
     const wrap = document.createElement("div");
@@ -310,10 +312,10 @@ function _favCardNode(it) {
     if (del) del.addEventListener("click", (e) => { e.stopPropagation(); _favDel(it, del); });
     return wrap;
 }
-/* 收藏「更新」（独立指纹）：{uid, title, sample_size, raw_data_status}。found 且指纹变 →
+/* 收藏「更新」（设计 §4 独立指纹）：{uid, title, sample_size, raw_data_status}。found 且指纹变 →
    重渲该卡 + toast「已更新」；指纹同 → toast「已是最新」；not_found → 「已下架」；load_error → 「目录未加载」。
    load_error 先经注册的加载器拉一次目录再重查（没进过浏览视图时目录本就没加载，
-   直接 toast 会让「稍后重试」永远落空）；拉取在途给按钮「更新中…」忙态。 */
+   直接 toast 会让「稍后重试」永远落空）；拉取在途给按钮「更新中…」忙态（视觉 spec §4.2）。 */
 async function _favUpdate(it, btn) {
     let lookup = _catalogOf(it.dataset_uid || "");
     if (!lookup) return;
@@ -330,7 +332,7 @@ async function _favUpdate(it, btn) {
     /* 两处修正：
        ① raw_data_status 走 fastqInfo 语义口径——结果页收藏的条目存的是后端旧式 emoji 串
           （「✅ 包含 FASTQ」），目录侧是「含 FASTQ」，裸比字符串会每次误报「已更新」；
-       ② 指纹变要把目录新值落回收藏条目（按 uid 定位、无 uid 回退 itemKey；
+       ② 指纹变要把目录新值落回收藏条目（按 uid 定位、无 uid 回退 itemKey，设计 §4 身份口径；
           folder 是收藏侧专属字段，merge 后保留原值）——光 toast 不写记录，重渲的卡还是旧数据，
           且同一条每点必报「已更新」（狼来了）。 */
     const fp = [it.dataset_uid, it.dataset_name, it.sample_size, fastqInfo(it.raw_data_status).label].join("|");
@@ -372,7 +374,7 @@ function _favDel(it, btn) {
     }
     if (btn._armedTimer) { clearTimeout(btn._armedTimer); btn._armedTimer = null; }
     toggleFav(it);   // 取消收藏（返回 false 表示移除；这里只需动作，不依赖返回值）
-    toast("已取消收藏");
+    toast(FAV_UNFAVED_COPY);
     if (_inLibFavs()) _fireFavRerender();
 }
 

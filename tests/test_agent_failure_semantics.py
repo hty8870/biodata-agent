@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""失败语义二分 + 连续失败处置二分（批；蓝本 pydantic-ai ModelRetry/ToolFailed 二分、
+"""失败语义二分 + 连续失败处置二分（2026-08-06 批；蓝本 pydantic-ai ModelRetry/ToolFailed 二分、
 12-factor-agents factor 9「错误进 context + 确定性熔断」、OpenHands stuck detector）的确定性门。
- 熔断二分：联网二连败不硬停、改**联网暂停**（moratorium）。
+联网二连败不硬停、改**联网暂停**（moratorium）。
 
 钉四条：
   1. **终态失败死路拦截**：工具以终态码（source_not_registered）失败 → (verb, 目标源) 记死路账；
@@ -18,12 +18,12 @@
   3b. **写步预算闸**：写步（search_online/sync_updates，成败都计）
      用满 MAX_WRITE_STEPS 次后写工具提议被机械拒绝（declined 如实点名「预算已用完、
      还要入库可以再说一次」），只读工具照常放行——总步数放宽不放大单请求写入上界。
-  4. **失败步同指纹重试的精确豁免面**（同指纹重试的放行与收窄均经实测定标）：
+  4. **失败步同指纹重试的精确豁免面**（2026-08-08 放行、收窄）：
      `_is_duplicate_step` 的比对集 = 成功步 + 非 network_error 失败步——network_error 是
      唯一真·可重试码（失败步什么都没做成，同指纹重试放行）；bad_result_shape 是确定性
      失败，同指纹重试必败照样拦截（不白烧步数）；bad_param/no_candidates 换参重试指纹
      天然不同，不受影响。
-  5. **「先新后旧」注入段**（重试会挤占 MAX_STEPS 预算）：存在失败步时
+  5. **「先新后旧」注入段**（重试挤占 MAX_STEPS 预算）：存在失败步时
      decide 双壳 prompt 注入「先把没做过的新事做完，重试最多一次放在最后」——纯劝导无闸。
 全离线：fake chat_model + monkeypatch LOOP_TOOLS（与 test_agent_exec_loop.py 同一 harness）。
 """
@@ -75,7 +75,7 @@ def _failing_tool(code, hint):
 
 def test_terminal_failure_blocks_same_source_retry(monkeypatch):
     """source_not_registered 失败后，decide 换关键词再试同一来源 → 死路机械拦截；
-     重入：拦截不等于整条完成——回灌重问一次（模型改 finish 收尾）；
+    重入：拦截不等于整条完成——回灌重问一次（模型改 finish 收尾）
     汇报兜底仍如实点名没做的事。"""
     monkeypatch.setitem(agent_exec.LOOP_TOOLS, "curate.search_online", {
         "run": _failing_tool("source_not_registered", "暂不支持联网搜索来源「10x」。"),
@@ -88,7 +88,7 @@ def test_terminal_failure_blocks_same_source_retry(monkeypatch):
         # decide：LLM 不知道死路，换关键词再试同一来源（槽位变了，重复步拦截管不到）
         AIMessage(content='{"verb": "curate.search_online", "quoted": "联网搜 10x 的肺数据",'
                           ' "source": "10x", "keywords": "肺"}'),
-        #  重入：拒绝回灌后模型如实 finish（不再提死路）
+        # 重入：拒绝回灌后模型如实 finish（不再提死路）
         AIMessage(content='{"done": true}'),
         AIMessage(content="10x 这个来源本工具接不了，这次没有搜成。"),
     )
@@ -100,7 +100,7 @@ def test_terminal_failure_blocks_same_source_retry(monkeypatch):
     assert plan["steps"][0]["ok"] is False
     assert plan["steps"][0]["error_code"] == "source_not_registered"
     reask_text = "；".join(t.get("detail", "") for t in trace)
-    assert "被系统拒绝" in reask_text and "回灌重问" in reask_text, "死路拒绝必须走  回灌重问"
+    assert "被系统拒绝" in reask_text and "回灌重问" in reask_text, "死路拒绝必须走 P0-1 回灌重问"
     report = plan.get("report_zh") or ""
     assert "接不了" in report or "没有搜成" in report or "没有做" in report, \
         f"兜底汇报必须如实点名没做的事：{report}"
@@ -140,7 +140,7 @@ def test_retryable_codes_do_not_create_dead_ends():
         assert retryable not in agent_exec._TERMINAL_STEP_CODES, retryable
 
 
-# ---------------------------------------------------------------- 2. 连续失败处置二分
+# ---------------------------------------------------------------- 2. 连续失败处置二分（2026-08-08 再二分）
 
 def _nonnetwork_failing_check_registry(monkeypatch):
     """失败禁提测试组的假注册表：check_updates 恒以 bad_param（非网络码）失败、db_status 返 0 条替身。"""
@@ -153,13 +153,13 @@ def _nonnetwork_failing_check_registry(monkeypatch):
                 "generated_at": "t", "sources": [], "total_records": 0,
                 "external_files": [], "recycle": [],
                 "ledger": {"entries": 0, "by_endpoint": {}, "recent": []}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True},
     })
 
 
 def test_nonnetwork_double_failure_bans_verb_but_keeps_independent_tasks(monkeypatch, _tmp_project_root):
-    """非网络码二连败 **不再硬停**——decide 照常调 LLM
+    """评审主治：非网络码二连败 **不再硬停**——decide 照常调 LLM
     （prompt 带「失败工具禁提」注入段），独立的 db_status 事项照常放行并真跑。
     旧口径「任意两步失败即停」会把两个不同动作的独立失败误当原地空转、连坐剩余事项。"""
     _nonnetwork_failing_check_registry(monkeypatch)
@@ -224,13 +224,13 @@ def _network_failing_search_registry(monkeypatch):
                 "generated_at": "t", "sources": [], "total_records": 0,
                 "external_files": [], "recycle": [],
                 "ledger": {"entries": 0, "by_endpoint": {}, "recent": []}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True},
     })
 
 
 def test_moratorium_does_not_ban_snapshot_source_check():
-    """（验证）：联网暂停只禁触网调用——离线快照源（CELLxGENE）的
+    """：联网暂停只禁触网调用——离线快照源（CELLxGENE）的
     check_updates 只读本地快照，不连坐；在线源（ArrayExpress）的 check 仍被禁。"""
     # 单元面：_is_network_call 的判定矩阵
     assert agent_exec._is_network_call("curate.check_updates", "CELLxGENE Discover") is False
@@ -258,7 +258,7 @@ def test_moratorium_does_not_ban_snapshot_source_check():
 
 
 def test_network_moratorium_lets_offline_db_status_through(monkeypatch, _tmp_project_root):
-    """联网二连败 **不再硬停**——decide 照常调 LLM（prompt 带联网暂停注入），
+    """联网二连败 **不再硬停**——decide 照常调 LLM（prompt 带联网暂停注入）
     离线 db_status 提议照常放行并真跑（链上剩余的离线事项不被一刀切误伤）。"""
     _network_failing_search_registry(monkeypatch)
     model = _FakeModel(
@@ -344,7 +344,7 @@ def test_network_moratorium_unit_matrix():
     assert nxt2 is None and "联网暂停中" in note2, "联网二连败后联网提议必须机械拒绝"
 
 
-# ---------------------------------------------------------------- 4. 失败步同指纹重试的精确豁免面
+# ---------------------------------------------------------------- 4. 失败步同指纹重试的精确豁免面（k03 放行 / f04 收窄）
 
 def test_duplicate_gate_network_error_is_the_only_retriable_exemption():
     """`_is_duplicate_step` 比对集 = 成功步 + 非 network_error 失败步（收窄矩阵钉）：network_error 失败步放行同指纹重试；bad_result_shape 等确定性
@@ -368,7 +368,7 @@ def test_duplicate_gate_network_error_is_the_only_retriable_exemption():
 
 
 def test_failed_step_same_fingerprint_retry_is_allowed(monkeypatch):
-    """全链路：check 网络失败 → decide 提议同源重查（恒同指纹，旧口径
+    """（全链路）：check 网络失败 → decide 提议同源重查（恒同指纹，旧口径
     在此恒杀）→ 去重闸放行、第二次真跑成功——可纠正码的重试价值真实存在。"""
     outcomes = iter([
         _failing_tool("network_error", "网络抖动，稍后重试"),
@@ -429,7 +429,7 @@ def test_deterministic_failure_same_fingerprint_retry_is_blocked(monkeypatch):
 
 
 def test_failed_step_block_reaches_decide_prompt(monkeypatch):
-    """问题4（重试挤占预算）：存在失败步时 decide prompt 注入「先新后旧」次序段；
+    """问题4（重试挤占预算）：存在失败步时 decide prompt 注入「先新后旧」次序段
     全部成功时整段不出现（双向钉；纯 prompt 劝导无机械闸）。"""
     _network_failing_search_registry(monkeypatch)
     model = _FakeModel(
@@ -467,7 +467,7 @@ def test_failed_step_block_reaches_decide_prompt(monkeypatch):
     assert "先把没做过" not in model2.invocations[1][0].content, "无失败步时注入段不得出现"
 
 
-# ---------------------------------------------------------------- 3. sync_updates 的汇报事实链（集成冒烟坐实的三处缺口）
+# ---------------------------------------------------------------- 3. sync_updates 的汇报事实链（真机冒烟坐实的三处缺口）
 
 def _sync_step(imported_total=0, new_count=1, note="检到疑似新增 1 条，但这个来源还没有联网入库适配器，本工具不能自动入库——可去官网核对"):
     return {
@@ -523,7 +523,7 @@ def test_sync_fallback_report_names_unclosed_part():
 # ---------------------------------------------------------------- 误伤修复（机械后检精度）
 
 def _check_step(online_recent=12, local_count=1784, new_count=2, n_cands=2):
-    """check_updates 成功步的最小真形状（与验证负载同口径）。"""
+    """check_updates 成功步的最小真形状（与探针负载同口径）。"""
     return {
         "verb": "curate.check_updates", "ok": True, "card_kind": "check_updates",
         "result": {"checked_at": "t", "sources": [{

@@ -16,14 +16,15 @@
   - 429/503 与瞬时连接错误指数退避 ≤3 次，其余 4xx 不重试；不引任何需要付费 key 的服务；
   - 解析只用标准库（re + html），**不引新依赖**；页面结构变了 → 如实降级（ok=False + error），不炸链。
 
-GEO 已接入：走 NCBI E-utilities 官方端点（esearch/esummary，免 key）。
-三条顾虑的处置：① 「需 email 礼貌声明」——本仓库无对外联系邮箱，按官方建议只带
+GEO 已接入（2026-08-07，推翻 v1 的「不接」裁决——产品已立项，配方见
+《数据源API调研-2026-08-08.md》§4）：走 NCBI E-utilities 官方端点（esearch/esummary，免 key）。
+当年三条顾虑的处置：① 「需 email 礼貌声明」——本仓库无对外联系邮箱，按官方建议只带
 `tool=biodata_agent` 参数，不编造 email；② 「返回结构深」——两段式封装进
 `_geo_esearch_ids` / `_geo_summary_items` 形状闸，响应漂移即如实降级（parse_changed），不硬解析；
 ③ 「series/study 两层映射价值低」——只取 Series 级（"GSE"[Entry Type] 枚举），与本地
 geo.json 快照同口径，check_updates 差分与关键词/物种检索都够用。
 
-GEO 备用通道（降级施工）：本机到 NCBI 持续不可达时，search_geo /
+GEO 备用通道（2026-08-07 降级施工）：本机到 NCBI 持续不可达时，search_geo /
 geo_recent_items 按「NCBI 主通道 → E-GEOD 镜像（BioStudies，≤2016 老数据）→
 Europe PMC 文献弱兜底」按序降级，全败如实报 all_channels_failed；每次降级的
 note_zh / channel 字段如实写明实际通道（含 E-GEOD 年代局限），绝不假装主通道数据。
@@ -45,6 +46,9 @@ from typing import Any
 from ..app.runtime_paths import instance_data_dir_for
 
 __all__ = [
+    "ORGANISM_COMMON",
+    "SOURCE_ALIASES",
+    "resolve_source_key",
     "search_online_source",
     "search_duckduckgo",
     "search_encode",
@@ -66,6 +70,33 @@ __all__ = [
 ]
 
 # ==============================================================================================
+# 物种词表真源（corpus 包共用）：学名（小写）→ 词表通用名
+# ==============================================================================================
+
+#: 单一真源：corpus 包一切「学名 ↔ 通用名」判定都从本表派生——本模块的 facet/检索词表
+#: 是它的反向映射，corpus_curation 的 species 硬过滤与抽取正则是它的正向查表。
+#: 词表值必须是可以被 species 硬过滤按子串命中的英文通用名。
+ORGANISM_COMMON: dict[str, str] = {
+    "homo sapiens": "Human",
+    "mus musculus": "Mouse",
+    "rattus norvegicus": "Rat",
+    "danio rerio": "Zebrafish",
+    "drosophila melanogaster": "Drosophila",
+    "macaca mulatta": "Macaque",
+    "macaca fascicularis": "Macaque",
+    "callithrix jacchus": "Marmoset",
+    "pan troglodytes": "Chimpanzee",
+    "gallus gallus": "Chicken",
+    "sus scrofa": "Pig",
+    "canis lupus familiaris": "Dog",
+    "canis familiaris": "Dog",
+    "oryctolagus cuniculus": "Rabbit",
+    "bos taurus": "Cattle",
+    "homo sapien": "Human",   # 常见投稿拼写变体（漏 s）；据实归一，否则被 species 硬过滤静默滤掉
+}
+
+
+# ==============================================================================================
 # 账本与路径小助手（复刻自 corpus_curation，原因见模块 docstring：避免循环 import）
 # ==============================================================================================
 
@@ -84,7 +115,7 @@ def _now_iso() -> str:
 
 
 # 并发账本写必须互斥：sync def 端点走线程池，Windows 上 open("a") 的 seek-to-EOF+write 跨并发句柄
-# 非原子，裸写会整行覆盖丢行/撕裂（实测 20 线程丢 7-13%、2 线程也丢）。
+# 非原子，裸写会整行覆盖丢行/撕裂（对抗评审 R2-3/R2-8 实测 20 线程丢 7-13%、2 线程也丢）。
 # 一把进程内锁兜住线程池并发；跨进程（Web↔MCP 双实例）残余风险已知悉（审计面，不挡主功能）。
 _ledger_lock = threading.Lock()
 
@@ -109,13 +140,14 @@ _DDG_MIN_INTERVAL = 1.0    # 任务红线：DDG 串行 + 间隔 ≥1s
 _DEFAULT_TIMEOUT = 20
 _DEFAULT_MIN_INTERVAL = 0.2  # 官方 API 礼貌限速 ≤5 req/s（与 corpus_curation 同口径）
 _RETRIES = 3
-# 单次响应体读取上限：urlopen 的 resp.read() 此前无界——异常/恶意
+# 单次响应体读取上限（审计 S-6，2026-08-21）：urlopen 的 resp.read() 此前无界——异常/恶意
 # 对端可用超大响应吃爆内存。元数据 JSON/搜索 HTML 正常远小于此；超限视为对端异常、不重试。
 _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 _RETRYABLE_HTTP = {429, 503}
 _last_request_by_host: dict[str, float] = {}
 # 限速的 check-then-set 必须整体互斥：sync def 端点（curate plan/apply/check-updates）走线程池，
-# 裸 dict 下 N 个并发请求会同时读旧值、同时通过、同时打出 N 倍红线速率（8 线程实测 6 次违规）。一把全局锁（sleep 也持锁）比每 host 一把更简单，且本就要 DDG 串行——
+# 裸 dict 下 N 个并发请求会同时读旧值、同时通过、同时打出 N 倍红线速率（对抗评审 xss-sec P1-1
+# 8 线程实测 6 次违规）。一把全局锁（sleep 也持锁）比每 host 一把更简单，且本就要 DDG 串行——
 # 跨 host 排队对单机单用户无感，对红线是加分。
 _rate_limit_lock = threading.Lock()
 
@@ -124,7 +156,7 @@ def _polite_wait(host: str, min_interval: float) -> None:
     """按 host 限速（不同源各记各的间隔，互不挤占）。持锁做 sleep 判定，并发下间隔同样成立。"""
     with _rate_limit_lock:
         # 睡到死线为止而非只睡一拍：Windows 上 time.sleep 可能提前返回（本机实测 0.2s 档
-        # 最早 -12ms，实测锁内 187ms<200ms 欠隔），循环复查把提前返回补满。
+        # 最早 -12ms，R2-8 测得锁内 187ms<200ms 欠隔），循环复查把提前返回补满。
         deadline = _last_request_by_host.get(host, 0.0) + min_interval
         while True:
             remaining = deadline - time.monotonic()
@@ -152,7 +184,7 @@ def _raw_get(url: str, *, timeout: int, min_interval: float, headers: dict[str, 
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = resp.read(_MAX_RESPONSE_BYTES + 1)
                 if len(data) > _MAX_RESPONSE_BYTES:
-                    # 确定性失败（对端异常），不走瞬时错误重试——与上方 ValueError 不重试同哲学。
+                    # 确定性失败（对端异常），不走瞬时错误重试——与 fetch_json 的 ValueError 不重试同哲学。
                     # _NetError 非 HTTPError/URLError 族，本 try 的两个 except 子句都不会捕获它，直接向上传播。
                     raise _NetError(f"响应体超过 {_MAX_RESPONSE_BYTES} 字节上限（{url}）——对端异常，已停止读取、不重试。")
                 return data, int(getattr(resp, "status", 200) or 200)
@@ -404,7 +436,7 @@ _ENCODE_HEADERS = {"Accept": "application/json"}
 #: 10x 数据集目录页（人工核对入口；机读走下方 TENX_SEARCH_API 私有接口）。
 TENX_DATASETS_URL = "https://www.10xgenomics.com/datasets"
 
-#: HCA Data Browser 的后端 Azul 服务（免认证， 接入；复刻字面量的原因同上——
+#: HCA Data Browser 的后端 Azul 服务（免认证，2026-08-08 接入；复刻字面量的原因同上——
 #: 本模块不许反向依赖 corpus_curation）。无公开 OpenAPI 文档，响应先过形状校验再消费。
 AZUL_PROJECTS_API = "https://service.azul.data.humancellatlas.org/index/projects"
 HCA_STUDY_TMPL = "https://data.humancellatlas.org/explore/projects/{project_id}"
@@ -513,12 +545,12 @@ def search_encode(
     return {"ok": True, "items": items, "note_zh": f"ENCODE 官方 API 返回 {len(items)} 条。"}
 
 
-# ---- 10x 数据集（官网前端私有搜索 API， 接入；原页面抓取通道同日退役）--------------
+# ---- 10x 数据集（官网前端私有搜索 API，2026-08-08 接入；原页面抓取通道同日退役）--------------
 # **风险声明**：`GET /api/search?document=dataset` 是 10x 官网前端自用的**私有接口**（逆向自官网
 # JS chunk；无官方文档、无版本化契约、无变更承诺），10x 随时可能改参数、改响应形状或加鉴权。
 # 因此所有响应必须先过 `_tenx_api_items` **形状校验**：字段缺失/类型漂移 → fail-closed 如实报错
 # （ok=False + parse_changed + 中文说明），绝不拿畸形响应硬解析充数，也不抛异常炸链。
-# 实测验证：免认证 200；meta.count=786
+# 实测证据（2026-08-08，《数据源API调研-2026-08-08.md》§2）：免认证 200；meta.count=786
 # （本地快照 774 条，已有增量）；limit 到 1000 可一次拉全量；sort=publishedAt DESC 最新在前；
 # search= 全文（title+body）、tag[species]=Human/Mouse 服务端过滤生效。
 TENX_SEARCH_API = "https://www.10xgenomics.com/api/search"
@@ -526,7 +558,7 @@ TENX_BASE = "https://www.10xgenomics.com"
 _TENX_PAGE_LIMIT = 1000  # 实测 limit 上限内（当前全库 786 条，一次拉全）
 _TENX_MAX_PAGES = 5      # 翻页兜底上限：防 meta.count 谎报导致无限翻页
 
-#: 物种 facet 服务端词表只钉 验证过的两个显示值（facets 里还有 Rattus norvegicus /
+#: 物种 facet 服务端词表只钉 2026-08-08 实测过的两个显示值（facets 里还有 Rattus norvegicus /
 #: "Human, Mouse" 等脏取值，不敢猜映射）；其余物种不打服务端 tag，回退本地子串过滤。
 _TENX_SPECIES_TAG = {"human": "Human", "mouse": "Mouse"}
 
@@ -646,18 +678,15 @@ def search_10x(
     return {"ok": True, "items": items, "note_zh": f"10x 官网接口返回 {len(items)} 条。"}
 
 
-# ---- HCA（Azul）轻量 items 搜索（收尾：统一出口补 HCA）------------------------------
-#: 通用名（小写）→ Azul genusSpecies facet 词表值。真源是 corpus_curation.ORGANISM_COMMON 的
-#: 反向映射（本模块不许反向 import corpus_curation，见模块 docstring），此处复刻其字面量结果——
-#: facet 精确匹配大小写敏感，必须是首字母大写的规范学名。词表外物种不打服务端 facet，
-#: 回退 genusSpecies 原文本地子串过滤。
-_HCA_SPECIES_TO_LATIN = {
-    "human": "Homo sapiens", "mouse": "Mus musculus", "rat": "Rattus norvegicus",
-    "zebrafish": "Danio rerio", "drosophila": "Drosophila melanogaster",
-    "macaque": "Macaca mulatta", "marmoset": "Callithrix jacchus",
-    "chimpanzee": "Pan troglodytes", "chicken": "Gallus gallus", "pig": "Sus scrofa",
-    "dog": "Canis lupus familiaris", "rabbit": "Oryctolagus cuniculus", "cattle": "Bos taurus",
-}
+# ---- HCA（Azul）轻量 items 搜索（2026-08-08 收尾：统一出口补 HCA）------------------------------
+#: 通用名（小写）→ Azul genusSpecies facet 词表值（学名）：由 `ORGANISM_COMMON` 程序派生的
+#: 反向映射，同名取先见的规范学名（拼写变体如 homo sapien 排后自然不覆盖），首字母大写还原
+#: 词表形态（mus musculus → Mus musculus）。facet 精确匹配大小写敏感。词表外物种不打服务端
+#: facet，回退 genusSpecies 原文本地子串过滤。
+_HCA_SPECIES_TO_LATIN: dict[str, str] = {}
+for _latin, _common in ORGANISM_COMMON.items():
+    _HCA_SPECIES_TO_LATIN.setdefault(_common.lower(), _latin.capitalize())
+del _latin, _common
 _AZUL_PAGE_SIZE = 75   # 实测 size 上限（>75 → 400）
 _AZUL_MAX_PAGES = 8    # 全库 532 项、size=75 全量 8 页封顶（防分页游标失控的兜底）
 
@@ -742,8 +771,8 @@ def search_hca(
     return {"ok": True, "items": items, "note_zh": f"HCA（Azul）官方接口本地匹配后 {len(items)} 条。"}
 
 
-# ---- NCBI GEO（E-utilities）轻量 items 搜索（接入）--------------------------------
-# 实测配方：esearch(db=gds) 用 "GSE"[Entry Type]
+# ---- NCBI GEO（E-utilities）轻量 items 搜索（2026-08-07 接入）--------------------------------
+# 配方与实测证据见《数据源API调研-2026-08-08.md》§4：esearch(db=gds) 用 "GSE"[Entry Type]
 # 枚举只取 Series 级；实验类型**不能**写 "Expression profiling by high throughput
 # sequencing"[Entry Type]（实测被静默忽略），要过滤须走 esummary 的 gdstype 字段；
 # retstart/retmax 分页；无 key 官方红线 ≤3 req/s（比默认 ≤5 req/s 更严，见 _GEO_MIN_INTERVAL）。
@@ -761,7 +790,7 @@ _GEO_RECENT_RELDATE = 90   # check_updates 的 pdat 相对窗口（天）：调�
 #: docstring）。词表外物种不打服务端 [Organism]，回退 esummary taxon 原文本地子串过滤。
 _GEO_SPECIES_TO_LATIN = _HCA_SPECIES_TO_LATIN
 
-# ---- GEO 备用通道：NCBI 主通道断/形状漂移时按序降级 --
+# ---- GEO 备用通道（2026-08-07 降级施工，配方见调研 §1）：NCBI 主通道断/形状漂移时按序降级 --
 # 降级①：EBI BioStudies 的 E-GEOD-* 集合——ArrayExpress 2017 年停止从 GEO 导入前的镜像老数据
 # （调研实测 E-GEOD-70000 有、90000+ 均 404，**只有 ≤2016 的条目**）。E-GEOD-{n} ↔ GSE{n}
 # 编号换算规则确定，accession 出 GSE 口径与主通道一致（镜像原号留 egeod_accession 字段）。
@@ -1037,7 +1066,7 @@ def search_geo(
     limit: int = 20,
     project_root: Path,
 ) -> dict:
-    """GEO 轻量 items 搜索（三通道降级编排， 降级施工）。
+    """GEO 轻量 items 搜索（三通道降级编排，2026-08-07 降级施工）。
 
     主通道 NCBI E-utilities；失败（network_error / parse_changed 形状闸拦）→ 降级①
     E-GEOD 镜像（BioStudies，**只有 2016 年前的老数据**）→ 降级② Europe PMC 文献弱兜底；
@@ -1068,8 +1097,8 @@ def search_geo(
     return _geo_all_channels_failed(reasons)
 
 
-# ---- Zenodo 轻量 items 搜索（接入，第 10 源）-------------------------------------
-# 配方依据 Zenodo REST API 公开文档
+# ---- Zenodo 轻量 items 搜索（2026-08-08 接入，第 10 源）-------------------------------------
+# 配方与实测证据见《调研-zenodo等新源-2026-08-08.md》：REST API 公开文档化
 # （https://developers.zenodo.org/），Lucene 字段查询可用——裸自由词噪声大（实测 "single-cell"
 # 自由词混进非单细胞条目），故默认查询走字段限定 metadata.title/description 短语 + type=dataset；
 # 官方限速 30 req/min（2025-11 公告，匿名/认证同口径，且在封禁激进爬虫），出口按 20/min 留余量；
@@ -1281,7 +1310,7 @@ def hca_recent_items(*, project_root: Path, limit: int = 10) -> dict:
 
 def _geo_recent_items_ncbi(*, project_root: Path, limit: int = 10) -> dict:
     """GEO 主通道「最近条目」："GSE"[Entry Type] + reldate/datetype=pdat 相对日期窗口
-    （实测配方，窗口放宽到 90 天防静默期空窗）。
+    （调研 §4 实测配方，窗口放宽到 90 天防静默期空窗）。
 
     esearch 不保证按日期排序：多取一批（4×limit、封顶 200 条）esummary 富化后**本地按 pdat
     倒序**截断，确保「最近」口径成立。形状漂移如实降级（parse_changed），不炸链。"""
@@ -1380,7 +1409,7 @@ def zenodo_recent_items(*, project_root: Path, limit: int = 10) -> dict:
 
 
 # ==============================================================================================
-# refine.bio（接入，第 11 源）：
+# refine.bio（2026-08-14 接入，第 11 源；实测证据见 staging/refinebio/mapping.md §0）：
 # 公开 REST API，免认证。全文检索走 /v1/search/（ElasticSearch：search= 全文 +
 # technology/organism/platform/num_downloadable_samples__gt 过滤；08-08 调研的「?search= 400」
 # 是打在 /v1/experiments/ 上，/v1/search/ 实测可用）——但全文是**模糊 OR 匹配**（实测
@@ -1527,16 +1556,67 @@ def refinebio_recent_items(*, project_root: Path, limit: int = 10) -> dict:
 # 统一出口：适配器与通用搜索同形，调用方不关心走的是哪条
 # ==============================================================================================
 
-_SOURCE_ALIASES: dict[str, str] = {
-    "ddg": "ddg", "duckduckgo": "ddg", "web": "ddg", "generic": "ddg", "通用": "ddg",
-    "arrayexpress": "arrayexpress", "ae": "arrayexpress",
-    "encode": "encode",
-    "10x": "10x", "10x genomics": "10x", "tenx": "10x",
-    "hca": "hca", "human cell atlas": "hca", "azul": "hca",
-    "geo": "geo", "ncbi geo": "geo",
-    "zenodo": "zenodo",
-    "refinebio": "refinebio", "refine.bio": "refinebio", "refine bio": "refinebio",
+#: 来源别名唯一真源（corpus 包共用）：口语说法 → 该说法在各注册表中可能对应的键（按稳定顺序）。
+#: 同一别名在不同注册表里键名可以不同（如 search 注册表键 `single_cell_portal`、
+#: check_updates 注册表键 `scp`——键名属持久化契约，不许改名），故值是候选键元组，
+#: 由 `resolve_source_key` 按调用方传入的键集解析出本语境的唯一键。
+SOURCE_ALIASES: dict[str, tuple[str, ...]] = {
+    # 通用搜索（search_online_source）
+    "ddg": ("ddg",),
+    "duckduckgo": ("ddg",),
+    "web": ("ddg",),
+    "generic": ("ddg",),
+    "通用": ("ddg",),
+    # ArrayExpress
+    "ae": ("arrayexpress",),
+    # CELLxGENE
+    "cxg": ("cellxgene",),
+    "cellxgene discover": ("cellxgene",),
+    # 10x
+    "10x genomics": ("10x",),
+    "tenx": ("10x",),
+    # HCA
+    "human cell atlas": ("hca",),
+    "azul": ("hca",),
+    # GEO
+    "ncbi geo": ("geo",),
+    # refine.bio
+    "refine.bio": ("refinebio",),
+    "refine bio": ("refinebio",),
+    # EBI SCEA（仅 check_updates 注册表有该键）
+    "single cell expression atlas": ("ebi_scea",),
+    "scea": ("ebi_scea",),
+    # Broad SCP：两注册表键名不同（search=single_cell_portal / check_updates=scp），两键都列出
+    "scp": ("single_cell_portal", "scp"),
+    "single cell portal": ("single_cell_portal", "scp"),
+    "broad single cell portal": ("single_cell_portal", "scp"),
 }
+
+
+def resolve_source_key(alias: Any, *, valid_keys) -> str | None:
+    """口语来源名/别名 → 调用方注册表键；认不出 → None（调用方 fail-closed）。
+
+    三级解析（顺序即各注册表解析器的既有语义）：① 注册表键精确匹配；② label 小写精确
+    匹配（valid_keys 为「键 → 带 label 的 spec」注册表 dict 时）；③ SOURCE_ALIASES 别名表，
+    取第一个落在 valid_keys 键集内的候选。valid_keys 传注册表 dict 或纯键集容器均可。"""
+    text = str(alias or "").strip().lower()
+    if not text:
+        return None
+    if text in valid_keys:
+        return text
+    for key, spec in (valid_keys.items() if hasattr(valid_keys, "items") else ()):
+        if text == str(spec["label"]).lower():
+            return key
+    for key in SOURCE_ALIASES.get(text, ()):
+        if key in valid_keys:
+            return key
+    return None
+
+
+#: search_online_source 可分发的出口键集（本模块出口无 label 注册表，传纯键集即可）。
+_ONLINE_SOURCE_KEYS = frozenset({
+    "ddg", "arrayexpress", "encode", "10x", "hca", "geo", "zenodo", "refinebio",
+})
 
 
 def search_online_source(
@@ -1551,7 +1631,7 @@ def search_online_source(
 
     - source：ddg/web/generic（通用搜索主力）| arrayexpress | encode | 10x | hca | geo | zenodo | refinebio（官方适配器对照）；
     - 任何失败（网络/解析/参数）都落成 ok=False + error 机器码 + note_zh，**绝不抛异常**。"""
-    key = _SOURCE_ALIASES.get(str(source or "").strip().lower())
+    key = resolve_source_key(source, valid_keys=_ONLINE_SOURCE_KEYS)
     if key is None:
         return _fail(
             "unknown_source",

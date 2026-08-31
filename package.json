@@ -12,6 +12,7 @@
     "#memory_rank": "./web/static/js/panel/memory_rank.js",
     "#dream_core": "./web/static/js/panel/dream_core.js",
     "#act_core": "./web/static/js/act/act_core.js",
+    "#downloads": "./web/static/js/core/downloads.js",
     "#memory": "./web/static/js/panel/memory.js",
     "#examples": "./web/static/js/panel/examples.js",
     "#accounts": "./web/static/js/panel/accounts.js",

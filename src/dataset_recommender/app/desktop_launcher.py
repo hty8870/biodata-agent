@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
-"""无控制台桌面启动器——PyInstaller windowed/noconsole 构建的进程编排层。
+"""无控制台桌面启动器（安装器工程 W2）——PyInstaller windowed/noconsole 构建的进程编排层。
 
 本模块**不面向控制台**：windowed 构建下 `sys.stdout`/`sys.stderr` 可能为 None
 （入口流守卫见 `_guard_streams`），一切生产输出走滚动日志（launcher.log/web.log）。
-路径一律经 `runtime_paths.get_app_paths()` 单一真源解析；**不引入任何
+路径一律经 W1 的 `runtime_paths.get_app_paths()` 单一真源解析；**不引入任何
 第三方 GUI 依赖**，Win32 交互面（mutex/托盘/MessageBox/剪贴板/PID 探测）全部
 ctypes 直调 `desktop_launcher_win32.py`。
 
-契约逐条落点（对应安装器契约 14 条）：
-1. 入口 `main(argv=None) -> int` 供 PyInstaller spec 直接引用；`if __name__ == "__main__"`
+契约逐条落点（对应安装器 W2 任务书 14 条）：
+1. 入口 `main(argv=None) -> int` 供 W3 spec 直接引用；`if __name__ == "__main__"`
    兜底脚本式执行。
 2. 启动第一行先配脱敏滚动日志：log_root/launcher.log 与 web.log，RotatingFileHandler
    各 ≤5MiB×5 文件；`RedactingFormatter` 掩掉 API Key/密码/Token/Authorization 等，
@@ -41,7 +41,7 @@ ctypes 直调 `desktop_launcher_win32.py`。
 11. windowed 流守卫：stdout/stderr 为 None 时换入空实现；未捕获异常进日志。
 12. 无模型不触发下载（warm 仅本地加载、`unavailable` 秒过）、不发现 Python、
     不碰 PATH、无外网依赖（urllib 只探 127.0.0.1）、不加防火墙规则。
-13. `--migrate-from` 迁移旧便携版用户数据：源校验（start-web.bat + 产品
+13. `--migrate-from` 迁移旧便携版用户数据（实现）：源校验（start-web.bat + 产品
     源码标记）→ dry-run 计划 → staging+逐文件 SHA-256 校验；**staging 全成功才开写**
     目标（落位逐文件 os.replace，可重入幂等——不是全有或全无的事务性提交，落位阶段
     中断会留下部分已落位文件但可安全重入）；只复制白名单用户数据（.env/已知
@@ -81,7 +81,7 @@ from typing import Any, Callable
 
 import uvicorn
 
-# sys.path 锚定（source/portable 直接以模块方式运行时可解析到真实源码；
+# W1 风格 sys.path 锚定（source/portable 直接以模块方式运行时可解析到真实源码；
 # frozen 下随包导入，此段为空操作）。desktop_launcher.py 位于
 # src/dataset_recommender/app/ → 仓库根 = parents[3]。
 _SRC_ROOT = Path(__file__).resolve().parents[3] / "src"
@@ -93,6 +93,7 @@ from dataset_recommender.app.runtime_paths import (  # noqa: E402
     default_data_root_frozen,
     get_app_paths,
 )
+from dataset_recommender import secret_patterns  # noqa: E402
 from dataset_recommender.app import desktop_launcher_win32 as _win32  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -114,7 +115,7 @@ LAUNCHER_LOG_NAME = "launcher.log"
 WEB_LOG_NAME = "web.log"
 LAUNCHER_LOGGER = "biodata.launcher"
 #: 在 launcher 进程内运行的 biodata.* 层 logger（统一接 launcher.log 的同一 handler）。
-#: 审计（grep 'getLogger("biodata\\.' src/）：除 biodata.launcher 外只有
+#: 审计（2026-08-24 grep 'getLogger("biodata\\.' src/）：除 biodata.launcher 外只有
 #: biodata.webview_shell（桌面壳层）。它此前未接入——frozen windowed 下无控制台，
 #: 其回退原因日志（"pywebview 不可用"/"未检测到 WebView2"/"桌面窗口启动失败"）
 #: propagate 到无 handler 的 root 而全部丢失，导致 launcher 只报「已回退系统浏览器」
@@ -131,7 +132,7 @@ INSTANCE_FILENAME = "instance.json"
 STARTUP_TIMEOUT_S = 60.0        #: 服务从线程启动到可服务的等待上限
 GRACEFUL_SHUTDOWN_S = 3.0       #: uvicorn 优雅关停兜底（契约 9：退出后 5s 内释放端口）
 SHUTDOWN_JOIN_S = 10.0
-ATTACH_TIMEOUT_S = 60.0         #: 二次启动定位运行中实例的等待上限（与 STARTUP_TIMEOUT_S
+ATTACH_TIMEOUT_S = 60.0         #: 二次启动定位运行中实例的等待上限（A2-M4：与 STARTUP_TIMEOUT_S
                                 #: 对齐——主实例可能仍在 warm 预热（本地重排模型加载可达分钟级），
                                 #: 6s 等不到就报「无法确认可用地址」是误导；期间每轮验证 PID 存活，
                                 #: 实例进程已退出立即失败，不空转到超时）
@@ -145,14 +146,15 @@ _logger.addHandler(logging.NullHandler())
 # ---------------------------------------------------------------------------
 # 日志：脱敏 + 滚动
 # ---------------------------------------------------------------------------
-#: 键值对形态的敏感字段（key=value / key: value / Authorization: Bearer x）
+#: 键值对形态的敏感字段（key=value / key: value / Authorization: Bearer x）。
+#: 与 secret_patterns.SECRET_VALUE_PATTERNS 的分工：那边是交付扫描级的**强锚定**
+#: 服务商前缀（宁可漏、不可误报）；本层是日志脱敏，额外保留更宽的形态网
+#: （key=value / Bearer / Basic / URL userinfo）兜住无知名前缀的凭据。
 _SECRET_KEY_VALUE = re.compile(
     r"(?i)(api[_-]?key|apikey|access[_-]?key|client[_-]?secret|secret|password|passwd|pwd|"
     r"token|authorization|auth|cookie|session[_-]?id|private[_-]?key|llm[_-]?api[_-]?key)"
     r"\b[^\r\n=:]{0,24}?[=:][ \t]*[^\s,;\"']{4,}"
 )
-#: 裸形态的密钥令牌（sk-/pk-/rk- 前缀，OpenAI 风格）
-_BARE_TOKEN = re.compile(r"\b(sk|pk|rk)-[A-Za-z0-9_\-]{16,}\b")
 #: Bearer <token>（值含空格，键值模式匹配不全，先于键值模式处理）
 _BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=\-]{8,}")
 #: HTTP Basic base64 凭据（Authorization: Basic <base64(user:pass)>；字符集仅
@@ -178,7 +180,10 @@ def redact(text: str) -> str:
                 cut = min(cut, idx)
         return key + tail[:cut] + " <redacted>"
 
-    text = _BARE_TOKEN.sub("<redacted>", text)
+    # 先走交付扫描同源的强锚定值模式（单一真源 secret_patterns），再走本层形态网。
+    # 裸 sk-/pk-/rk- 短令牌不再单独立网：强锚定模式已覆盖真实服务商 key 形态。
+    for _pattern_id, rx in secret_patterns.SECRET_VALUE_PATTERNS:
+        text = rx.sub("<redacted>", text)
     text = _BEARER_TOKEN.sub("<redacted>", text)
     text = _BASIC_TOKEN.sub("<redacted>", text)
     text = _URL_USERINFO.sub(r"\1<redacted>@", text)
@@ -416,7 +421,7 @@ class RuntimeStore:
     """runtime.json 端口持久化：唯一「固定端口」真源。
 
     语义：文件缺失或 schema/port 非法 → 无固定端口；否则恒用该端口。
-    缺失（首次启动）与损坏（存在但读不出合法端口）区分对待——损坏时
+    A2-M5：缺失（首次启动）与损坏（存在但读不出合法端口）区分对待——损坏时
     `read_port_with_state` 尽力恢复原 port 并标记 corrupt，调用方告警并沿用，
     避免静默换端口导致 localStorage origin 漂移。"""
 
@@ -532,7 +537,7 @@ class HealthProbe:
 
     探测对象恒为 loopback（127.0.0.1）——显式 bypass HTTP 代理：用户/加固环境里的
     HTTP(S)_PROXY 若指向不可用代理，会让 attach/端口裁决的健康探测失败（实测
-    frozen E2E 的 attach 场景因此卡死）。契约 12「无外网依赖（urllib 只探 127.0.0.1）」
+    frozen E2E f03 attach 因此卡死）。契约 12「无外网依赖（urllib 只探 127.0.0.1）」
     本就不应走代理。"""
 
     def __init__(self, timeout: float = HEALTH_TIMEOUT_S) -> None:
@@ -612,7 +617,7 @@ class NoPortAvailableError(PortError):
 def bind_socket(port: int, host: str = HOST) -> socket.socket | None:
     """探测并占住端口：成功返回已 bind（未 listen）的 socket，失败返回 None。
 
-    **绝不设 SO_REUSEADDR**（实测：Windows 上双 REUSEADDR 时第二个
+    **绝不设 SO_REUSEADDR**（实测 2026-08-20：Windows 上双 REUSEADDR 时第二个
     socket 可 bind+listen 已被监听的端口，会误判「空闲」）；无 REUSEADDR 时被占
     端口抛 WinError 10048，监听关闭后可立即重绑（退出即释放）。"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -629,7 +634,7 @@ def _url_for(port: int) -> str:
 
 
 def _warn_corrupt_runtime(logger: logging.Logger, path: Path, port: int | None) -> None:
-    """runtime.json 损坏/非法时的明确警告：提示 localStorage origin 可能漂移。
+    """runtime.json 损坏/非法时的明确警告（A2-M5）：提示 localStorage origin 可能漂移。
 
     能恢复原端口 → 本次继续沿用（不静默重排）；恢复不出 → 重新分配，明确提示。"""
     if port is not None:
@@ -653,7 +658,7 @@ def resolve_port(*, runtime_store: RuntimeStore, health: HealthProbe,
     """契约 4 的端口分配主逻辑。`preferred_port`（env PORT）为一次性调试覆盖，
     不参与持久化；其余情况下固定端口优先、未固定则 7860 → 7861-7869 漂移并保存。
 
-    runtime.json 损坏（corrupt）与缺失（missing）区分对待——损坏时告警并
+    A2-M5：runtime.json 损坏（corrupt）与缺失（missing）区分对待——损坏时告警并
     沿用恢复出的原端口（不静默重排）；恢复不出才重新分配。"""
     log = logger or _logger
     if preferred_port is not None:
@@ -671,7 +676,7 @@ def resolve_port(*, runtime_store: RuntimeStore, health: HealthProbe,
                                               expected_runtime_mode, expected_install_root):
             return PortDecision(fixed, None, _url_for(fixed), False, None)
         if hit is not None:
-            # 端口上有健康响应但不匹配本安装 → 本产品异版本/异安装
+            # 端口上有健康响应但不匹配本安装 → 本产品异版本/异安装（A2-L1 文案区分）
             raise PortOccupiedByOtherError(
                 f"固定端口 {fixed} 上运行着另一份 BioData Agent"
                 f"（service={hit.service} version={hit.version} install_root={hit.install_root}）。"
@@ -727,8 +732,8 @@ def try_attach(*, runtime_store: RuntimeStore, instance_store: InstanceStore,
     记录缺失/损坏/过期时回退到固定端口（或 7860）的 health 探测（覆盖「实例刚
     启动、instance.json 尚未落盘」的窗口），并轮询等待 instance.json 补写。
 
-    `timeout` 对齐 warm 预热耗时（默认 60s）；每轮验证 PID——记录里的实例
-    进程已退出时**立即失败**，不空转到超时。runtime.json 损坏时告警并用
+    A2-M4：`timeout` 对齐 warm 预热耗时（默认 60s）；每轮验证 PID——记录里的实例
+    进程已退出时**立即失败**，不空转到超时。A2-M5：runtime.json 损坏时告警并用
     恢复出的原端口探测（不静默改探 7860）。"""
     log = logger or _logger
     deadline = time.monotonic() + timeout
@@ -830,7 +835,7 @@ def start_background_warm(warm: Callable[[logging.Logger], str], logger: logging
 
 
 def _warn_stale_root_env(paths: AppPaths) -> None:
-    """frozen 下 BIODATA_DATA_ROOT 重定向后，旧默认根的 .env 不会自动跟随。
+    """frozen 下 BIODATA_DATA_ROOT 重定向后，旧默认根的 .env 不会自动跟随（A2-L5）。
 
     最小动作：仅检测「旧默认根 config/.env 存在而新根 config/.env 缺失」→ 警告日志
     （提示原 LLM 配置未随重定向生效）。不做自动复制——不改变用户意图。"""
@@ -887,7 +892,7 @@ def _default_open_browser(url: str) -> bool:
 def _default_notify(title: str, text: str) -> None:
     """windowed 下用 MessageBoxW；无交互桌面或调用失败 → 仅日志，绝不阻断。
 
-    无交互桌面（服务会话/无头环境）下 MessageBoxW 会失败或挂起——先探测
+    A2-L2：无交互桌面（服务会话/无头环境）下 MessageBoxW 会失败或挂起——先探测
     交互会话，非交互直接降级为仅日志，不尝试弹框。"""
     try:
         if not _win32.is_interactive():
@@ -942,7 +947,7 @@ class Launcher:
         self._win32 = win32 or _win32
         self._health = health or HealthProbe()
         self._browser = browser or _default_open_browser
-        # 桌面壳专用 runner（壳批）：独立于 browser——browser 仍被二次启动
+        # 桌面壳专用 runner（2026-08-21 壳批）：独立于 browser——browser 仍被二次启动
         # attach 路径复用（浏览器语义），window_runner 只服务主实例就绪后的窗口生命周期
         # （阻塞至关窗）。返回字符串语义见 app/webview_shell.py（WINDOW_CLOSED/FALLBACK_BROWSER）。
         self._window_runner = window_runner
@@ -1006,7 +1011,7 @@ class Launcher:
         finally:
             mutex.close()
 
-    # -- 数据迁移（契约 13）-----------------------------------------------
+    # -- 数据迁移（契约 13，W5）-----------------------------------------------
     def _migrate_from(self, source: str, paths: AppPaths, include_models: bool) -> int:
         """执行 --migrate-from：先 plan（dry-run 零写入，含冲突判定与链接穿透拒绝）→
         日志留痕 → run_migration（staging 全成功才开写 + 逐文件落位，可重入）。
@@ -1132,7 +1137,7 @@ class Launcher:
         thread.start()
 
         # 壳模式：托盘**延后**——壳成功则全程无托盘（窗口即界面）；壳不可用
-        # 回退浏览器时由 _run_foreground 按需恢复托盘（实现 验证：提前抑制会让回退路径
+        # 回退浏览器时由 _run_foreground 按需恢复托盘（Codex 评审：提前抑制会让回退路径
         # 无托盘永久驻留，只能结束进程）。
         shell = self._shell_mode and self._window_runner is not None
         tray = None if shell else self._make_tray(decision.port, args.no_tray)
@@ -1163,7 +1168,7 @@ class Launcher:
         self._log.info("服务已就绪：%s", self._url)
         if os.getenv("BIODATA_NO_BROWSER", "").strip() != "1":
             if self._shell_mode and self._window_runner is not None:
-                # 桌面窗口模式（壳批，实现 验证修订）：专用 window_runner 阻塞
+                # 桌面窗口模式（2026-08-21 壳批，Codex 评审修订）：专用 window_runner 阻塞
                 # 至关窗——WINDOW_CLOSED=关窗即退出（干净关停走既有 _shutdown）；
                 # FALLBACK_BROWSER=壳不可用（缺依赖/缺 WebView2/建窗失败，已开系统浏览器）
                 # → **此时恢复托盘**维持服务（除非 --no-tray），与浏览器模式一致。
@@ -1287,7 +1292,7 @@ class Launcher:
 
 
 # ---------------------------------------------------------------------------
-# 数据迁移：--migrate-from（契约 13）
+# 数据迁移：--migrate-from（契约 13，W5 实现）
 # ---------------------------------------------------------------------------
 #: 旧便携版根必须同时具备的标识：启动脚本 + 产品源码标记。
 MIGRATE_REQUIRED_FILES = ("start-web.bat", "src/dataset_recommender/__init__.py")
@@ -1310,12 +1315,12 @@ MIGRATE_USERDATA_DIRS = ("recycle", "citations")
 #: 官方快照（geo.json 等）不带此前缀 → 天然区分、不迁移。
 MIGRATE_UPLOAD_PREFIX = "upload_"
 #: 顶层明确不迁移的已知项（存在才进报告，便于用户核对；不复制）。
-#: 研究/采集流水线已整体迁至顶层 `research/`（同样非用户数据）；
+#: 2026-08-27 迁移批：研究/采集流水线已整体迁至顶层 `research/`（同样非用户数据）；
 #: 原 database 下的 workstream 条目保留在清单里只为识别存量安装目录（可能尚未迁移）。
 MIGRATE_KNOWN_EXCLUDED = (
     "src", "scripts", "web", "tests", "docs", "eval", "prompts", "automation",
     "research",
-    # 旧安装目录迁移识别兼容：存量安装的流水线可能还留在 database 下（
+    # 旧安装目录迁移识别兼容：存量安装的流水线可能还留在 database 下（2026-08-27 起
     # 顶层已是 research/），两个都认，存在才进报告。
     "database/base", "database/trace", "database/workstream",
     "logs", "run", "outputs", "exports", "services",
@@ -1378,7 +1383,7 @@ def _same_bytes(a: Path, b: Path) -> bool:
 
 
 def _link_escape_reason(candidate: Path, source_root: Path) -> str | None:
-    """源条目 resolve() 后必须仍位于源根之内（防 symlink/junction 穿透迁出）。
+    """源条目 resolve() 后必须仍位于源根之内（A1-M2 防 symlink/junction 穿透迁出）。
 
     条目本身是链接（symlink/junction）**允许**，但链接解析目标必须在源根内；指向源根
     外的链接会随迁移把外部数据带进本实例（或跟随复制意外内容）→ 拒绝。staging 前对
@@ -1441,7 +1446,7 @@ def plan_migration(source: Path | str, paths: AppPaths, *, include_models: bool 
 
     校验：目录必须同时含 `start-web.bat` 与产品源码标记 `src/dataset_recommender/`；
     源不得等于/包含/被包含于本实例 data_root；每个允许项 resolve() 后必须仍位于
-    源根之内（symlink/junction 指向源根外 → 拒绝进 rejected，防穿透迁出）。
+    源根之内（A1-M2：symlink/junction 指向源根外 → 拒绝进 rejected，防穿透迁出）。
     只允许白名单内的用户数据项；检测到但不在白名单内的项一律进 `rejected`
     （代码/官方快照/tests/日志缓存等），不复制。冲突判定：目标已存在 → 同字节视为
     「已迁移（幂等跳过）」；不同字节 → 保留双方，迁移副本带 `.migrated` 后缀。"""
@@ -1602,7 +1607,7 @@ def run_migration(source: Path | str, paths: AppPaths, *, include_models: bool =
     """执行迁移：staging 全成功才开写目标，逐文件 os.replace，可重入。
 
     流程：① 全部允许项先复制进 `data_root/run/migrate/staging-<ts>/` 并逐文件哈希校验
-    （此阶段不碰目标；staging 前对每个源条目再校验 resolve() 仍在源根内——
+    （此阶段不碰目标；staging 前对每个源条目再校验 resolve() 仍在源根内——A1-M2
     防御 plan 与执行之间的穿透）；② **staging 全部成功后才开始落位**（os.replace，
     同卷单文件原子）；③ 清理 staging。失败 → 抛 MigrationError，staging 保留供诊断，
     **旧数据未受影响**，可重入。
@@ -1751,17 +1756,17 @@ def tray_selfcheck(*, win32: Any = None, hold_seconds: float = 1.5) -> int:
 
 
 def _shell_probe() -> int:
-    """桌面壳依赖验证（构建期 fail-closed，配合 scripts/build_windows_runtime.py）。
+    """桌面壳依赖探针（构建期 fail-closed，配合 scripts/build_windows_runtime.py）。
 
     只做 `import webview`（pywebview 5.4 必须在 frozen 内可导入——modulegraph 只收代码，
-    数据/二进制靠 spec 的 collect_all + hooks；本验证是最终判据）。windowed 构建下
+    数据/二进制靠 spec 的 collect_all + hooks；本探针是最终判据）。windowed 构建下
     `sys.stdout`/`sys.stderr` 为 None（`_guard_streams` 换 `_NullStream`），打印不可捕获，
     故：真成败由**退出码**表达（0=可导入，1=缺依赖或导入异常），同时把结果写入
     env `BIODATA_SHELL_PROBE_OUT` 指向的文件（'SHELL_PROBE_OK' 或 'SHELL_PROBE_FAIL: <原因>'）
     供构建脚本读取确认，不依赖 shell 管道。"""
     result_path = os.environ.get("BIODATA_SHELL_PROBE_OUT", "")
     try:
-        import webview  # noqa: PLC0415（验证只测壳依赖，与 webview_shell 同懒导入语义）
+        import webview  # noqa: PLC0415（探针只测壳依赖，与 webview_shell 同懒导入语义）
         msg = "SHELL_PROBE_OK\n"
         rc = 0
     except Exception as exc:  # noqa: BLE001（缺模块/导入异常都算壳不可用，fail-closed）

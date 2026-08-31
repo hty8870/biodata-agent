@@ -11,12 +11,12 @@
 1. **纯逻辑核心零 DOM / 零网络 / 零 localStorage / 零 `#` import**：project_exports_core.js
    只做确定性计算（diff/台账条目/折叠推导/文案）；出网与 DOM 全在 project_exports.js 壳层。
 2. **自接线不进 boot**：project_exports.js 经 MutationObserver 发现 projects.js 的
-    挂点渲染导出区；不进 boot.js 的 import 表（同 feedback.js 哲学——
-   新增 `#` 键会牵动两页 importmap，dataset.html 归另一并行改动，本包不碰）。
+   ENG-P5-MOUNT 挂点渲染导出区；不进 boot.js 的 import 表（同 feedback.js 哲学——
+   新增 `#` 键会牵动两页 importmap，dataset.html 归 F2 并行包，本包不碰）。
 3. **importmap 只在本页 + package.json**：parity 门只查**被使用**的 specifier——project_exports.js
    只相对 import 纯逻辑核、不引入新的 `#` 静态 import，故不红。
-4. **挂点契约**：projects.js 的 区域内必须有 `data-export-mount`（带课题 id）
-   与默认隐藏的 `data-export-mount-section`；无导出中心时整段不渲染。
+4. **挂点契约**：projects.js 的 ENG-P5-MOUNT 区域内必须有 `data-p5-mount-export`（带课题 id）
+   与默认隐藏的 `data-p5-mount-section`；无 P5 时整段不渲染。
 5. **埋点与后端同源**：`export_downloaded` 在 USAGE_KINDS；端点路径常量与 webapp.py
    `@app.post("/api/artifacts/export-pack")` 逐字一致；导出类型枚举与后端 export_pack.EXPORT_KINDS 一致。
 """
@@ -92,27 +92,30 @@ def test_shell_uses_mutation_observer_and_self_wiring() -> None:
 
 
 def test_shell_imports_core_relatively_and_shared_keys_only() -> None:
-    """壳层只相对 import 纯逻辑核；静态 `#` import 只用两页已有的共享键（不新增 specifier）。"""
+    """壳层只相对 import 纯逻辑核；静态 `#` import 只用两页已有的共享键（不新增 specifier）。
+
+    2026-08-30 dl-browser-queue：`#downloads` 入列——导出包 blob 走统一下载引擎
+    （单通道原则，AGENTS.md §2），这是登记过的共享键，不是私自新增 specifier。"""
     ui = UI.read_text(encoding="utf-8")
     assert 'from "../core/project_exports_core.js"' in ui, "壳层未相对 import 纯逻辑核"
     used = re.findall(r'from\s*"(#[A-Za-z_0-9]+)"', ui)
-    assert set(used) <= {"#core", "#artifacts", "#usage_core", "#usage_log"}, f"壳层用了新 # 键：{used}"
+    assert set(used) <= {"#core", "#artifacts", "#usage_core", "#usage_log", "#downloads"}, f"壳层用了新 # 键：{used}"
     assert re.search(r'from\s*"\./usage_upload\.js"', ui) is None, "壳层静态 import 了 usage_upload（应动态）"
 
 
 # ---------------------------------------------------------------- 挂点契约
 
 def test_projects_js_mount_region_contract() -> None:
-    """projects.js 的 区域内：挂点带课题 id、区域默认整段隐藏（无导出中心不渲染）。"""
+    """projects.js 的 ENG-P5-MOUNT 区域内：挂点带课题 id、区域默认整段隐藏（无 P5 不渲染）。"""
     ui = PROJECTS.read_text(encoding="utf-8")
-    assert "PROJECT_EXPORTS_MOUNT" in ui
-    assert "data-export-mount" in ui, "导出挂点区域缺 data-export-mount 挂点"
-    assert "data-prj-id=" in ui, "挂点缺课题 id（导出功能读库需要）"
-    assert 'data-export-mount-section hidden' in ui, "导出区默认整段隐藏缺失（无导出中心时不渲染）"
+    assert "ENG-P5-MOUNT" in ui
+    assert "data-p5-mount-export" in ui, "ENG-P5-MOUNT 区域缺 data-p5-mount-export 挂点"
+    assert "data-prj-id=" in ui, "挂点缺课题 id（P5 读库需要）"
+    assert 'data-p5-mount-section hidden' in ui, "导出区默认整段隐藏缺失（无 P5 时不渲染）"
 
 
 def test_importmap_registration_stays_on_index_page_only() -> None:
-    """importmap 登记只在本页 + package.json（dataset.html 归另一并行改动，不碰）。"""
+    """importmap 登记只在本页 + package.json（dataset.html 归 F2 并行包，不碰）。"""
     pkg = PKG.read_text(encoding="utf-8")
     index = INDEX.read_text(encoding="utf-8")
     for key, rel in (('"#project_exports_core"', "/static/js/core/project_exports_core.js"),
@@ -134,7 +137,7 @@ def test_boot_stays_last_in_load_order() -> None:
 # ---------------------------------------------------------------- 埋点与后端同源
 
 def test_usage_kind_registered() -> None:
-    """埋点（计数型无文本）：export_downloaded 必须在 USAGE_KINDS（设计约定）。"""
+    """埋点（计数型无文本）：export_downloaded 必须在 USAGE_KINDS。"""
     usage = USAGE.read_text(encoding="utf-8")
     assert 'export_downloaded: "export_downloaded"' in usage, "USAGE_KINDS 缺 export_downloaded"
 
@@ -142,7 +145,7 @@ def test_usage_kind_registered() -> None:
 def test_shell_telemetry_only_counting_kind() -> None:
     """壳层埋点：调 usageLog 且用 USAGE_KINDS.export_downloaded（无文本载荷）。"""
     code = _strip_js_comments(UI.read_text(encoding="utf-8"))
-    assert "usageLog(" in code, "project_exports.js 未埋点（设计约定 export_downloaded）"
+    assert "usageLog(" in code, "project_exports.js 未埋点（设计 §10 export_downloaded）"
     assert "USAGE_KINDS.export_downloaded" in code, "埋点未走 USAGE_KINDS.export_downloaded"
 
 

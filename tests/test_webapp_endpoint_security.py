@@ -100,7 +100,7 @@ def test_diagnose_rejects_cross_origin_before_network(monkeypatch: pytest.Monkey
 
 
 def test_diagnose_network_calls_happen_outside_env_lock(monkeypatch: pytest.MonkeyPatch):
-    """healthcheck / diagnose_network 的网络 I/O 绝不发生在 ENV_LOCK 内——
+    """触发点审计 F1：healthcheck / diagnose_network 的网络 I/O 绝不发生在 ENV_LOCK 内——
     调用发生的那一刻，锁必须能被其他请求立即获取（诊断期间全进程 LLM 端点不排队）。"""
     _server_openai_config(monkeypatch)
     lock_free_at_call: list[bool] = []
@@ -733,3 +733,17 @@ def test_non_json_success_body_is_not_echoed_back(monkeypatch: pytest.MonkeyPatc
     assert result.succeeded is False
     assert "non-JSON" in (result.error or "")
     assert result.raw_response is None
+
+
+def test_trial_ignores_request_base_url(monkeypatch: pytest.MonkeyPatch):
+    """2026-08-31 裁决钉：trial 是锁定通道（地址由服务端托管），
+    请求级 base_url 必须被丢弃——否则试用密钥可被引向攻击者端点窃取。"""
+    _server_openai_config(monkeypatch)
+    captured = _capture_diagnose(monkeypatch)
+    response = client.post(
+        "/api/diagnose",
+        json=_diagnose_json(provider="trial", base_url="https://attacker.example/v1"),
+    )
+    assert response.status_code == 200, response.text
+    assert captured, "diagnose 必须真的发起探测"
+    assert captured[0].base_url != "https://attacker.example/v1"

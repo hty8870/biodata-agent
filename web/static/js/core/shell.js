@@ -5,7 +5,8 @@
    #browse、resetFavFolderState 自 #fav_folders import（shell↔browse / shell↔interactions 成环，
    绑定只在函数体内使用）；benchfbSyncSettings 自 #benchfb import（设置打开时刷新
    使用反馈卡片的本机编号行——benchfb 不反向 import 本文件，无环）。
-   boot/interactions/onboarding/browse/search/board/task_pack/act/dream 经 import 取本文件导出。 */
+   boot/interactions/onboarding/browse/search/board/task_pack/act/dream 经 import 取本文件导出
+   （绞杀桥已全退役）。 */
 import { $, API, LS, MOTION, REDUCE_MOTION, clampInt, readJSON, toast, writeJSON } from "#core";
 import { LS_SIDE } from "#cards";
 import { placeFacetBar } from "#facets";
@@ -15,14 +16,14 @@ import { benchfbSyncSettings } from "#benchfb";
 
 export function setSidebar(open) {
     document.body.classList.toggle("side-closed", !open);
-    //  移动端抽屉与浮窗互斥（我的库 + 历史两窗都关）：浮窗曾靠抬 z 压回抽屉，
-    // 结果抽屉导航/遮罩被浮窗盖死点不到（镜像版 BUG-5）——层级对调治不好，开抽屉即关浮窗。桌面不动：
+    // 移动端抽屉与浮窗互斥（2026-08-04：我的库 + 历史两窗都关）：浮窗曾靠抬 z 压回抽屉，
+    // 结果抽屉导航/遮罩被浮窗盖死点不到——层级对调治不好，开抽屉即关浮窗。桌面不动：
     // 那边侧栏非遮罩，浮窗与侧栏本就同层共存。
     if (open && window.innerWidth <= 780) { closeLibWin(); closeHistWin(); }
     if (window.innerWidth > 780) { try { localStorage.setItem(LS_SIDE, open ? "0" : "1"); } catch (_e) {} }
     if (typeof placeFacetBar === "function") placeFacetBar(false);   // 收起/展开只安置分面条落位，不播导航收缩 FLIP（侧栏本身有滑入/滑出过渡，导航动画会与之抢戏、重复）
 }
-function closeSidebarOnMobile() { if (window.innerWidth <= 780) { document.body.classList.add("side-closed"); if (typeof placeFacetBar === "function") placeFacetBar(); } }   //  抽屉关闭 → 分面条搬回结果区，别遗落在离屏抽屉里（验证）
+function closeSidebarOnMobile() { if (window.innerWidth <= 780) { document.body.classList.add("side-closed"); if (typeof placeFacetBar === "function") placeFacetBar(); } }   // 抽屉关闭 → 分面条搬回结果区，别遗落在离屏抽屉里
 /* ≤780px 固钉 logo（side-fab）恒显会压住从它下面滚过的正文（放宽横幅/控制台顶边被盖）。
    向下滚动阅读时把它淡出（fab-tucked），向上回滚/回到顶部即还——只切 class，动画走 side-fab 既有
    transition；桌面不动（那边 fab 与内容无冲突）。 */
@@ -93,7 +94,7 @@ export function initSidebarResize() {
         let next = current;
         if (event.key === "ArrowLeft") next -= 12;
         else if (event.key === "ArrowRight") next += 12;
-        else if (event.key === "Home") next = SIDEBAR_WIDTH.min;   // ：Home=最窄（惯例），End=最宽；重置默认宽用双击分隔条
+        else if (event.key === "Home") next = SIDEBAR_WIDTH.min;   // Home=最窄（惯例），End=最宽；重置默认宽用双击分隔条
         else if (event.key === "End") next = SIDEBAR_WIDTH.max;
         else return;
         event.preventDefault();
@@ -152,7 +153,7 @@ export function showView(name) {
 }
 
 /* ---------- 通用浮窗工厂（骨架 开合/拖动/缩放/落位/重钳 每窗一份） ----------
-   把 fn2 档案浮窗的骨架（开合/拖动/缩放/落位/重钳/关窗计时器）抽成每窗一份的控制器；
+   把档案浮窗的骨架（开合/拖动/缩放/落位/重钳/关窗计时器）抽成每窗一份的控制器；
    #histWin 与 #libWin 共用，几何参数与既有实现逐位一致。渲染器注册反转保留——
    projects.js（追踪）/ browse.js（收藏·历史）经 setLibRenderer/setHistRenderer 注册，
    本文件不反向 import 它们的渲染器（防新环；browse→shell / projects→shell 边早已存在）。 */
@@ -173,7 +174,7 @@ export function initFloatingWin(winEl, opts) {
             if (!w.dataset.placed) {   // 首次落位：主区中央偏上（侧栏占左，稍右偏）；之后记住拖动位置
                 w.dataset.placed = "1";
                 const ww = w.offsetWidth || 560;
-                //  +110 的桌面右偏在 ≤780px 视口豁免（验证移动宽度右缘溢出 98px、
+                // 2026-08-04：+110 的桌面右偏在 ≤780px 视口豁免（实测移动宽度右缘溢出 98px、
                 // 按钮不可达），且任何宽度下都钳进视口（右缘留 12px）。
                 const wide = window.innerWidth > 780;
                 const left = (window.innerWidth - ww) / 2 + (wide ? 110 : 0);
@@ -243,7 +244,7 @@ export function initFloatingWin(winEl, opts) {
         head.addEventListener("pointercancel", up);
         e.preventDefault();
     });
-    //  缩放（右下角把手）：指针捕获 + 按下时记偏移的真实拖拽几何——
+    // 缩放（右下角把手）：指针捕获 + 按下时记偏移的真实拖拽几何（2026-08-04）——
     // 按下点距窗口右/下缘的偏移换算回「窗右/下缘位置」，宽高变化量严格等于指针位移量。
     if (rz) rz.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
@@ -294,7 +295,7 @@ function _renderLibTab(tab) {
     if (typeof fn === "function") { try { fn(); } catch (_e) {} }
 }
 
-/* 切 tab：data-lib-active（CSS 按它显隐更新检查挂点）+ is-on/aria-selected
+/* 切 tab：data-lib-active（CSS 按它显隐追踪详情的更新检查挂点）+ is-on/aria-selected
    + pane hidden + 头注，随后调该 tab 注册的渲染器。 */
 export function setLibTab(name) {
     const tab = name === "favs" ? "favs" : "tracks";
@@ -369,8 +370,8 @@ export function initHistWinSkeleton() {
 // 通用 LLM 连接预设：底层统一走 OpenAI 兼容 /chat/completions。
 // wire = 真正发给后端的 provider（后端认 mock / zhipuai / openai-compatible / trial）；
 // 其余预设都映射成 openai-compatible，仅 base_url + model 不同 → 经安全校验的兼容端点即插即用。
-// trial（限量试用）：key/地址/模型全部由服务端托管并锁定（BIODATA_TRIAL_API_KEY，
-// 缺省回落 BIODATA_EMBED_API_KEY；默认模型由服务端锁定），
+// trial（限量试用，2026-08-25）：key/地址/模型全部由服务端托管并锁定（BIODATA_TRIAL_API_KEY，
+// 缺省回落 BIODATA_EMBED_API_KEY；2026-08-27 起默认模型 glm-5.3-flash），
 // base/model 留空不是「缺省」而是「不可填」——applyPreset 对 trial 禁用三个输入框。
 const LLM_PRESETS = {
     mock: {
@@ -383,7 +384,7 @@ const LLM_PRESETS = {
     },
     deepseek: {
         // 预填非思考通道官方别名 deepseek-chat：AI 执行的工具调用走强制档（required），
-        //  思考型模型（v4-flash/reasoner）拒收该档（400， 验证），速度也慢一倍。
+        // 思考型模型（v4-flash/reasoner）拒收该档（400，2026-08-05 实测），速度也慢一倍。
         wire: "openai-compatible", base: "https://api.deepseek.com", model: "deepseek-chat",
         note: "已填入 DeepSeek 官方兼容地址与推荐模型，可按需修改。",
     },
@@ -452,7 +453,7 @@ export function closeSettings(opts) {
     $("settings").setAttribute("inert", "");
     if (!(opts && opts.returnFocus === false) && _settingsReturnFocus && document.body.contains(_settingsReturnFocus)) _settingsReturnFocus.focus();
 }
-/* 指路「直达」兑现：打开设置后把目标滚进视野并短暂高亮——
+/* 2026-08-04 指路「直达」兑现：打开设置后把目标滚进视野并短暂高亮——
    此前降级气泡的「去开启 AI 执行」只打开抽屉，开关在屏外，照做被门控弹回（死路）。
    expand=true 用于 <details>（AI / API 配置默认收起，不展开滚进去也看不见内容）。 */
 export function revealSetting(id, expand) {
@@ -465,7 +466,7 @@ export function revealSetting(id, expand) {
         setTimeout(() => el.classList.remove("setting-flash"), 1600);
     });
 }
-/* ---------- AI 能力门控与设置三维度（设置体系重写） ----------
+/* ---------- AI 能力门控与设置三维度（2026-08-03 设置体系重写） ----------
    三个独立维度：A 排序（规则恒开标识 ∥ 本地精准重排 ∥ AI 重排）、B 自动选择排序策略
    （开则隐藏 A 的手动项，按规则匹配结果自动决定重排层）、C AI 执行（对话指令理解与操作执行，
    合并旧「说了就直接做」+「Agent 规划执行」；大模型总开关同期退役——两道闸是「AI 重排点不动」
@@ -542,11 +543,11 @@ export function syncAiGates() {
    后端自动回退基础规划，不锁开关（与「运行时不可用只降级标注」同一条语义）。 */
 let _agentExtMissing = false;
 export function agentExtMissing() { return _agentExtMissing; }
-// 整份 health 快照缓存（recall_api 在线状态等 additive 字段的消费口；
+// 2026-08-26：整份 health 快照缓存（recall_api 在线状态等 additive 字段的消费口；
 // 排序策略卡「已在线」判定用）。只在 /api/health 成功时更新。
 let _healthSnapshot = null;
 export function healthSnapshot() { return _healthSnapshot; }
-/* health 快照到达钩子（注册式反转——project_updates 的登录后
+/* health 快照到达钩子（2026-08-26；注册式反转——project_updates 的登录后
    自动刷新经此触发，shell 不反向 import 它）。快照每次成功写入后逐个调用；钩子异常不连累
    主流程。 */
 const _healthArrivedHooks = [];
@@ -556,7 +557,7 @@ export function setHealthArrivedHook(fn) {
 function _fireHealthArrived() {
     _healthArrivedHooks.forEach(function (h) { try { h(); } catch (_e) {} });
 }
-/* 网页版公网护栏（护栏硬化批）前端统一判定口：唯一真源 = /api/health 的
+/* 网页版公网护栏（2026-08-26）前端统一判定口：唯一真源 = /api/health 的
    account.required（与 accounts.js 的 _gate 同一份 health 快照语义）。快照未到/探测失败 →
    false（按本机形态处理，绝不误锁功能）。task_pack/act 等模块经此函数取判定，不自造第二真源。 */
 export function webGuardOn() {
@@ -595,10 +596,10 @@ export async function syncAgentAvailability() {
         if (h && h.ok) { _healthSnapshot = h; _fireHealthArrived(); }
         if (h && h.llm_server) _healthLlm = h.llm_server;
         _agentExtMissing = !!(h && h.extensions && h.extensions.agent === false);
-        //  零配置默认：用户从没存过设置、当前还是本地演示，而服务端已配好
+        // 零配置默认（2026-08-03）：用户从没存过设置、当前还是本地演示，而服务端已配好
         // 真实 key → 接入方式默认到与服务端一致的那个预设（服务端 key 直接适用，AI 开箱可用）。
         // 用户一旦自己选过/存过（LS.cfg 存在）就绝不替他改——存档优先。
-        //  服务端没配正式 key 但开了限量试用通道 → 默认到「限量试用」，
+        // 限量试用（2026-08-25）：服务端没配正式 key 但开了限量试用通道 → 默认到「限量试用」，
         // 新用户开箱即可对话（每日限轮）；正式 key 命中优先于试用。
         if (!readJSON(LS.cfg, null) && _healthLlm && _llmWire() === "mock") {
             let hit = null;
@@ -613,7 +614,7 @@ export async function syncAgentAvailability() {
             if (hit) {
                 $("cfgProvider").value = hit;
                 applyPreset(hit, { force: false });
-                //  替用户改配置必须可见：「服务端有 key」这个条件用户看不到，
+                // 替用户改配置必须可见（2026-08-15）：「服务端有 key」这个条件用户看不到，
                 // 静默改写预设就是隐式分支。如实 toast 一句；用户一旦自己存过设置（上面 LS.cfg 守卫）就到不了这里。
                 toast(trialHit
                     ? "本站提供限量试用通道（每日限轮），已为你切到「限量试用」；正式使用请在设置里配置自己的密钥。"
@@ -626,7 +627,7 @@ export async function syncAgentAvailability() {
             : "允许 AI 按您的话直接执行操作；每步都有记录，最近一次可一键撤回";
         _syncWebGuardUI();   // 护栏模式设置面收口（health 快照刚更新，此刻判定最准）
     } catch (_e) {
-        //  fail-open：开关维持原状。但必须留痕——health 探测失败时
+        // fail-open：开关维持原状。但必须留痕（2026-08-15）——health 探测失败时
         // 「AI 执行」的实际可用性与界面显示可能不符，静默吞掉就无从排障。
         console.warn("syncAgentAvailability: /api/health 探测失败，AI 可用性维持界面原状", _e);
     }
@@ -645,7 +646,7 @@ export function syncStrategyNode() {
     $("nodeRecall").classList.toggle("active", $("cfgRecall").checked && !on);
     $("nodeRerank").classList.toggle("active", $("cfgRerank").checked && !on);
     // AI 重排参数区：手动模式且开关开时整区可见；自动模式下整区常显但「自动补全关键词」行
-    //  由 CSS（.auto-owned .strategy-rerank-audit）藏掉——「AI 重排候选数」保留可调（用户：
+    // 由 CSS（.auto-owned .strategy-rerank-audit）藏掉——「AI 重排候选数」保留可调（用户 2026-08-04：
     // 后端 auto 分支本就消费 rerank_top_n，藏起来等于剥夺了这项调节权）。
     const detail = $("rerankDetail");
     if (detail) detail.classList.toggle("off", !on && !$("cfgRerank").checked);
@@ -660,6 +661,10 @@ function syncApiConfigSummary() {
 let _localModelPoll = null;
 let _localModelState = null;
 
+/* 字节人性化·本地模型安装专用口径（与 act_core.tpBytes 刻意不同，保留两份的理由）：
+   ① 进度从 0 字节起报——0 必须显示「0 KB」，tpBytes 的 `!size → "未知"` 在进度态是错话；
+   ② 数百 MB 的模型文件用整数 MB（toFixed(0)），一位小数全是噪音；KB 段同理取整。
+   文件体积展示（任务包/导出）仍一律走 tpBytes，两处口径不混用。 */
 function _modelBytes(value) {
     const n = Number(value) || 0;
     if (n < 1024 * 1024) return `${Math.max(0, Math.round(n / 1024))} KB`;
@@ -672,7 +677,7 @@ function _renderLocalModelStatus(state) {
     const row = $("modelInstallRow"), title = $("modelInstallTitle"), note = $("modelInstallStatus");
     const install = $("modelInstallBtn"), cancel = $("modelCancelBtn"), progress = $("modelInstallProgress");
     if (!row || !title || !note || !install || !cancel || !progress) return;
-    //  方案A 放量：服务端开了智谱 API 向量召回/重排（health.recall_api）时，
+    // 2026-08-26：服务端开了智谱 API 向量召回/重排（health.recall_api）时，
     // 网页版没有也不需要有「本地下载模型」这回事——直接如实显示「已在线」，藏起安装按钮。
     // recall_api 字段缺失（旧后端）或 embed=false 且本机形态 → 走下方原逻辑，逐字节不变。
     const recallApi = _healthSnapshot && _healthSnapshot.recall_api;
@@ -796,7 +801,7 @@ export function initLocalModelControl() {
 
 // 切 provider 时填入该预设的默认地址/模型。force=用户主动切换 → 覆盖；否则仅填空（不动用户已输入）。
 // 兼容接口/本地演示的 base/model 可为空；本地演示不需要地址和模型输入。
-// trial：地址/密钥两行**整行隐藏**（锁定项不占地），模型框只读
+// trial：地址/密钥两行**整行隐藏**（2026-08-25：锁定项不占地），模型框只读
 // 上屏锁定模型名；额度卡（trialQuotaInfo）显示「今日剩余」；提示小字一并隐藏。
 // 切走 trial 时三行恢复可填可见。隐藏用 inline display（.input 的 CSS display 会盖掉 hidden 属性）。
 function _setCfgRowHidden(inputId, hide) {
@@ -849,7 +854,7 @@ export function applyPreset(key, opts) {
     syncAiGates();   // 接入方式变了 → API 可用性可能翻转，门控视觉随之重算
 }
 
-/* 试用额度卡：trial 预设 + 服务端通道可用 → 显示并拉取「今日剩余」。
+/* 试用额度卡（2026-08-25）：trial 预设 + 服务端通道可用 → 显示并拉取「今日剩余」。
    数据源 /api/account/trial-quota（护栏形态才有；本机形态 404 → 静默隐藏）。
    seq 防竞态：快速切预设时旧响应不得覆盖新状态。 */
 let _trialQuotaSeq = 0;
@@ -886,7 +891,7 @@ export function getConfig() {
     const key = $("cfgProvider").value || "mock";
     const preset = LLM_PRESETS[key] || LLM_PRESETS.mock;
     const provider = preset.wire;
-    // 大模型总开关退役。use_llm = mock 演示恒 true（演示输出靠它），
+    // 2026-08-03：大模型总开关退役。use_llm = mock 演示恒 true（演示输出靠它），
     // 真实 AI 由 API 可用性门控（llmCapable 单一判据）——已配 key 必可用，运行时不可用
     // 由后端如实降级（fallback_reason），不再由前端开关叠加第二道闸。
     const mockLlm = provider === "mock";
@@ -910,7 +915,7 @@ export function getConfig() {
         // 执行侧（下载/打包/导出）关键词核对：真实（非 mock）LLM 可用时自动带上——用户说的「LLM 开启时应包含」。
         // 后端只核对+上报（meta.action_audit），绝不代劳；规则漏认时前端 actionHint 也指路到打包入口。
         action_audit: useLlm && !mockLlm,
-        // AI 执行（维度 C，合并旧「说了就直接做」+「Agent 规划执行」）：
+        // AI 执行（维度 C，2026-08-03 合并旧「说了就直接做」+「Agent 规划执行」）：
         // 开 → 所有消息过 LLM 分流（langgraph 优先、基础规划保底），执行类动词直接派发；
         // 关 → 一切输入按规则检索处理，操作句只回降级气泡。随 /api/utterance 请求带给后端。
         auto_act: $("cfgAgentExec") ? $("cfgAgentExec").checked : true,
@@ -923,7 +928,7 @@ export function getConfig() {
 export function loadConfig() {
     const c = readJSON(LS.cfg, null);
     if (!c) { applyPreset($("cfgProvider").value || "mock", { force: false }); syncAiGates(); return; }
-    // 旧存档迁移（三维度化）：
+    // 旧存档迁移（2026-08-03 三维度化）：
     // - 大模型总开关（useLlm）退役 → AI 能力由 API 可用性门控（llmCapable）；
     // - 「说了就直接做」(autoAct) +「Agent 规划执行」(agent) 合并为「AI 执行」(agentExec)——
     //   任一开过则开（用户显然要执行）；两个旧键都没有时沿用旧 agent 默认（开，未装扩展后端自动回退）。

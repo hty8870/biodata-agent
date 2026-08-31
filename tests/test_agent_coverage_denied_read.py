@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""核销/覆盖闸问题修复批的确定性门（全离线：fake model + monkeypatch LOOP_TOOLS）：
+"""2026-08-08 探针 v3 病灶修复批的确定性门（全离线：fake model + monkeypatch LOOP_TOOLS）：
 
-1. **搜索覆盖闸** `_search_coverage_violation`（首搜成功后 decide 换措辞/加过滤
+1. **搜索覆盖闸** `_search_coverage_violation`（病灶 a06/d01：首搜成功后 decide 换措辞/加过滤
    再搜一遍同主题，rule 10 没拦住、第三步才被指纹去重拦下）——同 source 既往成功搜索的
    token 并集覆盖新提议即机械停环；多主题/换 source/首搜失败重试一律放行。
-2. **第五路机械后检 denied_read** `_denies_done_read`（明明搜过 X，LLM 汇报却说
+2. **第五路机械后检 denied_read** `_denies_done_read`（病灶 d07：明明搜过 X，LLM 汇报却说
    「未搜索 X」——既有四路管不到只读动作的否认）；结果动词（「没搜到」）是零结果时的诚实
    措辞，刻意豁免。
-3. **decide 核销流程化钉字**（马拉松指令提前 finish）——INTRO 核销句 /
-   rule 10 马拉松实例 / finish **必填 completion_report**（第二刀：核销从纯外化
+3. **decide 核销流程化钉字**（病灶 b12/g04：马拉松指令提前 finish）——INTRO 核销句 /
+   rule 10 马拉松实例 / finish **必填 completion_report**（2026-08-08 第二刀：核销从纯外化
    articulation 升级为机械闸——`_unfinished_business` 扫出报告自认「没做」的事项，
    decide 拒收收尾并把缺口回灌重问一次；第二次仍自认未完成 → fail-safe 接受并如实标注）。
-    核销闸升级（`_completion_report_veto` 三形态，本文件第 4 节矩阵）：
+   2026-08-08 探针 v4 核销闸升级（`_completion_report_veto` 三形态，本文件第 4 节矩阵）：
    形态 A「已做」无合法步骤号（b08/k01）、形态 B 豁免行夹带依赖借口词（k03/k08）。
-    举证责任：豁免行（条件不成立/做不到）同样必须引用
+   2026-08-08 探针 v5 病灶2 再加举证责任：豁免行（条件不成立/做不到）同样必须引用
    合法步骤号（据第几步的结果得出），空口豁免与没做同罪——finish 工具 description 同步。
-   prompt 全文字节钉在 tests/test_agent_schemas.py，本文件只钉问题相关的点。
+   prompt 全文字节钉在 tests/test_agent_schemas.py，本文件只钉病灶相关的点。
 """
 import json
 
@@ -37,7 +37,7 @@ SEARCH_OK = {"source_label": "ArrayExpress", "query": "小鼠脑", "species": ""
 
 def _search_step(keywords, record_count=2, source="ArrayExpress", ok=True):
     """既往 search_online 实录步（ok=False 时无 result——失败步不计入覆盖）。"""
-    step = {"verb": "curate.search_online", "verb_zh": "联网搜索数据集", "ok": ok,
+    step = {"verb": "curate.search_online", "verb_zh": "联网搜索入库", "ok": ok,
             "card_kind": "search_online", "readonly": False,
             "slots": {"source": source, "keywords": keywords}, "ms": 1}
     if ok:
@@ -208,7 +208,7 @@ def test_denied_read_needs_a_successful_read_step():
 
 def test_denied_read_reason_code_and_route_priority():
     """denied_read 是独立原因码；优先级 untouched_source → count_mismatch → denied_read
-    → 写动作两路（四路扩五路）。"""
+    → 写动作两路（2026-08-08 四路扩五路）。"""
     steps = [_search_step("mouse brain", record_count=2)]
     # 前面四路都不命中时落到 denied_read
     assert agent_exec._report_contradiction_reason(
@@ -221,25 +221,31 @@ def test_denied_read_reason_code_and_route_priority():
         "搜到 5 条，没搜索 mouse brain。", steps) == "count_mismatch"
 
 
-# ---------------------------------------------------------------- decide 核销流程化钉字
+# ---------------------------------------------------------------- decide 核销流程化钉字（病灶 b12/g04）
 
 def test_decide_prompt_carries_the_checklist_discipline():
-    """马拉松指令做两件就 finish 的防收工钉：INTRO 核销句 + rule 10 马拉松实例
-    两个壳（tools 主通道 / JSON 兜底）都钉住；全文字节钉在 test_agent_schemas.py。"""
-    for prompt in (agent_exec._DECIDE_RULES_ZH, agent_exec._DECIDE_TOOLS_RULES_ZH):
-        assert "逐件标注「已做 / 没做 / 条件不成立」" in prompt
-        assert "做完前两件不许收尾" in prompt
-    # 第二刀：tools 壳的 finish 说明句必须带 completion_report 必填与拒收警告
-    # （JSON 壳没有 finish 概念，不过此钉）。
-    assert "completion_report" in agent_exec._DECIDE_TOOLS_RULES_ZH
-    assert "有一件没交代系统会拒收收尾并重问一次" in agent_exec._DECIDE_TOOLS_RULES_ZH
+    """探针 v3 病灶 b12/g04（马拉松指令做两件就 finish）的核销纪律钉。
+    2026-08-31 单锚点化后改指新锚点：纪律本体在 prompts/loop_core.md（intro 核销句 +
+    诚实不变量第 4 条 + finish 契约），经同一装配进 scoped 各面双壳与 rescue 面双壳。"""
+    faces = [p for rules in agent_exec._SCOPED_DECIDE_RULES_BY_SUITE.values()
+             for p in rules.values()]
+    faces += [agent_exec._SCOPED_DECIDE_RULES_RESCUE["tools"],
+              agent_exec._SCOPED_DECIDE_RULES_RESCUE["json"]]
+    for prompt in faces:
+        assert "「已做 / 没做 / 条件不成立」" in prompt
+        assert "做完一件不许就收工" in prompt
+        assert "有一件没交代系统会拒收收尾并重问一次" in prompt
+    # tools 壳的 finish 指令必须带 completion_report 必填（JSON 壳没有 finish 概念，不过此钉）。
+    for rules in agent_exec._SCOPED_DECIDE_RULES_BY_SUITE.values():
+        assert "completion_report" in rules["tools"]
+    assert "completion_report" in agent_exec._SCOPED_DECIDE_RULES_RESCUE["tools"]
 
 
 def test_finish_tool_requires_completion_report():
-    """finish 的 completion_report **必填**钉（提前收工治理：
+    """finish 的 completion_report **必填**钉（2026-08-08 探针 b12/g04 提前收工病灶第二刀：
     核销从可选 checklist 的纯外化 articulation 升级为机械闸输入——`_unfinished_business`
     扫描报告，自认还有没做的事就拒收收尾并回灌重问一次）。钉住参数面，防回退。
-     刻意更新：description 同步「豁免也要举证（据第几步的结果）」。"""
+    2026-08-08 探针 v5 病灶2 刻意更新：description 同步「豁免也要举证（据第几步的结果）」。"""
     finish = next(t for t in agent_exec._DECIDE_TOOL_SPECS
                   if t["function"]["name"] == "finish")
     params = finish["function"]["parameters"]
@@ -314,7 +320,7 @@ def test_same_topic_research_is_stopped_by_the_coverage_gate(monkeypatch, _tmp_p
 
 def test_unfinished_business_markers_hit_without_exemption():
     """命中词（没做/未做/还没有做/还没做/待做）且同行无豁免词 → 返回该行（原文引用）。
-     刻意更新：签名加 `n_steps`（形态 A 的步骤号越界判定用），
+    2026-08-08 探针 v4 刻意更新：签名加 `n_steps`（形态 A 的步骤号越界判定用），
     本钉的「已做（第1步）」合法引用行传入 n_steps=1 保持放行口径。"""
     assert agent_exec._unfinished_business(
         "1. 检查ArrayExpress更新：已做（第1步）\n2. 再检查ENCODE：没做", 1
@@ -328,7 +334,7 @@ def test_unfinished_business_markers_hit_without_exemption():
 def test_unfinished_business_same_line_exemption_passes():
     """同行有豁免词（条件不成立/做不到/无法/不需要）**且带步骤号举证** → 放行：
     「条件不成立（第1步无新增）所以没做」是 rule 7 语义下的合法收尾，机械闸不误伤。
-     刻意更新：豁免行也要举证（据第几步的结果得出）。"""
+    2026-08-08 探针 v5 病灶2 刻意更新：豁免行也要举证（据第几步的结果得出）。"""
     assert agent_exec._unfinished_business(
         "2. 搜人类肺：没做——条件不成立（第1步没有新增）", 1) is None
     assert agent_exec._unfinished_business("2. 打包下载：做不到（第1步来源认不出），没做", 1) is None
@@ -337,7 +343,7 @@ def test_unfinished_business_same_line_exemption_passes():
 
 
 def test_unfinished_business_exemption_without_step_evidence_is_vetoed():
-    """提前收工残余治理——豁免行的**举证责任**：
+    """病灶2（探针 v5：k02/k09/k10/k11/l07 提前收工残余）——豁免行的**举证责任**：
     空口「条件不成立/做不到」（无步骤号或号码越界）与没做同罪否决；中文数字步骤号
     举证齐全 → 放行（对照）。"""
     assert agent_exec._unfinished_business(
@@ -351,7 +357,7 @@ def test_unfinished_business_exemption_without_step_evidence_is_vetoed():
 
 def test_unfinished_business_all_done_or_empty_passes():
     """全部「已做」（带合法步骤号）/ 空报告 / 报告缺席 → 放行（拿不到核销结论时维持
-    fail-safe 接受）。刻意更新：传 n_steps=2 让两个「已做（第N步）」
+    fail-safe 接受）。2026-08-08 探针 v4 刻意更新：传 n_steps=2 让两个「已做（第N步）」
     都是合法引用。"""
     assert agent_exec._unfinished_business(
         "1. 检查更新：已做（第1步）\n2. 汇报条数：已做（第2步）", 2) is None
@@ -359,10 +365,10 @@ def test_unfinished_business_all_done_or_empty_passes():
     assert agent_exec._unfinished_business(None) is None
 
 
-# ---------------------------------------------------------------- finish 核销硬闸升级：形态 A/B 矩阵
+# ---------------------------------------------------------------- finish 核销硬闸升级：形态 A/B 矩阵（探针 v4）
 
 def test_unfinished_business_done_claim_must_cite_a_real_step():
-    """形态 A（没跑 db_status 却在核销里自称告知了库容）——
+    """形态 A（探针 v4 病灶 b08/k01：没跑 db_status 却在核销里自称告知了库容）——
     标注「已做」的行必须引用**真实存在**的步骤号：无步骤号 / 号码越界 / 第0步
     都与「自认没做」同罪否决；合法引用（阿拉伯/中文数字、含空白写法）放行。"""
     # 无步骤号 → 否决（返回该行原文）
@@ -381,7 +387,7 @@ def test_unfinished_business_done_claim_must_cite_a_real_step():
 
 
 def test_unfinished_business_dependency_excuse_is_not_a_valid_exemption():
-    """形态 B（彼此独立的事写成「因前置步骤失败而未执行」）——
+    """形态 B（探针 v4 病灶 k03/k08：彼此独立的事写成「因前置步骤失败而未执行」）——
     豁免词命中行夹带依赖借口词（前置/前面/前件/该步骤/上一步）→ 不是合法豁免。
     合法豁免对照（条件不成立引用「第1步」不是依赖借口词）不误伤。"""
     assert agent_exec._unfinished_business(
@@ -392,12 +398,12 @@ def test_unfinished_business_dependency_excuse_is_not_a_valid_exemption():
         "3. 再检查B：待做，该步骤失败后无法继续", 1) is not None
     assert agent_exec._unfinished_business(
         "2. 搜人类肺：没做——条件不成立（第1步检查没有新增）", 1) is None
-    # 「该来源」不是依赖借口词（借口词表收的是「该步骤」）； 问题2 起补步骤号举证
+    # 「该来源」不是依赖借口词（借口词表收的是「该步骤」）；2026-08-08 病灶2 起补步骤号举证
     assert agent_exec._unfinished_business(
         "2. 检查：做不到（第1步：该来源无法在线比对），没做", 1) is None
 
 
-# ---------------------------------------------------------------- finish 核销硬闸：veto 回灌重问（全链路）
+# ---------------------------------------------------------------- finish 核销硬闸：veto 回灌重问（b12/g04 型全链路）
 
 MARATHON_UTTER = "检查ArrayExpress更新，完了告诉我库里多少条"
 
@@ -413,7 +419,7 @@ def _marathon_registry(monkeypatch):
                 "generated_at": "t", "sources": [], "total_records": 0,
                 "external_files": [], "recycle": [],
                 "ledger": {"entries": 0, "by_endpoint": {}, "recent": []}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True},
     })
 
@@ -425,7 +431,7 @@ def _marathon_plan(model):
 
 
 def test_finish_veto_rejects_unfinished_report_and_reasks(monkeypatch, _tmp_project_root):
-    """第一次 finish 的核销报告自认「告诉我库里多少条：没做」→ 机械拒收并
+    """b12/g04 型：第一次 finish 的核销报告自认「告诉我库里多少条：没做」→ 机械拒收并
     把缺口回灌重问；第二次提议 db_status 续步 → 照常执行。trace 如实记否决留痕。"""
     _marathon_registry(monkeypatch)
     model = _FakeModel(
@@ -451,9 +457,9 @@ def test_finish_veto_rejects_unfinished_report_and_reasks(monkeypatch, _tmp_proj
 
 
 def test_finish_veto_third_strike_is_accepted_as_fail_safe(monkeypatch, _tmp_project_root):
-    """第一次否决回灌、第二次否决回灌（反馈点名**下一步必须做的动作**）、
+    """第一次否决回灌、第二次否决回灌（反馈点名**下一步必须做的动作**，候选1）、
     第三次 finish 仍自认未完成 → fail-safe 接受收尾，trace 如实标注「已回灌重问 2 次」。
-    旧「第二击即放行」过软（每请求至多回灌一次），
+    2026-08-09 调研-长程agent批 候选2：旧「第二击即放行」过软（每请求至多回灌一次），
     升级为至多两次、三击放行。"""
     _marathon_registry(monkeypatch)
     model = _FakeModel(
@@ -473,7 +479,7 @@ def test_finish_veto_third_strike_is_accepted_as_fail_safe(monkeypatch, _tmp_pro
     decides = [t for t in trace if t["node"] == "decide"]
     assert len(decides) == 1
     assert "已拒收收尾并把缺口回灌重问一次" in decides[0]["detail"]
-    # 第二次否决的反馈点名下一步必须做的动作（硬性要求句）
+    # 第二次否决的反馈点名下一步必须做的动作（候选1 硬性要求句）
     assert "下一步你必须提议「汇报数据库状态」" in decides[0]["detail"]
     assert "核销报告仍标注有未完成事项，按大模型最终判断收尾（已回灌重问 2 次）" in decides[0]["detail"]
     assert len(model.invocations) == 5  # understand + decide + 回灌×2 + narrate
@@ -502,7 +508,7 @@ def test_finish_veto_second_reask_completes_the_forced_item(monkeypatch, _tmp_pr
 
 
 def test_finish_veto_feedback_distinguishes_done_without_step(monkeypatch, _tmp_project_root):
-    """形态 A 全链路：核销报告把没跑的 db_status 标成「已做」
+    """形态 A 全链路（探针 v4 病灶 b08/k01）：核销报告把没跑的 db_status 标成「已做」
     （无步骤号）→ 拒收收尾并把缺口回灌重问；反馈文案带形态 A 专句
     「『已做』必须写明是第几步的结果」；补做 db_status 后第二次 finish 合法收尾。"""
     _marathon_registry(monkeypatch)
@@ -528,7 +534,7 @@ def test_finish_veto_feedback_distinguishes_done_without_step(monkeypatch, _tmp_
 
 
 def test_finish_veto_feedback_distinguishes_dependency_excuse(monkeypatch, _tmp_project_root):
-    """形态 B 全链路：彼此独立的事拿前件失败当理由
+    """形态 B 全链路（探针 v4 病灶 k03/k08）：彼此独立的事拿前件失败当理由
     （「因前置步骤失败而未做」）→ 同样拒收收尾并回灌重问；反馈文案带形态 B 专句
     「彼此独立的事不许拿前件失败当理由」。"""
     _marathon_registry(monkeypatch)
@@ -553,7 +559,7 @@ def test_finish_veto_feedback_distinguishes_dependency_excuse(monkeypatch, _tmp_
 
 
 def test_finish_veto_feedback_distinguishes_exempt_without_step(monkeypatch, _tmp_project_root):
-    """举证责任全链路：豁免行空口无凭（「做不到，没做」
+    """病灶2 全链路（探针 v5 k02/k09/k10/k11/l07）：豁免行空口无凭（「做不到，没做」
     不写据第几步）→ 拒收收尾并回灌重问；反馈文案带「『条件不成立/做不到』必须写明是
     据第几步的结果得出的」；补做后第二次 finish（举证齐全）合法收尾。"""
     _marathon_registry(monkeypatch)
@@ -571,7 +577,7 @@ def test_finish_veto_feedback_distinguishes_exempt_without_step(monkeypatch, _tm
     assert [s["verb"] for s in plan.get("steps") or []] == [
         "curate.check_updates", "curate.db_status"], "豁免举证否决后回灌重问，续步照常执行"
     decides = [t for t in trace if t["node"] == "decide"]
-    assert "必须写明是据第几步的结果得出的" in decides[0]["detail"], "反馈专句必须进 trace"
+    assert "必须写明是据第几步的结果得出的" in decides[0]["detail"], "病灶2 反馈专句必须进 trace"
     reask = model.invocations[2]
     assert "必须写明是据第几步的结果得出的" in reask[-1].content
 
@@ -637,10 +643,10 @@ def test_json_channel_done_is_accepted_without_veto(monkeypatch, _tmp_project_ro
     assert "大模型判断：要求的事已经完成" in decides[0]["detail"]
 
 
-# ---------------------------------------------------------------- 点名源护栏：逐字规范名豁免
+# ---------------------------------------------------------------- 点名源护栏：逐字规范名豁免（w2a2 复跑病灶）
 
 def test_named_source_verbatim_canonical_is_accepted():
-    """词表刻意不收裸「encode」（检索池口径，
+    """2026-08-08 探针 w2a2 复跑病灶（b12/g04）：词表刻意不收裸「encode」（检索池口径，
     普通英文动词防撞车），但马拉松指令「再检查一遍ENCODE」里用户**原样写出了受控规范名**
     ——点名源闸不得把这种合法续步恒杀。豁免只认逐字出现的规范名，不扩散给没写出的来源。"""
     utter = ("检查ArrayExpress更新，有新的人类肺数据就搜来入库，"

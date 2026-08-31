@@ -4,8 +4,8 @@
    #memory 的 setRememberSearchAvailable 经 import 取。runRecommend（search）、cbClear/cbLogPush/
    renderCondBoard（board）、resetTaskPack/syncTaskPackBar（task_pack）、placeFacetBar（facets）、
    getSelectedSources/getSourceMode（interactions）经 import 取（互调成环——绑定都只在函数体内使用）。
-   search/board/browse/interactions/act/accounts 经 import 取本文件导出。 */
-import { API, MOTION, $, escapeHtml, escapeHtmlStrong, isHttp, normalizeItem, prettySource, revealCards, toast } from "#core";
+   search/board/browse/interactions/act/accounts 经 import 取本文件导出（绞杀桥已全退役）。 */
+import { API, MOTION, $, escapeHtml, escapeHtmlStrong, ghostExit, isHttp, normalizeItem, prettySource, revealCards, toast } from "#core";
 import { CB_DIM_LABEL } from "#board_core";
 import { buildCard } from "#cards";
 import { setRememberSearchAvailable } from "#memory";
@@ -18,7 +18,7 @@ import { getSelectedSources, getSourceMode } from "#interactions";
 import { applyRecommendResult, LAST_RECOMMEND_DATA, runRecommend } from "#search";
 import { benchfbAfterSearchRender } from "#benchfb";   // 结果区重建后重新挂 hero 评分卡槽位
 
-/* ---------- 结果曝光追踪（重写为 500ms 状态机，schema v3）----------
+/* ---------- 结果曝光追踪（2026-08-22；重写为 500ms 状态机，schema v3）----------
    一张结果卡入视口**可见累计 ≥500ms** 才算「看过」（USAGE_SEEN_MIN_MS；状态机在 usage_core
    纯核 usageSeenCreate/usageSeenTick/usageSeenPause，node 可测）。语义：
    - 滚动离开：在途计时清零重来（瞥一眼不算看）；
@@ -138,7 +138,7 @@ if (typeof document !== "undefined" && document.addEventListener) {
     });
 }
 
-/* ---------- imp 展示事件 + 卡级归因（schema v3）----------
+/* ---------- imp 展示事件 + 卡级归因（2026-08-22，schema v3）----------
    每次非空结果渲染：造一个不可变 ImpressionContext（tid/iid/policy/当屏 items 快照），
    绑到每张卡 DOM 上（之后这张卡的 open/fav 都归因到**这次展示**，新一轮检索/重渲不串号），
    并发一条 imp 事件。imp 参数缺 tid 时回落当前轮（渲染调用方只有 search.js
@@ -164,7 +164,7 @@ function joinLayers(layers) {
 }
 /* 回退附注：**每一句都由后端出**（`step.fallback_note`，单一真源 workflow._fallback_note）。
 
-   为什么不在这里写死措辞—— 抓到的真事故：本函数原来对所有 `status="fallback"` 一律写
+   为什么不在这里写死措辞——2026-07-26 抓到的真事故：本函数原来对所有 `status="fallback"` 一律写
    「本次未启用，已改用基础方式」。可后端从来就分得清两件事：`skipped` = 没启用，`fallback` = **试过但没成**。
    于是 provider 真返 400 的那几天，用户（和我）看到的都是「AI 重排本次未启用」——一次故障被写成一个选择，
    谁都看不出它坏了。`shell.js` 的开发者面板早就守着「尝试过但失败才算故障」，
@@ -184,13 +184,13 @@ function fallbackLayerNotes(steps, wanted) {
         if (!s || s.status !== "fallback" || !wanted[s.id]) return;
         let note = (typeof s.fallback_note === "string" && s.fallback_note) || "";
         _FALLBACK_NOTE_HUMAN.forEach(function (pair) { note = note.replace(pair[0], pair[1]); });
-        //  验证：note 是后端任意字符串（可含 provider 原始报错），返回值最终经
+        // 2026-08-10：note 是后端任意字符串（可含 provider 原始报错），返回值最终经
         // innerHTML 上屏（renderResultSummary）——拼接前必须转义，XSS 面封死在产地。
         notes.push(wanted[s.id] + (note ? "（" + escapeHtml(note) + "）" : "没能完成"));
     });
     return notes;
 }
-/* / 结果摘要：把旧「N 条 · 方法 · 库中匹配 N 条」计数行、「本次检索用了什么」trace 折叠、覆盖缺口
+/* 结果摘要：把旧「N 条 · 方法 · 库中匹配 N 条」计数行、「本次检索用了什么」trace 折叠、覆盖缺口
    三处合并成**一段自然语言**。逐步 trace 明细「查看每一步」折叠已删（用户判冗余——方法句已含回退附注，
    逐步明细又与分面/命中 chip 重复；原始输出仍在「设置 → 开发者信息 / 诊断」）。
    诚实红线：方法句只据真实 search_trace（哪层 status=used 才写哪层、回退如实附注）；后端没返回 trace
@@ -229,7 +229,7 @@ function renderResultSummary(data) {
         const polished = data.llm_response_used === true;
         if (total > 0) {
             const disp = (shown >= total) ? `已全部展示（共 <b>${shown}</b> 条）` : `展示前 <b>${shown}</b> 条`;
-            //  sum1（用户）：方法层关键词上行内高光，阅读时一眼定位用了哪几层——
+            // 2026-08-16 用户要求：方法层关键词上行内高光，阅读时一眼定位用了哪几层——
             // 三层统一上（「规则排序/本地精准重排/AI 重排」是同类方法词，只标两个会留下一个裸的不一致）。
             // 层名全是上方硬编码安全串，无 XSS 面；回退附注 fellSentence 里的层名不上（那是状态说明，不是方法）。
             const layersHtml = joinLayers(layers.map((l) => `<mark class="sum-layer">${l}</mark>`));
@@ -246,11 +246,11 @@ function renderResultSummary(data) {
     box.hidden = false;
 }
 
-// / 对比池：把本次结果集写进 localStorage，供「数据集详情」独立标签页的「数据集对比」子页取用（跨同源标签共享）。
-//  改存**完整归一化记录**（原只存轻量五字段）：全屏并排对比要把选中数据集当作 handoff 交给一个完整
+// 对比池：把本次结果集写进 localStorage，供「数据集详情」独立标签页的「数据集对比」子页取用（跨同源标签共享）。
+// 改存**完整归一化记录**（原只存轻量五字段）：全屏并排对比要把选中数据集当作 handoff 交给一个完整
 // 的 /dataset iframe 渲染，页头需要 download_url / 物种 / 组织 / 疾病 / 平台 / 可达性 / n_files 等——轻量字段
 // 会让对比侧退回「暂无下载」降级态。items = data.results（仅展示集、条数有界），故体积可控；换查询即整体覆盖。
-// setItem 失败（配额）时**删除旧 key**（验证：旧实现空 catch——写失败会留着上一查询的
+// setItem 失败（配额）时**删除旧 key**（2026-08-09：旧实现空 catch——写失败会留着上一查询的
 // 旧池，对比子页把旧数据当本次结果展示）；对比池空 → 对比子页如实提示先检索，不影响主结果渲染。
 function writeComparePool(items) {
     try {
@@ -264,7 +264,7 @@ function writeComparePool(items) {
 /* ---------- 多批检索结果：批次数据通道 ----------
    后端批次常驻（响应带 result_batches：批 {batch_id,kind,label,query_raw,
    query_effective,payload}）+ active_batch。
-   （用户手写定稿）：结果头部的 pill 切换器（#batchBar）退役——
+   2026-08-24 用户手写定稿：结果头部的 pill 切换器（#batchBar）退役——
    「检索结果页不再展示该 pill」，切换入口唯一化到对话流里的结果 pill（.ft-pill）。
    切换纯前端不发网络：批次 payload 与 /api/recommend 响应同形状，经共享落地口
    applyRecommendResult 重渲——推荐结果标题行两钮、摘要卡、各诚实回显条、条件板全部随批次
@@ -274,10 +274,10 @@ function _batchView(data, batch) {
         result_batches: data.result_batches, active_batch: batch.batch_id,
     });
 }
-/* pill 文案撞车时的批次来源前缀——初步批 label=本轮原话、rank 批
+/* 2026-08-17：pill 文案撞车时的批次来源前缀——初步批 label=本轮原话、rank 批
    label=rank query、rerank 批 label=改写后 query，同句两轮就出现两枚同名 pill 无法区分。
    只在撞名时加前缀（不撞不加，保持既有文案）；kind 口径与后端一致（turn.py 组卷 /
-   agent_exec.py 的 _loop_rank/_loop_rerank），措辞沿用 UI 既有说法。 补齐：
+   agent_exec.py 的 _loop_rank/_loop_rerank），措辞沿用 UI 既有说法。2026-08-18 补齐：
    rerank=「改写后重检」、search_rerun=「换词重检」；加前缀后仍撞名再按顺序补 ·2/·3。 */
 function _batchPillTexts(batches) {
     const prefixByKind = {
@@ -291,7 +291,7 @@ function _batchPillTexts(batches) {
         const label = labelOf(b, idx);
         labelCount.set(label, (labelCount.get(label) || 0) + 1);
     });
-    // kind 前缀不是唯一性证明——同 kind 可因 20 字 label 截断撞名，
+    // 2026-08-18：kind 前缀不是唯一性证明——同 kind 可因 20 字 label 截断撞名，
     // 甚至某个原始 label 可能恰等于另一枚「前缀·label」。最终文案再过 Set，按渲染顺序
     // 追加稳定 ·2/·3，保证任何合法批次数组里两枚 pill 不会完全同名。
     const used = new Set();
@@ -307,7 +307,7 @@ function _batchPillTexts(batches) {
         return shown;
     });
 }
-/* 覆盖策略：非活动备选批的排序层标注——「新检索 · 规则排序」这类
+/* 覆盖策略（设计 §10.3）：非活动备选批的排序层标注——「新检索 · 规则排序」这类
    后缀，让用户看出备选批比当前批弱在哪一层。只给**非活动** pill 加（当前批已是最好，无谓标注）；
    未知/缺失 trace → 空串（不标注，诚实：不可比较）。级别口径与 batch_select.rankingLevel 一致
    （规则=1 / +本地精准重排=2 / +AI 重排=3；polish 不计）。 */
@@ -327,7 +327,7 @@ function _batchRankSuffix(batch) {
 export function renderBatchSwitcher(data) {
     const bar = $("batchBar");
     if (!bar) return;
-    /* （用户 手写定稿「检索结果页不再展示该 pill」）：结果头部的批次 pill
+    /* 用户 2026-08-24 手写定稿「检索结果页不再展示该 pill」：结果头部的批次 pill
        切换器退役——批次切换入口唯一化到对话流里的结果 pill（.ft-pill，点击走 switchBatch，
        数据通道一字不动）。本函数只剩「确保 bar 不现身」；_batchPillTexts/_batchRankSuffix
        纯函数保留（tests 钉着，且批次文案口径以后若复用仍取这里）。 */
@@ -356,11 +356,11 @@ export function switchBatch(batchId) {
     if (String(data.active_batch || "") === normId) return;   // 已在这批
     const view = _batchView(data, batch);
     const q = String(batch.query_effective || batch.query_raw || "");
-    //  keepTurn：批次切换是**同一轮检索**内的换屏，imp 归因沿用当前轮 tid，
+    // keepTurn：批次切换是**同一轮检索**内的换屏，imp 归因沿用当前轮 tid，
     // 不能按 fromHistory 落入 null（那是「历史回看」的语义）。
     applyRecommendResult(view, q, { noScroll: true, fromHistory: true, keepTurn: true });
     renderCondBoard(view);
-    // 切换动画 ≈200ms：与既有「淡入微移」同一语言（placeChatSuite/firstReveal 同款参数族）。
+    // 切换动画 ≈200ms（设计 §M3）：与既有「淡入微移」同一语言（placeChatSuite/firstReveal 同款参数族）。
     if (MOTION) {
         gsap.from("#resultsGrid", { opacity: 0, y: 8, duration: 0.2, ease: "power2.out", clearProps: "all" });
         const sum = $("searchTrace");
@@ -373,6 +373,13 @@ export function enterResultsLayout() {
     if (!v || v.classList.contains("has-results")) return;
     const hero = v.querySelector(".hero");
     if (!(MOTION && hero)) { v.classList.add("has-results"); return; }
+    /* 2026-08-30：无对话直达路径（历史回看/切账户重渲——hero 各部还完整可见）的
+       display:none 瞬隐软化，与 board.js placeChatLog (a) 的幽灵同一语言。正常首发检索不走到这——
+       hero 各部在发送那一刻（chat-main-on）已隐，幽灵已播过（getClientRects 空 → ghostExit 自动跳过）。
+       console 仅在它将被隐藏时播（侧栏展开桌面档）；侧栏收起/移动端留任不播。 */
+    const sideOpen = !document.body.classList.contains("side-closed") && window.innerWidth > 780;
+    hero.querySelectorAll(".hero-rot, .chips, .memory-suggestions").forEach((el) => ghostExit(el, { y: -12, duration: 0.32 }));
+    if (sideOpen) ghostExit(hero.querySelector(".console"), { y: 22, duration: 0.34, ease: "power3.inOut" });
     const from = hero.getBoundingClientRect().top;
     v.classList.add("has-results");
     const dy = from - hero.getBoundingClientRect().top;
@@ -398,26 +405,26 @@ export function exitResultsLayout() {
     const bar = $("facetBar");
     if (bar) { bar.hidden = true; placeFacetBar(); }   // 隐藏后 placeFacetBar 会把它搬回结果区原位并收起侧栏二分
     // 本来就不在结果态（wasResults=false，如首页打字后删光）：布局没有任何变化，**不得播 FLIP**——
-    //  否则 from 哨兵 0 会让 dy=−hero.top，hero 整屏从上方滑回（缺陷：删空文字输入框上跳）。
+    // 否则 from 哨兵 0 会让 dy=−hero.top，hero 整屏从上方滑回（2026-08-03 缺陷：删空文字输入框上跳）。
     if (!MOTION || !hero || !wasResults) return;
     const dy = from - hero.getBoundingClientRect().top;
     if (Math.abs(dy) > 1) gsap.fromTo(hero, { y: dy }, { y: 0, duration: 0.48, ease: "power3.inOut", clearProps: "transform" });
 }
-/* 渲染钩子（注册式反转）：结果区每次重建（新检索/分面重跑/放宽/
+/* 渲染钩子（注册式反转，2026-08-22）：结果区每次重建（新检索/分面重跑/放宽/
    历史回看/失败屏）都通知注册方——projects.js 经 setAfterRenderHook 注册「存为课题」按钮显隐
    与上下文卡重挂。**不留 import 边**（results → projects 会成环：projects 反向 import 本模块
    的分面态），回调是闭包不是依赖。 */
 let _afterRenderHook = null;
 export function setAfterRenderHook(fn) { _afterRenderHook = (typeof fn === "function") ? fn : null; }
 
-/* 下一步行动阶梯：同一注册式反转模式——ladder.js 经
+/* 下一步行动阶梯（2026-08-22，设计 §5）：同一注册式反转模式——ladder.js 经
    setLadderRenderHook 注册结果区阶梯 chips 渲染（本模块不 import ladder，单向边不进 SCC）。
    data=null 表示非完整结果屏（放宽预览），ladder.js 按此整块隐藏。 */
 let _ladderRenderHook = null;
 export function setLadderRenderHook(fn) { _ladderRenderHook = (typeof fn === "function") ? fn : null; }
 
 export function renderResults(items, data, imp) {
-    _seenBegin();   // ：每次结果区重渲 = 一次新展示（上一屏曝光在 begin 内先收尾）
+    _seenBegin();   // 每次结果区重渲 = 一次新展示（上一屏曝光在 begin 内先收尾）
     // 可行性面板的数据是按「点开那一刻的查询」聚合的——任何一次新结果渲染
     // （新检索 / 分面重跑 / 放宽 / 历史回看）都意味着屏上条件已变，面板残留上一轮的数字
     // 就是拿别轮的统计给这轮背书。每次渲染先重置（隐藏+清空）；想看得就新条件重新点。
@@ -426,17 +433,17 @@ export function renderResults(items, data, imp) {
     if (_feasP && !_feasP.hidden) { _feasP.hidden = true; _feasP.innerHTML = ""; }
     enterResultsLayout();
     if (_afterRenderHook) _afterRenderHook(data);   // 空态/失败/弃权各分支早退也不漏（data 恒可判 hasResults）
-    if (_ladderRenderHook) _ladderRenderHook(data);   // ：结果区阶梯 chips / 过宽收窄建议
+    if (_ladderRenderHook) _ladderRenderHook(data);   // 结果区阶梯 chips / 过宽收窄建议
     const wrap = $("resultsWrap");
     const firstReveal = wrap.style.display !== "block";
     wrap.style.display = "block";
-    //  首页 → 结果区的容器级过渡——整块淡入 + 微升（0.45s power2.out，
+    // 2026-08-03：首页 → 结果区的容器级过渡——整块淡入 + 微升（0.45s power2.out，
     // 克制、不晃眼）。只在 none→block 的真实切换播（细化/继续对话不重播）；卡片自身的
     // stagger 由 revealCards 照旧，MOTION 关/reduced-motion 时直接静落。
     if (firstReveal && MOTION) gsap.from(wrap, { autoAlpha: 0, y: 10, duration: 0.45, ease: "power2.out", clearProps: "all" });
-    renderResultSummary(data);     // ：方法句 + 计数 + 逐步 trace 合并成一段摘要（替换旧 resultsCount/resultsSource/renderSearchTrace）
-    renderBatchSwitcher(data);     // ：多批切换器（result_batches>1 才现身；缺失/≤1 批恒 hidden=回退）
-    writeComparePool(items);       // ：把本次结果写进对比池 localStorage，供「数据集详情」新标签页的「数据集对比」子页取用
+    renderResultSummary(data);     // 方法句 + 计数 + 逐步 trace 合并成一段摘要（替换旧 resultsCount/resultsSource/renderSearchTrace）
+    renderBatchSwitcher(data);     // 多批切换器（result_batches>1 才现身；缺失/≤1 批恒 hidden=回退）
+    writeComparePool(items);       // 把本次结果写进对比池 localStorage，供「数据集详情」新标签页的「数据集对比」子页取用
     setRememberSearchAvailable(items.length > 0);   // 「记住这次需求」按钮已删；函数 null 守卫后为 no-op（记忆能力保留、待需要时再挂新入口）
     renderCoverageCaveats(data);   // 诚实降级：覆盖缺口渲染进摘要卡内的 #coverageCaveats（有/无结果都渲染）
     renderUnusedQueryTerms(data);  // 静默丢词：无对应筛选维度、被静默丢弃的实义描述词显式回显
@@ -464,7 +471,7 @@ export function renderResults(items, data, imp) {
             return;
         }
         // 分面细化把结果收窄到 0：不提「放宽 query」（空是筛选所致），提示移除一个筛选。
-        //  文案不写死"上方/左侧"——面包屑落位随状态在结果区上方或左侧栏「数据细化」面板间搬家（验证）。
+        // 文案不写死"上方/左侧"——面包屑落位随状态在结果区上方或左侧栏「数据细化」面板间搬家。
         // error:true（网络/后端出错）时不走此支——空不是筛选所致，应如实报错。
         if (_facetFilters.length && !(data && data.error)) {
             grid.innerHTML = `<div class="info-bar noresult"><strong>该筛选组合下没有数据</strong>
@@ -473,7 +480,7 @@ export function renderResults(items, data, imp) {
             return;
         }
         // error:true（网络/后端出错）：空**不是**筛选/语义所致，如实报「检索失败」，绝不套用「安全弃权」话术甩锅用户查询。
-        //  正文与详情分工：data.markdown 已是人话（网络层错误在 search.js 翻好），
+        // 正文与详情分工（2026-08-04）：data.markdown 已是人话（网络层错误在 search.js 翻好），
         // 进正文段落；结构化代号 + 浏览器原始串退进详情 <pre>——上屏不再直接甩「Failed to fetch」。
         if (data && data.error) {
             const emsg = (data && data.markdown) ? escapeHtml(String(data.markdown)) : "";
@@ -496,7 +503,7 @@ export function renderResults(items, data, imp) {
         if (data && data.resolution_status === "abstained") {
             // 后端的 markdown 首行就是弃权理由（render_no_result → "抱歉，" + abstain_detail），
             // 直接拿来当正文，比前端再编一套说辞诚实，也不会与后端口径漂移。
-            // 后端文案已收敛成一句话（哪个词没收录、去掉可能有结果），
+            // 2026-08-03：后端文案已收敛成一句话（哪个词没收录、去掉可能有结果），
             // 前端不再补第二句（补了就是同一句话说两遍）。
             const raw = String((data && data.markdown) || "").split("\n")[0].replace(/^抱歉，?/, "");
             const why = raw ? escapeHtml(raw)
@@ -549,15 +556,15 @@ export function renderResults(items, data, imp) {
     // 结果区重建（新检索 / 分面重跑 / 放宽 / 历史回看）后把 hero 轮评分卡挂回顶部槽位——
     // 空态/失败/弃权/澄清各分支已在上面 return，那张卡只对「有结果」的屏出现。
     benchfbAfterSearchRender();
-    _seenObserve(grid);   // ：hero/横幅挂完再观察——非卡片节点不影响 .card 名次口径
-    _emitImpression(items, imp);   // ：imp 展示事件 + 每张卡绑不可变归因快照
+    _seenObserve(grid);   // hero/横幅挂完再观察——非卡片节点不影响 .card 名次口径
+    _emitImpression(items, imp);   // imp 展示事件 + 每张卡绑不可变归因快照
 }
 // 澄清态选一个 → 把当前查询改写后重跑：exclude=锚定在 fastq 短语上的『不需要/无需…』→『不要』（硬排除）；ignore=删掉该 fastq 短语（不筛 raw）。
 function applyClarification(optionId) {
     const inp = $("queryInput");
     let q = (inp.value || "");
     if (optionId === "exclude_raw") {
-        //  只改写锚定在 fastq/原始数据 短语上的那一处否定词——
+        // 2026-08-15：只改写锚定在 fastq/原始数据 短语上的那一处否定词——
         // 此前的 /g 全局替换会把原句其它位置的「不需要」也一并改写（用户原话被静默改动）。
         const anchored = q.replace(/(不需要|无需|无须|不用|不必|没必要)(\s*(?:fastq|原始数据|raw\s*data))/gi, "不要$2");
         // 原句里没有可锚定的否定短语时显式补一条排除条件——否则这次选择是无操作，会再跑回同一个澄清。
@@ -617,7 +624,7 @@ function bindRelaxMore(root) {
         btn.textContent = open ? "收起" : `更多放宽方式（${btn.dataset.relaxMore}）`;
     });
 }
-/* 放宽预览**实际生效**的条件集（普查的真源，不是旧解析快照）：
+/* 放宽预览**实际生效**的条件集（真源是后端实际执行集，不是旧解析快照）：
    - drop（去掉一个条件）：retriever 的放宽就是「原 intent 去掉这一条」，故 = 原响应的
      query_constraints（后端实际执行集，被忽略的维度本就不在其中）去掉本项对应的 filter_id。
      key → filter_id 映射（retriever.relaxation_options ↔ query_parser.active_filters）：
@@ -656,7 +663,7 @@ function applyRelaxation(data, i) {
     const opt = isDeg ? deg : ((data && data.relaxation_options) || [])[i];
     if (!opt) return;
     // 「用户不得不放宽条件」本身就是一次检索没做好的信号，值得进反馈包。
-    //  v2：补维度/键与降级档的被忽略词（截 5 个），分析侧才知放宽的是哪一类条件。
+    // v2：补维度/键与降级档的被忽略词（截 5 个），分析侧才知放宽的是哪一类条件。
     const relaxPayload = { d: isDeg ? "未收录词降级" : String(opt.label || opt.dim || "放宽"),
         dim: String(opt.dim || ""), key: String(opt.key || "") };
     if (isDeg) relaxPayload.terms = (opt.ignored_terms || []).slice(0, 5).map(String);
@@ -673,14 +680,14 @@ function applyRelaxation(data, i) {
     const _sum = $("searchTrace"); if (_sum) _sum.hidden = true;
     const _uqt = $("unusedQueryTerms"); if (_uqt) _uqt.hidden = true;   // 同理隐去陈旧的「未作为筛选维度」框
     const _idlk = $("identifierLookup"); if (_idlk) _idlk.hidden = true;   // 放宽预览时隐去陈旧的标识符反查框
-    if (_ladderRenderHook) _ladderRenderHook(null);   // ：放宽预览不是完整结果屏，阶梯 chips/收窄建议一并隐去
+    if (_ladderRenderHook) _ladderRenderHook(null);   // 放宽预览不是完整结果屏，阶梯 chips/收窄建议一并隐去
     // 只收起条件板里的「原严格条件」展示层（摘要 + 经典条件行），**不隐藏整块 #condBoard**——
     // telegram（对话记录）态下整块条件板就是聊天窗（#cbHistory 在其内、由 placeCondBoard 搬进侧栏），
-    // 整块 hidden 会把用户整段对话记录一起抹掉、直到下条消息才回来（真 bug 修复）。
+    // 整块 hidden 会把用户整段对话记录一起抹掉、直到下条消息才回来（用户反馈的真 bug）。
     // 与放宽结果冲突的只是「原严格条件」那点展示（摘要/条件行），用 .cb-relax-preview 精确藏这两处；
     // 聊天记录留着——放宽本身就是一次对话动作。任务包仍单独复位（打包按钮打的还是原严格那批）。
     const _cb = $("condBoard"); if (_cb) _cb.classList.add("cb-relax-preview");
-    // 普查 ：「查询条件」chips 同步换成预览**实际生效**的条件——旧代码只藏了 condBoard
+    // 「查询条件」chips 同步换成预览**实际生效**的条件——旧代码只藏了 condBoard
     // 展示层，#facetActive 仍停在原严格查询的快照上（被去掉的「发表时间」chip 还带着「忽略」
     // 按钮留在栏里，与「这条没参与筛选」矛盾）。渲染走 facets.js 唯一渲染口 renderActiveChips；
     // 点「返回」时下方 renderFacets(data) 按原数据把 chips/分面组整块复原。
@@ -705,7 +712,7 @@ function applyRelaxation(data, i) {
     grid.appendChild(banner);
     rows.forEach((it, idx) => grid.appendChild(buildCard(it, { rank: idx + 1 })));
     revealCards(grid.querySelectorAll(".card"), false);
-    _seenObserve(grid);   // ：放宽预览的卡片同样进曝光追踪
+    _seenObserve(grid);   // 放宽预览的卡片同样进曝光追踪
     // 放宽预览也是一次真实展示，同样发 imp + 绑卡级快照。tid 沿用当前轮
     // （放宽是这轮内的动作）；policy 只能取原响应的 policy_id（预览不发新请求，后端没给就留空，绝不编）。
     _emitImpression(rows, { tid: usageActiveTurnId(), policy: usagePolicyRef(data) });
@@ -726,9 +733,11 @@ export let _queryHits = [];   // [{dim,label,values}]
 // 诚实降级：被用户「也纳入未标注的」的维度（dim 字符串，取自 coverage_caveats[].dim）。每次重跑随请求带上 →
 // 后端把这些维度上**字段为空**的记录视作通过（无法核验≠不匹配），已知不同值仍排除。换查询清空、随历史快照复原。
 export let _lenientDims = [];   // ["tissue","disease",...]
-const _DIM_LABEL = { species: "物种", tissue: "组织", disease: "疾病", platform: "平台", assay: "技术", modality: "模态" };
+/* 维度中文标签单一真源：CB_DIM_LABEL（board_core.js，已从 #board_core import）。
+   本区块出现的 dim 域 = 后端 DIMENSIONS 六维（species/tissue/disease/platform/assay/modality），
+   是 CB_DIM_LABEL 键集的子集，直用不多不少。 */
 
-/* 可变共享状态只允许属主模块写：模块之外对这四个数组的**重赋值**一律经 setFacetState
+/* 可变共享状态只允许属主模块写（迁移约定 §4）：模块之外对这四个数组的**重赋值**一律经 setFacetState
    （ESM live binding 对外只读，消费方经 import 拿到本函数）。patch 只给要换的键；
    原地改（push/splice）不在此列——facets.js 等经 live binding 拿到的就是同一个数组。 */
 export function setFacetState(patch) {
@@ -755,18 +764,18 @@ function renderCoverageCaveats(data) {
     let html = "";
     if (applied.length) {
         const chips = applied.map((d) =>
-            `<button type="button" class="cov-undo" data-cov-dim="${escapeHtml(d)}" title="撤销：重新按标注严格筛选">已纳入未标注「${escapeHtml(_DIM_LABEL[d] || d)}」的数据 ✕</button>`
+            `<button type="button" class="cov-undo" data-cov-dim="${escapeHtml(d)}" title="撤销：重新按标注严格筛选">已纳入未标注「${escapeHtml(CB_DIM_LABEL[d] || d)}」的数据 ✕</button>`
         ).join("");
         html += `<div class="cov-applied">${chips}</div>`;
     }
     if (caveats.length) {
         const rows = caveats.map((c, i) => {
             const srcs = (c.by_source || []).map((s) => `${escapeHtml(prettySource(s.source))} ${s.count} 条`).join("、");
-            //  ③（修正 误读）：用户要的是**多档放宽策略选择**，不是「看看是哪些」记录预览。
+            // 2026-08-01：用户要的是**多档放宽策略选择**，不是「看看是哪些」记录预览。
             // 每行 caveat 的展开给出该维度的两档策略（方向相反、文案各自成立）：
             //   ① lenient＝纳入未标注「X」的 N 条（旧「也纳入」；无法核验≠不匹配，已知不同值仍排除）
             //   ② drop   ＝不按「X」筛选（该条件整个放开，连已知其它取值也进来 → 结果明显变宽）
-            const dimLabel = _DIM_LABEL[c.dim] || c.dim;
+            const dimLabel = CB_DIM_LABEL[c.dim] || c.dim;
             const expandBtn =
                 `<button type="button" class="cov-expand" data-cov-idx="${i}" aria-expanded="false">放宽方式 ▸</button>`;
             const detail =
@@ -786,7 +795,7 @@ function renderCoverageCaveats(data) {
     }
     box.innerHTML = html;
     // 「已纳入未标注 X ✕」撤销 chips（applied_lenient 回显）：只绑撤销 chip 自身，不再罩住整片 [data-cov-dim]
-    //  （③ 起策略按钮改走 data-cov-how 通道，两种触发语义不同，不能混绑）。
+    // （策略按钮改走 data-cov-how 通道，两种触发语义不同，不能混绑）。
     box.querySelectorAll(".cov-undo[data-cov-dim]").forEach((b) =>
         b.addEventListener("click", () => toggleLenient(b.dataset.covDim)));
     // 策略按钮：lenient → 纳入未标注的（toggleLenient）；drop → 不按该维筛（relaxDimFully）。
@@ -807,7 +816,7 @@ function renderCoverageCaveats(data) {
         }));
 }
 
-/* 「不按「X」筛选」（③ 放宽方式第二档 drop）：把该维条件**整个放开**——已标注为其它取值的也进来。
+/* 「不按「X」筛选」（放宽方式第二档 drop）：把该维条件**整个放开**——已标注为其它取值的也进来。
    与「纳入未标注的」（toggleLenient，只放行空字段、已知不同值仍排除）是**相反方向的两档**。
    机制全复用既有原语、无新后端行为：分面筛选里有该维 → 撤掉该维全部分面取值；否则按原始命中忽略
    （_suppressed，与条件栏 chip 的「忽略」同一通道，还原也走既有路径：条件板「已忽略」分区 /
@@ -839,7 +848,7 @@ function renderUnusedQueryTerms(data) {
     box.innerHTML = `<span class="uqt-txt" title="如果需要精确筛选，请改用物种、组织、疾病、平台、技术的规范名称">以下词没有对应的筛选维度，结果<b>未按它们过滤</b>：</span> ${chips}`;
 }
 
-// 「A 或 B」的实际处理方式。 之前这类说法**整句弃权**（0 条结果、0 个放宽选项、0 个降级），
+// 「A 或 B」的实际处理方式。2026-07-25 之前这类说法**整句弃权**（0 条结果、0 个放宽选项、0 个降级），
 // 现在照做——但引擎能表达的「或」只有「同一维度多个值」这一种。三档必须如实播报，否则就是静默偏离：
 //   exact    唯一一个维度拿到多值 → 执行的就是用户说的那个「或」
 //   superset 多个维度各拿到多值 → 实际是交叉组合，比用户说的搭配更宽
@@ -880,6 +889,16 @@ function renderActionHint(data) {
         : "";
     box.innerHTML = `<span class="uqt-txt">你提到了 ${chips}${llmNote}——检索本身<b>不包含</b>这一步。`
         + `结果上方的「📦 下载这批数据」可以直接下载真实文件，也可一次生成清单、下载脚本、FAIR 自检与引文。</span>`;
+}
+
+/* 指路条的核销口（2026-08-31）：「检索本身不包含这一步」只在该动作**没被执行**时成立——
+   同轮把动作真执行成了（act.js 执行层成功收尾时调本函数），它就自相矛盾，必须摘掉；
+   失败/取消不摘（手动入口恰好是那时的正确退路）。 */
+export function clearActionHint() {
+    const box = $("actionHint");
+    if (!box) return;
+    box.hidden = true;
+    box.innerHTML = "";
 }
 
 // 标识符精确反查回显：query 本身是标识符时。indexed 且命中 → 直达该数据集卡片；

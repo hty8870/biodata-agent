@@ -24,7 +24,7 @@ def records():
 
 @pytest.fixture(scope="module")
 def items(records):
-    # 显式取策展产物 10x-Visium.json 的前 5 条，而非 records[:5]—— 受控重基线后
+    # 显式取策展产物 10x-Visium.json 的前 5 条，而非 records[:5]——2026-08-17 promo1 重基线后
     # base 多了 10x-synced.json（文件序在其前），records[:5] 会变成无文件清单的 sync 记录，
     # 本组「声明带真数字」钉的输入语义（有主文件、有被排除文件）就空了。
     visium = [r for r in records if r.source_file == "10x-Visium.json"]
@@ -179,7 +179,7 @@ def test_pack_contains_exactly_the_declared_files(pack):
 
 
 def test_file_list_groups_rows_by_dataset(pack):
-    """ 可读性：file-list.md 按数据集分组，每组醒目标题 = 数据集编号 + 标题，文件列在其下。
+    """dl2 可读性：file-list.md 按数据集分组，每组醒目标题 = 数据集编号 + 标题，文件列在其下。
 
     用户投诉「分不清哪些数据是哪个数据集的」——旧版是一张五列大表，归属藏在第一列里。
     新版组标题直读归属；组内文件行只含 文件/大小/能核对到什么 三列。
@@ -201,7 +201,7 @@ def test_file_list_groups_rows_by_dataset(pack):
 
 
 def test_manifest_keeps_dataset_group_headers_but_stays_script_parseable(pack):
-    """ 可读性：manifest.tsv 组前插 `# ===== 编号 · 标题 =====` 注释分组行。
+    """dl2 可读性：manifest.tsv 组前插 `# ===== 编号 · 标题 =====` 注释分组行。
 
     两个脚本都 `grep -v '^#'` 跳过注释，因此分组行不得影响脚本解析：
     去掉 # 行后的首行仍是 dataset_uid 表头、数据行列数不变、逐文件行紧跟在组注释后。
@@ -223,12 +223,12 @@ def test_manifest_keeps_dataset_group_headers_but_stays_script_parseable(pack):
 
 
 def test_start_here_explains_no_data_files_and_the_three_steps(pack):
-    """ 可读性：00-START-HERE.txt 改成小白三步——
-    ①包里没有数据文件（是清单+脚本）；②想直接下数据用界面「直接下载真实数据」；
+    """dl2 可读性：00-START-HERE.txt 改成小白三步——
+    ①包里没有数据文件（是清单+脚本）；②想直接下数据用界面「下载勾选的数据集文件」；
     ③自己跑脚本：每行属于哪个数据集怎么看、怎么跑、校验什么意思。"""
     text = {f["path"]: f["text"] for f in task_pack.render_files(pack)}["00-START-HERE.txt"]
     assert "没有任何数据文件" in text and "是设计如此" in text          # ①
-    assert "直接下载真实数据" in text                                     # ②
+    assert "下载勾选的数据集文件" in text                                   # ②
     assert "manifest.tsv 每行的第一列就是数据集编号" in text              # ③ 归属怎么看
     assert "download.ps1" in text and "download.sh" in text               # ③ 怎么跑（双脚本）
     assert "校验是什么意思" in text and "md5" in text and "unverified" in text  # ③ 校验语义
@@ -277,7 +277,7 @@ def test_scripts_default_to_dry_run(pack, name):
 def test_scripts_actually_verify_what_they_downloaded(pack, name):
     """四档里「只能核对文件大小」那一档，脚本必须**真的**去比字节数。
 
-    两个脚本下完只在「有 md5 且本机有 md5sum」时核验，其余一律写 ok——
+    对抗评审实测：两个脚本下完只在「有 md5 且本机有 md5sum」时核验，其余一律写 ok——
     包里三处却都写着「脚本只能比对字节数」。承诺了一件产物根本没做的事，是本项目最严重的一类缺陷。
     """
     text = {f["path"]: f["text"] for f in task_pack.render_files(pack)}[name]

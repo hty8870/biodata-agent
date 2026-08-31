@@ -49,7 +49,7 @@ def test_onboarding_is_first_run_optional_and_replayable():
     assert 'event.key === "Escape"' in js
     assert "initOnboarding()" in boot
     assert "maybeAutoOpenSettings()" not in boot
-    assert ".onboarding {" in css and "z-index: var(--z-tour)" in css   # z 层叠令牌化（原 2147483000 魔法数 → --z-tour:1000，定义在 :root）
+    assert ".onboarding {" in css and "z-index: var(--z-tour)" in css   # Round3 V5：z 层叠令牌化（原 2147483000 魔法数 → --z-tour:1000，定义在 :root）
     assert ".onboarding.onboarding-settings" in css
     assert "left: 50%; top: 50%" in css
     assert 'id="onboardingSurface"' in html and ".onboarding-surface" in css
@@ -57,9 +57,9 @@ def test_onboarding_is_first_run_optional_and_replayable():
     assert "position: sticky; bottom: 0" in css
     assert '"#apiConfigBody"' in js and '"#modelInstallRow"' in js
     assert 'classList.toggle("onboarding-settings"' in js
-    # 导览独立紫（oklch hue 274）收敛为品牌青族——--tour-accent 改从全局 accent 派生，oklch 紫字面量已清零
+    # Round3 V1：导览独立紫（oklch hue 274）收敛为品牌青族——--tour-accent 改从全局 accent 派生，oklch 紫字面量已清零
     assert "--tour-accent: var(--accent)" in css and "oklch(56% 0.18 274)" not in css
-    assert ".onboarding-focus-ring" in css and "z-index: var(--z-tour-ring)" in css   # 原 2147482999 → --z-tour-ring:999
+    assert ".onboarding-focus-ring" in css and "z-index: var(--z-tour-ring)" in css   # V5：原 2147482999 → --z-tour-ring:999
     assert "pointer-events: none" in css
     assert ".onboarding-focus { outline: none !important; }" in css
     assert "function syncOnboardingFocusRing()" in js
@@ -88,14 +88,14 @@ def test_tutorial_has_early_task_chain_and_transform_only_resize_motion():
     html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "web/static/js/core/onboarding.js").read_text(encoding="utf-8")
     css = (ROOT / "web/static/css/app.css").read_text(encoding="utf-8")
-    # 步数演进 9 → 10：「细化筛选」步后插入「数据集详情页里有什么」
+    # 2026-07-29 起 9 步；2026-08-14 ux3 起 10 步：「细化筛选」步后插入「数据集详情页里有什么」
     # （详情页实拍截图 + 六子标签一句话），新用户不必真开页面就知道详情页含哪些信息。
-    # 11 步：数组头部新增「第0步」（使用反馈承诺 + 高质量查询引导，BENCHFB_BUILD 分叉）。
-    # 把两个尾部能力步骤合并前移为第 2 屏，总步数 13→12；用户先知道能交代完整任务，
+    # 2026-08-19 tu1 起 11 步：数组头部新增「第0步」（使用反馈承诺 + 高质量查询引导，BENCHFB_BUILD 分叉）。
+    # om1：把 ob3 两个尾部能力步骤合并前移为第 2 屏，总步数 13→12；用户先知道能交代完整任务，
     # 再学习查询细节，避免只把产品理解成普通检索页。
-    # 后续：在「出结果后可以接着改条件」之后插入「接进你自己的 AI 助手」步
+    # fx2（2026-08-22）：在「出结果后可以接着改条件」之后插入「接进你自己的 AI 助手」步
     # （可选，复用帮助页 copyAgentPrompt 单一真源），总步数 12→13。
-    # ①「我的库」介绍步插到「出结果后可以接着改条件」之后（追踪+收藏双页签、
+    # 任务C（2026-08-23）：①「我的库」介绍步插到「出结果后可以接着改条件」之后（追踪+收藏双页签、
     # 只存本机浏览器），②「接进你自己的 AI 助手」按产品方向后移至结尾（走 MCP/技能包会绕开
     # react agent 侧数据采集、不主动推，文案精简），总步数 13→14；使用反馈步仍收尾。
     assert 'id="onboardingProgress">1 / 14<' in html
@@ -103,7 +103,7 @@ def test_tutorial_has_early_task_chain_and_transform_only_resize_motion():
     for visual in ("query", "scope", "provider", "ranking", "polish", "trace", "refine", "detail", "board", "react", "agent"):
         assert f'data-onboarding-visual="{visual}"' in html
         assert f'visual: "{visual}"' in js
-    # 「接进你自己的 AI 助手」步视觉块 + 复制按钮接线：copyAgentPrompt 单一真源
+    # fx2「接进你自己的 AI 助手」步视觉块 + 复制按钮接线：copyAgentPrompt 单一真源
     #（interactions.js 提为 export，onboarding.js 委托复用），「下载技能包」纯 <a download> 无需 JS。
     assert 'id="tourAgentPromptCopyBtn"' in html
     assert 'copyAgentPrompt' in js
@@ -124,7 +124,7 @@ def test_tutorial_has_early_task_chain_and_transform_only_resize_motion():
     resize_fn = js.split("function animateOnboardingResize", 1)[1].split("function setOnboardingDone", 1)[0]
     assert "scaleX" in resize_fn and "scaleY" in resize_fn and 'surface.style.transform = "none"' in resize_fn
     assert "style.width" not in resize_fn and "style.height" not in resize_fn
-    # FLIP 缩放动画的减弱动效判据从加载时取一次的 REDUCE_MOTION 常量，改成实时读 matchMedia 的
+    # UX1：FLIP 缩放动画的减弱动效判据从加载时取一次的 REDUCE_MOTION 常量，改成实时读 matchMedia 的
     # onboardingReduceMotion()（会话中途开启也即时生效）；助手函数里仍以 REDUCE_MOTION 为基。
     assert "onboardingReduceMotion()" in resize_fn
     assert "function onboardingReduceMotion()" in js and 'matchMedia("(prefers-reduced-motion: reduce)")' in js
@@ -142,7 +142,7 @@ def test_tutorial_copy_explains_ranking_polish_trace_and_refinement_boundaries()
         "AI 重排适合复杂描述",
         "不会把不符合必选条件的数据排回来",
         "AI 润色只改说明，不改结果",
-        # 「不把打算用的说成已经用了」这条诚实语义必须留在教程里； 文案校对把它从
+        # 「不把打算用的说成已经用了」这条诚实语义必须留在教程里；2026-07-21 文案校对把它从
         # 「不会把计划使用的能力冒充成已经成功执行」改写成下面这句大白话，语义不变、更好懂。
         "不会把「本来打算用」写成「已经用了」",
         "用细化筛选收窄，再查看数据集介绍",
@@ -152,27 +152,23 @@ def test_tutorial_copy_explains_ranking_polish_trace_and_refinement_boundaries()
 
 
 def test_step0_true_branch_final_copy_with_accent_and_bold_marks():
-    """第0步反馈强化（BENCHFB_BUILD=true 分支）终稿契约；文案如实化。
+    """ob2/S5：第0步反馈强化版（BENCHFB_BUILD=true 分支）终稿契约；ux1 起文案如实化。
 
     - 正文逐字含「默认开启本地数据采集」「每个账户首次发送前独立确认」
-      「记录只保存在本机，不会上传——除非部署方另外配置了上传通道」
-      「经明文 HTTP 上传到部署方的服务器（保留 90 天）」「不采集 API Key、密码和账户名」
-      （公开发布包出厂 meta 是占位符、上传通道 fail-closed 未配置，文案按
-      「本机 Only，部署方配置通道后才上传」的条件口径书写，两布局同真；
-       尽力过滤：手机号/证件号/邮箱自动遮蔽、API Key 等直接标识删除，并非匿名化，
-       与 consent v2 口径一致）；
+      「经明文 HTTP 上传到项目所有者的服务器（保留 90 天）」「不采集 API Key、密码和账户名」
+      （2026-08-22 ux1：旧的「安全 HTTPS 通道」虚口径已如实改写为明文 HTTP + 90 天 + 结构性去标识；
+      2026-08-22 ov1-fix2：结构性去标识 → 尽力过滤（手机号/证件号/邮箱自动遮蔽、API Key 等直接
+      标识删除，并非匿名化），与 consent v2 口径一致）；
     - 评分频率新口径入正文（每会话最多两次）+ 隐私提醒（勿输入患者隐私/样本信息/未公开课题）；
     - 旧「导出反馈包 / 手动发给开发者」口径已清除（导出仅作兜底，不再出现在 step0 正文）；
     - 样式只走 additive 字段 titleAccent/boldText（与 BENCHFB_BUILD 绑定），渲染端 classList.toggle
-      挂类、CSS 用主题色变量（--tour-accent = 全局 --accent）——标准构建 false 分支文案与视觉一律不动。
+      挂类、CSS 用主题色变量（--tour-accent = 全局 --accent）——主线版 false 分支文案与视觉一律不动。
     """
     js = (ROOT / "web/static/js/core/onboarding.js").read_text(encoding="utf-8")
     css = (ROOT / "web/static/css/app.css").read_text(encoding="utf-8")
     assert "默认开启本地数据采集" in js
     assert "每个账户首次发送前独立确认" in js
-    assert "记录只保存在本机，不会上传——除非部署方另外配置了上传通道" in js
-    assert "记录经尽力过滤（手机号/证件号/邮箱自动遮蔽、API Key 等直接标识删除，并非匿名化）经明文 HTTP 上传到部署方的服务器（保留 90 天）" in js
-    assert "上传到项目所有者的服务器" not in js
+    assert "记录经尽力过滤（手机号/证件号/邮箱自动遮蔽、API Key 等直接标识删除，并非匿名化）后经明文 HTTP 上传到项目所有者的服务器（保留 90 天）" in js
     assert "配置安全 HTTPS 通道后才会脱敏自动上传" not in js
     assert "不采集 API Key、密码和账户名" in js
     assert "请尽管用真需求考验它" in js
@@ -185,13 +181,13 @@ def test_step0_true_branch_final_copy_with_accent_and_bold_marks():
     assert 'classList.toggle("onboarding-text-bold"' in js
     assert ".onboarding-copy h3.onboarding-title-accent { color: var(--tour-accent); }" in css
     assert ".onboarding-copy > p.onboarding-text-bold { font-weight: 700; }" in css
-    # 标准构建 false 分支：标题与正文文案保持原样
+    # 主线版 false 分支：标题与正文文案保持 tu1 原样（ob2 不改动）
     assert 'title: BENCHFB_BUILD ? "你的使用，在帮它变好" : "尽管用真需求考验它"' in js
     assert "检索、下载、入库、对比、导出引文，一句话都能交代。" in js
 
 
 def test_tutorial_task_chain_is_second_screen_and_uses_plain_product_language():
-    """不用 React/RAG 术语，第二屏即用真任务链建立“检索只是起点”的心智。"""
+    """om1：不用 React/RAG 术语，第二屏即用真任务链建立“检索只是起点”的心智。"""
     html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "web/static/js/core/onboarding.js").read_text(encoding="utf-8")
     css = (ROOT / "web/static/css/app.css").read_text(encoding="utf-8")
@@ -227,8 +223,8 @@ def test_api_key_is_filled_in_the_real_form_during_onboarding():
 
 
 def test_api_key_persistence_requires_separate_explicit_opt_in():
-    """普通设置可记住，但密钥必须有独立、显式的持久化授权。
-    界面只留「记住设置」「记住api key」两项八个字，
+    """ah-c1：普通设置可记住，但密钥必须有独立、显式的持久化授权。
+    2026-08-25 夜 ux 精简批：界面只留「记住设置」「记住api key」两项八个字，
     「key 落盘以设置落盘为前提」改由联动行为表达（勾 key 带设置、撤设置撤 key）。"""
     html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
     shell = (ROOT / "web/static/js/core/shell.js").read_text(encoding="utf-8")
@@ -265,7 +261,7 @@ def test_settings_group_strategy_controls_and_keep_copy_concise():
     assert '<span class="api-config-chevron" aria-hidden="true">⌄</span>' not in html
     assert 'class="strategy-panel ranking-control auto-owned"' in html
     assert 'id="strategyAutoRow"' in html and 'id="strategyModeHint"' in html
-    # 设置三维度化：维度 A＝规则排序（恒开标识）∥ 本地精准重排 ∥ AI 重排
+    # 2026-08-03 agent2 设置三维度化：维度 A＝规则排序（恒开标识）∥ 本地精准重排 ∥ AI 重排
     # 三张并列卡；AI 重排从已退役的大模型面板回归排序面板。
     assert html.count('class="strategy-choice strategy-tip"') == 2
     assert 'strategy-choice-rule strategy-rule strategy-tip active' in html
@@ -296,10 +292,10 @@ def test_settings_group_strategy_controls_and_keep_copy_concise():
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
     assert ".strategy-choice-rule" in css and ".strategy-choice-icon" not in css
     assert ".strategy-auto-ai.off, .strategy-rerank-detail.off" in css
-    # B（自动选择）开 → 隐藏 A 的手动项（.auto-owned 单一收口，不再逐个 disabled）
+    # 2026-08-03 agent2：B（自动选择）开 → 隐藏 A 的手动项（.auto-owned 单一收口，不再逐个 disabled）
     assert ".ranking-control.auto-owned .strategy-choice-grid," in css
     assert ".ranking-control:not(.auto-owned) .strategy-auto-ai" in css
-    # （用户）：自动模式下「AI 重排候选数」保留可调——只藏「自动补全关键词」行，不藏整区
+    # 2026-08-04（用户）：自动模式下「AI 重排候选数」保留可调——只藏「自动补全关键词」行，不藏整区
     assert ".ranking-control.auto-owned .strategy-rerank-audit" in css
     assert ".ranking-control.auto-owned .strategy-rerank-detail" not in css
     assert 'detail.classList.toggle("off", !on && !$("cfgRerank").checked)' in shell
@@ -309,8 +305,8 @@ def test_settings_group_strategy_controls_and_keep_copy_concise():
     assert 'control.classList.toggle("auto-owned", on)' in shell
     assert "自动模式：规则排序始终启用，系统按每次查询的匹配情况自动决定" in shell
     assert "手动模式：规则排序始终启用；可按需叠加本地精准重排或 AI 重排。" in shell
-    # 开关语义统一：已配 key 必可开关——不再有 masterOn/auto 叠加的 disabled 锁
-    assert '$("cfgRerank").disabled' not in shell, "AI 重排开关不得再被第二道闸锁死（根因）"
+    # 开关语义统一（P0-3）：已配 key 必可开关——不再有 masterOn/auto 叠加的 disabled 锁
+    assert '$("cfgRerank").disabled' not in shell, "AI 重排开关不得再被第二道闸锁死（P0-3 根因）"
     assert '$("cfgRecall").disabled' not in shell
 
 
@@ -318,7 +314,7 @@ def test_settings_provider_choices_are_grouped_presets_and_legacy_values_migrate
     html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
     shell = (ROOT / "web/static/js/core/shell.js").read_text(encoding="utf-8")
     provider_block = html.split('id="cfgProvider"', 1)[1].split("</select>", 1)[0]
-    # +1「限量试用」（value=trial，免密钥每日限轮、服务端托管锁定）→ 10 个选项。
+    # 2026-08-25 T3：+1「限量试用」（value=trial，免密钥每日限轮、服务端托管锁定）→ 10 个选项。
     assert provider_block.count("<option value=") == 10
     assert 'label="主流 API 服务商"' in provider_block
     assert 'label="高级接入"' in provider_block
@@ -367,7 +363,7 @@ def test_sidebar_resize_has_pointer_keyboard_and_persistence_contract():
 
 
 def test_result_summary_is_built_from_real_backend_trace():
-    """/：结果头三处合并成一段自然语言摘要（renderResultSummary）；逐步 trace「查看每一步」折叠已删（用户判冗余）。
+    """ux3/ux3c：结果头三处合并成一段自然语言摘要（renderResultSummary）；逐步 trace「查看每一步」折叠已删（用户判冗余）。
     留下的诚实不变量：方法句只据真实 search_trace 的 used/fallback 状态生成，绝不把计划能力冒充成已执行；
     无 trace（新前端 + 未重启旧后端）如实说「执行明细不可用」；计数并入句子。"""
     results = (ROOT / "web/static/js/search/results.js").read_text(encoding="utf-8")
@@ -375,7 +371,7 @@ def test_result_summary_is_built_from_real_backend_trace():
     assert "data.search_trace" in results
     assert 'status === "used"' in results and 'status !== "fallback"' in results
     assert 'used.has("local_semantic")' in results and 'used.has("llm_rerank")' in results
-    # 这里原来钉的是 `assert "本次未启用" in results`——**它把缺陷钉成了正确**。
+    # 2026-07-26：这里原来钉的是 `assert "本次未启用" in results`——**它把缺陷钉成了正确**。
     # 后端一直分得清 `skipped`（没启用）与 `fallback`（试过但没成），前端却把两者一律写成
     # 「本次未启用」，于是 provider 真返 400 的那几天，界面读起来像是系统自己选择不用这一层。
     # 现在措辞由后端 `step.fallback_note` 给（单一真源 workflow._fallback_note），
@@ -386,7 +382,7 @@ def test_result_summary_is_built_from_real_backend_trace():
     assert "data.result_total" in results             # 「库中共 N 条匹配」计数并入方法句、不再单独渲染 #resultsTotal
     assert "条关键信息" not in results
     assert "执行明细不可用（请重启后端）" in results    # 新前端 + 未重启旧后端：无 trace 时如实说、绝不猜方法
-    # 逐步 trace 明细与「查看每一步」折叠已删：results.js 不再有 CUSTOMER_TRACE_IDS / customerTraceSteps；
+    # 逐步 trace 明细与「查看每一步」折叠已删（ux3c）：results.js 不再有 CUSTOMER_TRACE_IDS / customerTraceSteps；
     # index.html 不再有 #searchTraceToggle / #searchTraceBody（#searchTrace 摘要卡容器仍在，web_smoke 亦钉）。
     assert "CUSTOMER_TRACE_IDS" not in results and "customerTraceSteps" not in results
     html = (ROOT / "web/static/index.html").read_text(encoding="utf-8")
@@ -412,7 +408,7 @@ def test_tutorial_provider_buttons_drive_the_real_settings_form():
     for value in ("deepseek", "kimi", "qwen", "zhipuai", "openrouter"):
         assert f'data-tour-provider="{value}"' in html
         assert f'value="{value}"' in provider_block
-    # 五个按钮都可点、带 aria-pressed，且「模型」对应 zhipuai 预设（不是独立 brand）。
+    # 五个按钮都可点、带 aria-pressed，且「GLM」对应 zhipuai 预设（不是独立 brand）。
     brands = html.split('class="tour-provider-brands"', 1)[1].split("</div>", 1)[0]
     assert brands.count('class="tour-provider-brand"') == 5
     assert brands.count('aria-pressed="false"') == 5

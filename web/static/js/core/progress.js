@@ -1,8 +1,8 @@
 "use strict";
 
 /* 本文件是 ES Module：core 的 $/REDUCE_MOTION 经 import 取；search/board/browse/interactions
-   经 import 取进度函数与查询缓存。
-   （animateConsoleWidth 曾随「.console-bar width:0 排除法」退役；
+   经 import 取进度函数与查询缓存（绞杀桥已全退役）。
+   （animateConsoleWidth 在 2026-08-03 曾随「.console-bar width:0 排除法」退役；
    同日缺陷修复按「防跳三件套」复活：打字期间 pill 冻结不变（interactions.js onQueryInput 不再
    同步刷摘要），只有识别落地/用户改模式才更新摘要并走这里补宽度过渡——抖动源头在调用侧堵死，
    动画机器只负责让「一次性更新」平滑。） */
@@ -56,7 +56,7 @@ export function animateConsoleWidth() {
         con.addEventListener("transitionend", done);
     });
 }
-/* 检索进度（改为不确定态）：后端是单次阻塞调用、拿不到真实进度，此前用「恒速爬升到 96% 再补满」
+/* 检索进度（不确定态）：后端是单次阻塞调用、拿不到真实进度，此前用「恒速爬升到 96% 再补满」
    的百分比画像表达处理中；用户要求撤掉所有数字进度——现在只表达「处理中 / 已完成」：按钮 loading 静态态
    + 系统回复气泡里的三点跳动（#cbProgPct 那颗泡保留三点、数字列撤下；蜕变成回音后 #cbLivePct
    以同款三点继续滚，board.js 渲染侧按 progressActive() 决定挂不挂）。数字里程表机器
@@ -65,7 +65,7 @@ let _pctActive = false;       // 有检索在途。board.js 渲染侧据此把�
 
 /* 是否有检索在途。board.js 渲染侧据此决定要不要在当前系统泡右端挂 #cbLivePct（三点）。 */
 export function progressActive() { return _pctActive; }
-/* 期望时长：纯前端拿不到后端真实进度，据「是否走 LLM」估一个量级。数字里程表退役，
+/* 期望时长：纯前端拿不到后端真实进度，据「是否走 LLM」估一个量级。数字里程表退役后，
    该值不再参与动画时长（startProgress 只收下参数不动调用点），仅保留导出与调用约定。 */
 export function estimateDuration(cfg) {
     if (cfg && cfg.mock_llm) return 1200;             // mock：无真实 API 往返，很快
@@ -78,7 +78,7 @@ export function startProgress(expectedMs) {
     const btn = $("submitBtn");
     if (!btn) return;
     // 幂等：统一框在路由问句前就已把按钮置 loading 并起跑；runRecommend 接手时不重启。
-    //  起不再逐帧翻数（数字已撤），动画交给 CSS 三点跳动，这里只管 loading 态与在途旗标。
+    // 不再逐帧翻数（数字已撤），动画交给 CSS 三点跳动，这里只管 loading 态与在途旗标。
     if (btn.classList.contains("loading")) return;
     btn.classList.add("loading");
     _pctActive = true;
@@ -108,8 +108,8 @@ export function finishProgress() {
    同步复位、不依赖动画收尾：隐藏标签页的 rAF 会被浏览器暂停，靠动画收尾会漏。
    （本函数是从 viewHistorySnapshot 里抽出来的——那里早就正确处理了这条路径。）
 
-   **不借道 finishProgress**（验证抓到的竞态）：那是「**完成**」语义；这里是「**取消**」语义——
-    数字里程表已退役，两者都同步收干净，区别只在语义标签与调用点约定。 */
+   **不借道 finishProgress**：那是「**完成**」语义；这里是「**取消**」语义——
+   数字机器已退役，两者都同步收干净，区别只在语义标签与调用点约定。 */
 export function resetSubmitButton() {
     const b = $("submitBtn");
     if (!b) return;

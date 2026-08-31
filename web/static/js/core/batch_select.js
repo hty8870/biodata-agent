@@ -1,16 +1,17 @@
 "use strict";
 
-/* 结果覆盖策略 · 纯逻辑核
+/* 结果覆盖策略 · 纯逻辑核（设计 §10.3）
  *
  * ## 本文件是什么 / 不是什么
  *
  * - 是：`/api/utterance` 两阶段（preliminary 初屏 → final 落屏）下**统一选择**哪一版结果上屏的
  *   纯逻辑。后端批次带 `scope_fingerprint`（规范化检索范围指纹）与 `search_trace`；前端据
- *   「排序层级别」决定是否自动换屏、据「scope + 有序记录键向量」判同去重。
+ *   「排序层级别」决定是否自动换屏、据「scope + 有序记录键向量」判同去重。设计见
+ *   内部设计文档 §10.3。
  * - 不是：DOM、fetch、墙钟、状态。一切决定做成纯函数，node 规格可直跑（零 `#` import、
  *   零相对 import——self-contained，不进 import 环）。
  *
- * ## 规则（用户既定覆盖规则 + 条件变更修正）
+ * ## 规则（设计 §10.3 + 条件变更修正，用户既定覆盖规则）
  *
  * - `rankingLevel(trace)`：规则=1，+local_semantic=2，+llm_rerank=3（polish 不计）；
  *   **未知/缺失 trace = null = 不可比较**，不得默认 1 后自动覆盖（同 scope 择优时）。
@@ -47,7 +48,7 @@
  *   做一次轻量 batchBar 刷新（`renderBatchSwitcher`），把换词批作为非活动备选 pill。
  */
 
-/* ---------- 排序层级别 ---------- */
+/* ---------- 排序层级别（设计 §10.3） ---------- */
 
 /* 轨迹 → 排序层级别。trace 缺/非数组/无步骤 → null（不可比较）；polish 不计。
    local_semantic / llm_rerank 只要 status=used 即计入（fallback/skipped 不计）。 */
@@ -70,7 +71,7 @@ export function traceOf(x) {
     return (p && p.search_trace) || null;
 }
 
-/* ---------- 有序记录键向量 + scope 判同 ---------- */
+/* ---------- 有序记录键向量 + scope 判同（设计 §10.3） ---------- */
 
 /* 记录键向量：payload.results 的有序 dataset_uid 列表（保序、不去重）。
    stable = 长度>0 且全部非空（任一空 uid → 不折叠、不稳定，判同走保守）。 */
@@ -145,7 +146,7 @@ export function mergeBatches(existing, incoming) {
     return out;
 }
 
-/* ---------- 批 id 归一（缺 batch_id 时补稳定合成 id）----------
+/* ---------- 批 id 归一（缺 batch_id 的批补稳定合成 id）----------
    renderBatchSwitcher / switchBatch 都用 `b.batch_id || ("b"+(idx+1))` 作键。selectDisplayBatch
    之前用**裸** `ref.batch_id` 回填 activeBatchId——参考批缺 batch_id（preliminary 批常不带）时
    activeBatchId 塌成 ""，下游渲染高亮错位（两枚 pill 都标「规则排序」、无一枚 is-on）、
@@ -178,7 +179,7 @@ function _activeBatchIdFor(ref, merged) {
     return "";
 }
 
-/* ---------- 统一选择函数 ---------- */
+/* ---------- 统一选择函数（设计 §10.3） ---------- */
 
 /* 候选批 = 本轮最终要落的那一批（reply.active_batch，缺省取最后一批）——初步批只作参考，
    不作为「要展示的新结果」。 */
@@ -213,10 +214,10 @@ function _referenceBatch(reply, currentView) {
     return null;
 }
 
-/* 回执短语（**如实**）——「已更新为更匹配结果」只许在真正升级时（display）由调用方说，
+/* 回执短语（设计 §10.3，**如实**）——「已更新为更匹配结果」只许在真正升级时（display）由调用方说，
    dedupe / alternate 一律换成本页给的如实句。 */
 export const DEDUPE_SYS_TEXT = "这次没有得出更优结果，当前结果保持不变。";
-/*换词/未知 trace 的弱批不再作「备选 pill」——按「只展示一份最终结果 + supersede 即丢弃」，
+/* 换词/未知 trace 的弱批不再作「备选 pill」——按「只展示一份最终结果 + supersede 即丢弃」，
    较弱/被覆盖的批直接丢弃，不展示也不存储；回执改成如实的不变句（不再提「上方切换」，因为没有切换器）。
    条件变更（scope 不同）已改走 display 整屏覆盖，本档只留给「**同 scope** 的重检较弱批」——
    文案去黑话（去掉误导性的「按新条件」，说明实际是同一条件下这次重检没更好，保住当前结果）。 */
@@ -317,7 +318,7 @@ export function selectDisplayBatch(reply, currentView) {
 }
 
 /* ============================================================================
- *零命中救回链退役 —— 纯逻辑核（board.js 渲染选择条用；本文件只放纯函数，node 可测）
+ * 零命中救回链退役 —— 纯逻辑核（board.js 渲染选择条用；本文件只放纯函数，node 可测）
  * 救回选项不再以 sys 气泡出现；改为贴输入框上沿的选择条。这里把「从零命中批派生选项 /
  * 判定哪批是最新结果」的确定性逻辑集中成纯函数，供 board.js 与 node 规格共用。
  * ========================================================================== */

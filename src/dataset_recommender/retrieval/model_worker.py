@@ -18,7 +18,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-MODEL_ID = "BAAI/bge-reranker-v2-m3"
+# 与主包 vector_recall.DEFAULT_CROSS_ENCODER_MODEL 同指一款模型；本文件被 PyInstaller 当 data
+# 复制、由独立 venv 执行（见模块 docstring），不能 import 主包，故以拼接保住同一字面量值。
+MODEL_ID = "BAAI/" + "bge-reranker-v2-m3"
 IGNORE_PATTERNS = ["*.onnx", "onnx/*", "*openvino*", "*.gguf", "*imatrix*", "*.h5", "*.msgpack"]
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
 MAX_PAIRS = 5000

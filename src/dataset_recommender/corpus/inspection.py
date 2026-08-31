@@ -2,10 +2,10 @@
 """活台账只读层：把「逐文件检查向量 + 最近核验时间」喂给 MCP / webapp（运行时不联网、优雅降级）。
 
 与 `downloads.py` 同层（Data/IO）、同合同：数据缺失/损坏 → 一律返回空/None（永不崩、永不阻塞调用方）。
-读的是 `data/inspection/current.json`（随仓库分发的物化视图，`scripts/patrol_links.py`
-重测后重建）。**不改也不依赖 downloads.py**；调用方拿到 dataset_uid 后来查逐文件状态。
+读的是 `data/inspection/current.json`（由 `scripts/seed_inspection_ledger.py` 播种、`scripts/patrol_links.py`
+重测后重建的物化视图）。**不改也不依赖 downloads.py**；调用方拿到 dataset_uid 后来查逐文件状态。
 
-对外语义（v0 契约）：
+对外语义（v0 契约，见 seed 脚本头 / 设计文档 §5.5）：
   reachable ok|dead|unknown · size match|mismatch|unknown ·
   integrity unknown|verified|mismatch（unknown=md5 未重算；后两档由 provision 回写实测落盘）·
   load unknown|loaded|failed（unknown=未真加载；后两档由 load_smoke 抽样真下载真加载落盘）
@@ -16,21 +16,14 @@
 """
 from __future__ import annotations
 
-import json
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
+
+from . import fs_utils
 
 _DEFAULT = str(Path(__file__).resolve().parents[1] / "data" / "inspection" / "current.json")
 _DATA_PATH = os.environ.get("BIODATA_INSPECTION", _DEFAULT)
-
-
-def _data_path() -> str:
-    """台账路径：每次加载时现读环境变量，未设置时回落 _DATA_PATH（import 期快照，测试经
-    monkeypatch 覆盖）。此前只在 import 期读一次，长驻进程内改环境变量
-    不生效；现读后路径含进缓存键，换路径自然换缓存条目。"""
-    return os.environ.get("BIODATA_INSPECTION") or _DATA_PATH
 
 
 def norm(u: "str | None") -> str:
@@ -46,33 +39,23 @@ def norm(u: "str | None") -> str:
     return f"{scheme}://{rest}"
 
 
-@lru_cache(maxsize=4)
-def _load_cached(path: str) -> dict:
-    """按路径加载 current.json。
-
-    缓存纪律：文件不存在 → 空 dict（稳定状态，缓存合法）；
-    读了但失败（坏 JSON / IO / 形状不符）→ 抛出由 _load 兜底——失败**不入缓存**，
-    故障消除后同进程下次调用自动重试（此前失败被缓存到进程结束，须重启才恢复）。"""
-    try:
-        with open(path, encoding="utf-8") as f:
-            cur = json.load(f)
-    except FileNotFoundError:
-        return {}
-    if not isinstance(cur, dict) or not isinstance(cur.get("by_uid"), dict):
+def _ledger_shape(data: object) -> dict:
+    """形状闸：必须 {by_uid: dict}，缺形状 = 文件损坏（骨架见 fs_utils.make_sidecar_loader）。"""
+    if not isinstance(data, dict) or not isinstance(data.get("by_uid"), dict):
         raise ValueError("台账形状不符（缺 by_uid dict，文件损坏）")
-    return cur
+    return data
 
 
-def _load() -> dict:
-    """加载台账（缓存键含路径：换环境变量即换缓存条目）；cache_clear 仪式保持可用。
-    读盘失败 → 空 dict 降级（"永不崩"合同不变），但不入缓存——下次调用自动重试。"""
-    try:
-        return _load_cached(_data_path())
-    except Exception:
-        return {}
+def _data_path() -> str:
+    """台账路径：每次加载现读环境变量，未设置回落 import 期快照 `_DATA_PATH`（可 monkeypatch）。"""
+    return os.environ.get("BIODATA_INSPECTION") or _DATA_PATH
 
 
-_load.cache_clear = _load_cached.cache_clear  # 测试既有失效仪式（cache_clear）不变
+_load = fs_utils.make_sidecar_loader(
+    data_path=_data_path,
+    shape_gate=_ledger_shape,
+    missing={},
+)
 
 
 def is_available() -> bool:
@@ -98,9 +81,9 @@ def snapshot_info() -> "dict | None":
 def _derive(url: str, v: dict) -> dict:
     """把紧凑存储行 {r,h,s,srv,v[,i][,l]} 派生成对外逐文件状态（problem/reason 在此单点计算）。
 
-    additive：`i` 是 provision 回写落盘的 integrity 验证档
+    additive（2026-08-01）：`i` 是 provision 回写落盘的 integrity 实测档
     （verified|mismatch；无此键 = 未实测 = unknown）。旧向量没有 `i`，行为逐位不变。
-    additive（load_smoke）：`l` 是抽样冒烟落盘的 load 验证档
+    additive（2026-08-01，load_smoke）：`l` 是抽样冒烟落盘的 load 实测档
     （loaded|failed；无此键 = 未真加载 = unknown），failed 计入 problem 并派生 reason。
     """
     reach = v.get("r", "unknown")
@@ -153,7 +136,7 @@ def file_status(uid: "str | None") -> "dict[str, dict]":
     **测试支撑接口，生产侧无调用点**（webapp / mcp_server 都按单个直链走 `status_for`）。
     保留理由：`tests/test_inspection.py` 用它**独立**逐文件派生问题数，交叉核验台账的 `np` 字段与
     `dataset_summary` 的 `n_problem` —— 即它钉的是「摘要的计数 == 逐文件重算的计数」这条不变量。
-     全盘审计把它报成死代码（零生产调用点，属实），但删掉＝丢掉该不变量、换一个整洁度，
+    2026-07-17 全盘审计把它报成死代码（零生产调用点，属实），但删掉＝丢掉该不变量、换一个整洁度，
     是坏交易 → 明确保留并在此标注，避免下一轮再被当垃圾清掉。
     """
     if not uid:

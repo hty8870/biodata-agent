@@ -5,7 +5,7 @@ param(
     [string] $ProjectPath = ''
 )
 
-# This launcher serves SOURCE/PORTABLE mode only. Its
+# W1 (installer workstream): this launcher serves SOURCE/PORTABLE mode only. Its
 # .env / first-run marker / models detection anchor on $root (the project/install
 # root), which is exactly what runtime_paths reports as install_root in those modes,
 # so behavior stays byte-identical. FROZEN (packaged exe) startup is taken over by
@@ -24,7 +24,7 @@ $ExpectedService = 'dataset-recommender-web'
 # Fallback literal only - the real value is parsed from webapp.py just below (single
 # source of truth), so a future version bump can never drift the "already running"
 # detection. tests/test_release_version_contract.py pins this fallback to WEB_API_VERSION.
-$ExpectedVersion = '2.7.0'
+$ExpectedVersion = '2.9.0'
 
 try {
     $webappPy = Join-Path (Split-Path -Parent $PSScriptRoot) 'src\dataset_recommender\app\webapp.py'
@@ -224,7 +224,7 @@ function Install-LocalSemanticModel {
 
     $req = Join-Path $Root 'requirements-embeddings.txt'
     if (-not (Test-Path -LiteralPath $req -PathType Leaf)) {
-        # Repo clone layout (): requirements files live under requirements\.
+        # Repo clone layout (2026-08-27): requirements files live under requirements\.
         $req = Join-Path $Root 'requirements\requirements-embeddings.txt'
     }
     $fetch = Join-Path $Root 'scripts\fetch_embedding_model.py'
@@ -267,7 +267,7 @@ function Install-AgentExecDependencies {
 
     $req = Join-Path $Root 'requirements-langchain.txt'
     if (-not (Test-Path -LiteralPath $req -PathType Leaf)) {
-        # Repo clone layout (): requirements files live under requirements\.
+        # Repo clone layout (2026-08-27): requirements files live under requirements\.
         $req = Join-Path $Root 'requirements\requirements-langchain.txt'
     }
     if (-not (Test-Path -LiteralPath $req -PathType Leaf)) {
@@ -364,7 +364,7 @@ try {
     $runner = Join-Path $root 'scripts\run_web.py'
     $requirements = Join-Path $root 'requirements.txt'
     if (-not (Test-Path -LiteralPath $requirements -PathType Leaf)) {
-        # Repo clone layout (): requirements files live under requirements\.
+        # Repo clone layout (2026-08-27): requirements files live under requirements\.
         $requirements = Join-Path $root 'requirements\requirements.txt'
     }
     if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) {

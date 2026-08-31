@@ -14,7 +14,7 @@
  *
  * ## 为什么产物是「一段文本」而不是 JSON 文件
  *
- * 产物格式基准是「简单地 ctrl c+v 微信发送即可的那种」。这一条把格式定死了：
+ * 产品方的原话是「简单地 ctrl c+v 微信发送即可的那种」。这句话把格式定死了：
  * ① 必须是纯文本 —— 微信输入框粘 JSON 会连引号带缩进一起过去，没人读得下去；
  * ② 必须**短** —— 微信对超长粘贴会弹「是否转为文件发送」，一转成文件就不是「简单粘一下」了。
  *    所以这里有硬字数预算 USAGE_MAX_CHARS，超了**如实截断并写明省略了多少**（见下条）。
@@ -34,7 +34,7 @@
  * node 规格就没法逐字节断言。日期在这里只用于「大概哪段时间」，差几小时不影响任何判断。
  */
 
-export const USAGE_SCHEMA = 3;   //  v3：imp/label 独立事件、卡级不可变 ImpressionContext 归因、policy_id 优先、consent v2（同意时刻 ISO）、曝光「看过」判据 500ms 状态机（USAGE_SEEN_MIN_MS）。v2早被别的批用过故跳号；v2 内容：活跃天数、「检索速度」小节（秒出占比+验证耗时）、弃权查询原话；打点侧 search.ms/cached、open site、undo
+export const USAGE_SCHEMA = 3;   // v3：imp/label 独立事件、卡级不可变 ImpressionContext 归因、policy_id 优先、consent v2（同意时刻 ISO）、曝光「看过」判据 500ms 状态机（USAGE_SEEN_MIN_MS）。v2已被占用故跳号；v2 内容：活跃天数、「检索速度」小节（秒出占比+实测耗时）、弃权查询原话；打点侧 search.ms/cached、open site、undo
 
 /* 字数预算。微信实测在几千字上下开始提示转文件；留足余量，
    并且给用户自己在 textarea 里补充几句话的空间。 */
@@ -44,7 +44,7 @@ export const USAGE_MAX_CHARS = 1800;
 export const USAGE_MAX_QUERY_LINES = 24;
 
 /* 事件类型表 —— **记录层和聚合层共用这一份**，不许各抄一份。
-   本项目在「两份手抄必漂移」上栽过不止一次（两份 denylist 对不上账、
+   本项目在「两份手抄必漂移」上栽过不止一次（gitignore/deliveryignore 对不上账、
    两份条数解析器各算各的），这里从一开始就只留一个真源。 */
 export const USAGE_KINDS = {
     search: "search",   // 一次检索：查询原话 + 命中数 + 用了哪几层排序 + 没用上的词（v3 起当屏 items 移到 imp 事件）
@@ -60,34 +60,36 @@ export const USAGE_KINDS = {
     view: "view",       // 一次结果展示的曝光汇总（v3：seen=入视口≥500ms 的名次表 + 可见累计毫秒，results.js 的 IO 追踪）
     imp: "imp",         // 一次结果展示的内容快照（v3：tid/iid/policy + 当屏 items[{uid,pos,score,reason?}]，卡级归因的锚）
     label: "label",     // 一次轮次评分（v3：benchfb 评分也进 usage 流——记录被 ACK 删除后评价仍可达；接收端按 rev 合并）
-    //  ---- 追踪（计数型无文本——追踪名/query/uid 不进遥测）----
+    // ---- 追踪（2026-08-22 计数型无文本——追踪名/query/uid 不进遥测）----
     project_created: "project_created",     // 存为追踪成功（带候选数 n）
     project_resumed: "project_resumed",     // 打开追踪详情
     context_card_used: "context_card_used", // 追踪上下文卡激活（{once}：会话内同追踪只计一次）
-    //  ---- 数据集页一键同步（全部计数型无文本）----
+    // ---- 数据集页一键同步----
     sync_button_used: "sync_button_used",   // 点「同步数据集」并拿到回执（带 added/skipped/failed 计数；无文本）
-    //  ---- 下一步行动（全部计数型无文本）----
+    // ---- 下一步行动（2026-08-22 全部计数型无文本）----
     ladder_shown: "ladder_shown",           // 结果页阶梯 chips 展示（带 n=颗数；无文本）
     ladder_clicked: "ladder_clicked",       // 点某颗阶梯 chip / 收窄建议（带 action=动作 id；无文本）
     template_originated: "template_originated", // 任务卡/chip 生成文本提交（带 edited=true/false；无文本）
-    //  ---- 追踪更新检查闭环（全部计数型无文本）----
+    // ---- 追踪更新检查闭环----
     watch_checked: "watch_checked",         // 单追踪检查完成（{changed}：1=有 material change，0=无；无文本）
     delta_review_completed: "delta_review_completed",   // 某追踪「待查看更新」被用户逐条处理完（{}；无文本）
-    //  ---- 追踪导出中心（全部计数型无文本）----
+    // ---- 追踪导出中心----
     export_downloaded: "export_downloaded", // 追踪导出 ZIP 真拿到之后（带 kind：download_list/citations/screening_record/full；无文本）
+    // ---- 逐条系统回复反馈（2026-08-28 msgfb）：气泡下操作条的赞/倒赞 ----
+    msgfb: "msgfb",             // 单条系统回复的赞/倒赞（{conv, mid, v:"up"|"down"|""}；无文本——评论正文走加密 feedback 通道，不进 usage 流）
 };
 
 export const USAGE_OPEN_LABELS = { intro: "数据集详情", files: "文件清单", site: "去原站" };
-export const USAGE_DL_LABELS = { pack: "打包下载", script: "下载脚本", cite: "引文导出", reuse: "投稿材料" };
+export const USAGE_DL_LABELS = { pack: "打包下载", script: "下载脚本", cite: "引文导出", reuse: "投稿材料", data: "数据下载" };
 export const USAGE_CONV_LABELS = { refine: "数据细化", chat: "对话记录" };
 /* **键必须逐字等于后端 search_trace 里的 step id**（local_semantic / llm_rerank / llm_polish），
    不是我另起的短名 —— 记录层用 USAGE_AI_LABELS[s.id] 当准入判据，键对不上的后果不是报错，
-   而是**一条 AI 事件都记不进去、还没有任何提示**（典型的静默短路）。
+   而是**一条 AI 事件都记不进去、还没有任何提示**（同 FRONTEND.md §4.3 那类静默短路）。
    llm_intro 不在 trace 里（它是 cards.js 的按需导读），由该处单独打点，共用这张表。 */
 export const USAGE_AI_LABELS = { local_semantic: "本地精准重排", llm_rerank: "AI 重排", llm_polish: "AI 说明润色", llm_intro: "AI 中文导读" };
 
 /* ============================================================================
- * 遥测 ID 层（schema v2）
+ * 遥测 ID 层（2026-08-22 schema）
  * ----------------------------------------------------------------------------
  * 与上方的聚合纯核不同，本节是**有状态的会话标识**——它仍是本文件唯一的有状态区：
  * 零 DOM / 零网络 / 零墙钟（id 由随机数 + 模块内单调计数器合成，不读 Date.now），
@@ -104,17 +106,43 @@ export const USAGE_AI_LABELS = { local_semantic: "本地精准重排", llm_reran
  *   让同一句查询在不同管线配置下的表现可以分开算。
  * ========================================================================== */
 
+/* ---------- uid/hash 基元（usage 域所有 id/哈希的唯一实现；形状各保其旧，消费点一律 import） ---------- */
+
 let _idSeq = 0;
-function _telemetryUid(prefix) {
+/* 带会话内递增计数后缀的 uid：CSPRNG（randomUUID）优先，不可用时降级 random+counter。
+   随机段更长：sid/tid/iid 跨标签页/跨会话撞名概率基本归零；计数后缀让同毫秒生成也可区分。 */
+export function usageTelemetryUid(prefix) {
     _idSeq += 1;
-    /*优先 CSPRNG（randomUUID，node≥19 与现代浏览器同源可用），
-       不可用时降级既有 random+counter。随机段更长：sid/tid/iid 跨标签页/跨会话撞名概率基本归零。 */
     try {
         if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
             return prefix + "-" + crypto.randomUUID() + "-" + _idSeq.toString(36);
         }
     } catch (_e) {}
     return prefix + "-" + Math.random().toString(36).slice(2, 10) + "-" + _idSeq.toString(36);
+}
+/* 纯随机 uid（无计数后缀；降级路径带时间戳）：client/profile/event/drop 等持久 id 用。
+   纯核零环境依赖：随机源读全局 crypto（与 usageTelemetryUid 同形），墙钟毫秒数由调用方注入。 */
+export function usageRandomId(prefix, nowMs) {
+    try {
+        if (typeof crypto !== "undefined" && crypto && typeof crypto.randomUUID === "function") {
+            return prefix + "-" + crypto.randomUUID();
+        }
+    } catch (_e) {}
+    return prefix + "-" + Number(nowMs).toString(36) + "-" + Math.random().toString(36).slice(2, 14);
+}
+/* FNV-1a 32bit → base36：legacy 事件迁移 id 与 drop 快照 revision 的确定性哈希。 */
+export function usageFnv1a(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36);
+}
+/* 双种子 FNV → 16 hex：crypto.subtle 不可用时 packet_id 的兜底哈希（输出形状与主路径区分开）。 */
+export function usagePacketHashFallback(text) {
+    let a = 2166136261, b = 2246822519;
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i); a = Math.imul(a ^ c, 16777619); b = Math.imul(b ^ c, 3266489917);
+    }
+    return (a >>> 0).toString(16).padStart(8, "0") + (b >>> 0).toString(16).padStart(8, "0");
 }
 
 let _sidMem = "";
@@ -123,7 +151,7 @@ export function usageSessionId() {
     let s = "";
     try { if (typeof sessionStorage !== "undefined") s = String(sessionStorage.getItem("biodata_sid_v1") || ""); } catch (_e) { s = ""; }
     if (!s) {
-        s = _telemetryUid("sid");
+        s = usageTelemetryUid("sid");
         try { if (typeof sessionStorage !== "undefined") sessionStorage.setItem("biodata_sid_v1", s); } catch (_e) {}
     }
     _sidMem = s;
@@ -132,12 +160,12 @@ export function usageSessionId() {
 
 let _activeTurnId = "";
 /* 一轮的开始（用户亲手提交检索/对话）。返回新 tid；调用方只有 board.js ubSubmit。 */
-export function usageBeginTurn() { _activeTurnId = _telemetryUid("t"); return _activeTurnId; }
+export function usageBeginTurn() { _activeTurnId = usageTelemetryUid("t"); return _activeTurnId; }
 export function usageActiveTurnId() { return _activeTurnId; }
 
 let _activeImpressionId = "";
 /* 一次新结果列表展示的开始。返回新 iid；调用方只有 results.js 的结果区重渲。 */
-export function usageBeginImpression() { _activeImpressionId = _telemetryUid("i"); return _activeImpressionId; }
+export function usageBeginImpression() { _activeImpressionId = usageTelemetryUid("i"); return _activeImpressionId; }
 export function usageActiveImpressionId() { return _activeImpressionId; }
 
 /* 策略串纯组合：parts = {strategy, rerank, recall, gen}（调用方从既有请求参数/缓存代取，
@@ -193,7 +221,7 @@ export function usagePolicyRef(source, fallbackParts) {
 }
 
 /* ============================================================================
- * 曝光「看过」状态机（schema v3）
+ * 曝光「看过」状态机（2026-08-22 schema）
  * ----------------------------------------------------------------------------
  * 一张结果卡入视口**连续/累计可见 ≥ USAGE_SEEN_MIN_MS** 才算「看过」。仍零 DOM/零墙钟：
  * 时刻一律由调用方注入（results.js 用 IO entry.time 或 performance.now()，二者同源）；
@@ -414,7 +442,7 @@ export function usageSummarize(events, opts) {
 
     // ── 点开了哪些结果（含「一条都没点」）─────────────────────
     // 「有结果但一条都没点」必须和点击统计**同一小节**：它没有自己的标题时会串到上一节末尾，
-    // 读的人会以为它跟上一节（未用词）有关——dump 出来一眼就看见了，代码里看不出来。
+    // 读的人会以为它跟上一节（未用词）有关 —— 真机 dump 出来一眼就看见了，代码里看不出来。
     const opens = events.filter(function (e) { return e.k === USAGE_KINDS.open; });
     const barren = usageBarrenSearches(events);
     if (opens.length || barren) {
@@ -463,7 +491,7 @@ export function usageSummarize(events, opts) {
     }
 
     // ── AI 各层 ───────────────────────────────────────────
-    //  「用上了」和「没能完成」必须分开报 —— 这正是 那轮修的病根：
+    // 「用上了」和「没能完成」必须分开报 —— 这正是 2026-07-29 那轮修的病根：
     // 把故障说成「未启用」，坏了也没人看得出来。反馈包同样不许把两者合成一个数。
     const ais = events.filter(function (e) { return e.k === USAGE_KINDS.ai; });
     if (ais.length) {
@@ -515,7 +543,7 @@ export function usageSummarize(events, opts) {
  * 脱敏是**结构性的**：与 benchfb 同一条红线——api_key 整键删除、端点只留主机名、
  * 不记密码/账户名。usage 事件本就不含这些字段（记录层有契约门盯着），这里的剔除
  * 是防御性兜底：万一未来某个打点把不该进的东西带进事件，构造上传包时也必须挡在门外。
- * 起再加**值级遮蔽**：自由文本值里的手机号/证件号/邮箱正则打码，
+ * 2026-08-22 起再加**值级遮蔽**：自由文本值里的手机号/证件号/邮箱正则打码，
  * 递归作用于整个包（usage 事件 + benchfb 记录 + mcp_records 中继记录）。
  * ========================================================================== */
 
@@ -523,7 +551,7 @@ export const TELEMETRY_SCHEMA = "biodata-telemetry/1";
 export const TELEMETRY_CONTRACT_VERSION = 2;
 
 /* 禁止入包的主键（防御性剔除）。与 benchfb 红线逐字对齐：api_key 系、密码、账户名/id；
-   脱敏词表扩 token|secret|authorization|cookie|email——账户凭证/会话类键
+   另扩 token|secret|authorization|cookie|email——账户凭证/会话类键
    一旦未来打点漂移进事件，构造上传包时同样必须挡在门外。
    大小写不敏感；只删**键**，不改值、不动其余字段——记录层采什么，这里就传什么。 */
 export const TELEMETRY_STRIP_KEY_RE = /^(api[_-]?key|password|passwd|username|accountusername|account[_-]?(?:name|id)|token|secret|authorization|cookie|email)$/i;
@@ -531,7 +559,7 @@ export const TELEMETRY_STRIP_KEY_RE = /^(api[_-]?key|password|passwd|username|ac
 /* 端点只留主机名（同 benchfb_core.benchfbEndpointHost 口径——那处是记录时的真源，
    这里只对漏网进包的原始 URL 兜底，非法/空一律空串，路径/查询串整段不采）。
    `new URL(s).host` 会**保留端口**（如 api.deepseek.com:8443）——这是有意为之
-   （有意维持现状）：自建代理/自托管服务的端口是复现检索现场所需，
+   （确认后维持现状）：自建代理/自托管服务的端口是复现检索现场所需，
    且端口本身不含敏感信息，刻意不剥。 */
 function telemetryHost(url) {
     const s = String(url || "").trim();
@@ -647,7 +675,7 @@ function _contractRecord(value, opts) {
 /* 上传包构造函数。纯函数：时间/环境信息一律由调用方（usage_upload.js）注入。
    opts.exportedAt（ISO 串）、opts.installId/clientId/profileId/packetId、
    opts.app = {cache_generation, ua, lang}、
-   opts.mcpRecords（同源 /api/telemetry/mcp-calls 取回的中继记录，
+   opts.mcpRecords（2026-08-22：同源 /api/telemetry/mcp-calls 取回的中继记录，
    非空数组才附进顶层 mcp_records 字段——接收端顶层 extra="forbid"，该字段的收编
    由接收端包配套；记录同样过深度脱敏 + 值级遮蔽）。
    usage_events / benchfb_records / mcp_records 都过深度脱敏；非数组输入按空数组处理（绝不抛）。 */

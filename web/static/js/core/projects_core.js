@@ -4,9 +4,9 @@
  *
  * ## 本文件是什么 / 不是什么
  *
- * - 是：课题追踪**纯逻辑**——「存为追踪」的规格构造（check_condition.spec 与 /api/watch/check
- *   入参逐字段对齐）、追踪草稿构造、上下文卡序列化与 ≤2000 字截断、
- *   「上次检查于 X 天前」文案、「候选状态计数」（追踪 / 上下文卡）。
+ * - 是：追踪**纯逻辑**——「存为追踪」的规格构造（check_condition.spec 与 /api/watch/check
+ * 入参逐字段对齐）、追踪草稿构造、上下文卡序列化与 ≤2000 字截断
+ *   「上次检查于 X 天前」文案、「候选状态计数」。
  * - 不是：DOM、IndexedDB、网络、墙钟。时间一律经参数注入（projectsSetClock 注入点，
  *   node 规格可逐字段断言）；写库走 `artifacts.js` 的 CRUD，本文件不碰。
  * - 零 `#` import：本文件只相对 import `./artifacts.js`（纯数据层，同零 DOM）——
@@ -22,7 +22,7 @@
 
 import { ARTIFACTS_LIMITS, artifactsProvenance, artifactsUidSet } from "./artifacts.js";
 
-/* ---------- 上下文卡常量（数值上限，UI 与规格共读） ---------- */
+/* ---------- 上下文卡常量（的数值上限，UI 与规格共读） ---------- */
 export const PROJECTS_CTX_MAX_CHARS = 2000;      // 序列化后硬 cap（Unicode 字符数）
 export const PROJECTS_CTX_MAX_GOAL = 300;        // 研究目标 ≤300
 export const PROJECTS_CTX_MAX_INCLUDE = ARTIFACTS_LIMITS.MAX_INCLUDE;   // 纳入 ≤8（与数据层同源）
@@ -86,12 +86,12 @@ export function projectsSpecFromRequest(parts) {
    parts：
    { query（原始检索句，display_query 与默认名/目标来源）,
      specParts（交给 projectsSpecFromRequest）,
-     uids[]（当前结果 uid 列表，默认全部「待核验」——硬性规则）,
+     uids[]（当前结果 uid 列表，默认全部「待核验」—— 硬性）,
      provenanceParts（交给 artifactsProvenance：query/retrieval_params/search_trace/filters/
        corpus_digest/policy_id/trace_turn_id/result{truncated}） }
    返回 { input（可直传 artifactsCreateProject 的追踪输入）, spec }。
    检查条件先落 spec+display_query（baseline=null）——基线失败时追踪仍保存、spec 留着供
-   「稍后在追踪里重试」基线（artifactsSetBaseline 回填）；基线生成成功由调用方再补。 */
+   P4「稍后在追踪里重试」基线（artifactsSetBaseline 回填）；基线生成成功由调用方再补。 */
 export function projectsDraftFromSearch(parts, opts) {
     opts = opts || {};
     parts = (parts && typeof parts === "object") ? parts : {};
@@ -107,7 +107,7 @@ export function projectsDraftFromSearch(parts, opts) {
         include_conditions: [],
         exclude_conditions: [],
         candidates: uids.map((uid) => ({ uid: uid, status: "待核验" })),   // 一律默认「待核验」
-        check_condition: {                    // 基线失败也保留 spec（后续重试基线的依据）
+        check_condition: {                    // 基线失败也保留 spec（P4 重试基线的依据）
             display_query: query,
             spec: spec,
             baseline: null,

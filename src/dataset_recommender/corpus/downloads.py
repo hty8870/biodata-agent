@@ -1,62 +1,33 @@
 # -*- coding: utf-8 -*-
-"""真实文件下载直链 · 主线接入模块（零第三方依赖，优雅降级）。
+"""阶段二真实下载链接 · 主线接入模块（零第三方依赖，优雅降级）。
 
 按 `dataset_uid`（首选）或数据集页面 `url` 查该数据集的**真实文件下载直链**——替换掉表格里
-原本的数据集页面链接。数据来自一次全库直链核验（767 数据集、15119 直链、逐条 Range-GET
-校验 200/206、join 覆盖率 100%），已随包落地到 `data/download_links.by_uid.json`，**运行时不联网**。
+原本的数据集页面链接。数据来自阶段二产出（767 数据集、15119 直链、逐条 Range-GET 校验 200/206、
+join 覆盖率 100%），已随包落地到 `data/download_links.by_uid.json`，**运行时不联网**。
 
 优雅降级（与推荐器"永不崩"一致）：数据文件缺失/损坏 → 所有查询返回 None/空 → 调用方回退页面 url，
 不报错、不阻塞。用 `BIODATA_DOWNLOAD_LINKS` 环境变量可覆盖数据文件位置。
 """
 from __future__ import annotations
 
-import json
 import os
-from functools import lru_cache
 from pathlib import Path
+
+from . import fs_utils
 
 _DEFAULT = str(Path(__file__).resolve().parents[1] / "data" / "download_links.by_uid.json")
 _DATA_PATH = os.environ.get("BIODATA_DOWNLOAD_LINKS", _DEFAULT)
 
-
 def _data_path() -> str:
-    """数据文件路径：每次加载时现读环境变量，未设置时回落 _DATA_PATH（import 期快照，测试经
-    monkeypatch 覆盖）。此前只在 import 期读一次，长驻进程内改环境变量
-    不生效；现读后路径含进缓存键，换路径自然换缓存条目（同路径的内容热更新见模块 docstring）。"""
+    """数据文件路径：每次加载现读环境变量，未设置回落 import 期快照 `_DATA_PATH`（可 monkeypatch）。"""
     return os.environ.get("BIODATA_DOWNLOAD_LINKS") or _DATA_PATH
 
 
-@lru_cache(maxsize=4)
-def _load_cached(path: str) -> "tuple[dict, dict]":
-    """按路径加载 by_uid 映射 + 派生 by_url 映射。
-
-    缓存纪律：文件不存在 → 空表（稳定状态，缓存合法）；
-    读了但失败（坏 JSON / IO / 顶层形状不符）→ 抛出由 _load 兜底——失败**不入缓存**，
-    故障消除后同进程下次调用自动重试（此前失败被缓存到进程结束，须重启才恢复）。"""
-    try:
-        with open(path, encoding="utf-8") as f:
-            by_uid = json.load(f)
-    except FileNotFoundError:
-        return {}, {}
-    if not isinstance(by_uid, dict):
-        raise ValueError("台账顶层不是 dict（文件损坏）")
-    # 只保留值为 dict 的记录：即便文件被部分损坏（某条记录值退化成标量/列表），
-    # 下游 getter 的 r.get(...) 也不会 AttributeError（守住"永不崩→降级"合同）。
-    by_uid = {k: v for k, v in by_uid.items() if isinstance(v, dict)}
-    by_url = {r.get("url"): r for r in by_uid.values() if r.get("url")}
-    return by_uid, by_url
-
-
-def _load() -> "tuple[dict, dict]":
-    """加载数据（缓存键含路径：换环境变量即换缓存条目）；cache_clear 仪式保持可用。
-    读盘失败 → 空表降级（"永不崩"合同不变），但不入缓存——下次调用自动重试。"""
-    try:
-        return _load_cached(_data_path())
-    except Exception:
-        return {}, {}
-
-
-_load.cache_clear = _load_cached.cache_clear  # 测试既有失效仪式（cache_clear）不变
+_load = fs_utils.make_sidecar_loader(
+    data_path=_data_path,
+    shape_gate=fs_utils.by_uid_shape("台账"),
+    missing=({}, {}),
+)
 
 
 def get(uid_or_url: "str | None") -> "dict | None":

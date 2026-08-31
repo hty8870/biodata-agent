@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """对话式数据库管护（curate_datasets）的**单一真源**模块：清点 / 本地导入 / 联网搜索 / 回收站删除 / 恢复 / 检查来源更新。
 
-授权口径（用户明确授权）。本模块是纯函数模块，
+设计蓝本：`agent/设计文档（2026-08-01 用户明确授权）。本模块是纯函数模块，
 **plan 零副作用**（只读盘 + 联网查询，返回 preview + confirm_token）、**apply 显式执行**（回传 token，
 重算比对不一致 → 一个字节不动）。MCP / Web / CLI 三入口共用本模块，不在各入口各写一份。
 
-管护对象：`database/external/` 的 `upload_*` 文件（用户上传 + 联网搜索入库记录）。
-官方快照（arrayexpress/cellxgene/ebi_scea/encode/hca + 接入的 hubmap/single_cell_portal/
-geo.json）**不可**经本模块删改（`not_curatable`），仍走仓库外的人工流水线。`database/base/` 冻结基准结构性不可达：本模块只接受叶子文件名、
+管护对象（v1，授权决策 3）：`database/external/` 的 `upload_*` 文件（用户上传 + 联网搜索入库记录）。
+官方快照（arrayexpress/cellxgene/ebi_scea/encode/hca + 2026-08-06 接入的 hubmap/single_cell_portal/
+geo.json）**不可**经本模块删改（`not_curatable`），仍走顶层 `research/`（原 workstream）人工流水线。`database/base/` 冻结基准结构性不可达：本模块只接受叶子文件名、
 写入路径恒在 external 或 `.userdata/recycle/` 之下。
 
 两步确认约定（复用 task_pack 指纹模式）：
@@ -27,13 +27,13 @@ geo.json）**不可**经本模块删改（`not_curatable`），仍走仓库外�
   - **源适配器注册表 `SOURCE_ADAPTERS`**：`arrayexpress`（BioStudies 关键词搜索 + 详情两段式富化，
     搜索与字段映射逻辑**移植**自 `scripts/ingest_arrayexpress.py`，共享助手移植自
     `scripts/ingest_cellxgene.py`）；`cellxgene`（全量拉取 + 本地关键词过滤，映射移植自
-    `scripts/ingest_cellxgene.py`）；`hubmap`（POST Elasticsearch 查询，映射移植自前端原型）；
-    `single_cell_portal`（全量列表 + 逐条详情富化，映射移植自历史研究管线脚本）；
-    `hca`（Azul facet 物种过滤 + 分页拉取后本地关键词匹配， 接入）；
-    `10x`（官网私有搜索 API，形状校验 fail-closed， 接入）；
-    `geo`（NCBI E-utilities esearch→esummary 两段式，无 key 限速 ≤3 req/s， 接入）；
+    `scripts/ingest_cellxgene.py`）；`hubmap`（POST Elasticsearch 查询，映射移植自 t06 mjs）；
+    `single_cell_portal`（全量列表 + 逐条详情富化，映射移植自 t07/t34）；
+    `hca`（Azul facet 物种过滤 + 分页拉取后本地关键词匹配，2026-08-08 接入）；
+    `10x`（官网私有搜索 API，形状校验 fail-closed，2026-08-08 接入）；
+    `geo`（NCBI E-utilities esearch→esummary 两段式，无 key 限速 ≤3 req/s，2026-08-07 接入）；
     `zenodo`（通用开放仓储公开 REST API，字段限定 Lucene 查询 + type=dataset，物种从文本抠取、
-    组织/疾病槽位放弃如实标注，限速 30 req/min 留余量 20/min， 接入）。
+    组织/疾病槽位放弃如实标注，限速 30 req/min 留余量 20/min，2026-08-08 接入）。
     HuBMAP/SCP 端点不供 species 等字段 → 映射后调 `corpus_enrich.backfill_record` 反标回填
     （provenance 留痕）。
     无分页的全量端点（CELLxGENE / SCP 列表、HuBMAP 类型聚合）走进程内 TTL 缓存（300s）。
@@ -76,18 +76,30 @@ from typing import Any, Callable, Literal
 
 from . import corpus_enrich
 from . import corpus_net
+from . import fs_utils
+from .corpus_net import ORGANISM_COMMON
 from .corpus import EXTERNAL_DIR_NAME, _cmp_key_cached, invalidate_external_cache
 from .data_loader import extract_records
+from .provenance import (
+    SOURCE_10X,
+    SOURCE_ARRAYEXPRESS,
+    SOURCE_CELLXGENE,
+    SOURCE_ENCODE,
+    SOURCE_GEO,
+    SOURCE_HCA,
+    SOURCE_HUBMAP,
+    SOURCE_SCP,
+    SOURCE_SCEA,
+)
 from ..app.runtime_paths import instance_data_dir_for, resource_file_for
 from ..retrieval.normalizer import MISSING_VALUE_TOKENS
 from .uploads import (
-    DEFAULT_UPLOAD_SOURCE,
     EXTERNAL_TOTAL_MAX_RECORDS,
-    KNOWN_SPECIES_LOWER,
     MAX_INGEST_RECORDS,
     UploadError,
+    _ingest_warnings,
+    _tag_records_for_ingest,
     decode_json_bytes,
-    first_nonempty,
     ingest_critical_section,
     ingest_dataset,
     new_upload_name,
@@ -129,7 +141,7 @@ CURATABLE_PREFIX = "upload_"
 
 #: 单文件导入条数上限：实测 150 万条合法 JSON 入库后 /api/datasets
 #: 单请求 37.8s、并发下线程池饿死。上传语义是「用户自己的数据集元数据」，20 万条已是极宽上限。
-#: 验证：真源迁入写入汇 `uploads.MAX_INGEST_RECORDS`（闸必须住在所有入口
+#: 真源迁入写入汇 `uploads.MAX_INGEST_RECORDS`（闸必须住在所有入口
 #: 都要经过的地方），本常量只是兼容转发（plan_import 的早败门继续用它，测试可 monkeypatch）。
 MAX_IMPORT_RECORDS = MAX_INGEST_RECORDS
 
@@ -145,12 +157,12 @@ CURATE_SEARCH_NOTE = "对话式管护 curate.search_online 入库（联网搜索
 CURATE_SYNC_NOTE = "对话式管护 curate.sync_updates 入库（在线比对发现疑似新增后自动同步，只存元数据 + 官方直链）。"
 
 
-#: `CurateError.code` 的机器码全集（从本模块**实际 raise 点**
+#: `CurateError.code` 的机器码全集（2026-08-06 schema 加固顺手项：从本模块**实际 raise 点**
 #: 逐处收集——bad_action=未知动作；bad_param=入参非法；token_mismatch=确认指纹不符零写入；
 #: invalid_json/no_records/too_large=载荷解析与上限；duplicate_content=内容整集撞重；
 #: network_error=官方源请求失败；source_not_registered=源未注册；no_candidates=零候选；
 #: unknown_file=external/回收站无此文件；not_curatable=非 upload_* 命名空间；
-#: sync_busy=另一个 sync_updates 正在跑（整任务文件锁被占，
+#: 增 sync_busy=另一个 sync_updates 正在跑（整任务文件锁被占
 #: 立即失败不排队）；unknown_operation=按 operation_id 撤回时查无此操作）。
 #: 纯类型标注：收窄 `__init__` 形参让 IDE/类型检查能抓「打错码」，运行时行为零变化。
 CurateCode = Literal[
@@ -205,7 +217,7 @@ def _canonical_record(record: dict) -> str:
 
 
 def _patch_scope() -> "str | None":
-    """当前请求绑定的补丁账户（基线+补丁包机制）。未绑定 → None（历史行为逐字节不变）。
+    """当前请求绑定的补丁账户（任务 3：基线+补丁包）。未绑定 → None（历史行为逐字节不变）。
 
     惰性 import：本模块被 MCP/CLI 直接使用时 patch 机制零介入。"""
     from .patch_package import current_patch_scope
@@ -236,7 +248,7 @@ def _check_token(expected: str, confirm_token: Any) -> None:
 
 
 # ==============================================================================================
-# 路径与文件小助手（写盘侧统一经 runtime_paths 解析用户层——frozen 下 data_root 的
+# 路径与文件小助手（W1：写盘侧统一经 runtime_paths 解析用户层——frozen 下 data_root 的
 # external/.userdata；source/portable 与测试注入根保持根相对，历史逐字节一致）
 # ==============================================================================================
 
@@ -281,7 +293,7 @@ def _load_file_records(path: Path) -> list[dict]:
 
 
 # 并发账本写必须互斥：sync def 端点走线程池，Windows 上 open("a") 的 seek-to-EOF+write 跨并发句柄
-# 非原子，裸写会整行覆盖丢行/撕裂（实测 20 线程丢 7-13%、2 线程也丢）。
+# 非原子，裸写会整行覆盖丢行/撕裂（对抗评审 / 实测 20 线程丢 7-13%、2 线程也丢）。
 # 一把进程内锁兜住线程池并发；跨进程（Web↔MCP 双实例）残余风险已知悉（审计面，不挡主功能）。
 _ledger_lock = threading.Lock()
 
@@ -342,7 +354,7 @@ def _file_info(path: Path, *, project_root: Path) -> dict:
 def list_curations(*, project_root: Path) -> dict:
     """枚举 external 库全部文件（名/条数/来源/修改时间/是否 upload_*）与回收站内容。纯只读，零副作用。
 
-    补丁包机制：绑定补丁作用域（登录账户）时改返回**本人补丁包视图**（adds/blocks/trash），
+    任务 3：绑定补丁作用域（登录账户）时改返回**本人补丁包视图**（adds/blocks/trash），
     共享 external 的内容不再冒充「你可管护的对象」（补丁形态下账户的写都落在补丁包）。"""
     scope = _patch_scope()
     if scope:
@@ -412,7 +424,7 @@ def _parse_payload(payload_bytes: bytes, filename: Any) -> tuple[str, Any, list[
             "no_records",
             '未解析出任何数据集记录。文件应是记录数组 [ {…} ]，或对象 { "records": [ {…} ] }。',
         )
-    # 条数上限。实测 150 万条合法 JSON 能入库，随后 /api/datasets
+    # 2026-08-05：条数上限。实测 150 万条合法 JSON 能入库，随后 /api/datasets
     # 单请求 37.8s、并发下线程池饿死全站无响应——体量闸（64MB）挡不住「条数洪水」。
     # 本产品的上传语义是「用户自己的数据集元数据」，20 万条已是极宽上限。
     if len(records) > MAX_IMPORT_RECORDS:
@@ -425,30 +437,12 @@ def _parse_payload(payload_bytes: bytes, filename: Any) -> tuple[str, Any, list[
 
 
 def _probe_sources_and_warnings(records: list[dict], payload: Any, form_source: str) -> tuple[dict[str, int], list[str]]:
-    """preview 的来源分布与可读校验提示——与 ingest_dataset 的打标/提示逻辑同口径（先审后入）。"""
-    wrapper_source = str(payload.get("source") or "").strip() if isinstance(payload, dict) else ""
-    fallback = (form_source or "").strip() or wrapper_source or DEFAULT_UPLOAD_SOURCE
-    source_counts: dict[str, int] = {}
-    missing_name = 0
-    unknown_species: dict[str, int] = {}
-    for r in records:
-        rec_src = str(r.get("source") or "").strip() or fallback
-        source_counts[rec_src] = source_counts.get(rec_src, 0) + 1
-        if not first_nonempty(r, ("dataset_name", "name", "title", "dataset_title", "dataset")):
-            missing_name += 1
-        sp = first_nonempty(r, ("species", "organism"))
-        if sp and not any(k in sp.lower() for k in KNOWN_SPECIES_LOWER):
-            unknown_species[sp] = unknown_species.get(sp, 0) + 1
-    warnings: list[str] = []
-    if missing_name:
-        warnings.append(f"{missing_name} 条缺少 dataset_name（数据集名称），可能不会被展示或检索。")
-    if unknown_species:
-        shown = "、".join(list(unknown_species)[:3])
-        warnings.append(
-            f"物种字段用了非通用名（如 {shown}）。物种筛选按英文通用名匹配（Human/Mouse…），"
-            "这些记录可能被物种约束漏掉，建议改成英文通用名。"
-        )
-    return source_counts, warnings
+    """preview 的来源分布与可读校验提示。单一真源：打标与提示直接复用 ingest_dataset 的
+    `_tag_records_for_ingest`/`_ingest_warnings`，preview 与落地同一口径（先审后入）。"""
+    _fallback, source_counts, missing_name, unknown_species = _tag_records_for_ingest(
+        payload, records, form_source
+    )
+    return source_counts, _ingest_warnings(missing_name, unknown_species)
 
 
 def _find_duplicate_files(records: list[dict], project_root: Path) -> list[str]:
@@ -510,7 +504,7 @@ def _import_preimage(cleaned: str, source: Any, records: list[dict]) -> dict:
 
 
 def _scan_patch_duplicates(records: list[dict], root: Path, account_id: str) -> tuple[list[str], int]:
-    """补丁形态的去重比对 + 累计条数闸：整集指纹比对本人补丁 adds；
+    """补丁形态（任务 3）的去重比对 + 累计条数闸：整集指纹比对本人补丁 adds；
     预算按单账户补丁上限（不再适用实例级 external 总闸）。损坏 fail-closed（load_patch 抛）。"""
     from . import patch_package as pp
 
@@ -534,7 +528,7 @@ def plan_import(payload_bytes: bytes, filename: Any, source: Any = None, *, proj
 
     返回：条数/来源分布/warnings/内容指纹/去重结果（撞重文件列表）+ token。
     解析/校验失败沿用 UploadError 码（bad_file/bad_encoding/invalid_json/no_records）。
-    绑定补丁作用域时去重与预算按本人补丁包口径（补丁包）。"""
+    绑定补丁作用域时去重与预算按本人补丁包口径（任务 3）。"""
     cleaned, payload, records = _parse_payload(payload_bytes, filename)
     source_counts, warnings = _probe_sources_and_warnings(records, payload, str(source or ""))
     scope = _patch_scope()
@@ -542,7 +536,7 @@ def plan_import(payload_bytes: bytes, filename: Any, source: Any = None, *, proj
         matched, _patch_total = _scan_patch_duplicates(records, Path(project_root), scope)
     else:
         matched, external_total = _scan_external_files(records, Path(project_root))
-        # 全库累计闸：单文件 20 万条上限挡不住「连续导入多个 20 万」的累计洪水。
+        # 全库累计闸（K5/N8）：单文件 20 万条上限挡不住「连续导入多个 20 万」的累计洪水。
         _check_external_total_budget(len(records), external_total)
     digest = records_content_digest(records)
     token = make_confirm_token(_import_preimage(cleaned, source, records))
@@ -558,7 +552,7 @@ def plan_import(payload_bytes: bytes, filename: Any, source: Any = None, *, proj
             "is_duplicate": bool(matched),
             "matched_files": matched,
             # force_param 是给 MCP/程序化调用方的结构化入口（人话 hint 里不塞 API 参数名——
-            # 网页对话通道撞重时会自动带 force 重确认，用户根本不该看见参数名，copy 验证）。
+            # 网页对话通道撞重时会自动带 force 重确认，用户根本不该看见参数名，copy 评审）。
             "force_param": "force",
             "hint": ("内容与既有文件整集重复；确认仍要入库的话，需在确认时声明「允许重复」。"
                      if matched else ""),
@@ -614,7 +608,7 @@ def apply_import(
 # ==============================================================================================
 
 _FETCH_TIMEOUT = 30
-#: 单次响应体读取上限：urlopen 的 resp.read() 此前无界——异常/恶意
+#: 单次响应体读取上限，2026-08-21）：urlopen 的 resp.read() 此前无界——异常/恶意
 #: 对端可用超大响应吃爆内存。本出口取官方源元数据 JSON（MB 级，如 CELLxGENE 全库单次拉取），
 #: 64MiB 是正常上界加宽裕（对齐 llm_client 的 8MiB 限读范式，联网单页更大故放宽）；
 #: 超限视为对端异常（确定性失败），不重试。
@@ -625,19 +619,19 @@ _RETRYABLE_HTTP = {429, 503}
 _last_request_monotonic = 0.0
 # 限速的 check-then-set 必须整体互斥（与 corpus_net 同型同口径）：sync def 端点
 # （/api/curate/plan、/api/curate/check-updates）走线程池，裸全局下 N 个并发请求同时读旧值、
-# 同时通过、同时打出 N 倍红线速率（实测 8 线程 40 调用 35 次违规）。
+# 同时通过、同时打出 N 倍红线速率（对抗评审实测 8 线程 40 调用 35 次违规）。
 _rate_limit_lock = threading.Lock()
 
 
 def _polite_wait(min_interval: float = _MIN_REQUEST_INTERVAL) -> None:
     """请求间距 ≥0.2s（≤5 req/s），与 ingest 脚本的礼貌限速同纪律。
 
-    GEO（NCBI E-utilities）官方红线更严（无 key ≤3 req/s）→ 间隔参数化，
+    2026-08-07：GEO（NCBI E-utilities）官方红线更严（无 key ≤3 req/s）→ 间隔参数化，
     默认 0.2s 对其余各源逐位不变。"""
     global _last_request_monotonic
     with _rate_limit_lock:
         # 睡到死线为止而非只睡一拍：Windows 上 time.sleep 可能提前返回（本机实测 0.2s 档
-        # 最早 -12ms，实测锁内 187ms<200ms 欠隔），循环复查把提前返回补满。
+        # 最早 -12ms，测得锁内 187ms<200ms 欠隔），循环复查把提前返回补满。
         deadline = _last_request_monotonic + min_interval
         while True:
             remaining = deadline - time.monotonic()
@@ -659,16 +653,16 @@ def _fetch(
 ) -> tuple[Any, int]:
     """**唯一网络出口**：请求 url → (解析后的 JSON, HTTP 状态码)。
 
-    纪律（网络口径）：官方公开 API、礼貌限速 ≤5 req/s、429/503 与瞬时连接错误
+    纪律（WORK_RULES 网络口径）：官方公开 API、礼貌限速 ≤5 req/s、429/503 与瞬时连接错误
     指数退避 ≤3 次、其余 4xx 不重试、禁绕登录/robots。一切失败 → CurateError(network_error)。
     测试在本接缝注入假响应（monkeypatch），全模块测试禁网。
 
-    method/body/headers 为 keyword-only 可选参（为 HuBMAP 的 POST ES 查询扩）：
+    method/body/headers 为 keyword-only 可选参（2026-08-06 为 HuBMAP 的 POST ES 查询扩）：
     默认 GET 且不带 body，与扩前行为逐位一致；headers 逐键覆盖默认 UA（默认
     biodata-agent-curate/1.0）。POST 的是幂等只读查询体，退避重试语义不变。
-    min_interval（为 GEO 的 NCBI ≤3 req/s 红线扩）：礼貌限速间隔，默认
+    min_interval（2026-08-07 为 GEO 的 NCBI ≤3 req/s 红线扩）：礼貌限速间隔，默认
     0.2s 对其余各源逐位不变。
-    attempts：可选出参（单元素列表），回填实际请求次数——重试在函数内部
+    attempts（2026-08-15 G-10）：可选出参（单元素列表），回填实际请求次数——重试在函数内部
     发生，不带回尝试数的话账本只能记最终一条，「刚才为什么卡了几秒」无从回答。"""
     last_exc: Exception | None = None
     for attempt in range(_FETCH_RETRIES):
@@ -685,9 +679,9 @@ def _fetch(
                 raw = resp.read(_FETCH_MAX_BYTES + 1)
                 status_code = int(getattr(resp, "status", 200) or 200)
             if len(raw) > _FETCH_MAX_BYTES:
-                # 确定性失败（对端异常）——重试只会再白读 64MB+。
+                # 审计 S-6（2026-08-21）：确定性失败（对端异常）——重试只会再白读 64MB+。
                 # 这里只记标记、到 try 外再 raise：CurateError 继承 ValueError，若在 try 内
-                # raise 会被下方 except ValueError（上方 JSON 解析失败子句）捕获并改写成
+                # raise 会被下方 except ValueError（G-10 的 JSON 解析失败子句）捕获并改写成
                 # 「不是合法 JSON」的误导文案，走样且难排查。
                 oversize = True
             else:
@@ -704,7 +698,7 @@ def _fetch(
                     else f"已自动重试 {_FETCH_RETRIES} 次仍未成功，可稍后再试。")),
             ) from exc
         except ValueError as exc:
-            # JSON 解析失败是对端改了返回形状，属确定性失败——
+            # G-10：JSON 解析失败是对端改了返回形状，属确定性失败——
             # 当瞬时错误退避重试只是白打两次，直接如实报错、不重试。
             raise CurateError(
                 "network_error",
@@ -722,7 +716,7 @@ def _fetch(
                 f"官方来源请求失败，已自动重试 {_FETCH_RETRIES} 次仍未成功，可稍后再试。",
             ) from exc
         if oversize:
-            # 在 except 链之外 raise（原因见 try 内注释），绝不重试。
+            # 审计 S-6（2026-08-21）：在 except 链之外 raise（原因见 try 内注释），绝不重试。
             raise CurateError(
                 "network_error",
                 f"官方来源响应体超过 {_FETCH_MAX_BYTES // (1024 * 1024)} MiB 上限（对端异常）；已停止读取，不重试。",
@@ -757,7 +751,7 @@ def _fetch_logged(
     except CurateError as exc:
         entry.update({"http_status": None, "records": 0, "error": exc.hint})
         if tries[0] > 1:
-            entry["attempts"] = tries[0]  # 重试留痕（账本条目形状只增不减）
+            entry["attempts"] = tries[0]  # G-10：重试留痕（账本条目形状只增不减）
         _append_jsonl(_net_ledger_path(project_root), entry)
         raise
     n = 0
@@ -775,13 +769,13 @@ def _fetch_logged(
         n = len(payload)  # 全量列表形态（CELLxGENE / SCP site/studies）
     entry.update({"http_status": status, "records": n})
     if tries[0] > 1:
-        entry["attempts"] = tries[0]  # 重试后成功同样留痕（第几次才成功可追）
+        entry["attempts"] = tries[0]  # G-10：重试后成功同样留痕（第几次才成功可追）
     _append_jsonl(_net_ledger_path(project_root), entry)
     return payload
 
 
 #: 无分页全量端点的进程内 TTL 缓存（秒）。CELLxGENE / SCP 的列表端点单次返回全量
-#: （实测 2,198+ / 1,032 条，MB 级），同一进程内连续两次搜索不该各拉一遍全量；
+#: （2026-08-06 实测 2,198+ 1,032 条，MB 级），同一进程内连续两次搜索不该各拉一遍全量；
 #: 300s 是「数据新鲜度 vs 官方端点礼貌」的折中（与 _MIN_REQUEST_INTERVAL 同旨）。
 #: 缓存命中 = 没有发生联网 → 不记请求账本；失败不缓存（fail-closed，下次仍真联网）。
 _LIST_CACHE_TTL = 300.0
@@ -827,25 +821,8 @@ AE_DETAIL_API = "https://www.ebi.ac.uk/biostudies/api/v1/studies"
 AE_STUDY_TMPL = "https://www.ebi.ac.uk/biostudies/arrayexpress/studies/{accession}"
 AE_SOURCE_LABEL = "ArrayExpress"
 
-# ---- 移植自 ingest_cellxgene.py：物种学名 → 词表通用名（硬过滤按子串匹配 record.species，必须命中通用名）----
-ORGANISM_COMMON: dict[str, str] = {
-    "homo sapiens": "Human",
-    "mus musculus": "Mouse",
-    "rattus norvegicus": "Rat",
-    "danio rerio": "Zebrafish",
-    "drosophila melanogaster": "Drosophila",
-    "macaca mulatta": "Macaque",
-    "macaca fascicularis": "Macaque",
-    "callithrix jacchus": "Marmoset",
-    "pan troglodytes": "Chimpanzee",
-    "gallus gallus": "Chicken",
-    "sus scrofa": "Pig",
-    "canis lupus familiaris": "Dog",
-    "canis familiaris": "Dog",
-    "oryctolagus cuniculus": "Rabbit",
-    "bos taurus": "Cattle",
-    "homo sapien": "Human",   # 常见投稿拼写变体（漏 s）；据实归一，否则被 species 硬过滤静默滤掉
-}
+# 物种词表 ORGANISM_COMMON 的唯一真源在 corpus_net（两模块共用的叶子锚点），
+# 本模块 import 复用：species 硬过滤与抽取正则正向查表。
 
 
 def _labels(items: object) -> list[str]:
@@ -883,7 +860,7 @@ def _norm_token(v: str) -> str:
 # 本表 = 真源词表经同一 `_norm_token` 归一后的形态（"n/a"→"n a"、"-"→""），再叠加只在
 # **管护摄取侧**出现的占位拼写（nan/undetermined/not applicable 等——不是已标注的取值，
 # 但也不必进全产品的缺失判定）。新增缺失写法只许加在 normalizer，本表随之自动收录，
-# 防两套词表各自漂移。
+# 防两套词表各自漂移（对抗评审 docs-arch）。
 _NONVALUE = {_norm_token(token) for token in MISSING_VALUE_TOKENS} | {
     "", "nan", "not applicable", "not available", "not collected", "not reported",
     "undetermined", "missing",
@@ -923,7 +900,7 @@ def map_species(organisms: list[str]) -> str:
 _TISSUE_NAMES = {"organism part", "tissue"}
 _DISEASE_NAMES = {"disease", "disease state", "clinical history", "clinical information"}
 # 健康态标签（normal/healthy/control）＝ 源库**显式声明健康** → 统一写入规范值 "normal"
-# （口径：与 CELLxGENE / EBI SCEA 一致——「健康」是已知事实，不是「没标注」）。
+# （xdc1 口径：与 CELLxGENE / EBI SCEA 一致——「健康」是已知事实，不是「没标注」）。
 _HEALTHY = {"normal", "healthy", "control"}
 
 
@@ -935,7 +912,7 @@ def _canonical_disease(v: str) -> str | None:
     return "normal" if n.split(" ")[0] in _HEALTHY else v
 
 
-# 平台家族分类：只认无歧义关键词；按家族是否出现（二值）判定，恰好一个家族出现才给标签。
+# 平台家族分类（N14）：只认无歧义关键词；按家族是否出现（二值）判定，恰好一个家族出现才给标签。
 _PLATFORM_PATTERNS: "list[tuple[str, list[str]]]" = [
     ("Visium", [r"visium"]),
     ("Xenium", [r"xenium"]),
@@ -1306,7 +1283,7 @@ def _search_cellxgene(
 ) -> tuple[list[dict], list[str]]:
     """CELLxGENE 全量拉取（TTL 缓存 300s）→ 本地关键词过滤 → 候选记录（不落盘）。
 
-    端点不收查询参数（无分页、单次全量，实测 2,198+ 条）：关键词过滤在本地做——
+    端点不收查询参数（无分页、单次全量，2026-08-06 实测 2,198+ 条）：关键词过滤在本地做——
     query 小写分词后对 title/collection_name 连接文本子串匹配，多词 AND。species 为本地子串过滤
     （与 AE 同口径，作用于映射后的通用名）。顺序：关键词过滤 → 映射/uid 去重 → species 过滤 →
     limit 截断。返回 (records, warnings)。"""
@@ -1341,10 +1318,10 @@ def _search_cellxgene(
 
 # ==============================================================================================
 # HuBMAP 适配器：POST Elasticsearch 查询（search.api v3）。
-# 请求体构造与字段映射**移植**自历史研究管线脚本（不随本仓分发）：
-# _source 白名单 / entity_type=Dataset & status=Published &
-# data_access_level=public 公共边界 / dataset_type 动态 allowlist / normalized()；
-# 全文子句的取舍见 _hubmap_query_clause 注释。
+# 请求体构造与字段映射**移植**自 research/reports/t06-hubmap-formal-candidate/
+# build-hubmap-formal.mjs（_source 白名单 / entity_type=Dataset & status=Published &
+# data_access_level=public 公共边界 / dataset_type 动态 allowlist / normalized()）；
+# 全文子句选型经 2026-08-06 真机探测（结论见 _hubmap_query_clause 注释）。
 # ==============================================================================================
 
 HUBMAP_SEARCH_API = "https://search.api.hubmapconsortium.org/v3/search"
@@ -1405,7 +1382,7 @@ def _hubmap_observed_types(project_root: Path) -> list[str]:
     （移植自 mjs 的两段式口径）。
 
     为什么必须动态推导：terms 是精确匹配，而线上取值普遍带「 [pipeline]」后缀——
-     集成验证：42 桶中「Visium (no probes)」基名 0 条、仅剩
+    2026-08-06 真机实测 42 桶中「Visium (no probes)」基名 0 条、仅剩
     「Visium (no probes) [Salmon + Scanpy]」1 条，写死基名会整源漏光。聚合结果走 TTL 缓存
     （类型分布变化以月计，不必每次搜索都多问一次）。"""
     body = json.dumps({
@@ -1433,7 +1410,7 @@ def _hubmap_observed_types(project_root: Path) -> list[str]:
 
 
 def _hubmap_query_clause(query: str) -> dict:
-    """用户 query → ES 全文子句（集成探测结论，POST ≤5 次礼貌预算内完成）：
+    """用户 query → ES 全文子句（2026-08-06 真机探测结论，POST ≤5 次礼貌预算内完成）：
 
     - `match` 已证实可用且真实过滤（title 上查 "lung"：公共全集 5,272 → 516 命中）；
     - `simple_query_string` 语法也被端点接受（200），但它解析 `+ " * ( )` 等操作符——
@@ -1584,7 +1561,7 @@ def _search_hubmap(
             if "species" in report["filled"]:
                 n_backfill_species += 1
             if sp and sp not in str(rec.get("species") or "").lower():
-                continue  # species 本地子串过滤（边滤边攒，见函数 docstring 说明）
+                continue  # species 本地子串过滤（边滤边攒，见函数 docstring 的 R9 说明）
             records.append(rec)
             if len(records) >= limit:
                 break
@@ -1606,7 +1583,9 @@ def _search_hubmap(
 
 # ==============================================================================================
 # Broad Single Cell Portal 适配器：全量列表（TTL 缓存）+ 本地过滤 + 逐条详情富化。
-# 列表边界与骨架映射、详情富化（description/count/文件三簇）移植自历史研究管线脚本（不随本仓分发）。
+# 列表边界与骨架映射移植自 research/reports/t07-scp-formal-candidate/
+# build_scp_formal_candidate.py；详情富化（description/count/文件三簇）移植自
+# research/staging/single-cell-portal/t34/build_promotion.py。
 # ==============================================================================================
 
 SCP_LIST_API = "https://singlecell.broadinstitute.org/single_cell/api/v1/site/studies"
@@ -1615,12 +1594,12 @@ SCP_SOURCE_LABEL = "Broad Single Cell Portal"
 _SCP_HEADERS = {"Accept": "application/json"}
 _SCP_ACCESSION_RE = re.compile(r"^SCP[0-9]+$")
 _SCP_FASTQ_RE = re.compile(r"\.(fastq|fq)(\.gz)?$", re.I)
-#: 论文 DOI 匹配：只用于**报告**，绝不冒充数据集 collection_doi。
+#: 论文 DOI 匹配（移植自 t34 DOI_RE）：只用于**报告**，绝不冒充数据集 collection_doi。
 _SCP_DOI_RE = re.compile(r"(?:doi\.org/|doi:\s*)(10\.\d{4,9}/\S+)", re.I)
 
 
 def _scp_strip_html(value: object) -> str:
-    """剥 HTML 标签 + 实体反转 + 空白折叠；非字符串/剥空 → ""。"""
+    """剥 HTML 标签 + 实体反转 + 空白折叠（移植自 t34 strip_html）；非字符串/剥空 → ""。"""
     if not isinstance(value, str):
         return ""
     text = re.sub(r"<[^>]+>", " ", value)
@@ -1629,17 +1608,17 @@ def _scp_strip_html(value: object) -> str:
 
 
 def _scp_is_fastq(file: dict) -> bool:
-    """Fastq 判定：file_type=="Fastq" 或文件名 .fastq/.fq(.gz)。"""
+    """Fastq 判定：file_type=="Fastq" 或文件名 .fastq/.fq(.gz)（移植自 t34 is_fastq_file）。"""
     if str(file.get("file_type") or "").strip().lower() == "fastq":
         return True
     return bool(_SCP_FASTQ_RE.search(str(file.get("name") or "")))
 
 
 def _scp_to_record(row: dict) -> dict:
-    """列表行 → 候选记录骨架（详情未富化）。调用方已按 public 口径过滤
+    """列表行 → 候选记录骨架（详情未富化）。调用方已按 t07 public_state 口径过滤
     （public is True + accession ^SCP[0-9]+$ + 标题非空）。
 
-    species/tissue/disease/chemistry/published_date 端点不供 → None，
+    species/tissue/disease/chemistry/published_date 端点不供（t07/t34 同口径）→ None，
     其中前四维由调用方 backfill_record 反标；文件三簇在详情核实前一律 None（不猜值）。"""
     accession = str(row.get("accession") or "").strip()
     return {
@@ -1672,10 +1651,10 @@ def _scp_to_record(row: dict) -> dict:
 
 
 def _scp_apply_detail(record: dict, detail: dict) -> list[str]:
-    """详情响应富化一条候选（就地），返回发现的论文 DOI 列表（只报告用）。
+    """详情响应富化一条候选（就地，移植自 t34 的详情段），返回发现的论文 DOI 列表（只报告用）。
 
     study_files 非列表（如 "Unavailable (cannot load study workspace or bucket)" 占位串）→
-    文件三簇保持 None 不猜值（清单不可用 ≠ 没有 FASTQ）。"""
+    文件三簇保持 None 不猜值（t34 同口径：清单不可用 ≠ 没有 FASTQ）。"""
     desc = _scp_strip_html(detail.get("full_description")) or _scp_strip_html(detail.get("description"))
     if desc:
         record["description"] = desc
@@ -1717,7 +1696,7 @@ def _search_scp(
 ) -> tuple[list[dict], list[str]]:
     """SCP 全量列表（TTL 缓存 300s）→ 本地过滤 → 前 limit 条逐条详情富化 → 候选（不落盘）。
 
-    列表边界：public is True + accession ^SCP[0-9]+$ + 标题非空；
+    列表边界：public is True + accession ^SCP[0-9]+$ + 标题非空（t07 public_state 同口径）；
     关键词本地过滤（name+description 小写子串，多词 AND）；详情失败优雅降级不中断
     （文件三簇/计数停留 None，warnings 如实告知）；species 过滤为本地子串过滤
     （SCP 的 species 只能来自 backfill 反标，故过滤在反标后做）。返回 (records, warnings)。"""
@@ -1760,7 +1739,7 @@ def _search_scp(
                 headers=_SCP_HEADERS,
             )
         except CurateError:
-            n_detail_fail += 1   # 详情失败优雅降级（沿用 AE 口径），不中断整体搜索
+            n_detail_fail += 1   # 详情失败优雅降级（沿用 AE/t34 口径），不中断整体搜索
         if isinstance(detail, dict):
             if _scp_apply_detail(rec, detail):
                 pub_doi_accessions += 1
@@ -1791,8 +1770,8 @@ def _search_scp(
 
 
 # ==============================================================================================
-# HCA（Human Cell Atlas）适配器：Azul `/index/projects`（免认证， 接入；
-# 配方经官方 API 实测验证）。
+# HCA（Human Cell Atlas）适配器：Azul `/index/projects`（免认证，2026-08-08 接入；
+# 配方与实测证据见《数据源API调研-2026-08-08.md》§1）。
 # Azul **无服务端全文检索**（filters 只做 facet 词条精确匹配）：search_online =
 # genusSpecies facet 物种过滤（服务端）+ 跟随 pagination.next 键集分页拉取后**客户端**对
 # 标题/描述/entryId 匹配关键词（全库仅 532 项、size≤75，全量 8 页代价可忽略）。
@@ -1829,7 +1808,7 @@ def _azul_field_values(groups: object, field: str) -> list[str]:
 def _azul_to_record(hit: dict) -> dict | None:
     """一条 Azul projects 命中 → 本项目记录 schema。无 entryId/标题 → 丢弃。
 
-    字段口径（验证响应形状）：标题/描述/估算细胞数取 projects[0]；物种取
+    字段口径（2026-08-08 实测响应形状）：标题/描述/估算细胞数取 projects[0]；物种取
     donorOrganisms[*].genusSpecies（学名 → 通用名）；组织取 samples[*].effectiveOrgan；
     疾病取 specimens/donorOrganisms 的 disease（健康态归一 normal）；日期取
     dates[0].aggregateSubmissionDate；文件簇取 fileTypeSummaries（format 含 fastq →
@@ -1971,7 +1950,7 @@ def _search_hca(
 
 # ==============================================================================================
 # 10x Genomics 适配器：官网前端私有搜索 API `/api/search?document=dataset`（免认证，
-# 接入；配方经官方 API 实测验证）。
+# 2026-08-08 接入；配方与实测证据见《数据源API调研-2026-08-08.md》§2）。
 # **风险声明：私有接口、无官方契约**——10x 可随时改参数/改形状/加鉴权。故响应一律先过
 # `_tenx_validate_payload` 形状校验：字段缺失/类型漂移 → fail-closed 如实报错（network_error
 # + 写明漂移与人工核对入口），绝不拿畸形响应硬解析充数。
@@ -1983,7 +1962,7 @@ _TENX_BASE = "https://www.10xgenomics.com"
 _TENX_FULL_LIMIT = 1000  # 实测 limit 上限内（当前全库 786 条，slug 直查一次拉全）
 _TENX_SLUG_RE = re.compile(r"[a-z0-9]+(?:[-_][a-z0-9]+)+")  # 「形似 slug」判定（sync 按编号搜回用；
 #: 实测 slug 含下划线与大写：160k_DTC_Matched_PBMC_…，故字符集收 [-_]、比较前统一小写）
-#: 物种 facet 服务端词表只钉 验证过的两个显示值（facets 里还有学名/「Human, Mouse」
+#: 物种 facet 服务端词表只钉 2026-08-08 实测过的两个显示值（facets 里还有学名/「Human, Mouse」
 #: 等脏取值，不敢猜映射）；其余物种回退映射后本地子串过滤（与 AE 同口径）。
 _TENX_SPECIES_TAG = {"human": "Human", "mouse": "Mouse"}
 
@@ -2037,8 +2016,8 @@ def _tenx_to_record(item: dict) -> dict:
     for d in (item.get("diseaseStateNames") or []):
         if not isinstance(d, str) or not d.strip():
             continue
-        # 10x 词表的健康态写法是 "non-diseased"（验证）→ 归一到规范 "normal"
-        # （与 _HEALTHY 的口径一致：「健康」是已知事实，不是「没标注」）。
+        # 10x 词表的健康态写法是 "non-diseased"（2026-08-08 实测）→ 归一到规范 "normal"
+        # （与 _HEALTHY 的 xdc1 口径一致：「健康」是已知事实，不是「没标注」）。
         diseases.append("normal" if _norm_token(d) in {"non diseased", "nondiseased"}
                         else (_canonical_disease(d) or ""))
     platforms = [p for p in (item.get("platformName") or []) if isinstance(p, str)]
@@ -2135,8 +2114,8 @@ def _search_tenx(
 
 
 # ==============================================================================================
-# NCBI GEO 适配器：E-utilities esearch/esummary（免 key， 接入；
-# 配方经官方 API 实测验证）。
+# NCBI GEO 适配器：E-utilities esearch/esummary（免 key，2026-08-07 接入；
+# 配方与实测证据见《数据源API调研-2026-08-08.md》§4）。
 # 要点：esearch(db=gds) 用 "GSE"[Entry Type] 枚举只取 Series 级（与本地 geo.json 快照同口径）；
 # 实验类型**不能**写 "Expression profiling by high throughput sequencing"[Entry Type]
 # （实测被静默忽略），要过滤须走 esummary 的 gdstype 字段；retstart/retmax 分页；
@@ -2184,7 +2163,7 @@ def _geo_summary_docs(payload: Any) -> list[dict]:
 def _geo_to_record(doc: dict) -> dict | None:
     """一条 esummary 文档 → 本项目记录 schema。缺 accession/标题 → None（调用方跳过）。
 
-    字段口径（实测响应形状）：物种 taxon（学名 → 通用名）；日期 pdat
+    字段口径（调研 §4 实测响应形状）：物种 taxon（学名 → 通用名）；日期 pdat
     （"2026/08/04" → ISO）；platform 存 GEO 官方实验类型 gdstype；count=n_samples
     （单位 Samples）；download_url=ftplink（官方给的 Series FTP 目录，缺省不猜）。
     esummary 不供组织/疾病/建库方案/文件清单/数据集 DOI → tissue/disease/chemistry/
@@ -2293,7 +2272,8 @@ def _search_geo(
 
 
 # ==============================================================================================
-# Zenodo 适配器：公开 REST API（接入，第 10 源；配方见官方文档）。
+# Zenodo 适配器：公开 REST API（2026-08-08 接入，第 10 源；配方与实测证据见
+# 《调研-zenodo等新源-2026-08-08.md》）。
 # 要点：Lucene 字段限定查询（metadata.title/description 短语 OR + type=dataset——裸自由词
 # 实测噪声大）；官方限速 30 req/min（2025-11 公告，匿名/认证同口径），出口按 20/min 留余量；
 # 响应是 legacy/InvenioRDM 混合形状，形状闸只钉两版共有核心字段（hits.hits、id、
@@ -2356,7 +2336,7 @@ def _zenodo_validated_hits(payload: Any) -> list[dict]:
 def _zenodo_to_record(hit: dict) -> dict | None:
     """一条 Zenodo 记录（已过 `_zenodo_core_ok` 形状闸）→ 本项目记录 schema。
 
-    字段口径（实测响应形状）：accession/url 用数字 record id；
+    字段口径（2026-08-08 实测响应形状，调研 §1）：accession/url 用数字 record id；
     collection_doi 取 conceptdoi（指向「所有版本的最新版」，比版本 doi 稳定），缺失回退
     doi / RDM pids.doi.identifier；description 是 HTML，剥标签后截 400；species 从
     title+description 抠既有物种词表（抠不到 None，不编）；resource_type 非 dataset 的
@@ -2481,9 +2461,10 @@ def _search_zenodo(
 
 
 # ==============================================================================================
-# refine.bio 适配器：公开 REST API（第 11 源）。
+# refine.bio 适配器：公开 REST API（2026-08-14 接入，第 11 源；实测证据见
+# research/staging/refinebio/mapping.md §0）。
 # 要点：全文检索走 `/v1/search/`（ElasticSearch；search= + technology/organism/platform/
-# num_downloadable_samples__gt 过滤）——「?search= 400」是打在 /v1/experiments/
+# num_downloadable_samples__gt 过滤）——08-08 调研的「?search= 400」是打在 /v1/experiments/
 # 上，/v1/search/ 实测可用；但全文是**模糊 OR 匹配**（"spatial transcriptomics" 实测命中
 # 1.9 万条），服务端只起召回作用，内容级甄别必须在本地做（见 ingest_refinebio.py 三道闸）。
 # 四槽位（organism/disease/specimen_part/technology）原生结构化：experiment 级有
@@ -2501,7 +2482,7 @@ REFINEBIO_SEARCH_API = f"{REFINEBIO_API}/search/"
 REFINEBIO_EXPERIMENTS_API = f"{REFINEBIO_API}/experiments/"
 REFINEBIO_SOURCE_LABEL = "refine.bio"
 REFINEBIO_EXP_TMPL = "https://www.refine.bio/experiments/{accession}"
-_REFINEBIO_MIN_INTERVAL = 1.0   # 无官方限速文档（验证响应头无限速标注）；礼貌 ≤60 req/min
+_REFINEBIO_MIN_INTERVAL = 1.0   # 无官方限速文档（2026-08-14 实测响应头无限速标注）；礼貌 ≤60 req/min
 _REFINEBIO_MAX_LIMIT = 500      # search limit 实测 1000 可用；适配器出口保守取 500
 #: 「形似 GEO/SRA/ENA/AE 主 accession」判定（sync_updates 按编号搜回 + accession 直达用）。
 _REFINEBIO_ACCESSION_RE = re.compile(
@@ -2511,7 +2492,7 @@ _REFINEBIO_ACCESSION_RE = re.compile(
 def _refinebio_organism_param(species: str) -> str:
     """通用名 → refine.bio organism 过滤值（UPPER_SNAKE 学名，如 HOMO_SAPIENS）；
     词表外 → ""（不做服务端过滤，不乱猜映射）。
-    映射真源收敛到 corpus_net.refinebio_organism_param，两个入口同口径——
+    G-04：映射真源收敛到 corpus_net.refinebio_organism_param，两个入口同口径——
     此前本函数把带空格的词表外词当二名法学名透传（"white mouse" → WHITE_MOUSE 假过滤）。"""
     return corpus_net.refinebio_organism_param(species)
 
@@ -2570,14 +2551,14 @@ def _refinebio_source_database(hit: dict) -> str | None:
     if acc.startswith(("ERP", "DRP")):
         return "ENA"
     if acc.startswith("E-"):
-        return "ArrayExpress"
+        return SOURCE_ARRAYEXPRESS
     return None
 
 
 def _refinebio_to_record(hit: dict) -> dict | None:
     """一条 refine.bio 实验（已过 `_refinebio_core_ok` 形状闸）→ 本项目记录 schema。
 
-    字段口径（/v1/search/ 列表项与 /v1/experiments/{acc}/ 详情两形状）：
+    字段口径（2026-08-14 实测 //search/ 列表项与 //experiments/{acc}/ 详情两形状）：
     accession/url 用主 accession_code；species 取原生 organism_names（四槽位优势之一）；
     count/unit = num_downloadable_samples 个 "samples"（统一 Salmon 处理后可下载样本数——
     该源核心价值字段）；platform 取 platform_names（详情形状回退 platforms）原文；
@@ -2650,7 +2631,8 @@ def _refinebio_apply_sample_annotations(record: dict, samples: list[dict]) -> No
 
     tissue = specimen_part 去重保序 join（≤3 个，`_is_informative` 过滤占位值）；disease 同口径
     （disease 字段；disease_stage 粒度不符不进）。has_raw_data：本页任一样本 has_raw=True → True
-    （正面证据）；本页全 False → 仍 None（单页不是完整清单，「没见到」≠「没有」——三态纪律）。provenance 对应轴改写为「samples 端点单页聚合，覆盖可能不全」。"""
+    （正面证据）；本页全 False → 仍 None（单页不是完整清单，「没见到」≠「没有」——三态纪律
+    见 NEXT_SOURCE_ROADMAP §4.2）。provenance 对应轴改写为「samples 端点单页聚合，覆盖可能不全」。"""
     tissues: list[str] = []
     diseases: list[str] = []
     any_raw = False
@@ -2763,7 +2745,7 @@ def _search_refinebio(
         url += f"&organism={organism}"
     species_note = ""
     if str(species or "").strip() and not organism:
-        # 词表外物种不过滤但必须用户可见（与 corpus_net.search_refinebio
+        # G-04：词表外物种不过滤但必须用户可见（与 corpus_net.search_refinebio
         # 同口径）——否则无法区分「没有这个物种的数据」与「这个词没被认出来」。
         species_note = f"物种词「{str(species).strip()}」不在已知词表里，这次没有按物种过滤。"
     payload = _fetch_logged(
@@ -2784,18 +2766,18 @@ def _search_refinebio(
         warnings.append(species_note)
     if records:
         warnings.append(
-            "refine.bio 是 GEO/SRA/ArrayExpress 的统一加工镜像（Salmon 定量），与库中 GEO/AE "
+            "refine.bio 是 GEO/SRA/ArrayExpress 的统一加工镜像（ Salmon 定量），与库中 GEO/AE "
             "来源可能指向同一研究（按 accession 去重）；其全文检索是模糊匹配，结果含弱相关条目，"
             "入库前需人工甄别；组织/疾病取值需另拉 samples 端点（此处未拉，留空不猜）。"
         )
     return records, warnings
 
 
-#: 源适配器注册表。arrayexpress 为首发； 接入 cellxgene / hubmap /
-#: single_cell_portal 三支； 接入 hca（Azul facet + 分页本地匹配）/ 10x（官网私有
-#: 搜索 API，形状校验 fail-closed）两支； 接入 geo（NCBI E-utilities esearch→esummary
-#: 两段式，无 key 限速 ≤3 req/s）； 接入 zenodo（公开 REST API，字段限定 Lucene 查询，
-#: 通用仓储如实标注，限速 30 req/min 留余量）； 接入 refinebio（公开 REST API，
+#: 源适配器注册表（闸 1）。arrayexpress 为首发；2026-08-06 接入 cellxgene / hubmap /
+#: single_cell_portal 三支；2026-08-08 接入 hca（Azul facet + 分页本地匹配）/ 10x（官网私有
+#: 搜索 API，形状校验 fail-closed）两支；2026-08-07 接入 geo（NCBI E-utilities esearch→esummary
+#: 两段式，无 key 限速 ≤3 req/s）；2026-08-08 接入 zenodo（公开 REST API，字段限定 Lucene 查询，
+#: 通用仓储如实标注，限速 30 req/min 留余量）；2026-08-14 接入 refinebio（公开 REST API，
 #: ES 全文模糊匹配如实标注，≤60 req/min；GEO/SRA/AE 镜像，需按 accession 跨源去重）。
 #: 未注册源 → source_not_registered（fail-closed）。
 SOURCE_ADAPTERS: dict[str, dict[str, Any]] = {
@@ -2859,39 +2841,12 @@ SOURCE_ADAPTERS: dict[str, dict[str, Any]] = {
     },
 }
 
-#: 口语说法 → 注册表键（与 _CHECK_UPDATE_ALIASES 同旨；key/label 精确匹配之外的常用别名）。
-_SEARCH_SOURCE_ALIASES: dict[str, str] = {
-    "ae": "arrayexpress",
-    "cxg": "cellxgene",
-    "cellxgene discover": "cellxgene",
-    "scp": "single_cell_portal",
-    "single cell portal": "single_cell_portal",
-    "broad single cell portal": "single_cell_portal",
-    "human cell atlas": "hca",
-    "azul": "hca",
-    "10x genomics": "10x",
-    "tenx": "10x",
-    "ncbi geo": "geo",
-    "refine.bio": "refinebio",
-    "refine bio": "refinebio",
-}
-
-
-def _resolve_search_source_key(name: Any) -> str | None:
-    """口语来源名 → SOURCE_ADAPTERS 注册表键；认不出 → None（调用方 fail-closed）。"""
-    text = str(name or "").strip().lower()
-    if not text:
-        return None
-    if text in SOURCE_ADAPTERS:
-        return text
-    for key, spec in SOURCE_ADAPTERS.items():
-        if text == str(spec["label"]).lower():
-            return key
-    return _SEARCH_SOURCE_ALIASES.get(text)
+#: 口语说法 → 注册表键的唯一真源与解析器在 corpus_net（SOURCE_ALIASES / resolve_source_key），
+#: 调用点经 corpus_net.resolve_source_key 按各自注册表键集解析（键名注册表契约不变）。
 
 
 # ==============================================================================================
-# 实体级去重（验证）：search_online / sync 共用
+# 实体级去重：search_online / sync 共用
 #
 # 问题：search_online 此前**零去重**——同一数据集换关键词反复搜会反复入库（import 的内容 hash
 # 去重是**整集文件**粒度，盖不到「联网候选 vs 库中既有记录」的实体粒度；sync 此前也只按
@@ -2941,7 +2896,7 @@ def _external_identity_index(project_root: Path) -> tuple[set[str], list[str]]:
 
 
 def _scope_union_identity_index(index: set[str], skipped: list[str], project_root: Path) -> tuple[set[str], list[str]]:
-    """补丁包机制：绑定补丁作用域时把本人补丁 adds 的身份键并入去重比对集
+    """任务 3：绑定补丁作用域时把本人补丁 adds 的身份键并入去重比对集
     （共享 external 扫描结果之上做并集；未绑定 → 入参原样返回，逐字节不变）。
     补丁损坏 → load_patch 抛 PatchError（fail-closed），写操作如实失败。"""
     scope = _patch_scope()
@@ -3019,7 +2974,7 @@ def plan_search_online(
     """curate.search_online 第一步：**真联网**查询官方源 → 候选 preview（**不落盘**，只写请求账本）。
 
     候选 records 随 plan 返回（`candidates` 键）供 apply 原样回传；preview 展示条数/来源/样本标题。
-     实体级去重：已在库中的候选（同来源同编号/同页面链接）过滤并回显 `skipped_existing`——
+    实体级去重：已在库中的候选（同来源同编号/同页面链接）过滤并回显 `skipped_existing`——
     零新候选不报错（candidates 可为空，apply 走零写入诚实回报）。
     未注册源 → source_not_registered；网络失败 → network_error；在线零候选 → no_candidates。"""
     query_s = str(query or "").strip()
@@ -3027,7 +2982,7 @@ def plan_search_online(
         raise CurateError("bad_param", "搜索关键词不能为空。")
     limit_n = _validate_limit(limit)
     species_s = str(species or "").strip()
-    source_key = _resolve_search_source_key(source)
+    source_key = corpus_net.resolve_source_key(source, valid_keys=SOURCE_ADAPTERS)
     adapter = SOURCE_ADAPTERS.get(source_key) if source_key else None
     if adapter is None:
         raise CurateError(
@@ -3044,7 +2999,7 @@ def plan_search_online(
             f"{adapter['label']} 查询 {query_s!r}（物种：{species_s or '不限'}）没有可用候选。"
             "未写入任何内容；可换关键词重试。",
         )
-    #  实体级去重：已在库中的候选（同来源同编号、或同页面链接）诚实过滤并如实回显——
+    # 实体级去重：已在库中的候选（同来源同编号、或同页面链接）诚实过滤并如实回显——
     # 不重复入库。token 只覆盖**新候选**（apply 落盘前按届时库态同口径重检，防 TOCTOU）。
     # 零新候选不是错误：candidates=[] + skipped_existing 全量回显，apply 走零写入诚实回报。
     fresh, existing, dedup_skipped = _split_existing_candidates(records, Path(project_root), adapter["label"])
@@ -3083,7 +3038,7 @@ def apply_search_online(plan_result: dict, *, confirm_token: Any, project_root: 
     if not isinstance(plan_result, dict):
         raise CurateError("bad_param", "plan_result 必须是 plan_search_online 返回的字典。")
     candidates = plan_result.get("candidates")
-    # 零新候选（全部已在库中）是 plan 的合法产出——仅当 plan 带 skipped_existing 标记时放行，
+    # 零新候选（全部已在库中）是 plan 的合法产出——仅当 plan 带 skipped_existing 标记时放行
     # 否则空 candidates 仍是 bad_param（旧契约逐位不变）。
     if not isinstance(candidates, list) \
             or (not candidates and not plan_result.get("skipped_existing")) \
@@ -3162,7 +3117,7 @@ def apply_search_online(plan_result: dict, *, confirm_token: Any, project_root: 
 # curate.remove / curate.restore：回收站式可逆删除（移动而非删除）
 # ==============================================================================================
 
-# ---- 补丁作用域分支：登录账户的删除/恢复改打本人补丁包 ----------------
+# ---- 任务 3 补丁作用域分支：登录账户的删除/恢复改打本人补丁包 ----------------
 #
 # 语义映射：
 # - 删除本人补丁新增（adds）→ 移入补丁 trash（可逆，对应 legacy 的回收站）；
@@ -3535,15 +3490,15 @@ def apply_restore(recycle_name: Any, *, confirm_token: Any, project_root: Path) 
 
 
 # ==============================================================================================
-# curate.check_updates：检查来源更新（新能力）
-# 定位：**只读、不落盘、不抛**——
+# curate.check_updates：检查来源更新（2026-08-03 新能力）
+# 设计蓝本：设计文档 §1.3/§2.3。**只读、不落盘、不抛**——
 # 它不是 plan/apply 两步确认的写动作，故不走 run_curate_action 分发（ACTIONS 不变）。
 # ==============================================================================================
 
 #: 可检查的来源注册表：本地快照文件（相对 project_root）+ 官网核对入口。
 #: `online=True` 的是配了在线通道的源——**不伪造能力**：离线快照源
 #: 如实报告本地快照条数/日期与官网入口，并指路「联网搜…」。
-#: 在线通道两支（扩）：arrayexpress 走 `_fill_online_check`（既有 BioStudies 支，
+#: 在线通道两支（2026-08-03 扩）：arrayexpress 走 `_fill_online_check`（既有 BioStudies 支，
 #: 网络失败保留 mode="online" + note）；encode/10x/hca/geo/zenodo 走 `_fill_online_check_net`（corpus_net
 #: 工具组，拉不到/响应形状变了 → 如实降级 mode="snapshot" + note，mode 仍是 online/snapshot 二值）。
 #: 10x 指向 `database/base/` 的冻结基准文件——这里**只读**它做条数统计，写入依旧结构性不可达。
@@ -3555,60 +3510,60 @@ CHECK_UPDATE_SOURCES: dict[str, dict[str, Any]] = {
         "online": True,
     },
     "cellxgene": {
-        "label": "CELLxGENE Discover",
+        "label": SOURCE_CELLXGENE,
         "file": f"{EXTERNAL_DIR_NAME}/cellxgene.json",
         "site_url": "https://cellxgene.cziscience.com/",
         "online": False,
     },
     "ebi_scea": {
-        "label": "EBI Single Cell Expression Atlas",
+        "label": SOURCE_SCEA,
         "file": f"{EXTERNAL_DIR_NAME}/ebi_scea.json",
         "site_url": "https://www.ebi.ac.uk/gxa/sc/",
         "online": False,
     },
     "encode": {
-        "label": "ENCODE",
+        "label": SOURCE_ENCODE,
         "file": f"{EXTERNAL_DIR_NAME}/encode.json",
         "site_url": "https://www.encodeproject.org/",
         "online": True,
         "net_kind": "encode",
     },
     "hca": {
-        "label": "Human Cell Atlas",
+        "label": SOURCE_HCA,
         "file": f"{EXTERNAL_DIR_NAME}/hca.json",
         "site_url": "https://data.humancellatlas.org/",
         "online": True,
         "net_kind": "hca",
     },
-    # 三源接入：hubmap/scp 仍为离线快照（无在线比对通道，不伪造能力）；
-    # geo 于 接入 NCBI E-utilities 在线通道（esearch pdat 窗口 + esummary 富化）。
+    # 2026-08-06 三源接入：hubmap/scp 仍为离线快照（无在线比对通道，不伪造能力）；
+    # geo 于 2026-08-07 接入 NCBI E-utilities 在线通道（esearch pdat 窗口 + esummary 富化）。
     "hubmap": {
-        "label": "HuBMAP",
+        "label": SOURCE_HUBMAP,
         "file": f"{EXTERNAL_DIR_NAME}/hubmap.json",
         "site_url": "https://portal.hubmapconsortium.org/",
         "online": False,
     },
     "scp": {
-        "label": "Broad Single Cell Portal",
+        "label": SOURCE_SCP,
         "file": f"{EXTERNAL_DIR_NAME}/single_cell_portal.json",
         "site_url": "https://singlecell.broadinstitute.org/single_cell",
         "online": False,
     },
     "geo": {
-        "label": "NCBI GEO",
+        "label": SOURCE_GEO,
         "file": f"{EXTERNAL_DIR_NAME}/geo.json",
         "site_url": "https://www.ncbi.nlm.nih.gov/geo/",
         "online": True,
         "net_kind": "geo",
     },
     "10x": {
-        "label": "10x Genomics",
+        "label": SOURCE_10X,
         "file": "database/base/10x-Visium.json",
         "site_url": "https://www.10xgenomics.com/datasets",
         "online": True,
         "net_kind": "tenx",
     },
-    # 接入 zenodo（第 10 源）：type=dataset&sort=mostrecent 最近页 vs 本地快照
+    # 2026-08-08 接入 zenodo（第 10 源）：type=dataset&sort=mostrecent 最近页 vs 本地快照
     # record id 水位线差分；通用开放仓储，比对口径是全领域 dataset（note 如实写明）。
     "zenodo": {
         "label": ZENODO_SOURCE_LABEL,
@@ -3617,7 +3572,7 @@ CHECK_UPDATE_SOURCES: dict[str, dict[str, Any]] = {
         "online": True,
         "net_kind": "zenodo",
     },
-    # 接入 refinebio（第 11 源）：/v1/search/ ordering=-source_first_published
+    # 2026-08-14 接入 refinebio（第 11 源）：/v1/search/ ordering=-source_first_published
     # 最近页 vs 本地快照 accession 水位线差分；GEO/SRA/AE 镜像，比对口径是全库最新
     # （不限单细胞切片主题，note 如实写明）。
     "refinebio": {
@@ -3629,40 +3584,12 @@ CHECK_UPDATE_SOURCES: dict[str, dict[str, Any]] = {
     },
 }
 
-#: 口语说法 → 注册表键（key/label 精确匹配之外的常用别名）。
-_CHECK_UPDATE_ALIASES: dict[str, str] = {
-    "10x genomics": "10x",
-    "cellxgene discover": "cellxgene",
-    "single cell expression atlas": "ebi_scea",
-    "scea": "ebi_scea",
-    "human cell atlas": "hca",
-    "ae": "arrayexpress",
-    "single cell portal": "scp",
-    "broad single cell portal": "scp",
-    "ncbi geo": "geo",
-    "refine.bio": "refinebio",
-    "refine bio": "refinebio",
-}
-
 _AE_RECENT_LIMIT = 10      # 在线比对拉取的「最近条目」条数（一页，限速纪律不变）
 _NEW_CANDIDATES_SHOW = 20  # new_candidates 最多回传几条（accession + title）。
-                           # 必须 ≥ sync_updates 的 max_import clamp 上限
+                           # 2026-08-15 G-01 修复：必须 ≥ sync_updates 的 max_import clamp 上限
                            # （[1,20]），否则供给端会卡死每源入库上限——此前 =5 时
                            # _SYNC_MAX_IMPORT=10 永远吃不满，「5→10 放松批」一半是死代码。
 _AE_ACCESSION_RE = re.compile(r"E-[A-Z]+-[0-9]+")
-
-
-def _resolve_check_source_key(name: Any) -> str | None:
-    """口语来源名 → 注册表键；认不出 → None（调用方给 unknown 条目，不抛）。"""
-    text = str(name or "").strip().lower()
-    if not text:
-        return None
-    if text in CHECK_UPDATE_SOURCES:
-        return text
-    for key, spec in CHECK_UPDATE_SOURCES.items():
-        if text == str(spec["label"]).lower():
-            return key
-    return _CHECK_UPDATE_ALIASES.get(text)
 
 
 def _snapshot_local_info(path: Path, _err: list[str] | None = None) -> tuple[int, str | None]:
@@ -3671,8 +3598,8 @@ def _snapshot_local_info(path: Path, _err: list[str] | None = None) -> tuple[int
     快照日期**只认文件里显式声明的元信息**（snapshot_date/retrieved_at/generated_at/collected_at）；
     找不到 → None，由调用方在 note_zh 如实说明——不用文件 mtime 冒充快照日期
     （git 检出/复制会改写 mtime，那是「文件什么时候落盘的」，不是「快照什么时候采的」）。
-    损坏 ≠ 空库——解析失败经 _err 出参如实带出（调用方写进 note），
-    不再与「快照真的 0 条」同形（与各读取函数的 _err 出参同 pattern）。"""
+    G-27：损坏 ≠ 空库——解析失败经 _err 出参如实带出（调用方写进 note），
+    不再与「快照真的 0 条」同形（与 D5 各读取函数的 _err 出参同 pattern）。"""
     if not path.is_file():
         return 0, None
     try:
@@ -3693,7 +3620,7 @@ def _snapshot_local_info(path: Path, _err: list[str] | None = None) -> tuple[int
 
 
 def _snapshot_corrupt_note(errs: list[str]) -> str:
-    """快照损坏 ≠ 空库——diff 是把损坏快照当空集比出来的，新增数字可能虚报，
+    """D5：快照损坏 ≠ 空库——diff 是把损坏快照当空集比出来的，新增数字可能虚报，
     必须让用户可见。无损坏 → ""（不污染 note）。"""
     if not errs:
         return ""
@@ -3701,32 +3628,51 @@ def _snapshot_corrupt_note(errs: list[str]) -> str:
             "可能虚报——修复或移走该快照文件后再比对一次。")
 
 
-def _ae_local_accessions(path: Path, _err: list[str] | None = None) -> set[str]:
-    """本地 ArrayExpress 快照里已有的 accession 集合（dataset_uid 的 ae: 前缀 + URL 正则双通道）。
+def _local_keys(
+    path: Path,
+    *,
+    uid_prefix: str,
+    accession_re: "re.Pattern[str]",
+    fields: tuple[str, ...],
+    upper: bool,
+) -> tuple[set[str], list[str]]:
+    """本地快照键提取的唯一骨架：`dataset_uid` 前缀剥除 + 指定字段正则双通道。
 
-    损坏 ≠ 不存在——解析失败经 _err 出参如实带出（调用方写进 note），
-    不再与「空快照」同形。"""
+    各来源只喂 4 个差异参数：uid 前缀、accession 正则、扫描字段清单、大小写归一
+    （upper=True 时 uid 尾段与被扫字段先归一为大写）。损坏 ≠ 不存在纪律随骨架生效：
+    解析失败经 errs 出参如实带出，调用方写进 note，不与「空快照」同形。"""
     if not path.is_file():
-        return set()
+        return set(), []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError) as exc:
-        if _err is not None:
-            _err.append(f"{path.name}：{type(exc).__name__}")
-        return set()
-    accs: set[str] = set()
+        return set(), [f"{path.name}：{type(exc).__name__}"]
+    keys: set[str] = set()
     for r in extract_records(payload):
         if not isinstance(r, dict):
             continue
         uid = str(r.get("dataset_uid") or "")
-        if uid.startswith("ae:"):
-            accs.add(uid[3:].strip())
-        for field in ("url", "download_url"):
-            m = _AE_ACCESSION_RE.search(str(r.get(field) or ""))
+        if uid.startswith(uid_prefix):
+            tail = uid[len(uid_prefix):].strip()
+            keys.add(tail.upper() if upper else tail)
+        for field in fields:
+            text = str(r.get(field) or "")
+            m = accession_re.search(text.upper() if upper else text)
             if m:
-                accs.add(m.group(0))
-    accs.discard("")
-    return accs
+                keys.add(m.group(0))
+    keys.discard("")
+    return keys, []
+
+
+def _ae_local_accessions(path: Path, _err: list[str] | None = None) -> set[str]:
+    """本地 ArrayExpress 快照里已有的 accession 集合（dataset_uid 的 ae: 前缀 + URL 正则双通道）。
+
+    损坏 ≠ 不存在——解析失败经 _err 出参如实带出（调用方写进 note），不与「空快照」同形。"""
+    keys, errs = _local_keys(path, uid_prefix="ae:", accession_re=_AE_ACCESSION_RE,
+                             fields=("url", "download_url"), upper=False)
+    if _err is not None:
+        _err.extend(errs)
+    return keys
 
 
 #: AE 版本监控小钉：BioStudies arrayexpress/search 顶层键的已知快照。
@@ -3758,7 +3704,7 @@ def _fill_online_check(entry: dict, spec: dict, local_count: int, path: Path, ro
         payload = _fetch_logged(url, project_root=root, endpoint=AE_SEARCH_API,
                                 query="check_updates:recent")
     except CurateError as exc:
-        # 与 net 支统一降级语义——在线比对没完成就如实降级 mode="snapshot"，
+        # G-14：与 net 支统一降级语义——在线比对没完成就如实降级 mode="snapshot"，
         # 不再保留 mode="online"（同一语义两种 mode，下游按 mode 判断时行为不一）。
         _degrade_to_snapshot(entry, spec, local_count, path, exc.hint)
         return
@@ -3786,42 +3732,26 @@ def _fill_online_check(entry: dict, spec: dict, local_count: int, path: Path, ro
     })
 
 
-# ---- encode/10x 在线比对（走 corpus_net 工具组；失败如实降级 snapshot）----
-# ---- hca 同通道接入（Azul 最近条目 vs 本地快照键差分）--------------------------
-# ---- geo 同通道接入（E-utilities pdat 窗口最近条目 vs 本地 GSE 编号差分）--------
-# ---- zenodo 同通道接入（type=dataset&sort=mostrecent 最近页 vs 本地 record id 差分）
+# ---- 2026-08-03：encode/10x 在线比对（走 corpus_net 工具组；失败如实降级 snapshot）----
+# ---- 2026-08-08：hca 同通道接入（Azul 最近条目 vs 本地快照键差分）--------------------------
+# ---- 2026-08-07：geo 同通道接入（E-utilities pdat 窗口最近条目 vs 本地 GSE 编号差分）--------
+# ---- 2026-08-08：zenodo 同通道接入（type=dataset&sort=mostrecent 最近页 vs 本地 record id 差分）
 _ENCODE_ACCESSION_RE = re.compile(r"ENCSR[0-9A-Z]+")
 
 
 def _encode_local_accessions(path: Path, _err: list[str] | None = None) -> set[str]:
     """本地 ENCODE 快照里已有的 accession 集合（dataset_uid 的 encode: 前缀 + URL 正则双通道）。
     损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
-    if not path.is_file():
-        return set()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as exc:
-        if _err is not None:
-            _err.append(f"{path.name}：{type(exc).__name__}")
-        return set()
-    accs: set[str] = set()
-    for r in extract_records(payload):
-        if not isinstance(r, dict):
-            continue
-        uid = str(r.get("dataset_uid") or "")
-        if uid.startswith("encode:"):
-            accs.add(uid[7:].strip())
-        for field in ("url", "download_url", "public_accession"):
-            m = _ENCODE_ACCESSION_RE.search(str(r.get(field) or ""))
-            if m:
-                accs.add(m.group(0))
-    accs.discard("")
-    return accs
+    keys, errs = _local_keys(path, uid_prefix="encode:", accession_re=_ENCODE_ACCESSION_RE,
+                             fields=("url", "download_url", "public_accession"), upper=False)
+    if _err is not None:
+        _err.extend(errs)
+    return keys
 
 
 def _hca_local_keys(path: Path, _err: list[str] | None = None) -> set[str]:
     """本地 HCA 快照里已有的项目 uuid 集合（dataset_uid 的 hca: 前缀 + URL 末段双通道，小写）。
-    损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
+    D5：损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
     if not path.is_file():
         return set()
     try:
@@ -3846,7 +3776,7 @@ def _hca_local_keys(path: Path, _err: list[str] | None = None) -> set[str]:
 
 def _tenx_local_keys(path: Path, _err: list[str] | None = None) -> set[str]:
     """本地 10x 基准里已有的条目键集合（dataset_uid/url 末段 slug + 归一化 dataset_name 双通道）。
-    损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
+    D5：损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
     if not path.is_file():
         return set()
     try:
@@ -3885,56 +3815,25 @@ def _tenx_item_keys(item: dict) -> set[str]:
 def _geo_local_accessions(path: Path, _err: list[str] | None = None) -> set[str]:
     """本地 GEO 快照里已有的 GSE 编号集合（dataset_uid 的 geo: 前缀 + GSE 正则双通道，大写）。
     损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
-    if not path.is_file():
-        return set()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as exc:
-        if _err is not None:
-            _err.append(f"{path.name}：{type(exc).__name__}")
-        return set()
-    accs: set[str] = set()
-    for r in extract_records(payload):
-        if not isinstance(r, dict):
-            continue
-        uid = str(r.get("dataset_uid") or "")
-        if uid.startswith("geo:"):
-            accs.add(uid[4:].strip().upper())
-        for field in ("url", "download_url", "public_accession"):
-            m = _GEO_ACCESSION_RE.search(str(r.get(field) or "").upper())
-            if m:
-                accs.add(m.group(0))
-    accs.discard("")
-    return accs
+    keys, errs = _local_keys(path, uid_prefix="geo:", accession_re=_GEO_ACCESSION_RE,
+                             fields=("url", "download_url", "public_accession"), upper=True)
+    if _err is not None:
+        _err.extend(errs)
+    return keys
 
 
-_ZENODO_URL_ID_RE = re.compile(r"/records/(\d+)")
+#: Zenodo record id 形态（lookbehind 使 group(0) 即裸 id，与 uid 前缀剥除同口径）。
+_ZENODO_URL_ID_RE = re.compile(r"(?<=/records/)\d+")
 
 
 def _zenodo_local_accessions(path: Path, _err: list[str] | None = None) -> set[str]:
     """本地 Zenodo 快照里已有的 record id 集合（dataset_uid 的 zenodo: 前缀 + URL /records/<id> 双通道）。
     损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
-    if not path.is_file():
-        return set()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as exc:
-        if _err is not None:
-            _err.append(f"{path.name}：{type(exc).__name__}")
-        return set()
-    accs: set[str] = set()
-    for r in extract_records(payload):
-        if not isinstance(r, dict):
-            continue
-        uid = str(r.get("dataset_uid") or "")
-        if uid.startswith("zenodo:"):
-            accs.add(uid[7:].strip())
-        for field in ("url", "download_url", "public_accession"):
-            m = _ZENODO_URL_ID_RE.search(str(r.get(field) or ""))
-            if m:
-                accs.add(m.group(1))
-    accs.discard("")
-    return accs
+    keys, errs = _local_keys(path, uid_prefix="zenodo:", accession_re=_ZENODO_URL_ID_RE,
+                             fields=("url", "download_url", "public_accession"), upper=False)
+    if _err is not None:
+        _err.extend(errs)
+    return keys
 
 
 #: refine.bio 主 accession 形态（uid 前缀剥除后的本地键 + 在线条目键同口径，大写）。
@@ -3944,27 +3843,11 @@ _REFINEBIO_ACC_RE = re.compile(r"(?:GSE|SRP|ERP|DRP|PRJNA|PRJEB|PRJDB)\d+|E-[A-Z
 def _refinebio_local_accessions(path: Path, _err: list[str] | None = None) -> set[str]:
     """本地 refine.bio 快照里已有的 accession 集合（dataset_uid 的 refinebio: 前缀 + 各字段
     accession 正则双通道，大写）。损坏 ≠ 不存在——解析失败经 _err 出参如实带出。"""
-    if not path.is_file():
-        return set()
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as exc:
-        if _err is not None:
-            _err.append(f"{path.name}：{type(exc).__name__}")
-        return set()
-    accs: set[str] = set()
-    for r in extract_records(payload):
-        if not isinstance(r, dict):
-            continue
-        uid = str(r.get("dataset_uid") or "")
-        if uid.startswith("refinebio:"):
-            accs.add(uid[10:].strip().upper())
-        for field in ("url", "download_url", "public_accession"):
-            m = _REFINEBIO_ACC_RE.search(str(r.get(field) or "").upper())
-            if m:
-                accs.add(m.group(0))
-    accs.discard("")
-    return accs
+    keys, errs = _local_keys(path, uid_prefix="refinebio:", accession_re=_REFINEBIO_ACC_RE,
+                             fields=("url", "download_url", "public_accession"), upper=True)
+    if _err is not None:
+        _err.extend(errs)
+    return keys
 
 
 def _degrade_to_snapshot(entry: dict, spec: dict, local_count: int, path: Path, reason_zh: str) -> None:
@@ -3981,7 +3864,7 @@ def _degrade_to_snapshot(entry: dict, spec: dict, local_count: int, path: Path, 
                 f"本地没有找到这个来源的快照文件（{spec['file']}）。"
                 f"可到官网 {spec['site_url']} 核对；网络恢复后再说一次即可重试。")
     elif local_errs:
-        # 损坏 ≠ 空库——local_count 此时是假象 0，note 不许引用它
+        # G-27：损坏 ≠ 空库——local_count 此时是假象 0，note 不许引用它
         note = (f"这次在线比对没能完成（{reason_zh}），而本地快照文件（{spec['file']}）损坏无法解析"
                 f"（{local_errs[0]}），本地情况不可知——修复或移走该文件后重试。"
                 f"也可到官网 {spec['site_url']} 核对。")
@@ -4004,7 +3887,7 @@ def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path
 
     corpus_net 一律返回 {ok, items, ...} 不抛异常；ok=False（网络失败/parse_changed）→ 降级 snapshot。"""
     kind = str(spec.get("net_kind") or "")
-    local_errs: list[str] = []  # 快照损坏如实带出（损坏 ≠ 空库，否则 diff 虚报新增）
+    local_errs: list[str] = []  # D5：快照损坏如实带出（损坏 ≠ 空库，否则 diff 虚报新增）
     if kind == "encode":
         res = corpus_net.encode_recent_items(project_root=root, limit=_AE_RECENT_LIMIT)
         local_keys = _encode_local_accessions(path, _err=local_errs)
@@ -4030,7 +3913,7 @@ def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path
         local_keys = _tenx_local_keys(path, _err=local_errs)
         item_keys = _tenx_item_keys
     else:
-        # 守卫：未接线的 net_kind（拼错/新增源忘接线）不许静默按 10x 通道比对——
+        # G-13：未接线的 net_kind（拼错/新增源忘接线）不许静默按 10x 通道比对——
         # 差分结果会全错且无任何提示。如实降级并写明原因（不抛：check_updates 逐源容错契约）。
         _degrade_to_snapshot(entry, spec, local_count, path,
                              f"来源配置里的 net_kind={kind!r} 没有对应的在线比对通道（疑似新增源忘接线）")
@@ -4101,7 +3984,7 @@ def check_updates(sources: Any = None, *, project_root: Path) -> dict:
     - 有在线通道的源（ArrayExpress / ENCODE / 10x / HCA / GEO / Zenodo / refine.bio）→ `mode="online"`：
       ArrayExpress 经 `_fetch_logged`（限速唯一出口）真在线拉最近条目比对；ENCODE / 10x / HCA /
       GEO / Zenodo / refine.bio 经 corpus_net 工具组拉最新清单差分。**网络失败/响应形状变化不抛**：
-      各支统一如实降级 mode="snapshot" + note 写明原因（统一降级语义——
+      各支统一如实降级 mode="snapshot" + note 写明原因（2026-08-15 G-14 统一降级语义——
       此前 AE 支保留 mode="online"，同一语义两种 mode，下游按 mode 判断时行为不一）。
     - 离线快照源 → `mode="snapshot"`：如实报告本地条数与快照日期（找不到就 null 并说明）、
       官网核对入口，并指路「联网搜…」。
@@ -4111,7 +3994,8 @@ def check_updates(sources: Any = None, *, project_root: Path) -> dict:
         requested: list[tuple[str | None, str]] = [(key, key) for key in CHECK_UPDATE_SOURCES]
     else:
         items = sources if isinstance(sources, (list, tuple)) else [sources]
-        requested = [(_resolve_check_source_key(name), str(name or "").strip()) for name in items]
+        requested = [(corpus_net.resolve_source_key(name, valid_keys=CHECK_UPDATE_SOURCES),
+                      str(name or "").strip()) for name in items]
 
     entries: list[dict] = []
     for key, asked in requested:
@@ -4135,7 +4019,7 @@ def check_updates(sources: Any = None, *, project_root: Path) -> dict:
             "site_url": spec["site_url"],
         }
         if local_errs:
-            # 损坏 ≠ 空库——local_count 是假象 0，结构化字段也如实标注
+            # G-27：损坏 ≠ 空库——local_count 是假象 0，结构化字段也如实标注
             entry["snapshot_error"] = local_errs[0]
         if spec["online"]:
             entry["mode"] = "online"
@@ -4148,7 +4032,7 @@ def check_updates(sources: Any = None, *, project_root: Path) -> dict:
                 note = (f"本地没有找到这个来源的快照文件（{spec['file']}）。可到官网 {spec['site_url']} 核对；"
                         "要新数据可以说「联网搜…」。")
             elif local_errs:
-                # 损坏 ≠ 空库——不许把假象 0 条报给用户
+                # G-27：损坏 ≠ 空库——不许把假象 0 条报给用户
                 note = (f"这个来源只有本地副本，但快照文件（{spec['file']}）损坏无法解析（{local_errs[0]}），"
                         f"条数与快照日期不可知——修复或移走该文件后重试。"
                         f"可到官网 {spec['site_url']} 核对。要新数据可以说「联网搜…」。")
@@ -4173,21 +4057,21 @@ def check_updates(sources: Any = None, *, project_root: Path) -> dict:
 
 
 # ==============================================================================================
-# curate.sync_updates（「工作流即工具」）：检查更新 → 有新增则自动入库的复合流
+# curate.sync_updates：检查更新 → 有新增则自动入库的复合流
 #
 # 设计蓝本：goose subrecipes 的同构物——**固定流程折叠成一个工具，步骤顺序写死在代码里**
 # （不交给 LLM 逐步编排），步骤间只传窄接口结构化产物。闭环成立的交集 = 能在线比对的源
 # （ArrayExpress / ENCODE / 10x / HCA / GEO / Zenodo / refine.bio）∩ 有入库适配器的源
 # （SOURCE_ADAPTERS 九源）
-# = ArrayExpress / 10x / HCA / GEO / Zenodo / refine.bio（refine.bio 起；
+# = ArrayExpress / 10x / HCA / GEO / Zenodo / refine.bio（refine.bio 2026-08-14 起；
 # ENCODE 只有在线比对、无入库适配器）。
 # 其余来源逐条如实写明哪一段做不到，不伪造闭环。
 # ==============================================================================================
 
 #: 每个来源一次最多自动入库的疑似新增条数（自动入库是写操作，宁少勿滥；
 #: 超出部分如实报「还有 N 条没自动入库」，交给用户点名联网搜）。
-#: 上限 5→10：实测 10x 一次检查发现 7+ 条新增只入 5 条、用户要反复催；
-#: 同步加全请求总预算 `_SYNC_TOTAL_MAX_IMPORT`（每源放宽的
+#: 2026-08-08 约束放松批 5→10：实测 10x 一次检查发现 7+ 条新增只入 5 条、用户要反复催；
+#: 同步加全请求总预算 `_SYNC_TOTAL_MAX_IMPORT`（评审——每源放宽的
 #: 放大效应由总闸兜底，多源连跑也不失控）。
 _SYNC_MAX_IMPORT = 10
 
@@ -4218,14 +4102,14 @@ def _external_dataset_uids(root: Path) -> tuple[set[str], list[str]]:
             continue
         for record in records:
             if isinstance(record, dict):
-                uid = _cmp_key_cached(str(record.get("dataset_uid") or ""))   # ：与实体身份同一归一化真源
+                uid = _cmp_key_cached(str(record.get("dataset_uid") or ""))   # P1-4：与实体身份同一归一化真源
                 if uid:
                     uids.add(uid)
     return _scope_union_uids(uids, skipped, root)
 
 
 def _scope_union_uids(uids: set[str], skipped: list[str], root: Path) -> tuple[set[str], list[str]]:
-    """补丁包机制：绑定补丁作用域时并入本人补丁 adds 的 uid（小写同口径）；未绑定 → 原样返回。"""
+    """任务 3：绑定补丁作用域时并入本人补丁 adds 的 uid（小写同口径）；未绑定 → 原样返回。"""
     scope = _patch_scope()
     if not scope:
         return uids, skipped
@@ -4242,7 +4126,7 @@ def _scope_union_uids(uids: set[str], skipped: list[str], root: Path) -> tuple[s
 def _uid_matches_accession(uid: str, probe: str) -> bool:
     """uid 与待查编号的等值判定：整体等值，或 uid 以「:<编号>」收尾（uid 形如 source:accession）。
 
-    此前用裸 `uid.endswith(probe)` 后缀匹配，互为首尾缀的编号会误判
+    G-03：此前用裸 `uid.endswith(probe)` 后缀匹配，互为首尾缀的编号会误判
     （probe="1234" 会命中 "zenodo:91234"）——把真新增误判「已在库」而跳过，或捡回错记录。"""
     return uid == probe or uid.endswith(":" + probe)
 
@@ -4251,7 +4135,7 @@ def _sync_collect_records(
     source_key: str, candidates: list[dict], existing_uids: set[str], *,
     max_import: int, root: Path,
 ) -> tuple[list[dict], list[str], int]:
-    """逐编号把疑似新增搜回完整记录（适配器 search，dataset_uid 等值判定——不再后缀匹配）。
+    """逐编号把疑似新增搜回完整记录（适配器 search，dataset_uid 等值判定——G-03 起不再后缀匹配）。
 
     返回 (去重后的记录, 警告, 因已在外部库而跳过的条数)。单编号失败只进警告——
     一个编号失败不连累其余（与 check_updates 的「逐条如实」同哲学）。"""
@@ -4260,14 +4144,14 @@ def _sync_collect_records(
     warnings: list[str] = []
     seen: set[str] = set()
     skipped = 0
-    identity_index, dedup_skipped = _external_identity_index(root)   # ：实体级库态（一趟扫）
+    identity_index, dedup_skipped = _external_identity_index(root)   # 实体级库态（一趟扫）
     if dedup_skipped:
         warnings.append(_dedup_skipped_note(dedup_skipped))
     for cand in candidates[:max_import]:
         acc = str(cand.get("accession") or "").strip()
         if not acc:
             continue
-        probe = _cmp_key_cached(acc)   # ：与实体身份同一归一化真源
+        probe = _cmp_key_cached(acc)   # 与实体身份同一归一化真源
         if any(_uid_matches_accession(uid, probe) for uid in existing_uids):
             skipped += 1
             continue
@@ -4315,7 +4199,7 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
     没有边界要跨——与 agent 图内 `_loop_search_online` 的 plan→apply 原子化同一授权口径
     （全自动化：记账 + 回收站可回退）。
 
-    加固要点：
+    加固：
       - 整任务跨进程文件锁（`sync_updates_critical_section`）覆盖「检查+联网+入库」全程；
         **唯一会抛的情形 = 另一个 sync 正在跑**（CurateError(sync_busy)，立即失败不排队，
         fail-closed 拒绝并发写）；其余一切失败沿用「不抛、逐源如实降级」契约。
@@ -4367,7 +4251,7 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
                 )
                 entries.append(out)
                 continue
-            # 全请求总预算闸：跨来源累计写入达 `_SYNC_TOTAL_MAX_IMPORT`
+            # 全请求总预算闸：跨来源累计写入了了 `_SYNC_TOTAL_MAX_IMPORT`
             # 条后不再写——本源的疑似新增如实报「预算用完」，用户再说一次即可续跑。
             remaining_budget = _SYNC_TOTAL_MAX_IMPORT - imported_total
             if remaining_budget <= 0:
@@ -4379,7 +4263,7 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
                 entries.append(out)
                 continue
             per_source_cap = min(cap, remaining_budget)
-            # （验证）：逐源局部容错——本源搜回/写入抛错只毁本源条目
+            # 逐源局部容错——本源搜回/写入抛错只毁本源条目
             # （如实记错误、imported_count=0、filename=None），已成功入库的其他来源及其回执
             # 不受影响；此前一个来源异常会让整次 sync 以失败呈现、已写文件回执全丢。
             try:
@@ -4428,7 +4312,7 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
                     elif new_count > per_source_cap:
                         notes.append(f"另有 {new_count - len(records) - skipped} 条没有自动入库"
                                      f"（一次最多自动入库 {per_source_cap} 条），要它们可以说「联网搜…」")
-                    # 其余情形：差额来自逐编号搜回失败，
+                    # 其余情形（2026-08-15 G-01 文案修正）：差额来自逐编号搜回失败，
                     # 原因已由下方 warnings 如实写明——不再冒充「上限」口径。
                 if warnings:
                     notes.append("；".join(warnings[:3]))
@@ -4504,7 +4388,7 @@ def write_boundary_zh(action: str, *, dry_run: bool) -> str:
 
     语言水平与失败回执一致（「不是可管护的上传文件…」那句的人话口径）：机制词
     （upload_* 命名空间 / curate.restore / 写盘）不上屏——落盘位置走 `saved_to`/`moved_to`
-    等结构化字段；但诚实语义一个字不能丢：可逆、没真删、绝不碰冻结基准（copy 验证）。
+    等结构化字段；但诚实语义一个字不能丢：可逆、没真删、绝不碰冻结基准（copy 评审）。
 
     补 check_updates（只读）与 sync_updates（写盘 + 可整次撤回）
     两个动作的边界文案——它们不走 run_curate_action（无 plan→apply 两步），但文案真源
@@ -4605,10 +4489,10 @@ def run_curate_action(
 
 
 # ==============================================================================================
-# curate.sync_updates 加固：整任务跨进程锁 + operation receipt
+# curate.sync_updates 加固（2026-08-22 落地包）：整任务跨进程锁 + operation receipt
 # + 按 operation_id 批量撤回 + 实例级同步状态
 #
-# 设计要点——
+# 设计蓝本：设计文档 §7（评审①阻断4 裁决）——
 #   ① 新增跨进程 `sync_updates.lock`（沿用 uploads.ingest_critical_section 文件锁模式），覆盖整次
 #      sync（检查+联网+入库），冲突**立即**返回 sync_busy，不排队；
 #   ② 返回 operation receipt（operation_id / created_files[] / failed_sources[] / skipped_existing /
@@ -4653,40 +4537,20 @@ def _new_operation_id() -> str:
 
 
 def _acquire_os_sync_lock_nowait(project_root: Path):
-    """非阻塞获取跨进程 OS 文件锁（stdlib only：msvcrt on Windows / fcntl on POSIX）。
+    """非阻塞获取跨进程 OS 文件锁（平台骨架唯一锚点在 `fs_utils.acquire_file_lock`）。
 
     成功 → 返回打开的句柄；已被占（本进程其它线程 / 其它进程）→ 返回 None。**不等待、不重试**——
     sync 是分钟级整任务，冲突说明另一个 sync 正在跑，立即如实 sync_busy 让调用方决定重试，
     与 uploads 摄取锁的 60s 退避等待语义刻意不同（摄取是秒级操作，排队合理；sync 排队无意义）。"""
-    lock_dir = instance_data_dir_for(Path(project_root), USERDATA_DIR_NAME)
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    fh = (lock_dir / SYNC_LOCK_FILE_NAME).open("a+b")
     try:
-        if os.name == "nt":
-            import msvcrt
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return fh
-    except OSError:
-        fh.close()
+        return fs_utils.acquire_file_lock(_sync_lock_path(project_root), wait=False)
+    except fs_utils.FileLockBusy:
         return None
 
 
 def _release_os_sync_lock(fh) -> None:
-    """释放 `_acquire_os_sync_lock_nowait` 拿到的锁并关闭句柄（解锁与加锁锁同一字节位：先 seek(0)）。"""
-    try:
-        if os.name == "nt":
-            import msvcrt
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-    finally:
-        fh.close()
+    """释放 `_acquire_os_sync_lock_nowait` 拿到的锁并关闭句柄。"""
+    fs_utils.release_file_lock(fh)
 
 
 @contextlib.contextmanager
@@ -4808,7 +4672,7 @@ def sync_status(*, project_root: Path) -> dict:
 def recall_sync_operation(operation_id: Any, *, project_root: Path) -> dict:
     """按 operation_id **整次撤回**一次 sync 的全部成功写入（回收站语义：移动到 `.userdata/recycle/`）。
 
-    设计：「完整事后回执 + 整次一键撤回」替代「先预览再应用」。撤的是
+    设计：—「完整事后回执 + 整次一键撤回」替代「先预览再应用」。撤的是
     `created_files[]`（该次 sync 成功写入 external 的全部文件），与 apply_remove 同一回收站管线
     （时间戳前缀 + manifest 账本 + 缓存即时失效），可逆、不真删、不碰冻结基准。
 
@@ -4819,7 +4683,7 @@ def recall_sync_operation(operation_id: Any, *, project_root: Path) -> dict:
       - **单文件失败不连累其余**：某文件移动抛错只记进 `failed_files`，其余照常处理；已成功撤回的
         保持已撤回（不回滚）——「失败不破坏既有数据」指撤回过程永不毁坏未撤文件与回收站账本。"""
     if _patch_scope():
-        # 补丁包机制：绑定账户作用域时，sync 入库经写漏斗改落**该账户补丁包 adds**
+        # 任务 3：绑定账户作用域时，sync 入库经写漏斗改落**该账户补丁包 adds**
         # （receipt 里记的是合成批次号，external 下没有对应文件可撤回）。与其让撤回流程逐文件
         # 「已不在外部库」空转、回报一句误导性的「没有可撤回的文件」，不如当场如实指路：
         # 补丁条目的删除/恢复走 curate.remove / curate.restore（回收站语义同样在账户补丁内）。
