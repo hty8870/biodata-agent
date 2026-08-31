@@ -21,7 +21,7 @@ from . import vocabulary as V
 # alias（命中即 break），所以长名必须排在短名前面，否则 "10x genomics" 会被裸 "10x" 抢先匹配，
 # 去词时只抹掉 "10x"、把孤零零的 "genomics" 留在句子里再触发一次残差弃权。
 #
-# 补上口语简称。此前只认 "10x genomics"/"10x 官方"，用户写「来自10x」时来源识别恒空——
+# 2026-07-22：补上口语简称。此前只认 "10x genomics"/"10x 官方"，用户写「来自10x」时来源识别恒空——
 # 而且不是弃权、是**静默不筛**（"10x" 里的 "x" 在残差门的 `[a-z]{2,}` 下取不到 2 字母词，
 # 于是既没被当来源、也没触发弃权，用户以为按 10x 筛了、其实没有）。
 # 简称的收录门槛：必须是这个来源在中文语境里**唯一**的常用简称，且 ASCII 简称有词边界保护
@@ -40,7 +40,7 @@ SOURCE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "EBI Single Cell Expression Atlas",
         ("single cell expression atlas", "single-cell expression atlas", "ebi scea", "scea", "ebi 单细胞表达图谱"),
     ),
-    # 三源接入（HuBMAP / SCP / GEO）：别名沿用「高辨识度专名」门槛。
+    # 2026-08-06 三源接入（HuBMAP / SCP / GEO）：别名沿用「高辨识度专名」门槛。
     # "scp" 在生物数据语境里唯一指向 Single Cell Portal（SCP2 基因写作 scp2，词边界保护不会误命中）；
     # "geo" 收裸形——它是中文生信语境的标准说法，且 GeoMx/geometry 这类都被词边界挡住；
     # GSM/SRA 等编号形态不走本表（走 identifier_patterns 的标识符路径）。
@@ -50,20 +50,33 @@ SOURCE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("broad single cell portal", "single cell portal", "single-cell portal", "scp"),
     ),
     ("NCBI GEO", ("ncbi geo", "geo 数据库", "geo 数据", "geo")),
-    # Zenodo 首批入库（external/zenodo.json 非空）后登记检索侧别名：
+    # 2026-08-14 Zenodo 首批入库（external/zenodo.json 非空）后登记检索侧别名：
     # "zenodo" 是高辨识度专名（通用开放仓储，无普通词义），词边界保护下不会误命中。
     ("Zenodo", ("zenodo 数据库", "zenodo 数据", "zenodo")),
-    # refine.bio 首批入库（external/refinebio.json 非空，第 11 源）后登记检索侧别名：
+    # 2026-08-14 refine.bio 首批入库（external/refinebio.json 非空，第 11 源）后登记检索侧别名：
     # "refine.bio"/"refinebio" 是高辨识度专名（GEO/SRA/AE 统一加工镜像，无普通词义）。
     ("refine.bio", ("refine.bio 数据库", "refine.bio 数据", "refine.bio", "refinebio", "refine bio")),
     ("10x Genomics", ("10x genomics", "tenx genomics", "10x 官方", "10x官方", "10x", "tenx")),
 )
 
-SOURCE_NEGATION_PREFIX_RE = re.compile(
-    r"(?:除了|除去|排除|剔除|去掉|不含|不包含|不要|不用|不是|不限于|非|"
-    r"other\s+than|except|exclude|excluding|without|omit|skip)\s*$",
-    re.IGNORECASE,
-)
+# 来源限定语境的否定/排除前缀（「除了 GEO」「other than 10x」）：词源**程序取自** vocabulary
+# 否定语素锚点（交集，锚点本身按长度降序），不再手抄——本仓库在手抄词表上漂移过多次
+# （见 vocabulary.NEG_MORPHEMES_CN 头注）。「除了/除去/不限于」是来源限定专用说法、不是
+# 排除动作（「除了」在锚点仅以环缀开词存在），列在 EXTRA。
+_SOURCE_NEG_VOCAB_CN = frozenset({"排除", "剔除", "去掉", "不含", "不包含", "不要", "不是", "不用", "非"})
+_SOURCE_NEG_PREFIX_EXTRA_CN = ("除了", "除去", "不限于")
+_SOURCE_NEG_VOCAB_EN = frozenset({"other than", "except", "exclude", "excluding", "without", "omit", "skip"})
+
+
+def _source_negation_prefix_re() -> "re.Pattern[str]":
+    cn = [m for m in V.NEG_MORPHEMES_CN if m in _SOURCE_NEG_VOCAB_CN] + list(_SOURCE_NEG_PREFIX_EXTRA_CN)
+    en = [r"\s+".join(re.escape(p) for p in m.split())
+          for m in V.NEG_MORPHEMES_EN if m in _SOURCE_NEG_VOCAB_EN]
+    alts = sorted([re.escape(m) for m in cn] + en, key=len, reverse=True)  # 长词优先（同 _prefer_prefix_re 口径）
+    return re.compile(r"(?:" + "|".join(alts) + r")\s*$", re.IGNORECASE)
+
+
+SOURCE_NEGATION_PREFIX_RE = _source_negation_prefix_re()
 SOURCE_NEGATION_SUFFIX_RE = re.compile(r"^\s*(?:以外|之外)", re.IGNORECASE)
 
 # 「优先 10x」：这是**偏好**，不是范围收窄。若照常自动收窄，用户说「优先」却再也看不到别的来源，
@@ -71,7 +84,7 @@ SOURCE_NEGATION_SUFFIX_RE = re.compile(r"^\s*(?:以外|之外)", re.IGNORECASE)
 # preferred_sources 交给排序层加权（见 retriever.PREFERENCE_BOOST）。
 # 词表**由 vocabulary 程序生成**，不再手抄。旧版是一行手写的 `(?:优先考虑|优先选择|优先|…)`，
 # 与 `V.SOFT_PREFER_PREFIX_CN` 是两份手抄——当场已经漂了一处（虚字表少一个「带」）。
-# 起 hedge（最好 / 尽量 / 如果有…）也是软偏好标记，所以「最好是 10x 的人类肺数据」
+# 2026-07-25 起 hedge（最好 / 尽量 / 如果有…）也是软偏好标记，所以「最好是 10x 的人类肺数据」
 # 必须和「优先 10x…」走同一条路；hedge 的虚字表刻意不含「的」（见 V.HEDGE_CONNECTOR_CHARS）。
 def _prefer_prefix_re() -> "re.Pattern[str]":
     def group(markers: "Sequence[str]", conn: str) -> str:
@@ -109,7 +122,7 @@ def _token_pattern(token: str) -> re.Pattern[str]:
         return re.compile(escaped, re.IGNORECASE)
     guard = ""
     if token.lower() in ("10x", "tenx"):
-        # 「10X Multiome」「10X ATAC」是**试剂盒名（assay）**，不是 10x 数据来源——
+        # 2026-08-06 B6：「10X Multiome」「10X ATAC」是**试剂盒名（assay）**，不是 10x 数据来源——
         # 裸 "10x" 曾把它们误判成点名来源（实测：'10X Multiome 的人类肺癌数据' → 检索池收窄到
         # 10x，其它库的同 assay 数据全丢；agent 侧还被 _named_source_violation 错逼填 10x）。
         # 护栏 = 词边界后再加 assay 词前瞻：紧跟 assay 词时不算来源专名。做进 pattern（而非判后

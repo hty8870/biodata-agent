@@ -1,6 +1,6 @@
 "use strict";
 
-/* 数据集页一键同步 · 薄 DOM 壳
+/* 数据集页一键同步 · 薄 DOM 壳（对应设计 v2 §7「F4 数据集页一键同步」）
  *
  * 纯逻辑在 sync_button_core.js（零 DOM，node 可单测）；本文件只管 DOM 与网络：
  *   - 空闲态：GET /api/curate/sync-status 显示「上次同步：X 天前」（实例级事实；从未同步如实写）
@@ -8,13 +8,13 @@
  *   - 结果摘要：新增 X / 已存在 Z / 失败 W（失败项逐条列原因；绝不写「更新 Y」）
  *   - sync_busy：另一同步进行中（agent 可能在对话里发起）→「另一个同步任务进行中，请稍候」
  *   - 一键撤销：按 operation_id 调 /api/curate/recall，结果如实呈现
- * - 网页形态（guard on）下 sync-updates 走异步——返回
+ *   - 2026-08-26 起：网页形态（guard on）下 sync-updates 改异步——返回
  *     {async:true, job}，本壳轮询 GET /api/curate/sync-updates/status 到终态再呈现回执；
- * 本机形态响应逐字节不变（同步返回 result）。「并检查 N 个追踪的更新」
+ *     本机形态响应逐字节不变（同步返回 result）。「并检查 N 个追踪的更新」
  *     联动已随全体批量按钮一并退役。
  *
  * 本页加载序与 dataset_page.js 同源（dataset.html 只加载自身模块子集）：自挂 DOMContentLoaded，
- * 不经 boot（boot 是 index.html 入口）。后端三端点契约见 DEVELOPMENT.md §6。
+ * 不经 boot（boot 是 index.html 入口）。后端三端点契约见 webapp.py:2883-2926。
  */
 
 import { API, $, escapeHtml } from "#core";
@@ -62,7 +62,7 @@ function _renderRunning() {
     node.innerHTML = _runBtnHtml(true) + _statusLine(SYNC_RUNNING_COPY, "ds-sync-busy");
 }
 
-/* busy 冲突（另一同步任务进行中，可能是 agent 在对话里发起的）：显示固定文案，
+/* busy 冲突（另一同步任务进行中，可能是 agent 在对话里发起的）：显示设计 §7 固定文案，
    禁用按钮防重复撞锁，并轻量轮询等到它结束（到点上限如实回到空闲）。 */
 function _renderBusy(detail) {
     const node = $("dsSync");
@@ -82,8 +82,8 @@ function _renderError(message) {
     if (btn) btn.addEventListener("click", _startSync);
 }
 
-/* 结果摘要：新增 X / 已存在 Z / 失败 W；失败项逐条列原因；created_files 非空才给
-   「撤销本次同步」（没有可撤的东西就不给假按钮）； 联动挂点（探测式降级）。 */
+/* 结果摘要（设计 §7）：新增 X / 已存在 Z / 失败 W；失败项逐条列原因；created_files 非空才给
+   「撤销本次同步」（没有可撤的东西就不给假按钮）。 */
 function _renderResult(result) {
     _clearBusyPoll();
     const node = $("dsSync");
@@ -109,7 +109,7 @@ function _renderResult(result) {
     if (createdCount > 0 && _lastOpId) {
         html += '<button class="btn ds-sync-recall" type="button">撤销本次同步</button>';
     }
-    // 「并检查 N 个追踪的更新」联动已撤
+    // 2026-08-26：「并检查 N 个追踪的更新」联动已撤
     // （全体批量按钮退役，用户：点一下太耗费资源；批量诉求由登录后语料代哨兵自动刷新承接）。
     html += "</div></div>";
     node.innerHTML = html;
@@ -118,12 +118,12 @@ function _renderResult(result) {
     const recall = node.querySelector(".ds-sync-recall");
     if (recall) recall.addEventListener("click", _recall);
 
-    // 埋点（计数型无文本，usage_log 通道）：sync_button_used{added,skipped,failed}。
+    // 埋点（计数型无文本，usage_log 通道；设计 §10）：sync_button_used{added,skipped,failed}。
     // 关闭遥测时 usageLog 第一行即返回，静默少记——打点绝不把主功能带崩（usage_log.js 纪律）。
     try { usageLog(USAGE_KINDS.sync_button_used, { added: s.added, skipped: s.skipped, failed: s.failed }); } catch (_e) {}
 }
 
-/* 撤销结果（「结果如实呈现」）：显示撤销摘要；随后只原位刷新「上次同步」行——
+/* 撤销结果（设计 §7「结果如实呈现」）：显示撤销摘要；随后只原位刷新「上次同步」行——
    不能用 _loadStatus() 整块重渲（会把撤销结果瞬间抹成空闲态，用户看不到撤掉了什么）。 */
 function _renderRecall(recall) {
     const node = $("dsSync");
@@ -134,7 +134,7 @@ function _renderRecall(recall) {
     node.innerHTML = html;
     const btn = node.querySelector(".ds-sync-run");
     if (btn) btn.addEventListener("click", _startSync);
-    _refreshLastSyncedLine();   // 撤销后刷新状态显示
+    _refreshLastSyncedLine();   // 撤销后刷新状态显示（设计 §7）
 }
 
 /* 只更新当前 DOM 里的「上次同步」行文本（busy 时不动——另一任务进行中，行不抢跑） */
@@ -180,11 +180,11 @@ async function _startSync() {
         const res = await fetch(API.curateSyncUpdates, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),   // sources 缺省 = 全部已注册来源（契约）
+            body: JSON.stringify({}),   // sources 缺省 = 全部已注册来源（后端契约）
         });
         const j = await res.json().catch(function () { return null; });
         if (res.ok && j && j.ok && j.result) { _renderResult(j.result); return; }
-        // 网页形态异步响应（{async:true, job}）→ 轮询 job 到终态再呈现
+        // 2026-08-26 起：网页形态异步响应（{async:true, job}）→ 轮询 job 到终态再呈现
         if (res.ok && j && j.ok && j.async === true) { _pollSyncJob(); return; }
         // 失败分类：400 + detail 含「同步」= sync_busy（另一任务进行中）；其余如实报
         const cls = syncClassifyError(res.status, j, null);

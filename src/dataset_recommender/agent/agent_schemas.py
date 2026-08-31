@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""执行侧 agent 的 pydantic 契约层（硬约束收到 schema 层）。
+"""执行侧 agent 的 pydantic 契约层（2026-08-06 硬约束收到 schema 层）。
 
 两个方向各一刀（设计动机：此前 agent_exec 是全仓唯一没过 pydantic 的工具面）：
 
@@ -71,7 +71,7 @@ def _registry_source_labels() -> tuple[tuple[str, ...], tuple[str, ...]]:
 
 
 def source_names_for(verb: str) -> tuple[str, ...]:
-    """source 槽按 verb 取真枚举：联网搜给能搜的、检查/同步给能查的，
+    """source 槽按 verb 取真枚举：联网搜给能搜的、检查/同步给能查的
     其余 verb（当前没有带 source 槽的）回退检索词表全集。"""
     search_labels, check_labels = _registry_source_labels()
     if verb == "curate.search_online":
@@ -86,7 +86,7 @@ def source_candidates_zh(verb: str) -> str:
     return " / ".join(source_names_for(verb))
 
 
-#: source 槽描述按 verb 分派（提示层半）：候选清单不抄进文字（名单真源是
+#: source 槽描述按 verb 分派（评审裁决的提示层半）：候选清单不抄进文字（名单真源是
 #: 本字段的 enum，两处同出 `source_names_for`，文字再抄一份必漂移）；「接不了如实说」的
 #: 口径按动作写清。多点名只填第一个的纪律不变。
 _SOURCE_SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
@@ -109,15 +109,18 @@ _SOURCE_SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
     ),
 }
 
-#: 槽位描述必须**专职**（问题：「检查10x更新」被填成 source=ArrayExpress）。
+#: 槽位描述必须**专职**（2026-08-03 问题：「检查10x更新」被填成 source=ArrayExpress）。
 #: 此前所有非 limit 槽共用一句泛泛模板「按原话里的说法填」——LLM 没有受控清单可依，
 #: 随手填了它唯一眼熟的在线源。每个槽写清「填什么、何时必填、何时不填」；
 #: 即便如此 LLM 仍可能填错，所以 validate 还有一道不依赖 LLM 自觉的机械校验兜底（见
 #: `agent_exec._named_source_violation`）——两层防线各管一半。
-#: 补具体值示例与出处锚（多来源只检一个、条件成立后
-#: 搜索步被放弃两处问题的描述层锚；与 decide 铁律 rule 4/9 互文——提示词规则负责解释、
+#: 2026-08-08 B1a 调研六候选批：补具体值示例与出处锚（k09 多来源只检一个、j03/l07 条件成立后
+#: 搜索步被放弃两处问题的描述层锚；与 decide 铁律 rule 4/9 互文——提示词规则负责解释
 #: 工具描述当 checklist）。
-#: （本字典原在 agent_exec， 随 schema 生成迁入本模块——它是入参契约的一部分。）
+#: （本字典原在 agent_exec，2026-08-06 随 schema 生成迁入本模块——它是入参契约的一部分。）
+#: 互指：keywords 出处判定句的另一语境变体在
+#: agent_exec LOOP_TOOLS["curate.search_online"].decide_zh（decide 工具描述）；
+#: loop_action.md 已改指针式引用。改出处规则时两处变体须同步评估。
 _SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
     "source": (
         "数据来源，受控规范名（候选见本字段清单）。"
@@ -149,10 +152,10 @@ _SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
         "action=动作向（下载/联网搜库/检查更新/入库/管护）、"
         "general=全能兜底（拿不准就走它）；必填。"
     ),
-    # 通用兜底句（缝合）：声明 reason 槽的动词都应登记下方专职描述；
+    # 通用兜底句（2026-08-17 缝合）：声明 reason 槽的动词都应登记下方专职描述；
     # 本句只保证键存在（test_every_declared_slot_has_a_dedicated_description 的口径）。
     "reason": "补充理由（一句中文）；没有就不填。",
-    # 环内结果处理工具：compare.datasets 的 a/b 与 compat.find / fair.check 的 uid
+    # 2026-08-18 环内四工具批：compare.datasets 的 a/b 与 compat.find / fair.check 的 uid
     # ——三个槽都接「编号或名称」，缺省语义各自写清（缺省 = 当前结果第 N 条）。
     "a": (
         "第一个数据集的**编号或名称**（可选）：用户原话点名了对比对象就填（如 GSE…、"
@@ -168,7 +171,7 @@ _SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
         "数据集名）；「第一条/第二条/这个/它」这类**指代词不是编号**，不要填——"
         "不填时缺省会取当前结果第一条（输出里会说明）。"
     ),
-    # cite.export 的 uids 数组槽——按编号清单导出（真实消费）；
+    # 2026-08-20：cite.export 的 uids 数组槽——按编号清单导出（真实消费）
     # 数组元素可为真实编号，也可为同批前序检索结果的占位引用（`$<N>.top[<i>].dataset_uid`，
     # 形状与流向规则见 prompts/loop_core.md 依赖占位节），两种可混用。
     "uids": (
@@ -178,7 +181,7 @@ _SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
     ),
 }
 
-#: reason 槽的**按动词专职描述**（缝合，与 `_QUERY_SLOT_DESCRIPTIONS_ZH`
+#: reason 槽的**按动词专职描述**（2026-08-17 缝合，与 `_QUERY_SLOT_DESCRIPTIONS_ZH`
 #: 同型）：rerank 的「为什么优化检索词」与 route.request 的「为什么换路线」是两个语义，
 #: 通用句谁贴都不对——未登记的动词回退通用兜底句。
 _REASON_SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
@@ -214,7 +217,7 @@ def _args_model_for(spec: "_ap.VerbSpec") -> type[BaseModel]:
         fields["cancelled"] = (bool, Field(
             description="用户明确说不做这个动作时填 true（动词照选，由执行层决定不执行）。"))
     if spec.verb in _ap.ROUTE_QUERY_VERBS:
-        # 低4 留痕：ROUTE_QUERY 三动词在 agent 环内的投影已退役——
+        # 留痕：ROUTE_QUERY 三动词在 agent 环内的投影已退役——
         # scoped 各套件面都不装它们（_SUITE_UNDERSTAND_VERBS 不含、route.request 不进
         # 首步面），本分支生成的 schema 在生产**不可达**（只被全表生成遍历到，从不
         # 被 bind 给模型）。刻意保留不摘：保底 plan_action 的提示词/护栏仍在消费
@@ -228,7 +231,7 @@ def _args_model_for(spec: "_ap.VerbSpec") -> type[BaseModel]:
             fields["limit"] = (int, Field(
                 ge=1, le=_ap.MAX_LIMIT, description="用户明确说了条数才填数字，否则不填。"))
         elif slot == "source":
-            # 枚举与描述都按 verb 分派（联网搜给能搜的、检查/同步给能查的），
+            # 评审裁决：枚举与描述都按 verb 分派（联网搜给能搜的、检查/同步给能查的）
             # 名单与 decide 规则表的候选串同出 `source_names_for`——一个真源三处用。
             fields["source"] = (
                 Literal.__getitem__(source_names_for(spec.verb)),
@@ -236,11 +239,11 @@ def _args_model_for(spec: "_ap.VerbSpec") -> type[BaseModel]:
                     spec.verb, _SLOT_DESCRIPTIONS_ZH["source"])),
             )
         elif slot == "display":
-            # 布尔槽（rank/rerank）：检索结果是否上屏——schema 层给 bool
+            # 布尔槽（2026-08-17 rank/rerank）：检索结果是否上屏——schema 层给 bool
             # 类型引导填写；必填与否的裁决仍归 build_plan_from_raw（required 恒空铁律不变）。
             fields["display"] = (bool, Field(description=_SLOT_DESCRIPTIONS_ZH["display"]))
         elif slot == "uids":
-            # 数组槽（批）：cite.export 的编号清单——schema 层给
+            # 数组槽（2026-08-20 批）：cite.export 的编号清单——schema 层给
             # list[str] 类型引导（元素可混占位引用）；形状/流向裁决归 build_plan_from_raw
             # 与 execute 解析层，required 恒空铁律不变。
             fields["uids"] = (list[str], Field(description=_SLOT_DESCRIPTIONS_ZH["uids"]))
@@ -252,7 +255,7 @@ def _args_model_for(spec: "_ap.VerbSpec") -> type[BaseModel]:
                 # 该句被 tests/test_agent_schemas.py 逐字钉住，不得改动）。
                 description = _QUERY_SLOT_DESCRIPTIONS_ZH.get(spec.verb, description)
             if slot == "reason":
-                # reason 槽按动词取专职描述（rerank/route.request； 缝合）。
+                # reason 槽按动词取专职描述（rerank/route.request；2026-08-17 缝合）。
                 description = _REASON_SLOT_DESCRIPTIONS_ZH.get(spec.verb, description)
             fields[slot] = (str, Field(
                 # 专职描述优先（见 _SLOT_DESCRIPTIONS_ZH 的问题说明）；词表将来新增
@@ -284,7 +287,7 @@ def verb_parameters_schema(spec: "_ap.VerbSpec") -> dict[str, Any]:
 # ==============================================================================================
 # 返回契约（第一刀）：LOOP_TOOLS 三工具的出口形状 + Step 实录
 #
-# 字段提炼依据（逐路径核对）：
+# 字段提炼依据（2026-08-06 逐路径核对）：
 # - `corpus_status.db_status`：generated_at / sources[{source,label,local_count,snapshot_date}] /
 #   total_records / external_files[{filename,record_count,curatable,modified_at}] /
 #   recycle[{original_filename,record_count,moved_at}] / ledger{entries,by_endpoint,recent}；
@@ -462,11 +465,11 @@ class SearchRerunResult(BaseModel):
     如实为 None）/ replace_screen（rescue 入口恒 true，链内恒 false）。
     payload 仅 adopted 时非 None（/api/recommend 同形 dict，由 app.recommend_rows.recommend_payload
     构造）。
-     设计决定：**命中 0 条也采纳**（空结果集照常上屏，是条件变更重检的诚实
+    设计决定：**命中 0 条也采纳**（空结果集照常上屏，是条件变更重检的诚实
     答案）——原「改空拒」档 rewrite_empty_kept_original 退役，拒绝只剩同集/条件丢失两档。
     rescue2additive 两键：dropped_terms（采纳时改写句里消失的未收录词，
     机械子串比对；未采纳恒 []）、disclosure_zh（采纳档确定性披露句，未采纳为 None）。
-    additive 两键：n_before_total/n_after_total（**屏口径**未截断命中
+    nl-Aadditive 两键：n_before_total/n_after_total（**屏口径**未截断命中
     总数——采纳档 n_after_total 与屏单源 = payload.result_total，n_before_total 为基准
     同管线硬过滤存活数；无基准时 n_before_total 同 n_before 如实为 None）。n_before/
     n_after 保持择优闸口径（top-k 截断，步骤卡明示）不变。"""
@@ -493,7 +496,7 @@ class RankResult(BaseModel):
     workflow._active_filters 投影形状）/ top（前 3 条紧凑 digest）/
     displayed（是否上屏）/ batch（display=true 时的批次原料 dict——kind/label/
     query_raw/query_effective/payload，batch_id/seq/created_at 由轮级装配补齐；否则 None）。
-    top 条目的扩展字段：dataset_uid + rank（1 起序号）——同批依赖占位的
+    top 条目 2026-08-20 扩字段：dataset_uid + rank（1 起序号）——同批依赖占位的
     解析源（`$<N>.top[<i>].dataset_uid`），decide 据它挑对象、execute 据它解析。"""
 
     model_config = ConfigDict(extra="allow")
@@ -510,7 +513,7 @@ class RerankResult(BaseModel):
     """`rerank`（`agent_exec._loop_rerank`）的出口契约：在 RankResult
     口径上把 query 拆成三键——original_query（原始坏 query）/ rewritten_query（实际生效
     的检索句；改写未通过机械健全性检查时 = 原句）/ rewritten（改写是否被采纳，如实标注）。
-    batch 的 label 取生效的 rewritten_query。top 条目同 RankResult 的扩展字段
+    batch 的 label 取生效的 rewritten_query。top 条目同 RankResult 的批扩字段
     （dataset_uid + rank，依赖占位解析源）。"""
 
     model_config = ConfigDict(extra="allow")
@@ -526,7 +529,7 @@ class RerankResult(BaseModel):
 
 
 class RouteRequestResult(BaseModel):
-    """`route.request`（`agent_exec._loop_route_request`）的出口契约（
+    """`route.request`（`agent_exec._loop_route_request`）的出口契约（2026-08-17 M1
     逃生口）：三键恒在——requested_route（目标路线，机械校验 ∈ search/action/general）/
     switched（恒 True——能产出本结果即放行；路线切换由 execute 据 slots 写 state.route_scope）/
     reason（模型给的换线理由，可空串）。"""
@@ -539,10 +542,12 @@ class RouteRequestResult(BaseModel):
 
 
 class RollbackResult(BaseModel):
-    """`curate.rollback`（`agent_exec._loop_curate_rollback`）的出口契约（回滚动词化）：十键恒在——snapshot_id（回退锚；无可回滚步时如实 None）/ rolled_back
+    """`curate.rollback`（`agent_exec._loop_curate_rollback`）的出口契约（2026-08-17 rb1
+    回滚动词化）：十键恒在——snapshot_id（回退锚；无可回滚步时如实 None）/ rolled_back
     （是否真回了）/ reason（rolled_back / no_rollbackable_step / snapshot_not_finalized /
     snapshot_unavailable / snapshot_error / rollback_incomplete）/ verb（被回退步的动词，拒绝时 ""）/
-    recycled / restored（文件名清单）/ skipped / unrestorable / errors（`trace.rollback.apply_rollback` 的如实清单原样透传）/ note_zh（人读如实句，
+    recycled / restored（文件名清单）/ skipped / unrestorable / errors（
+    `trace.rollback.apply_rollback` 的如实清单原样透传）/ note_zh（人读如实句，
     成功与拒绝都恒在——execute 摘要与兜底汇报直接引用它，不二次概括）。
     拒绝是数据不是故障（search.rerun adopted=False 同哲学）：机械闸拒绝不抛异常。"""
 
@@ -575,7 +580,8 @@ class CompareField(BaseModel):
 
 
 class CompareResult(BaseModel):
-    """`compare.datasets`（`agent_exec._loop_compare_datasets`）的出口契约：a / b（条目 digest：dataset_uid + dataset_name + source）/ assumption_zh
+    """`compare.datasets`（`agent_exec._loop_compare_datasets`）的出口契约（2026-08-18
+    四工具批）：a / b（条目 digest：dataset_uid + dataset_name + source）/ assumption_zh
     （未指定对比对象时说明默认假设，指定则空串）/ fields（确定性 diff 逐字段——
     **事实层**）/ n_same / n_diff / n_unknown / identical（n_diff==0——字段全同是如实
     结论不是失败）/ comparison_zh（用户可见结论：LLM 措辞或确定性兜底，恒在）/
@@ -666,20 +672,20 @@ class FairCheckResult(BaseModel):
 
 #: LOOP_TOOLS 各动词的返回契约模型（execute 节点在 run() 出口 model_validate 的登记处）。
 #: 注册表（含测试替身整体替换 LOOP_TOOLS 的场景）按 verb 查这里——替身形状与真表同约，
-#: 同步漂移在此被闸住（tests.md  的补位：替身副本与真表从此共享同一份形状闸）。
+#: 同步漂移在此被闸住（tests.md 的补位：替身副本与真表从此共享同一份形状闸）。
 LOOP_RESULT_MODELS: dict[str, type[BaseModel]] = {
     "curate.db_status": DbStatusResult,
     "curate.check_updates": CheckUpdatesResult,
     "curate.search_online": SearchOnlineResult,
     "curate.sync_updates": SyncUpdatesResult,
     "search.rerun": SearchRerunResult,
-    # RAG 工具组与逃生口（常驻）。
+    # RAG 工具组与逃生口（常驻，原开关登记分支摘除）。
     "rank": RankResult,
     "rerank": RerankResult,
     "route.request": RouteRequestResult,
-    # 回滚动词化。
+    # 2026-08-17 rb1 回滚动词化。
     "curate.rollback": RollbackResult,
-    # 环内结果处理工具：compare.datasets / cite.export / compat.find / fair.check。
+    # 2026-08-18 环内四工具批：compare.datasets / cite.export / compat.find / fair.check。
     "compare.datasets": CompareResult,
     "cite.export": CiteExportResult,
     "compat.find": CompatFindResult,
@@ -694,7 +700,7 @@ class Step(BaseModel):
     `model_dump(exclude_none=True)`：成功步无 error/error_code 键、失败步无 result 键，
     与历史形状逐位一致；缺字段/错类型在构造期即 ValidationError——字段齐整由代码
     保证，不再靠两处字典字面量各自自觉。
-    （回滚动词化）additive：snapshot_id——写动词步的 trace 快照锚
+    rb1（2026-08-17 回滚动词化）additive：snapshot_id——写动词步的 trace 快照锚
     （capture 成功才非 None；只读步/快照缺失为 None，exclude_none 不落键，
     既有步骤字节契约不变），curate.rollback 的机械闸从 steps 实录现取。"""
 

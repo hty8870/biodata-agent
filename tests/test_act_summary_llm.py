@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LLM 执行结果总结层的**确定性**测试（无网络）。
+"""p10 · LLM 执行结果总结层的**确定性**测试（无网络）。
 
 覆盖：mock 短路（`call_mock_llm` 绝不用于总结）、disabled/no_key 门、成功路径、
 fail-open（provider 失败/异常→summary_zh=None，异常文本不泄 key）、prompt 接地护栏
@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from dataset_recommender.llm import act_summary_llm
+from dataset_recommender.llm import act_summary_llm, llm_client
 from dataset_recommender.app import webapp
 from dataset_recommender.llm.llm_client import LLMConfig, LLMResult
 from dataset_recommender.app.webapp import app
@@ -49,8 +49,8 @@ def test_mock_config_never_calls_provider(monkeypatch):
     """即便显式传 mock config（enable=True），也绝不调任何 provider、零网络。"""
     def _boom(*a, **k):
         raise AssertionError("mock 不该走真 provider")
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible", _boom)
-    monkeypatch.setattr(act_summary_llm, "call_zhipuai", _boom)
+    monkeypatch.setattr(llm_client, "call_openai_compatible", _boom)
+    monkeypatch.setattr(llm_client, "call_zhipuai", _boom)
     out = act_summary_llm.summarize_action_with_llm(_facts(), config=_cfg(mock=True))
     assert out["summary_zh"] is None
     assert out["summary_source"] is None
@@ -76,7 +76,7 @@ def test_ready_when_all_conditions_met():
 
 def test_success_returns_summary(monkeypatch):
     """假 LLM 成功（桩 zhipuai）：summary_zh 有值、source='llm'、status='ok'、带 model。"""
-    monkeypatch.setattr(act_summary_llm, "call_zhipuai",
+    monkeypatch.setattr(llm_client, "call_zhipuai",
                         lambda prompt, cfg: LLMResult(text="找到了 3 个候选，已入库 2 条。",
                                                       attempted=True, succeeded=True,
                                                       response_used=False, provider="zhipuai",
@@ -92,7 +92,7 @@ def test_fail_open_on_provider_exception_no_key_leak(monkeypatch):
     """provider 抛异常 → fail-open：summary_zh=None、status 以 'error:' 开头、且**不含 key 字样**。"""
     def _boom(*a, **k):
         raise RuntimeError("network down, credential sk-test rejected")
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible", _boom)
+    monkeypatch.setattr(llm_client, "call_openai_compatible", _boom)
     out = act_summary_llm.summarize_action_with_llm(_facts(), config=_cfg())
     assert out["summary_zh"] is None
     assert out["summary_source"] is None
@@ -102,7 +102,7 @@ def test_fail_open_on_provider_exception_no_key_leak(monkeypatch):
 
 def test_fail_open_on_provider_failure(monkeypatch):
     """provider 返回失败 → summary_zh=None、status=failed:*。"""
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda prompt, cfg: LLMResult(text=None, attempted=True, succeeded=False,
                                                       response_used=False, provider="openai-compatible",
                                                       model="gpt-x", error="HTTP 500 boom"))
@@ -112,7 +112,7 @@ def test_fail_open_on_provider_failure(monkeypatch):
 
 
 def test_empty_llm_text_fails_open(monkeypatch):
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda prompt, cfg: LLMResult(text="   ", attempted=True, succeeded=True,
                                                       response_used=False, provider="openai-compatible",
                                                       model="gpt-x"))
@@ -228,7 +228,7 @@ def test_endpoint_llm_success_path(monkeypatch, no_key_server_config):
     def _fake(prompt, cfg):
         return LLMResult(text="没有完成：联网查询失败，0 条入库。", attempted=True, succeeded=True,
                          response_used=False, provider="zhipuai", model="glm-x")
-    monkeypatch.setattr(act_summary_llm, "call_zhipuai", _fake)
+    monkeypatch.setattr(llm_client, "call_zhipuai", _fake)
     res = client.post("/api/act/summary", json={
         "verb_zh": "联网检索并入库", "ok": False,
         "gap_lines": ["联网查询失败，0 条入库"],
@@ -271,7 +271,7 @@ def test_brief_success_returns_the_sentence(monkeypatch):
         assert "不超过 35 字" in prompt                     # 走的确实是 brief prompt
         return LLMResult(text="找到 3 个候选，入库 2 条。", attempted=True, succeeded=True,
                          response_used=False, provider="openai-compatible", model="gpt-x")
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible", _fake)
+    monkeypatch.setattr(llm_client, "call_openai_compatible", _fake)
     out = act_summary_llm.summarize_brief_with_llm(_facts(), config=_cfg())
     assert out == "找到 3 个候选，入库 2 条。"
 
@@ -280,11 +280,11 @@ def test_brief_fail_open_returns_none(monkeypatch):
     """无 key / mock / provider 失败 / 空回 → 一律 None（不伪造简洁，前端留事实句）。"""
     def _boom(*a, **k):
         raise AssertionError("闸口没过的路径不该调 provider")
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible", _boom)
+    monkeypatch.setattr(llm_client, "call_openai_compatible", _boom)
     assert act_summary_llm.summarize_brief_with_llm(_facts(), config=_cfg(key=None)) is None
     assert act_summary_llm.summarize_brief_with_llm(_facts(), config=_cfg(mock=True)) is None
     assert act_summary_llm.summarize_brief_with_llm(_facts(), config=_cfg(enable=False)) is None
-    monkeypatch.setattr(act_summary_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda prompt, cfg: LLMResult(text=None, attempted=True, succeeded=False,
                                                       response_used=False,
                                                       provider="openai-compatible",
@@ -315,7 +315,7 @@ def test_endpoint_brief_success_path(monkeypatch, no_key_server_config):
         captured["prompt"] = prompt
         return LLMResult(text="没有完成：联网查询失败，0 条入库。", attempted=True, succeeded=True,
                          response_used=False, provider="zhipuai", model="glm-x")
-    monkeypatch.setattr(act_summary_llm, "call_zhipuai", _fake)
+    monkeypatch.setattr(llm_client, "call_zhipuai", _fake)
     res = client.post("/api/act/summary", json={
         "verb_zh": "联网检索并入库", "ok": False,
         "gap_lines": ["联网查询失败，0 条入库"],

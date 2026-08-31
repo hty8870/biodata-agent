@@ -11,7 +11,7 @@
 - `load_full_corpus()` → base + 全部外部（浏览页「并列展示所有库」用）。
 
 外部库是**静态离线快照**（`scripts/ingest_cellxgene.py` 生成），运行时不联网、不改动 →
-归一结果 `lru_cache` 缓存；基础语料按**内容指纹**键控缓存：目录里任何
+归一结果 `lru_cache` 缓存；基础语料按**内容指纹**键控缓存（2026-08-10 P1-6）：目录里任何
 文件增/删/改名/就地改写都会改指纹 → 自动重载，「改动即时可见」不再靠每次现算
 （实测每次分流双重现算 1548 条、median 89.5ms，命中后只剩亚毫秒级指纹扫描）。
 """
@@ -39,9 +39,9 @@ _EXTERNAL_CACHE_GENERATION = 0
 
 
 def _base_fingerprint(data_dir: Path) -> tuple:
-    """基础语料的内容指纹（缓存键）：目录下全部 .json 的 (文件名, mtime_ns, size)
+    """基础语料的内容指纹（P1-6 缓存键）：目录下全部 .json 的 (文件名, mtime_ns, size)
     排序元组——与 data_loader 的装载面（`*.json`）严格同形。任何增/删/改名/就地改写都会
-    改指纹（mtime 或 size 至少其一变）→ 缓存自动失效。已知边界（验证）：Windows
+    改指纹（mtime 或 size 至少其一变）→ 缓存自动失效。已知边界（2026-08-10 实测）：Windows
     NTFS 惰性时间戳下，**同一 mtime 刻度内的同尺寸改写**会共享指纹（本机紧挨两次写 47/50 次
     mtime_ns 逐位相同）——只有毫秒级连写同名文件才可能踩中；运行期没有写 database/base/ 的通路
     （上传/管护都写 external/），真遇到请调 invalidate_base_cache()。"""
@@ -59,7 +59,7 @@ def _base_fingerprint(data_dir: Path) -> tuple:
 
 @lru_cache(maxsize=4)
 def _base_normalized(data_dir_str: str, fingerprint: tuple) -> "tuple[DatasetRecord, ...]":
-    """按（路径 + 内容指纹）键控的基础语料归一缓存。fingerprint 只是键、函数体
+    """按（路径 + 内容指纹）键控的基础语料归一缓存（P1-6）。fingerprint 只是键、函数体
     不读它。maxsize=4：指纹每变一次产生一个新键，LRU 自动淘汰旧代际。返回元组（与外部库
     缓存同形），调用方经 _load_base 拿**新建 list**——列表级改写不跨调用污染。"""
     base = normalize_records(load_raw_records(Path(data_dir_str)))
@@ -122,7 +122,7 @@ def _warn_empty_base_once(data_dir: str) -> None:
 
 
 def invalidate_base_cache() -> None:
-    """受控失效入口：database/base/ 被非常规手段改写（如手工编辑且保留了 mtime）后调用。"""
+    """受控失效入口（P1-6）：database/base/ 被非常规手段改写（如手工编辑且保留了 mtime）后调用。"""
     _base_normalized.cache_clear()
 
 
@@ -173,7 +173,7 @@ def corpus_cache_generation(data_dir: Path, project_root: Path) -> tuple:
     base 用既有文件指纹（增/删/改即变）；external 用受控失效入口的代际数。
     仅供同进程缓存判断，不作对外可复现指纹；对外 ETag 仍从真实响应字节计算。
 
-    补丁包机制：绑定补丁作用域时在键尾追加该账户补丁文件的代际（mtime+size）——
+    任务 3：绑定补丁作用域时在键尾追加该账户补丁文件的代际（mtime+size）——
     不同账户 / 同一账户补丁变动都得到不同键，进程内缓存绝不跨账户串视图；
     未绑定时键与历史逐位一致。
     """
@@ -204,7 +204,7 @@ def load_normalized_corpus(
 ) -> list[DatasetRecord]:
     """按所选来源装配语料。sources=None → 仅基础语料（确定性默认）。
 
-    补丁包机制：绑定补丁作用域（登录账户请求）时，在该账户视图上合并其补丁包
+    任务 3（2026-08-26）：绑定补丁作用域（登录账户请求）时，在该账户视图上合并其补丁包
     （blocks 过滤 + adds 追加，adds 按自身 source 参与来源筛选）；未绑定 → 逐字节不变。"""
     base = _load_base(_resolve_base_dir(data_dir, project_root))
     if sources is None:
@@ -223,7 +223,7 @@ def load_normalized_corpus(
 
 
 def load_full_corpus(data_dir: Path, project_root: Path) -> list[DatasetRecord]:
-    """基础语料 + 全部外部平台库（浏览页并列展示所有库；外部为 shipped+user 双层合并）。
+    """基础语料 + 全部外部平台库（浏览页并列展示所有库；W1 起外部为 shipped+user 双层合并）。
 
     绑定补丁作用域时合并该账户补丁（blocks + 全部 adds）；未绑定 → 逐字节不变。"""
     base = _load_base(_resolve_base_dir(data_dir, project_root))
@@ -267,6 +267,9 @@ def raw_data_false_is_guess(item: dict) -> bool:
     （test_provenance.py 的闭包隔离钉）。"""
     if item.get("has_raw_data") is not False:
         return False
+    # 裸字面量是有意的：本模块在冻结评测路径（retriever）的 import 闭包内，不得 import
+    # 稿件产物模块 provenance（test_provenance.py 闭包隔离钉）；label 真源引用仅在
+    # corpus_curation / CHECK_UPDATE_SOURCES 一侧成立。
     if str(item.get("source") or "").strip() != "ArrayExpress":
         return False
     mp = item.get("metadata_provenance")
@@ -298,7 +301,7 @@ def locate_record(
 
     每一档键都**全扫一遍语料**再退化到下一档。旧实现是线性扫描「uid/url/name 任一命中即早退」：
     语料里存在同名两条（如 …-ff-ultima 与 …-ff-ultima-4）时，带全参的请求扫到靠前那条就被
-    name 截胡，根本走不到 uid 精确命中——介绍/FAIR 由此张冠李戴（普查）。
+    name 截胡，根本走不到 uid 精确命中——介绍/FAIR 由此张冠李戴（2026-08-04 普查 P0-1）。
     Web（/api/introduction、/api/fair）与 MCP（get_dataset_introduction、assess_dataset_fair）
     共用本函数作唯一定位真源，防止「同一 bug Web 修好 MCP 依旧」。
 
@@ -345,7 +348,7 @@ def _cmp_key_cached(text: str) -> str:
     - 纯函数 → 缓存对语义透明；语料热重载后，变了的字段得到的是不同字符串，自然算新键，
       旧条目只随 LRU 淘汰，不存在脏读，无需失效钩子。
     - Web 热路径每请求重建 records（基础语料每次现算），对象身份缓存永远打不中；
-      值键缓存在重建后仍全命中（5712 条 ×3 趟的最坏情形 ~1ms）。
+      值键缓存在重建后仍全命中（5712 条 ×3 趟的最坏情形 ~1ms，2026-08-04 R2-8 P1-1）。
     maxsize 覆盖 ~2× 全语料键量（uid/url/name/source 各一）；超出即逐出重算，优雅退化。"""
     return _ZERO_WIDTH_RE.sub("", unicodedata.normalize("NFC", text)).strip().casefold()
 
@@ -386,8 +389,8 @@ def known_source_values(data_dir: Path, project_root: Path) -> list[str]:
 def available_sources(data_dir: Path, project_root: Path) -> list[dict]:
     """列出所有可选来源 + 计数（10x Genomics 恒在且置顶，其余外部库按数量降序）。
     计数口径与 /api/datasets 分面一致：均按 source_of（基础语料已打标 BASE_SOURCE）。
-    外部计数基于 shipped+user 双层合并（source/portable 下与历史逐字节一致）。
-    补丁包机制：绑定补丁作用域时按该账户视图计数（blocks 扣减、adds 按其 source 计入）。"""
+    W1 起外部计数基于 shipped+user 双层合并（source/portable 下与历史逐字节一致）。
+    任务 3：绑定补丁作用域时按该账户视图计数（blocks 扣减、adds 按其 source 计入）。"""
     base = _load_base(_resolve_base_dir(data_dir, project_root))
     ext = _external_normalized_for(project_root)
     records = _scoped_patch_apply(list(base) + list(ext), project_root, include_adds=True)
@@ -411,7 +414,7 @@ _CONTENT_FIELDS = (
 
 
 def corpus_snapshot(records, *, with_content: bool = False) -> dict:
-    """确定性**语料快照描述**（可复现锚点）：内容指纹 + 条数 + 来源分布。
+    """确定性**语料快照描述**（可复现锚点，N9）：内容指纹 + 条数 + 来源分布。
 
     `snapshot_id` = 排序后全部 `dataset_uid` 的 SHA-256 前 12 位——**同一语料 → 同一 id**，
     换库 / 增删 / 上传即变。**不含日期**（日期是「检索时刻」，由调用方在检索时戳，不属于语料本身）。

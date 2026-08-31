@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""否定/排除语法契约测试（经对抗评审收敛的必测矩阵）。
+"""否定/排除语法契约测试（Codex 两轮对抗辩论收敛的必测矩阵）。
 
 覆盖：安全执行白名单 / 实体内否定字保护 / 必须弃权的危险语法 / 四个"当前就存在的静默反向"回归 /
 不需要fastq 的 clarification 第三态 / raw 三态精确过滤 / 存活集全集无违规。
@@ -39,7 +39,7 @@ def test_exclude_species_list_connectors():
 
 
 def test_raw_forbidden_variants():
-    """ 钉字：英文可执行前缀扩到 not/free of 时，raw 专用分支必须同表扩展。
+    """2026-08-18 钉字：英文可执行前缀扩到 not/free of 时，raw 专用分支必须同表扩展。
 
     否则通用 4d 会消费 raw span，却不会设置 ``has_raw_data_required=False``，把明确排除
     静默降成「不筛 FASTQ」。本矩阵同时覆盖 fastq 与 raw data 两种物理名。
@@ -53,7 +53,7 @@ def test_raw_forbidden_variants():
 
 
 def test_english_raw_negation_never_returns_fastq_records():
-    """ 行为钉：not/free of + raw 对象必须真排除，不能只把词面吃掉。"""
+    """2026-08-18 行为钉：not/free of + raw 对象必须真排除，不能只把词面吃掉。"""
     for q in ("human data not fastq", "human data free of fastq"):
         i = _p(q)
         assert not i.abstain, (q, i.abstain_reason)
@@ -91,10 +91,10 @@ def test_english_no_prefix():
     assert i.excluded_constraints.get("species") == ["mouse"]
 
 
-# ---------- 英文否定改写盲区（rerank 把中文否定句改写成英文措辞） ----------
+# ---------- 英文否定改写盲区（h41：rerank 把中文否定句改写成英文措辞） ----------
 def test_english_not_prefix_executes_exclusion():
-    """ 保护钉：修 raw 对象不能回退非 raw typed target 的既有执行语义。"""
-    # 失手句型：环内 rerank 把「人的血液样本，淋巴瘤的不要」改写成英文否定，
+    """2026-08-18 保护钉：修 raw 对象不能回退非 raw typed target 的既有执行语义。"""
+    # h41 失手句型：环内 rerank 把「人的血液样本，淋巴瘤的不要」改写成英文否定，
     # 「not」此前只检测（guard）不执行 → unsupported_negation 弃权、排除约束丢失。
     i = _p("human blood sample not lymphoma")
     assert not i.abstain, i.abstain_reason
@@ -114,7 +114,7 @@ def test_english_without_not_eaten_by_filler_with():
 
 
 def test_english_free_of_prefix():
-    """ 保护钉：free of 的非 raw 对象仍走结构化疾病 exclusion。"""
+    """2026-08-18 保护钉：free of 的非 raw 对象仍走结构化疾病 exclusion。"""
     i = _p("human blood sample free of lymphoma")
     assert not i.abstain, i.abstain_reason
     assert i.excluded_constraints.get("disease") == ["lymphoma"]
@@ -185,7 +185,7 @@ def test_must_abstain_cases():
         "非哺乳类的数据": "unsupported_negation",              # 哺乳类非 alias、非白名单，裸「非」
         "不要小鼠脑数据": "cross_dimension_negative_clause",   # 跨维复合 NOT(mouse AND brain)
         "不要小鼠的原始数据": "ambiguous_negation_scope",       # 的 后跨维
-        # 「不要小鼠或大鼠」**已从这张表移出**，改为照做（见下方专项测试）。
+        # 2026-07-25：「不要小鼠或大鼠」**已从这张表移出**，改为照做（见下方专项测试）。
         # ¬(A∨B) = ¬A∧¬B，而排除侧的判据逐字就是「命中任一 forbidden 即淘汰」——精确成立。
         "不排除小鼠的数据": "nested_negation",                  # 双重否定（会反向）
         "不要人类的人类数据": "conflicting_polarity",           # 同 target 正负冲突
@@ -198,7 +198,7 @@ def test_must_abstain_cases():
 
 
 def test_negated_or_is_executed_exactly_not_abstained():
-    """「不要小鼠或大鼠」= ¬(A∨B) = ¬A∧¬B —— 排除侧本来就是这个语义，照做。
+    """「不要小鼠或大鼠」= ¬(A∨B) = ¬A∧¬B —— 排除侧本来就是这个语义，2026-07-25 起照做。
 
     这条弃权是白弃的：`passes_hard_filter` 的负向判据逐字是「命中任一 forbidden target 即淘汰」，
     也就是同维度多个 forbidden 值天然就是「或」。更荒唐的是语义**更含糊**的
@@ -224,7 +224,7 @@ def test_negated_or_is_executed_exactly_not_abstained():
 def test_or_fit_counts_what_the_user_said_not_alias_expansions():
     """`fit` 必须数「用户说了几个东西」，不能数「展开出几个 target」。
 
-    集成验证抓到的编造：「肺癌或 10x 的数据」里「肺癌」一个词就展开成
+    真机实测抓到的编造：「肺癌或 10x 的数据」里「肺癌」一个词就展开成
     `['lung cancer', 'non-small cell lung']` 两个 target，按 target 数判定会给出
     「本次按『都算』检索：疾病＝Lung Cancer」这条**假回执**——「或」的另一半（10x）
     是来源专名，早在 parse_query 之前就被摘走了，根本没进任何维度。
@@ -282,3 +282,25 @@ def test_survivor_set_no_violation():
 def test_clarification_returns_no_candidates():
     i = _p("不需要fastq")
     assert [r for r in _RECS if passes_hard_filter(r, i)] == []   # 澄清态检索前即空
+
+
+def test_or_note_uses_chinese_dim_labels():
+    """2026-08-31 裁决钉：OR 回执的维度名必须是中文标签
+    （assay→「技术」、modality→「模态」），不许英文维度键直出。旧 `_DIM_ZH` 的键
+    误写 "technology" 永远 miss，「assay＝…」直出是 bug 而非基线行为。"""
+    from dataset_recommender.retrieval.query_parser import _describe_or_handling
+    out = _describe_or_handling(
+        "ATAC-seq 或 ChIP-seq 的数据",
+        constraints={"assay": ["atac-seq", "chip-seq"]},
+        display_map={"assay": ["ATAC-seq", "ChIP-seq"]},
+    )
+    note = out.get("note_zh", "")
+    assert "技术＝ATAC-seq / ChIP-seq" in note, note
+    assert "assay＝" not in note and "modality＝" not in note, note
+    out2 = _describe_or_handling(
+        "要 FASTQ 或表达矩阵",
+        constraints={"modality": ["fastq", "matrix"]},
+        display_map={"modality": ["FASTQ", "表达矩阵"]},
+    )
+    note2 = out2.get("note_zh", "")
+    assert "模态＝FASTQ / 表达矩阵" in note2, note2

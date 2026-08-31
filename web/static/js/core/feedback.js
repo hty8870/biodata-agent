@@ -1,17 +1,17 @@
 "use strict";
 
-/* 意见反馈对话框 · UI 壳（纯逻辑在 feedback_dialog_core.js，
+/* 意见反馈对话框 · UI 壳（2026-08-22；纯逻辑在 feedback_dialog_core.js，
  * 队列/遮蔽/加密在 feedback_core.js，唯一出网通道 usage_upload.js 的 sendFeedback()）
  *
  * ## 落点与加载
  * - 设置抽屉「使用反馈」卡片新增「向开发者发送意见」按钮（#feedbackSendEntryBtn）→ 本对话框
  *   （#feedbackModal，复用 benchfbModal 同款 modal 组件语言）。
  * - 本文件经 index.html 的 <script type="module"> 加载并**自接线**（不进 boot）：boot 的
- *   `#` 静态 import 会牵动两页 importmap 与 parity 门，而 dataset.html 归另一并行改动——
+ *   `#` 静态 import 会牵动两页 importmap 与 parity 门，而 dataset.html 归 F2 并行包——
  *   与 usage_upload.js / feedback_core.js 的「不进静态图」同哲学（见 usage_log.js 头部注释）。
  *   usage_upload.js 同样只**动态 import**（它的既有红线：静态 import 会牵动两页 importmap）。
  *
- * ## 授权语义（点发送只对当条记录授权）
+ * ## 授权语义（设计 §8，评审①阻断2 裁决）
  * - 点「发送」= 对该条**不可变记录**的明示单次授权：feedbackEnqueue 入 per-profile
  *   feedback_pending 队列（feedback_id/授权时间/正文/诊断快照定格），再 sendFeedback()
  *   只发该 profile 的 pending 队列——**不捎带** usage/benchfb/mcp 任何其他队列；
@@ -26,11 +26,11 @@
  *    usage 事件，绝不为了诊断重启采集）；遥测关闭时如实显示「无可用统计」。
  *
  * ## 埋点
- * - feedback_sent{with_diag} 计数在**接收端入库时**完成，客户端不另埋文本类事件
- *   （「接收端侧」），故本文件不调用 usageLog。
+ * - feedback_sent{with_diag} 计数在**接收端入库时**完成（B3 已实现），客户端不另埋文本类事件
+ *   （设计 §8/§10「接收端侧」），故本文件不调用 usageLog。
  */
 
-import { $, toast, cacheGeneration, currentAccountScope } from "#core";
+import { $, toast, cacheGeneration, copyTextAny, currentAccountScope } from "#core";
 import { usageEnabledForScope, usageEventsForScope } from "#usage_log";
 import { feedbackClipboardText, feedbackDiagBuild, feedbackEntryBuild, feedbackNewId, feedbackTextState } from "./feedback_dialog_core.js";
 import { feedbackEnqueue, feedbackRemoveForScope, hasSendChannel as feedbackHasSendChannel } from "./feedback_core.js";
@@ -57,36 +57,7 @@ function _platformText() {
     return String(navigator.platform || "");
 }
 
-/* ---------- 剪贴板（navigator.clipboard 需安全上下文；本地明文 HTTP 会失败 → execCommand 兜底） ---------- */
-
-function _fallbackCopy(text) {
-    try {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        ta.setAttribute("readonly", "");
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        ta.style.pointerEvents = "none";
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand("copy");
-        document.body.removeChild(ta);
-        return ok;
-    } catch (_e) { return false; }
-}
-
-function _copyText(text) {
-    const report = function (ok) {
-        toast(ok ? "已复制到剪贴板" : "复制失败，请手动全选复制");
-    };
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-        navigator.clipboard.writeText(text).then(
-            function () { report(true); },
-            function () { report(_fallbackCopy(text)); });
-        return;
-    }
-    report(_fallbackCopy(text));
-}
+/* ---------- 剪贴板（写入走 core.copyTextAny：clipboard API → execCommand 兜底，能力基元唯一实现） ---------- */
 
 /* 当前对话框内容（正文 + 勾选时附诊断）复制到剪贴板。 */
 function _copyCurrent() {
@@ -94,7 +65,7 @@ function _copyCurrent() {
     const ta = $("feedbackText");
     const chk = $("feedbackDiagChk");
     const withDiag = !!(chk && chk.checked);
-    _copyText(feedbackClipboardText(ta ? ta.value : "", withDiag ? _dialog.diag : null));
+    copyTextAny(feedbackClipboardText(ta ? ta.value : "", withDiag ? _dialog.diag : null), { okMsg: "已复制到剪贴板" });
 }
 
 /* ---------- 渲染 ---------- */

@@ -73,7 +73,7 @@ def test_cross_module_symbol_exists_on_both_ends(symbol, defined_in, used_in, wh
 
 
 def test_hist_hooks_registration_contract():
-    """历史打标的跨模块契约（由 import 改为注册反转——core→board 反向边切断）：
+    """历史打标的跨模块契约（2026-08-10 起由 import 改为注册反转——core→board 反向边切断）：
     board 定义并注册 cbConvId/cbLogForHistory，core 暴露 setHistHooks 且 pushHist 经钩子取值。"""
     assert re.search(r"export function cbConvId\(", BOARD), "board.js 缺 cbConvId 定义"
     assert re.search(r"export function cbLogForHistory\(", BOARD), "board.js 缺 cbLogForHistory 定义"
@@ -86,7 +86,7 @@ def test_hist_hooks_registration_contract():
 def test_or_handling_note_is_actually_wired_to_the_screen():
     """「或」的实际执行方式必须真的画到屏幕上——后端算了、前端不画，等于没做。
 
-     「或」不再整句弃权，而是按引擎的真实能力执行（同维度多值＝或）。
+    2026-07-25 起「或」不再整句弃权，而是按引擎的真实能力执行（同维度多值＝或）。
     `fit` 的三档里有两档（`superset` / `narrower`）是**真实的语义偏离**，
     不播报就是静默钳位。本仓库栽过同型：后端算好 `coverage_caveats`、前端没接，全量门照旧全绿。
 
@@ -126,7 +126,7 @@ def test_board_only_persists_the_collapsed_preference_and_uses_the_account_names
     撤销栈里是完整的检索返回，落盘既会撑爆存储配额，也会把一个人的检索轨迹留给共用机器的下一个人。
     """
     # 允许落盘的只有**纯 UI 偏好**（不含查询/结果/撤销栈），且必须走每账户键。
-    # 加入 SIDE_MODE_KEY（侧栏看「数据细化」还是「对话记录」）——与收起偏好同性质。
+    # 2026-07-23 加入 SIDE_MODE_KEY（侧栏看「数据细化」还是「对话记录」）——与收起偏好同性质。
     # 白名单**按名字列举**，不按个数：新增任何一个键都必须来这里显式说明它为什么不是用户数据。
     ALLOWED_KEYS = {"BOARD_COLLAPSED_KEY", "SIDE_MODE_KEY"}
     stores = re.findall(r"(localStorage|sessionStorage)\.(getItem|setItem|removeItem)\(([^)]*)\)", BOARD)
@@ -143,7 +143,7 @@ def test_push_frame_lives_in_run_recommend_not_in_apply_result():
 
     applyRecommendResult 同时是「回到上一步」「从检索历史回看」「切账户重渲」三条路径的落点，
     把推帧放进去会造成「点两次上一步原地不动」和「三天前的一条历史被当成对话的下一步」。
-    零命中救回后推帧随落地四件套收口进共享入口 landRecommendResult
+    sr1（2026-08-16 检索工具化 Phase 2）后推帧随落地四件套收口进共享入口 landRecommendResult
     （runRecommend 两落地点与零命中救回换屏同走）——不变量不变：applyRecommendResult 仍不推帧。
     """
     body = re.search(r"function applyRecommendResult\([^)]*\)\s*\{(.*?)\n\}", SEARCH, re.S)
@@ -172,7 +172,7 @@ def test_applying_a_plan_invalidates_the_stale_hit_snapshot():
     """换了句子就必须清掉原始命中的旧快照，否则它会与新条件同屏给出互相矛盾的取值。"""
     body = re.search(r"function cbCommit\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
     assert body, "找不到 cbCommit 的函数体"
-    # 四个分面状态的属主是 results.js（ESM），board.js 的重赋值一律经绞杀桥 setFacetState
+    # C2：四个分面状态的属主是 results.js（ESM），board.js 的重赋值一律经绞杀桥 setFacetState
     assert "setFacetState({ queryHits: [] })" in body.group(1), "写 queryInput 的分支里必须同时清掉命中快照"
 
 
@@ -246,7 +246,7 @@ def test_stale_pack_message_is_not_overwritten_by_the_finally_redraw(  ):
 def test_board_markup_and_scripts_are_wired_in_index():
     for token in ('id="condBoard"', 'id="cbSummaryBar"', 'id="cbRows"',
                   'id="cbPreview"', 'id="cbStepHint"', 'id="cbHistory"',
-                  # 数据细化「提交」暂存条：board.js initCondBoard 不加守卫直接绑定，
+                  # 数据细化「提交」暂存条（2026-07-24·点4）：board.js initCondBoard 不加守卫直接绑定，
                   # 名字打错会当场炸 boot——用 markup 门钉住这几个 id 存在，把「静默失效」变「立刻红」。
                   'id="facetStageBar"', 'id="facetStageSubmit"', 'id="facetStageCancel"'):
         assert token in HTML, f"index.html 缺少条件板节点 {token}"
@@ -274,13 +274,13 @@ def test_history_view_revert_handlers_are_defined_and_wired():
 
 
 def test_history_reply_bubble_button_and_fork_bar():
-    """非当前帧的系统回复＝「查看历史回复」入口，点击只展示那一帧
+    """点6/7（2026-08-03）：非当前帧的系统回复＝「查看历史回复」入口，点击只展示那一帧
     历史结果、不截断；查看历史位置时输入条变形成 #cbForkBar 三键——
     回到最新（cbToLatest 回栈顶）/ 从这里建立分支（cbBranchFromHere：**新开浏览器标签页**，
     ?fork=<convId>:<N> 落点由 browse.js 重建前 N 轮 + cbAdoptAsBranch 换新 convId）/
     回退至此（cbRevertHere 二段确认 → cbRevertToFrame：剪掉之后，不可撤销）。
     当前帧没有任何特殊标识（is-here 状态气泡/描环、hover 回退按钮、撤销/重做按钮全退役）。
-    两种「查看历史回复」（泡内 footer / 独立行）统一成**同一颗
+    点1（2026-08-03 二轮）：两种「查看历史回复」（泡内 footer / 独立行）统一成**同一颗
     低调文本链接** `.cbh-view-link`——muted 小字、无箭头，气泡按钮形态退役。"""
     assert "查看历史回复" in BOARD, "非当前帧的入口文案缺席"
     assert "cbh-sys-bubble cbh-hist" not in BOARD, "独立气泡按钮形态已退役（统一为 .cbh-view-link 文本链接）"
@@ -288,8 +288,8 @@ def test_history_reply_bubble_button_and_fork_bar():
     assert ".cbh-hist" not in CSS, "退役气泡按钮的样式也要清掉"
     assert "data-cbh-revert" not in BOARD and "cbh-revert" not in BOARD, "hover 的「回退至此」应已退役"
     assert "cbh-revert" not in CSS, "退役按钮的样式也要清掉"
-    # 当前帧无特殊标识——状态气泡文案、is-here 描环双端都不许在
-    assert "结果区正显示这句的结果" not in BOARD, "当前帧状态气泡应已退役（取消特殊标识）"
+    # 点7：当前帧无特殊标识——状态气泡文案、is-here 描环双端都不许在
+    assert "结果区正显示这句的结果" not in BOARD, "当前帧状态气泡应已退役（点7：取消特殊标识）"
     assert "is-here" not in BOARD and "is-here" not in CSS
     for token in ('id="cbForkBar"', 'id="cbTopBtn"', 'id="cbBranchBtn"', 'id="cbRevertBtn"'):
         assert token in HTML, f"index.html 缺少 {token}"
@@ -337,7 +337,7 @@ def test_action_route_opens_pack_on_current_results_without_researching():
     assert i_pack < i_overwrite, "action 档必须在覆盖 queryInput 之前处理——否则又变回「打包全库」"
     assert "return true;" in code[i_pack:i_overwrite], "action 档处理完必须 return，不能继续走到重搜"
     # 「前20条」按条数开档：两端都钉住。
-    # 起由 tpCountFromUtterance 取代 tpLimitFromUtterance——后者取整句第一个数字且只认
+    # 2026-07-25 起由 tpCountFromUtterance 取代 tpLimitFromUtterance——后者取整句第一个数字且只认
     # 10/20/50 三档，「2020年后…打包前20条」会咬中「202」落回默认 10、「前5条」也静默变 10。
     task_pack_js = _read("act/task_pack.js")
     assert re.search(r"\bfunction\s+tpCountFromUtterance\b", task_pack_js), "tpCountFromUtterance 未定义"
@@ -345,3 +345,45 @@ def test_action_route_opens_pack_on_current_results_without_researching():
     assert not re.search(r"\bfunction\s+tpLimitFromUtterance\b", task_pack_js), (
         "tpLimitFromUtterance 已被取代，不该再定义——留着会有人接着用那套三档语义"
     )
+
+
+def test_msg_feedback_action_bar_wired():
+    """msgfb（2026-08-28）：每条系统回复气泡外下侧常驻 赞/倒赞/评论/分支 操作条。
+    双端断言：渲染在 cbRenderHistory 的 sys 分支、事件在 cbHistoryClick 委托、
+    三态纯逻辑在 board_core、埋点经 USAGE_KINDS.msgfb、评论走加密 feedback 通道
+    （只许动态相对 import，不进静态图）、分支复用 ?fork= 新开标签页。"""
+    # 渲染：sys 分支挂操作条，四键齐全
+    assert "_cbMsgActBarHtml(e)" in BOARD, "sys 气泡下必须渲染操作条"
+    for attr in ("data-cbh-up", "data-cbh-down", "data-cbh-comment", "data-cbh-fork"):
+        assert attr in BOARD, f"操作条缺 {attr}"
+    for attr in ("data-cbh-cmt-send", "data-cbh-cmt-cancel"):
+        assert attr in BOARD, f"评论编辑器缺 {attr}"
+    # 事件：委托处理四键 + 编辑器两键
+    for sym in ("_cbMsgFbToggle", "_cbMsgCommentToggle", "_cbMsgCommentSend", "_cbMsgFork"):
+        assert re.search(r"\bfunction\s+" + sym + r"\b", BOARD), f"{sym} 没有定义"
+        assert sym + "(" in BOARD, f"{sym} 没有被调用"
+    # 三态纯逻辑在 board_core（node 有真行为规格），board.js 必须经 import 取
+    assert re.search(r"export function cbMsgFbNext\b", BOARD_CORE), "cbMsgFbNext 必须在 board_core"
+    assert re.search(r"export function cbMsgCommentText\b", BOARD_CORE), "cbMsgCommentText 必须在 board_core"
+    assert re.search(r"export function cbMsgForkable\b", BOARD_CORE), "cbMsgForkable 必须在 board_core"
+    assert "cbMsgFbNext(" in BOARD and "cbMsgForkable(" in BOARD and "cbMsgCommentText(" in BOARD
+    # 消息 id：cbLogPush 发 id、cbLogForHistory 落盘（i/f 字段）、恢复路径带回
+    assert "id: _cbMsgIdNext()" in BOARD, "每条消息必须发唯一 id（反馈关联锚）"
+    assert 'i: e.id || ""' in BOARD, "消息 id 必须随历史落盘"
+    assert "_cbMsgIdSeen(" in BOARD, "恢复路径必须避让 id 碰撞"
+    # 埋点：msgfb 事件经 usageLog，payload 无文本（conv/mid/v）
+    assert "USAGE_KINDS.msgfb" in BOARD, "赞/倒赞必须打 msgfb 事件"
+    usage_core = _read("core/usage_core.js")
+    assert 'msgfb: "msgfb"' in usage_core, "USAGE_KINDS 必须登记 msgfb"
+    # 评论：加密意见通道只许动态相对 import（不进静态图——import 图门只盯 # 静态边）
+    assert 'import("../core/feedback_core.js")' in BOARD, "feedback_core 必须动态相对 import"
+    assert 'import("../core/usage_upload.js")' in BOARD, "usage_upload 必须动态相对 import"
+    assert 'sendFeedback(' in BOARD and "feedbackEnqueue(" in BOARD, "评论必须复用加密 feedback 管道"
+    assert not re.search(r'import\s*\{[^}]*\}\s*from\s*"#[^"]*feedback[^"]*"', BOARD), (
+        "feedback 模块不许经 # 静态 import 进 board.js（会牵动静态图）")
+    # 分支：与输入条变形三键同一落点格式（?fork=<convId>:<N>，新开标签页）
+    fork_body = re.search(r"function _cbMsgFork\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
+    assert fork_body and "?fork=" in fork_body.group(1) and "window.open(" in fork_body.group(1)
+    # 样式：操作条与评论编辑器的类都在 CSS 里（漏了就是一排裸按钮）
+    for cls in (".cbh-actbar", ".cbh-act", ".cbh-cmt-ta", ".cbh-cmt-send"):
+        assert cls in CSS, f"app.css 缺 {cls}"

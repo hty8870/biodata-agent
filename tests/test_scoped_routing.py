@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""scoped 路由的常驻钉。
+"""scoped 路由（2026-08-17 过夜批）的常驻钉。
 
-scoped 路由是**唯一路径**——route.request 常驻动词表、
+scoped 路由成为**唯一路径**——route.request 常驻动词表
 route_consensus 恒为环首、三套件面常驻装配；原环境开关与 OFF 逐位一致负向钉
-随代码一并摘除。
+随代码一并摘除（开关全名与快照归档于
+`docs/归档/旧逻辑_scoped路由替代_2026-08-17/`）。
 
 本文件钉：route.request 登记齐、三套件面、分流共识（并行 2 票一致即定 / 分歧加投 /
 多数决 / 平票与无有效票机械兜底 general）、adjudicate 三道闸（套件外动词 / 逃生口
@@ -42,7 +43,7 @@ def test_route_request_registered():
     entry = AX.LOOP_TOOLS["route.request"]
     assert entry["readonly"] is True and callable(entry["run"])
     assert SC.LOOP_RESULT_MODELS["route.request"] is SC.RouteRequestResult
-    # 刻意更新：route.request 不再是顺序表末位（compare/cite/compat/
+    # 2026-08-18 四工具批刻意更新：route.request 不再是顺序表末位（compare/cite/compat/
     # fair 追加在其后）——换线元动词仍在表内，集合钉照旧。
     assert "route.request" in AX._DECIDE_VERB_ORDER
     assert set(AX._DECIDE_VERB_ORDER) == set(AX.LOOP_TOOLS)
@@ -56,7 +57,7 @@ def test_route_request_registered():
 
 def test_suites_and_faces():
     """三套件常驻装配（rank/rerank 同在注册表）。
-     结果处理四工具（compare/cite/compat/fair）同时入 search 与
+    2026-08-18 四工具批：结果处理四工具（compare/cite/compat/fair）同时入 search 与
     action 套件——检索后追问（「对比前两条」「找兼容的」「FAIR 自检」）实测分流到两条线
     都可能，只有一条线装它们会让另一线的追问无工具可选而误跑 rank。"""
     assert AX._SUITE_LOOP_VERBS["search"] == (
@@ -64,7 +65,7 @@ def test_suites_and_faces():
         "compare.datasets", "cite.export", "compat.find", "fair.check")
     assert AX._SUITE_LOOP_VERBS["action"] == (
         "curate.check_updates", "curate.search_online", "curate.sync_updates",
-        "curate.db_status", "curate.rollback",  # ：回滚动词入动作套件
+        "curate.db_status", "curate.rollback",  # rb1：回滚动词入动作套件
         "compare.datasets", "cite.export", "compat.find", "fair.check",
     )
     assert set(AX._SUITE_LOOP_VERBS["general"]) == set(AX.LOOP_TOOLS)
@@ -85,7 +86,7 @@ def test_suites_and_faces():
             assert retired not in verbs, (suite, retired)
     assert set(AX._SUITE_UNDERSTAND_VERBS["search"]) == {
         "rank", "rerank", "search.rerun", "curate.db_status", "none",
-        # 结果处理四工具入检索首步面（检索后追问「对比/兼容/FAIR」）。
+        # 2026-08-18 四工具批：结果处理四工具入检索首步面（检索后追问「对比/兼容/FAIR」）。
         "compare.datasets", "cite.export", "compat.find", "fair.check"}
     # action 面 = 套件动作工具 + 全部单步 EXEC + none。
     action = set(AX._SUITE_UNDERSTAND_VERBS["action"])
@@ -100,9 +101,26 @@ def test_suites_and_faces():
         assert core in rules["tools"] and core in rules["json"]
     assert "curate.search_online" in AX._SCOPED_DECIDE_RULES_BY_SUITE["action"]["tools"]
     assert "curate.search_online" not in AX._SCOPED_DECIDE_RULES_BY_SUITE["search"]["tools"]
+    # 2026-08-31 单锚点化结构钉（legacy 双壳与字节钉退役，规则本体只剩锚点一份）：
+    # - 套件壳不再经 bullets 双注入锚点已携带的段落——finish 契约的拒收句恰出现一次
+    #   （锚点 finish 契约节）；占位形状 = core 一次 + 路线差异段一次，恰两次；
+    # - rescue 面从同一锚点过滤装配：剔除「依赖占位」节（面内只有 search.rerun + finish，
+    #   没有消费占位形状的工具），工具表恰为 search.rerun 一行，诚实不变量/finish 契约仍在。
+    for suite in AX._SCOPED_ROUTES:
+        tools_rules = AX._SCOPED_DECIDE_RULES_BY_SUITE[suite]["tools"]
+        assert tools_rules.count("有一件没交代系统会拒收收尾并重问一次") == 1, suite
+        assert tools_rules.count("$<N>.top[<i>]") == 2, suite
+    for shell in AX._SCOPED_DECIDE_RULES_RESCUE.values():
+        assert "$<N>.top[<i>]" not in shell
+        assert "诚实不变量" in shell and "finish 契约" in shell
+    rescue_tools = AX._SCOPED_DECIDE_RULES_RESCUE["tools"]
+    assert "search.rerun" in rescue_tools
+    for off_face in ("compare.datasets", "cite.export", "compat.find", "fair.check",
+                     "curate.check_updates", "curate.search_online", "curate.sync_updates"):
+        assert f"- {off_face}（" not in rescue_tools, off_face
     # 联网归类显式钉：纯本地 = db_status / search.rerun / rank / rerank / route.request /
-    # curate.rollback（回滚是本地文件操作，不触网）；
-    # compare/cite/compat/fair 全本地（结果处理不触网）。
+    # curate.rollback（rb1 2026-08-17 回滚是本地文件操作，不触网）；2026-08-18 四工具批
+    # 的 compare/cite/compat/fair 全本地（结果处理不触网）。
     assert AX._NETWORK_LOOP_TOOLS == frozenset(
         set(AX.LOOP_TOOLS) - {"curate.db_status", "search.rerun", "rank", "rerank",
                               "route.request", "curate.rollback",
@@ -296,7 +314,7 @@ class _PromptSpyModel:
 
 
 def test_route_consensus_never_sees_result_titles():
-    """诚实不变量哨兵钉：分流模型的输入只允许
+    """2026-08-17 对抗评审（诚实不变量哨兵钉）：分流模型的输入只允许
     命中数/状态/生效条件——retrieval 里的 top_titles（结果集标题）绝不许进任何一票的
     prompt（`_context_zh` 会带标题，分流节点必须用专用的 `_route_context_zh`）。"""
     model = _PromptSpyModel([_rt("search"), _rt("search")])
@@ -429,7 +447,7 @@ def test_scoped_understand_face_helper():
     tools, names, specs = AX._scoped_understand_face(
         {"entry_mode": "", "route_scope": "search"})
     verbs = set(names.values())
-    # 结果处理四工具入检索首步面（检索后追问「对比/兼容/FAIR」）。
+    # 2026-08-18 四工具批：结果处理四工具入检索首步面（检索后追问「对比/兼容/FAIR」）。
     assert verbs == {"rank", "rerank", "search.rerun", "curate.db_status", "none",
                      "compare.datasets", "cite.export", "compat.find", "fair.check"}
     assert {s.verb for s in specs} == {
@@ -446,10 +464,10 @@ def test_parse_route_vote():
     assert AX._parse_route_vote("散文不是 JSON") == ("", "", False)
 
 
-# ---------------------------------------------------------------- 高2/中3：JSON-only 模型 search 面全图
+# ---------------------------------------------------------------- /JSON-only 模型 search 面全图
 
 class _JsonOnlySpyModel:
-    """JSON-only 替身（高2/中3）：bind_tools 抛错（模拟 provider 不支持
+    """JSON-only 替身（/）：bind_tools 抛错（模拟 provider 不支持
     tool-calling）→ understand 跌 JSON 兜底壳；invoke 依序弹 content 并记录全部
     prompt 文本（断言兜底壳提示词用）。bind 支持（共识投票的温度岔开走真 bind）。"""
 
@@ -470,16 +488,16 @@ class _JsonOnlySpyModel:
 
 
 def test_json_only_model_walks_search_face_full_graph(monkeypatch):
-    """ 高2 + 中3：真共识（本文件 autouse fixture 恢复真引用，不受
+    """2026-08-17：真共识（本文件 autouse fixture 恢复真引用，不受
     conftest 全局 stub 的 general 面掩盖）把「找人类肺癌数据」分进 search 面；
     JSON-only 模型走 understand 的 JSON 兜底壳。钉两件事——
     ① 兜底壳提示词**零残留** search.new/refine.conditions/lookup.identifier
-    （高2 修复前：scoped 收窄面原样带全表铁律，铁律 5/7/8/10 指着面内不存在的
+    （修复前：scoped 收窄面原样带全表铁律，铁律 5/7/8/10 指着面内不存在的
     三个动词下指令，规则与动词表自相矛盾）；
-    ② 全图照样走通：首步 rank 过 validate 出 plan（中3：套件面 × JSON 通道的组合
+    ② 全图照样走通：首步 rank 过 validate 出 plan（套件面 × JSON 通道的组合
     此前在图内零覆盖，本条是对冲钉）。"""
     monkeypatch.setattr(AX, "_audit_loop_tool", lambda *a, **k: None)
-    # 审计台账桩：JSON 兜底成功会经 _audit_fallback 写真实
+    # 审计台账桩（复核中指）：JSON 兜底成功会经 _audit_fallback 写真实
     # .userdata/agent_fallbacks.jsonl——本测试不测审计持久化，stub 掉保持 hermetic。
     monkeypatch.setattr(AX, "_audit_fallback", lambda *a, **k: None)
     loop_tools = {v: dict(e) for v, e in AX.LOOP_TOOLS.items()}
@@ -508,5 +526,5 @@ def test_json_only_model_walks_search_face_full_graph(monkeypatch):
     understand_prompt = model.prompts[2]             # 两票共识之后的第一问 = understand
     assert "- rank（" in understand_prompt           # 面内检索工具在表里
     for retired in ("search.new", "refine.conditions", "lookup.identifier"):
-        assert retired not in understand_prompt, retired   # 高2：退役动词零残留
+        assert retired not in understand_prompt, retired   # 退役动词零残留
     assert "选表里的检索动词" in understand_prompt     # 铁律 5 的收窄面口径

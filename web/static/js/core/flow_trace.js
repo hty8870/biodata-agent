@@ -1,9 +1,9 @@
 "use strict";
 
 /* ============================================================================
- * flow_trace.js —— 信息流· 过程轨迹纯逻辑核（用户重申定稿版）
+ * flow_trace.js —— 信息流 · 过程轨迹纯逻辑核（2026-08 用户重申定稿版）
  * ----------------------------------------------------------------------------
- * 输出结构（用户 重申，唯一准绳）：
+ * 输出结构（用户 2026-08-24 重申，唯一准绳）：
  *   上部·工具调用：流式时每个工具调用**最多一行**——只展示执行了哪些工具 + ✓/✗
  *     （进行中由渲染层给脉冲点），除此以外什么信息都没有（无 detail、无阶段话术）。
  *     输出结束后压缩：把各工具调用次数按类别**加和缩减为一行**（「执行了 1 次检索，
@@ -23,7 +23,7 @@
  *   - KIND_TOOL   "tool"   一次工具调用（rank/rerank/curate.x/pack.x/…——唯一入轨迹的类别）
  *   - KIND_RESULT "result" 最终结果批（保留为 pill/产物，不进工具行也不进压缩句）
  * 注意：route_consensus/分流共识**不是工具调用**（用户：除此以外最好什么信息都没有），
- * stageFromEvent 对它返回 null—— 的「已完成分流」行与 KIND_ROUTE/KIND_PRELIM 一并退役，
+ *   stageFromEvent 对它返回 null——「已完成分流」行与 KIND_ROUTE/KIND_PRELIM 一并退役，
  *   初步检索就是一次 rank 调用（计 1 次检索），不再单列。
  * ========================================================================== */
 
@@ -56,9 +56,9 @@ const FLOW_TOOL_KIND = {
    evKind ∈ "preliminary" | "tool_start" | "step"。
    返回 {id, kind, verb, text, phase}；无法归类（含分流共识/LLM 结构节点等非工具事件）返回 null。
    id 统一 "tool:"+label（展示名）：同一次调用的 tool_start 与完成帧 step 的 label_zh 逐字一致
-   ——天然同 id，upsertStage 更新同一行，不再出现「pending 行 + ✓ 行」并列两行（缺陷 0）。
+   ——天然同 id，upsertStage 更新同一行，不再出现「pending 行 + ✓ 行」并列两行。
    注意：真实后端 tool_start 只带 verb、不带 node，step 只带 node（工具完成帧 node="execute"）、
-   不带 verb——按 node/verb 各取会算出两个不同的 id，正是「同一行显示两次、pending 不落定」的问题。 */
+   不带 verb——按 node/verb 各取会算出两个不同的 id，正是「同一行显示两次、pending 不落定」的病灶。 */
 /* LLM 结构节点（非工具调用）完成帧的 node 名：决定/校验/修复/理解/叙述/分流 都是智能体编排
    阶段，不是一次工具调用——用户重申「除此以外最好什么信息都没有」，一律不入轨迹行。
    真实工具的完成帧 node 恒为 "execute"（agent_exec._trace_entry），保留它来落定工具行。 */
@@ -102,7 +102,7 @@ const FLOW_VERB_LABEL = {
     "rank": "检索数据集", "rerank": "优化检索词重查", "search.rerun": "检索新查询",
     "compat.find": "查找兼容数据集",
     "curate.check_updates": "检查来源更新", "curate.search_online": "联网搜索入库",
-    "curate.sync_updates": "检查更新并同步入库", "curate.db_status": "读取数据库状态",
+    "curate.sync_updates": "检查更新并同步入库", "curate.db_status": "汇报数据库状态",
     "compare.datasets": "对比数据集", "cite.export": "导出引文",
     "fair.check": "检查 FAIR 就绪度", "curate.rollback": "回滚写操作",
 };
@@ -179,7 +179,7 @@ export function compressFlow(records) {
     return { summaryText, kept, expanded: recs };
 }
 
-/* ---------- 覆盖丢弃（设计决定：supersede 即丢弃，连存储也丢；跨 query 不丢） ----------
+/* ---------- 覆盖丢弃（用户拍板：supersede 即丢弃，连存储也丢；跨 query 不丢） ----------
    shouldDiscardOutcome(prev, next, opts) → bool：next 成功 supersede prev 时丢弃 prev。
    prev / next：批对象（带 .payload / .scope_fingerprint / .kind）或裸 payload。
    判据：

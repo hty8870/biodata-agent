@@ -1,5 +1,5 @@
 "use strict";
-/* ==================== 数据集介绍详情页====================
+/* ==================== 数据集介绍详情页 ====================
    「查看介绍」从模态弹窗改为**独立浏览器标签页** `/dataset?uid=…&url=…&name=…&source=…`。
    数据来源两路：
      1) 打开介绍前，主页 buildCard 的链接把**完整记录**写进 localStorage(DS_VIEW_KEY)；本页按 uid/url 取回
@@ -13,14 +13,15 @@
    本文件是 ES Module：core/cards/fav_folders 经 import 取（同页三模块全 type=module，
    不再依赖共享全局）。本页无经典消费方、无跨页调用 → 不挂绞杀桥。 */
 import { HEART, $, escapeHtml, fastqInfo, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, revealCards } from "#core";
-import { buildCard, closeFilesModal, introKeyOf, loadCiteInto, loadCompatInto, loadFairInto, loadFilesInto, loadIntroductionInto, loadLlmIntro } from "#cards";
+import { buildCard, closeFilesModal, introKeyOf, loadCiteInto, loadCompatInto, loadFairInto, loadFilesInto, loadIntroductionInto, loadLlmIntro, reachBadgeHtml } from "#cards";
 import { openFavPopover } from "#fav_folders";
+import { initDownloads } from "#downloads";
 
 const DS_VIEW_KEY = "biodata_dataset_view_v1";          // 主页写入的完整记录（打开介绍前）
-const DS_COMPARE_POOL_KEY = "biodata_compare_pool_v1";  //  主页每次检索写入的对比池（存完整归一化记录）
-const DS_SPLIT_KEY = "biodata_split_handoff_v1";        //  全屏并排：开分屏前按 uid 写入两侧完整记录，供 embed iframe 各自取回
+const DS_COMPARE_POOL_KEY = "biodata_compare_pool_v1";  // 主页每次检索写入的对比池（存完整归一化记录）
+const DS_SPLIT_KEY = "biodata_split_handoff_v1";        // 全屏并排：开分屏前按 uid 写入两侧完整记录，供 embed iframe 各自取回
 
-//  嵌入态：分屏浮层里的两侧各是一个 `?embed=1` 的完整 /dataset iframe。嵌入态隐藏自己的返回主页 topbar，
+// 嵌入态：分屏浮层里的两侧各是一个 `?embed=1` 的完整 /dataset iframe。嵌入态隐藏自己的返回主页 topbar，
 // 并从子标签里丢掉「数据集对比」（不在对比里再开对比 → 防嵌套分屏）。模块加载时定一次。
 const DS_EMBED = new URLSearchParams(location.search).get("embed") === "1";
 
@@ -43,7 +44,7 @@ function dsReadSplitHandoff(uid) {
     return null;
 }
 
-/* 取完整记录：优先 split handoff（分屏 embed 页按 uid）→ 按 uid 分键 handoff（
+/* 取完整记录：优先 split handoff（分屏 embed 页按 uid）→ 按 uid 分键 handoff（2026-08-15 起，
    多标签连开不同数据集互不覆盖）→ 旧单槽 handoff（uid 或 url 对得上）→ 否则 URL 参数搭最小记录。 */
 function dsResolveItem(params) {
     const split = dsReadSplitHandoff(params.uid);
@@ -78,7 +79,7 @@ function dsTabDefs(it) {
         { key: "cite", label: "导出引文 RIS/BibTeX" },
         { key: "compare", label: "数据集对比" },
     ];
-    //  嵌入态（分屏浮层里的 iframe）不给「数据集对比」——不在对比里再开对比（防嵌套分屏）。
+    // 嵌入态（分屏浮层里的 iframe）不给「数据集对比」——不在对比里再开对比（防嵌套分屏）。
     return DS_EMBED ? defs.filter((t) => t.key !== "compare") : defs;
 }
 
@@ -125,17 +126,14 @@ function dsRenderHeader() {
     $("dsTitle").textContent = name;
 
     const fq = fastqInfo(it.raw_data_status);
-    const reach = it.reachability;
-    const reachBadge = (reach && reach.tier && reach.tier !== "unknown")
-        ? `<span class="reach reach-${escapeHtml(reach.tier)}" title="${escapeHtml((reach.hosting || "") + "：" + (reach.advice || "") + "（按托管位置推断、非实测速度）")}">🌐 ${escapeHtml(reach.tier_label)}</span>`
-        : "";
+    const reachBadge = reachBadgeHtml(it);   // 可达性徽章与结果卡同一锚点（cards.js）
     const metaBits = [prettyPlatform(it.platform), prettySource(it.source)].filter(Boolean)
         .map((m, i) => (i ? `<span class="dot">·</span>` : "") + escapeHtml(m)).join("");
     $("dsBadges").innerHTML = `<span class="fastq ${fq.cls}">${fq.label}</span>${reachBadge}`
         + (metaBits ? `<span class="ds-meta">${metaBits}</span>` : "");
 
     const subBits = [];
-    //  handoff 完整记录未取到：如实标注，不再静默展示残缺页头
+    // handoff 完整记录未取到：如实标注，不再静默展示残缺页头
     if (_dsHandoffDegraded) subBits.push("完整信息未取到，部分字段缺失");
     // 来源已在上方徽章行显示（prettySource），此处不再重复
     if (it.published_date) subBits.push("发表 " + escapeHtml(String(it.published_date).slice(0, 10)));
@@ -148,7 +146,7 @@ function dsRenderHeader() {
     const hasPage = isHttp(it.url) && it.url !== dl;
     const pageBtn = hasPage ? `<a class="cta cta-primary" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开数据集页 ↗</a>` : "";
     const dlBtn = isHttp(dl)
-        ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download>下载数据 ↓</a>`
+        ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据 ↓</a>`
         : `<span class="cta cta-disabled" aria-disabled="true">暂无下载</span>`;
     $("dsActions").innerHTML = pageBtn + dlBtn;
 
@@ -201,9 +199,9 @@ function dsReadComparePool() {
 
 /* 全屏并排对比：对比子标签是**启动器**——从最近检索池选一条 → dsOpenSplit 打开全屏分屏浮层，
    左右各是一个完整的 /dataset 页（iframe，embed 态），可各自完整操作、可关掉一侧保留另一侧。
-   （替代 在子标签内塞两个 bare 介绍正文的窄栏；用户澄清「分屏」是全屏意义上的分屏。）
+   （替代旧版在子标签内塞两个 bare 介绍正文的窄栏；用户澄清「分屏」是全屏意义上的分屏。）
 
-    点5：候选从 `<select>` 下拉改为**铺开的结果卡网格**。理由是选下拉要先点开、再逐行读
+   2026-07-29：候选从 `<select>` 下拉改为**铺开的结果卡网格**。理由是选下拉要先点开、再逐行读
    一串「名字（来源）」——那串文字里既没有物种/组织/疾病，也没有 FASTQ 状态，正是决定「要不要拿它来对比」
    的全部依据。卡片直接复用检索结果的 `buildCard`（**同一个函数**，不是照着做一份像的：照做必漂移），
    于是这里看到的每一张与检索页逐像素同构，心形收藏、数据集详情、下载直链一并可用。 */
@@ -303,7 +301,8 @@ function dsOpenSplit(a, b) {
 
 /* ---------- 初始化 ---------- */
 function dsInit() {
-    if (DS_EMBED) document.body.classList.add("ds-embedded");   //  分屏 iframe：隐藏自己的返回主页 topbar
+    if (DS_EMBED) document.body.classList.add("ds-embedded");   // 分屏 iframe：隐藏自己的返回主页 topbar
+    initDownloads();   // dl-browser-queue：页头/介绍行/文件弹窗的 data-dlq 直链统一进下载队列
     DS_ITEM = dsResolveItem(dsParams());
     dsRenderHeader();
     dsRenderTabs(DS_ITEM);
@@ -322,5 +321,5 @@ function dsInit() {
     if (hash && hash !== "intro" && dsTabDefs(DS_ITEM).some((t) => t.key === hash)) dsActivate(hash);
 }
 
-/* core.js 转 ESM 后模块是 deferred——顶层裸调会抢在 core 求值前跑，改挂 DOMContentLoaded。 */
+/* C1：core.js 转 ESM 后模块是 deferred——顶层裸调会抢在 core 求值前跑，改挂 DOMContentLoaded。 */
 document.addEventListener("DOMContentLoaded", dsInit);

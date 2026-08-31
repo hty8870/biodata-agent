@@ -42,8 +42,8 @@ function constantsSuite() {
         P.EXPORT_NO_CANDIDATE_COPY.indexOf("还没有候选") !== -1);
     check("台账区文案在场（最新一次 / 导出记录折叠）",
         P.EXPORT_LATEST_COPY === "最新一次" && P.EXPORT_HISTORY_LABEL === "导出记录");
-    check("挂点选择器与 projects.js ENG-EXPORT-MOUNT 一致",
-        P.EXPORT_MOUNT_SELECTOR === "[data-export-mount]");
+    check("挂点选择器与 projects.js ENG-P5-MOUNT 一致",
+        P.EXPORT_MOUNT_SELECTOR === "[data-p5-mount-export]");
 }
 
 /* ============================================================================

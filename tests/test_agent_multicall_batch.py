@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""多 tool_call **同批只读消费**的确定性门。**全离线**（FakeModel + 假注册表）。
+"""多 tool_call **同批只读消费**（2026-08-14 批）的确定性门。**全离线**（FakeModel + 假注册表）。
 
-验证依据（离线探针实测）：A 类独立只读
-批量第 2..N 个调用 schema/语义合法率经实测为高；写动词预发保真不足
-——故 decide 多调用的第 2..N 个里**只读白名单**（check_updates/db_status）
+实测依据（探针落盘 `research/reports/multicall-legality-probe/`）：A 类独立只读
+批量第 2..N 个调用 schema/语义合法率 100%（n=371，双臂）；写动词预发保真仅 45%（
+108 运行）——故 decide 多调用的第 2..N 个里**只读白名单**（check_updates/db_status）
 且互相独立的续步随首步同批执行；写动词/幻觉名出现即截断、整尾回炉再判。
 
 本文件钉死（与 test_agent_decide_channel.py 的既有「取第一个」钉互补——混批/zero 采纳时
@@ -15,7 +15,7 @@
 - 脏参数（非声明槽位键）剔除但**不截断**后续干净只读；
 - MAX_STEPS 预算：同批采纳不许越过步数硬上界；
 - 失败不连坐：同批某只读步失败，其余独立只读步照常执行并如实记录。
-- 依赖占位批量计划 v2：占位接地续步（compare/compat/
+- 2026-08-20（依赖占位批量计划 v2）：占位接地续步（compare/compat/
   fair/cite.export 的矩阵槽带 `$<N>.top[<i>].dataset_uid`）放行进批——写动词 cite.export
   带占位也可进批（无占位照旧截断，见 test_write_cite_export_without_placeholder_truncates）；
   写库动词/回滚/换线永不进批；矩阵外流向截断整尾（端到端钉在 test_agent_batch_plan.py）。
@@ -33,7 +33,7 @@ from dataset_recommender.llm.llm_client import LLMConfig  # noqa: E402
 CFG = LLMConfig(enable_llm=True, api_key="sk-batch-test")
 
 UTTER_RO = "检查ArrayExpress和ENCODE有没有更新，完了看看库里多少条"
-UTTER_MULTI_CHECK = "检查10x、ArrayExpress和ENCODE有没有更新，完了看看库里多少条"
+UTTER_RO3 = "检查10x、ArrayExpress和ENCODE有没有更新，完了看看库里多少条"
 UTTER_MIX = "检查ArrayExpress和ENCODE有没有更新，若有新的人类肺数据就搜来入库，完了看看库里多少条"
 
 AE_TWO_NEW = [{"source": "arrayexpress", "label": "ArrayExpress", "mode": "online",
@@ -127,7 +127,7 @@ def _fake_tools(monkeypatch):
                 "generated_at": "t", "sources": [], "total_records": 0,
                 "external_files": [], "recycle": [],
                 "ledger": {"entries": 0, "by_endpoint": {}, "recent": []}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True},
     })
     yield
@@ -138,7 +138,7 @@ def _nodes(trace, node):
     return [t for t in trace if t["node"] == node]
 
 
-_Q_AE_ENCODE = "检查ArrayExpress和ENCODE有没有更新"
+_Q3 = "检查ArrayExpress和ENCODE有没有更新"
 
 
 # ---------------------------------------------------------------- 同批采纳（全只读批量）
@@ -148,9 +148,9 @@ def test_readonly_batch_executes_together():
     快照 3 步且顺序不变、每调用一条 execute trace、只再花一轮 decide（finish）——
     对照旧策需 3 轮 decide。trace 如实留痕「一次给了 2 个调用…同批采纳执行」。"""
     model = _FakeModel(
-        _tool_call("curate.check_updates", quoted=_Q_AE_ENCODE, source="ArrayExpress",
+        _tool_call("curate.check_updates", quoted=_Q3, source="ArrayExpress",
                    confidence="high", reason="查更新"),
-        _batch(("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE",
+        _batch(("curate.check_updates", {"quoted": _Q3, "source": "ENCODE",
                                          "confidence": "high", "reason": "查ENCODE"}),
                ("curate.db_status", {"quoted": "完了看看库里多少条",
                                      "confidence": "high", "reason": "报数"})),
@@ -179,9 +179,9 @@ def test_write_in_batch_truncates_tail():
     其后的 db_status（报数可能在写给后）**整尾回炉**，下一轮 decide 再判；报数最终落在
     入库之后（顺序语义保住）。"""
     model = _FakeModel(
-        _tool_call("curate.check_updates", quoted=_Q_AE_ENCODE, source="ArrayExpress",
+        _tool_call("curate.check_updates", quoted=_Q3, source="ArrayExpress",
                    confidence="high", reason="查更新"),
-        _batch(("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE",
+        _batch(("curate.check_updates", {"quoted": _Q3, "source": "ENCODE",
                                          "confidence": "high", "reason": "查ENCODE"}),
                ("curate.search_online", {"quoted": "若有新的人类肺数据就搜来入库",
                                          "keywords": "人类肺", "source": "ArrayExpress"}),
@@ -232,12 +232,12 @@ def test_write_first_in_batch_adopts_nothing_extra():
 
 def test_hallucinated_name_in_batch_truncates_tail():
     """批 = [check(ENCODE), 幻觉工具名, db_status]：幻觉名视同截断点——其后只读也回炉
-    （hallucinated 之后的状态假设不可信），下一轮 decide 再提议 db_status。"""
+    （ hallucinated 之后的状态假设不可信），下一轮 decide 再提议 db_status。"""
     model = _FakeModel(
-        _tool_call("curate.check_updates", quoted=_Q_AE_ENCODE, source="ArrayExpress",
+        _tool_call("curate.check_updates", quoted=_Q3, source="ArrayExpress",
                    confidence="high", reason="查更新"),
-        _batch(("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE"}),
-               ("curate_teleport", {"quoted": _Q_AE_ENCODE, "source": "MARS"}),
+        _batch(("curate.check_updates", {"quoted": _Q3, "source": "ENCODE"}),
+               ("curate_teleport", {"quoted": _Q3, "source": "MARS"}),
                ("curate.db_status", {"quoted": "完了看看库里多少条"})),
         _tool_call("curate.db_status", quoted="完了看看库里多少条"),
         _finish("1. 检查ArrayExpress更新：已做（第1步）。\n"
@@ -256,10 +256,10 @@ def test_duplicate_calls_in_batch_run_once():
     """批 = [check(ENCODE), check(ENCODE)（与首步同指纹）, db_status]：重复调用只执行一次，
     不同指纹的 db_status 照常同批。"""
     model = _FakeModel(
-        _tool_call("curate.check_updates", quoted=_Q_AE_ENCODE, source="ArrayExpress",
+        _tool_call("curate.check_updates", quoted=_Q3, source="ArrayExpress",
                    confidence="high", reason="查更新"),
-        _batch(("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE"}),
-               ("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE"}),
+        _batch(("curate.check_updates", {"quoted": _Q3, "source": "ENCODE"}),
+               ("curate.check_updates", {"quoted": _Q3, "source": "ENCODE"}),
                ("curate.db_status", {"quoted": "完了看看库里多少条"})),
         _finish("1. 检查ArrayExpress更新：已做（第1步）。\n"
                 "2. 检查ENCODE更新：已做（第2步）。\n"
@@ -293,7 +293,7 @@ def test_dirty_args_dropped_without_truncating():
                 "3. 看库里多少条：已做（第3步）。\n"
                 "4. 检查ENCODE更新：已做（第4步）。"),
     )
-    plan, trace = _plan(UTTER_MULTI_CHECK, model)
+    plan, trace = _plan(UTTER_RO3, model)
     verbs = [s["verb"] for s in plan.get("steps") or []]
     assert verbs == ["curate.check_updates", "curate.check_updates",
                      "curate.db_status", "curate.check_updates"], (
@@ -312,7 +312,7 @@ def test_dirty_args_dropped_without_truncating():
 
 def test_write_cite_export_without_placeholder_truncates():
     """写动词截断系列补位：cite.export 是写动词（引文落盘）——**无占位**
-    在批中照旧截断整尾（其后 db_status 也可能写给后状态，回炉重判），与 的 search_online
+    在批中照旧截断整尾（其后 db_status 也可能写给后状态，回炉重判），与的 search_online
     写动词同口径；**矩阵内有占位**才放行（见下一条）。"""
     calls = [
         {"name": "rank", "args": {"query": "人类肺", "display": True}},
@@ -327,7 +327,7 @@ def test_write_cite_export_without_placeholder_truncates():
 
 
 def test_placeholder_grounded_cite_export_enters_batch(monkeypatch):
-    """矩阵内占位放行：cite.export(uids=[\"$1.top[0].dataset_uid\"]) 随
+    """矩阵内占位放行：cite.export（uids=[\"$1.top[0].dataset_uid\"]) 随
     rank 主步进批（写动词**带占位接地**即可进批——v2 与只读白名单的关键差别）。"""
     table = dict(agent_exec.LOOP_TOOLS)
     table["cite.export"] = {
@@ -358,9 +358,9 @@ def test_batch_respects_max_steps_budget(monkeypatch):
     monkeypatch.setattr(agent_exec, "MAX_STEPS", 3)
     utter = "检查ArrayExpress和ENCODE有没有更新，10x也看看，完了看看库里多少条"
     model = _FakeModel(
-        _tool_call("curate.check_updates", quoted=_Q_AE_ENCODE, source="ArrayExpress",
+        _tool_call("curate.check_updates", quoted=_Q3, source="ArrayExpress",
                    confidence="high", reason="查更新"),
-        _batch(("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE"}),
+        _batch(("curate.check_updates", {"quoted": _Q3, "source": "ENCODE"}),
                ("curate.check_updates", {"quoted": "10x也看看", "source": "10x"}),
                ("curate.db_status", {"quoted": "完了看看库里多少条"})),
     )
@@ -377,9 +377,9 @@ def test_failed_readonly_step_does_not_cascade():
     decide 带全量真实结果再判（失败步 ok=False 进实录）。"""
     _FAIL_SOURCES.add("ENCODE")
     model = _FakeModel(
-        _tool_call("curate.check_updates", quoted=_Q_AE_ENCODE, source="ArrayExpress",
+        _tool_call("curate.check_updates", quoted=_Q3, source="ArrayExpress",
                    confidence="high", reason="查更新"),
-        _batch(("curate.check_updates", {"quoted": _Q_AE_ENCODE, "source": "ENCODE"}),
+        _batch(("curate.check_updates", {"quoted": _Q3, "source": "ENCODE"}),
                ("curate.db_status", {"quoted": "完了看看库里多少条"})),
         _finish("1. 检查ArrayExpress更新：已做（第1步）。\n"
                 "2. 检查ENCODE更新：做不到（据第2步的真实结果：网络抖动）。\n"
@@ -394,7 +394,7 @@ def test_failed_readonly_step_does_not_cascade():
 
 
 def test_batch_breaker_recuts_between_extras(monkeypatch):
-    """**批内熔断**：批 = [check(ENCODE),
+    """2026-08-15 **批内熔断**：批 = [check（ENCODE),
     check(HCA), check(10x), db_status]，前两个联网二连败 -> 联网暂停即刻生效——
     第三个联网 extra（10x）**不执行、不记步**（初筛对批前状态，不重过就是盲飞）；
     离线 db_status 不连坐照常执行。缺口由 decide 带新状态再判（finish 先被 pending 硬闸
@@ -441,7 +441,7 @@ def test_batch_breaker_recuts_between_extras(monkeypatch):
     assert [s["ok"] for s in steps] == [True, False, False, True]
     assert [s["slots"].get("source") for s in steps[:3]] == [
         "ArrayExpress", "ENCODE", "HCA"], "10x 被批内熔断拦下、不产生步骤"
-    # 熔断剔步「留痕不留步」——步骤照旧不产生（上行钉不变），
+    # 熔断剔步「留痕不留步」——步骤照旧不产生（上行钉不变）
     # 但 execute trace 必须如实交代这一步为什么没跑（原钉"连 execute trace 都不产生"
     # 是刻意行为的旧口径，现为观测缺口已修）。
     exec_nodes = _nodes(trace, "execute")
@@ -454,7 +454,7 @@ def test_batch_breaker_recuts_between_extras(monkeypatch):
 
 
 def test_batch_breaker_ban_branch_leaves_trace(monkeypatch):
-    """ 批内熔断留痕分支：批 = [check(AE), check(ENCODE), check(10x),
+    """批 = [check（AE), check（ENCODE), check（10x),
     db_status]，两个 check 以**非网络码**二连败 → `_failed_tool_ban` 禁提 check_updates，
     10x extra 被批内熔断——不执行、不记步（行为不变），但 execute trace 如实留痕
     「连续失败两次被禁提」（此前熔断剔步零留痕，与 decide 的"同批采纳执行"矛盾）。"""
@@ -490,7 +490,7 @@ def test_batch_breaker_ban_branch_leaves_trace(monkeypatch):
     assert [s["verb"] for s in steps] == [
         "curate.check_updates", "curate.check_updates", "curate.db_status"]
     assert [s["ok"] for s in steps] == [False, False, True], \
-        "10x 被批内熔断拦下、不产生步骤；db_status 不连坐"
+        "10x 被批内熔断（禁提分支）拦下、不产生步骤；db_status 不连坐"
     breaker = [t for t in _nodes(trace, "execute") if str(t["label_zh"]).startswith("批内熔断")]
     assert len(breaker) == 1 and breaker[0]["ok"] is False
     assert "连续失败两次" in breaker[0]["detail"] and "禁提" in breaker[0]["detail"]

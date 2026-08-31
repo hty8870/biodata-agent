@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """桌面窗口壳（pywebview）装配测试——全程打桩、**绝不创建真实窗口**。
 
-覆盖（桌面壳 + 安装版完善，只读验证结论已并入）：
+覆盖（2026-08-21 壳批 zcode/desktop-shell + 安装版完善波次A，Codex 只读评审结论已并入）：
 - webview_shell：--window/env 判定、开窗参数钉（标题/尺寸/底色/最小尺寸/zoomable）、
   settings 双键（OPEN_EXTERNAL_LINKS_IN_BROWSER 兜底 + **下载必须开**）、
   start(private_mode=False + storage_path)、新窗口按 origin 分流（js_api 桥 + 注入拦截器）、
@@ -240,13 +240,21 @@ def test_opener_falls_back_when_webview2_missing(fake_webview, monkeypatch, capl
 
 
 def test_icon_candidates_source_and_frozen(monkeypatch):
+    from dataset_recommender.app.runtime_paths import reset_app_paths_cache
+
     monkeypatch.delattr(sys, "_MEIPASS", raising=False)
     cands = webview_shell.icon_path_candidates()
     assert cands, "source 模式至少给出 install_root/packaging/assets 候选"
     assert cands[-1].name == "BioDataAgent.ico"
+    # frozen 语义以 runtime_paths 单一真源判定（sys.frozen + 缓存重算），不再自读 _MEIPASS
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", "/fake/bundle", raising=False)
-    cands = webview_shell.icon_path_candidates()
-    assert cands[0] == Path("/fake/bundle") / "assets" / "BioDataAgent.ico"   # frozen 候选优先
+    reset_app_paths_cache()
+    try:
+        cands = webview_shell.icon_path_candidates()
+        assert cands[0] == Path("/fake/bundle") / "assets" / "BioDataAgent.ico"   # frozen 候选优先
+    finally:
+        reset_app_paths_cache()
 
 
 def test_attach_window_chrome_subscribes_before_show(fake_webview, monkeypatch):
@@ -365,7 +373,7 @@ def test_set_window_icon_updates_winforms_property_before_show(monkeypatch, tmp_
     assert webview_shell._icon_objects == [native.Icon]
 
 
-# ---------------------------------------------------------------- origin 分流
+# ---------------------------------------------------------------- origin 分流（H1）
 def test_is_same_origin_compares_scheme_host_port():
     base = "http://127.0.0.1:7860"
     assert webview_shell.is_same_origin("http://127.0.0.1:7860/dataset?uid=x", base) is True

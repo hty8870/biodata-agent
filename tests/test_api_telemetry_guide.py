@@ -3,10 +3,10 @@
 
 覆盖 `tests/conftest.py` 全局夹具之外的四件事：
 - `GET /api/telemetry/mcp-calls`：行号增量语义（offset=after）、半截尾行不计数、文件不存在 → 空、
-  非法 after → 400； 分页——limit/max_bytes 截断（next_offset 只到最后一条已消费行）、
+  非法 after → 400；分页——limit/max_bytes 截断（next_offset 只到最后一条已消费行）、
   since_ts 过滤（无 ts 的 legacy 行保留、被滤行视为已消费）、无 call_id 旧行合成稳定 legacy 键；
 - `POST /api/telemetry/mcp-calls/ack`：游标持久化（.userdata/mcp_calls_uploaded.json）、幂等、
-   CAS（回退 ack 不落盘、响应 max(新,旧)）、非法 offset → 422、跨源 → 403；
+  CAS（回退 ack 不落盘、响应 max(新,旧)）、非法 offset → 422、跨源 → 403；
 - `GET /api/guide/agent-prompt`：text/markdown 全文 + 缺失 404 + 跨源 403；
 - `GET /api/guide/skill.zip`：内存 zip 附件（内含 SKILL.md）+ 确定性（两次构建字节一致、
   X-SHA256 = 内容 sha256）+ 缺失 404 + 跨源 403。
@@ -216,7 +216,7 @@ def test_telemetry_ack_rejects_bad_offset(monkeypatch, tmp_path):
 
 
 def test_telemetry_ack_cas_never_moves_cursor_backwards(monkeypatch, tmp_path):
-    """ CAS：游标只前进——回退 ack 不落盘，响应恒为 max(请求, 已存)。"""
+    """CAS：游标只前进——回退 ack 不落盘，响应恒为 max(请求, 已存)。"""
     _log, cursor = _redirect_userdata(monkeypatch, tmp_path)
     r1 = client.post("/api/telemetry/mcp-calls/ack", json={"offset": 10})
     assert r1.status_code == 200 and r1.json() == {"ok": True, "offset": 10}
@@ -237,7 +237,7 @@ def test_telemetry_ack_cas_never_moves_cursor_backwards(monkeypatch, tmp_path):
 
 
 def test_telemetry_ack_tolerates_corrupt_cursor_file(monkeypatch, tmp_path):
-    """ CAS：游标文件损坏按 0 计，本次 ack 照旧推进修复。"""
+    """CAS：游标文件损坏按 0 计，本次 ack 照旧推进修复。"""
     _log, cursor = _redirect_userdata(monkeypatch, tmp_path)
     cursor.parent.mkdir(parents=True, exist_ok=True)
     cursor.write_text("{corrupted", encoding="utf-8")
@@ -277,6 +277,34 @@ def test_guide_agent_prompt_rejects_evil_origin(monkeypatch, tmp_path):
     assert client.get("/api/guide/agent-prompt", headers=_EVIL).status_code == 403
 
 
+# ---------------------------------------------------------------- GET /api/guide/online-prompt
+
+def test_guide_online_prompt_returns_markdown(monkeypatch, tmp_path):
+    """在线接入提示词模板（2026-08-30 任务2）：占位符随模板全文下发，前端铸币后代入真实值。"""
+    prompt_dir = tmp_path / "使用教程" / "MCP安装"
+    prompt_dir.mkdir(parents=True)
+    prompt_dir.joinpath("在线接入提示词模板.md").write_text(
+        "URL=__BIODATA_MCP_URL__ T=__BIODATA_MCP_TOKEN__\n", encoding="utf-8")
+    monkeypatch.setattr("dataset_recommender.app.webapp.RESOURCE_ROOT", tmp_path)
+    r = client.get("/api/guide/online-prompt")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/markdown")
+    assert "__BIODATA_MCP_URL__" in r.text and "__BIODATA_MCP_TOKEN__" in r.text
+
+
+def test_guide_online_prompt_missing_file_404(monkeypatch, tmp_path):
+    monkeypatch.setattr("dataset_recommender.app.webapp.RESOURCE_ROOT", tmp_path)  # 空目录
+    assert client.get("/api/guide/online-prompt").status_code == 404
+
+
+def test_guide_online_prompt_rejects_evil_origin(monkeypatch, tmp_path):
+    prompt_dir = tmp_path / "使用教程" / "MCP安装"
+    prompt_dir.mkdir(parents=True)
+    prompt_dir.joinpath("在线接入提示词模板.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr("dataset_recommender.app.webapp.RESOURCE_ROOT", tmp_path)
+    assert client.get("/api/guide/online-prompt", headers=_EVIL).status_code == 403
+
+
 # ---------------------------------------------------------------- GET /api/guide/skill.zip
 
 def _fake_skill_dir(tmp_path: Path) -> Path:
@@ -309,7 +337,7 @@ def test_guide_skill_zip_missing_dir_404(monkeypatch, tmp_path):
 
 
 def test_guide_skill_zip_deterministic_bytes_and_sha256_header(monkeypatch, tmp_path):
-    """：同一棵目录树两次构建字节完全一致；X-SHA256 == 内容 sha256。"""
+    """同一棵目录树两次构建字节完全一致；X-SHA256 == 内容 sha256。"""
     import hashlib
     _fake_skill_dir(tmp_path)
     monkeypatch.setattr("dataset_recommender.app.webapp.RESOURCE_ROOT", tmp_path)

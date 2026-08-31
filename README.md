@@ -342,7 +342,7 @@ Windows 可使用 `scripts\setup_mcp.ps1` 完成独立环境、协议自检、AP
 
 面向开发者的环境、架构、HTTP 端点、扩展方法和验证矩阵见[开发指南](DEVELOPMENT.md)。
 
-当前 Web API 版本为 `2.7.0`。开发和交付优先使用清单驱动的统一质量门：
+当前 Web API 版本为 `2.9.0`。开发和交付优先使用清单驱动的统一质量门：
 
 ```powershell
 $Python = '.\.venv\Scripts\python.exe'

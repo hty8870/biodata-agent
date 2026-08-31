@@ -1,32 +1,37 @@
 "use strict";
 
-/* 追踪导出中心 UI 壳。
+/* 追踪导出中心 UI 壳（设计 §6）。
  *
  * 纯逻辑在 project_exports_core.js（零 DOM/零网络，node 可单测）；本文件只管 DOM 与网络：
  *   - 自接线不进 boot：DOMContentLoaded 起监听 #artifactsWinBody，发现 projects.js 渲染的
- * `[data-export-mount]` 挂点（区域内）就渲染导出区——导出中心未挂载时
- *     projects.js 把挂点留在 hidden，这里不渲染不报错（探测式降级）。
+ *     `[data-p5-mount-export]` 挂点就渲染导出区——导出功能未落地时
+ *     projects.js 把挂点留在 hidden，这里不渲染不报错（探测式降级，设计 §11 纪律）。
  *   - 四个按钮：导出下载清单 / 导出引文 / 导出筛选记录 / 导出全部研究材料（kind 与后端
  *     EXPORT_KINDS 同源）；追踪无候选时按钮禁用并如实提示。
  *   - 点导出 → 组装追踪当前状态快照 → POST /api/artifacts/export-pack → blob 下载 →
  *     读 X-Biodata-Export-Meta（目录版本，实例级事实）→ 台账 diff（新增 N 候选 · 状态变化 M，
  *     零 LLM）→ artifactsAddExport 写 exports[] → 埋点 export_downloaded{kind}（计数型无文本）。
  *   - 台账：默认只展示最新一条；「导出记录」历史折叠；每条可命名（如「初筛」「投稿前复核」）
- *     可重新下载（重新生成，不存文件本体——每次导出自动再记一条台账）。
+ *     可重新下载（重新生成，不存文件本体——每次导出自动再记一条台账，设计 §6）。
  *
  * 诚实约束：服务端报错如实上屏（detail 优先）；下载成功但台账写失败如实提示「已下载，台账
  * 写入失败」；埋点只在真拿到 ZIP 之后记（同 task_pack「只在真拿到产物之后记」）。
  */
 
-import { $, currentAccountScope, downloadBlobAs, escapeHtml, fmtTime, toast } from "#core";
+import { $, currentAccountScope, escapeHtml, fmtTime, toast } from "#core";
+import { dlqFilenameFrom, dlqFireBlob } from "#downloads";
 import { artifactsAddExport, artifactsGetProject, artifactsUpdateProject } from "#artifacts";
 import { USAGE_KINDS } from "#usage_core";
 import { usageLog } from "#usage_log";
-import { EXPORT_API_PATH, EXPORT_HISTORY_CLOSE_COPY, EXPORT_HISTORY_LABEL,
+import { EXPORT_API_PATH, EXPORT_FAIL_FALLBACK_COPY, EXPORT_HISTORY_CLOSE_COPY, EXPORT_HISTORY_LABEL,
     EXPORT_HISTORY_OPEN_COPY, EXPORT_KINDS, EXPORT_LATEST_COPY, EXPORT_META_HEADER,
-    EXPORT_MOUNT_SELECTOR, EXPORT_NO_CANDIDATE_COPY, exportCandidateSnapshot,
-    exportChanges, exportChangesText, exportHistoryRows, exportKindLabel,
-    exportLastRecord, exportLedgerRecord, exportRenamedRecord, exportRecordSummary } from "../core/project_exports_core.js";
+    EXPORT_MOUNT_SELECTOR, EXPORT_NAME_BTN_HINT_COPY, EXPORT_NAME_CANCEL_COPY, EXPORT_NAME_COPY,
+    EXPORT_NAME_CLEARED_COPY, EXPORT_NAME_PLACEHOLDER_COPY, EXPORT_NAME_SAVE_COPY,
+    EXPORT_NAME_TITLE_COPY, EXPORT_NO_CANDIDATE_COPY, EXPORT_REDL_COPY, EXPORT_REDL_HINT_COPY,
+    EXPORT_RENAME_COPY, exportCandidateSnapshot,
+    exportChanges, exportChangesText, exportDoneCopy, exportFailCopy, exportHistoryRows,
+    exportKindLabel, exportLastRecord, exportLedgerFailCopy, exportLedgerRecord,
+    exportNameSaveFailCopy, exportNamedCopy, exportRenamedRecord, exportRecordSummary } from "../core/project_exports_core.js";
 
 /* ---------- 模块内状态 ---------- */
 let _lastMount = null;      // 当前挂点元素（projects.js 每次重渲都重建挂点 → 元素身份变化触发重渲）
@@ -66,8 +71,8 @@ async function pexRender() {
     if (!mount.isConnected) return;      // 读库期间已切走
     if (!p) { mount.hidden = true; return; }
     mount.hidden = false;
-    const section = mount.closest("[data-export-mount-section]");
-    if (section) section.hidden = false;   // 展开 projects.js 默认隐藏的导出区（无导出中心时保持隐藏）
+    const section = mount.closest("[data-p5-mount-section]");
+    if (section) section.hidden = false;   // 展开 projects.js 默认隐藏的导出区（挂点缺席时保持隐藏）
     renderExportArea(mount, p);
 }
 
@@ -116,18 +121,18 @@ function pexRowHtml(record, isLatest) {
         + (changes ? '<span class="pex-row-changes">' + _esc(exportChangesText(changes)) + "</span>" : "");
     if (_editId === record.id) {
         main += '<span class="pex-row-edit"><input class="prj-input pex-name-input" type="text" maxlength="40"'
-            + ' placeholder="命名这个导出节点" value="' + _esc(name) + '" data-pex-name-input="' + _esc(record.id) + '">'
-            + '<button class="btn btn-primary" type="button" data-pex-name-save="' + _esc(record.id) + '">保存</button>'
-            + '<button class="btn" type="button" data-pex-name-cancel>取消</button></span>';
+            + ' placeholder="' + EXPORT_NAME_PLACEHOLDER_COPY + '" value="' + _esc(name) + '" data-pex-name-input="' + _esc(record.id) + '">'
+            + '<button class="btn btn-primary" type="button" data-pex-name-save="' + _esc(record.id) + '">' + EXPORT_NAME_SAVE_COPY + '</button>'
+            + '<button class="btn" type="button" data-pex-name-cancel>' + EXPORT_NAME_CANCEL_COPY + '</button></span>';
     } else {
-        main += (name ? '<span class="pex-row-name" title="导出节点命名">' + _esc(name) + "</span>" : "");
+        main += (name ? '<span class="pex-row-name" title="' + EXPORT_NAME_TITLE_COPY + '">' + _esc(name) + "</span>" : "");
     }
     return '<div class="pex-row' + (isLatest ? " pex-row-latest" : "") + '" data-pex-record="' + _esc(record.id) + '">'
         + '<div class="pex-row-main">' + main + "</div>"
         + '<div class="pex-row-acts">'
-        + '<button class="prj-mini-btn" type="button" data-pex-name="' + _esc(record.id) + '" title="给这次导出起个名字，方便以后找到它">'
-        + (name ? "改命名" : "命名") + "</button>"
-        + '<button class="prj-mini-btn" type="button" data-pex-redl="' + _esc(record.id) + '" title="按追踪当前状态重新生成（不保存文件本体）">重新下载</button>'
+        + '<button class="prj-mini-btn" type="button" data-pex-name="' + _esc(record.id) + '" title="' + EXPORT_NAME_BTN_HINT_COPY + '">'
+        + (name ? EXPORT_RENAME_COPY : EXPORT_NAME_COPY) + "</button>"
+        + '<button class="prj-mini-btn" type="button" data-pex-redl="' + _esc(record.id) + '" title="' + EXPORT_REDL_HINT_COPY + '">' + EXPORT_REDL_COPY + '</button>'
         + "</div></div>";
 }
 
@@ -170,10 +175,10 @@ function bindExportEvents(mount, p) {
                 np.exports = (np.exports || []).map((r) => (String(r.id) === rid ? exportRenamedRecord(r, name) : r));
                 return np;
             }).then(() => {
-                toast(name ? "已命名「" + name + "」" : "已清除命名");
+                toast(name ? exportNamedCopy(name) : EXPORT_NAME_CLEARED_COPY);
                 pexRerender(prjId);
             }).catch((e) => {
-                toast("命名保存失败：" + ((e && e.message) || "未知错误"));
+                toast(exportNameSaveFailCopy((e && e.message) || "未知错误"));
                 pexRerender(prjId);
             });
         });
@@ -246,14 +251,14 @@ async function pexExport(p, kind) {
             body: JSON.stringify(payload),
         });
         if (!res.ok) {
-            let detail = "导出失败";
+            let detail = EXPORT_FAIL_FALLBACK_COPY;
             try { const j = await res.json(); detail = j.message_zh || j.detail || detail; } catch (_e) {}
             toast(detail);
             return;
         }
         const blob = await res.blob();
-        const name = pexFilenameFrom(res.headers.get("content-disposition")) || "biodata-export.zip";
-        downloadBlobAs(blob, name);
+        const name = dlqFilenameFrom(res.headers.get("content-disposition")) || "biodata-export.zip";
+        dlqFireBlob(name, blob, { kind: "export" });
         const meta = pexParseMeta(res.headers.get(EXPORT_META_HEADER));
 
         /* 台账 diff（零 LLM）：相对上次导出的变化「新增 N 候选 · 状态变化 M」。
@@ -273,14 +278,14 @@ async function pexExport(p, kind) {
         try {
             await artifactsUpdateProject(_scope(), p.project_id, (np) => artifactsAddExport(np, record));
         } catch (e) {
-            toast("已下载「" + exportKindLabel(kind) + "」，但台账写入失败：" + ((e && e.message) || "未知错误"));
+            toast(exportLedgerFailCopy(exportKindLabel(kind), (e && e.message) || "未知错误"));
             return;
         }
         usageLog(USAGE_KINDS.export_downloaded, { kind: kind });
-        toast("已导出「" + exportKindLabel(kind) + "」，可重新命名或再次下载");
+        toast(exportDoneCopy(exportKindLabel(kind)));
     } catch (err) {
         const msg = String((err && err.message) || err);
-        toast("导出失败：" + msg);
+        toast(exportFailCopy(msg));
     } finally {
         _busyKind = "";
         const m = document.querySelector(EXPORT_MOUNT_SELECTOR);
@@ -288,11 +293,7 @@ async function pexExport(p, kind) {
     }
 }
 
-/* ---------- 小工具（与 task_pack.js 同款：文件名取自 Content-Disposition） ---------- */
-function pexFilenameFrom(disposition) {
-    const match = /filename="([^"]+)"/.exec(String(disposition || ""));
-    return match ? match[1] : "";
-}
+/* ---------- 小工具：文件名取自 Content-Disposition（唯一实现：#downloads.dlqFilenameFrom） ---------- */
 
 function pexParseMeta(raw) {
     /* X-Biodata-Export-Meta：JSON（ASCII 转义），后端把目录版本等实例级事实回传。

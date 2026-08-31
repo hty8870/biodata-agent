@@ -2,7 +2,7 @@
 检索：hard_filter（保证 0% 违规）→ 存活集排序 → family 去重（不越界）→ 终检 → 解释字段。
 无匹配/弃权 → 结构化无结果诊断（缺失约束 + 放宽建议）。
 
-架构约束（经对抗评审收敛）：
+架构约束（与 Codex 辩论收敛）：
 - 硬约束只在结构化字段上判定，先过滤后排序；语义/embedding 若启用也只排存活集，永不引入违规。
 - 硬约束是存活集的常量，不参与排序权重，只进解释字段。
 - family 上限严格执行（宁可少返，绝不超额）。
@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from .normalizer import DatasetRecord, is_missing_value
 from .query_parser import DIMENSIONS, QueryIntent
 from .synonyms import expand_term
+from . import vocabulary as V
 
 
 @dataclass(slots=True)
@@ -100,13 +101,13 @@ def _dim_field_present(record: DatasetRecord, dim: str) -> bool:
     """该维是否**已核验**：字段有真实取值 **且** 取值集合穷尽。否则＝无法核验该条件
     （诚实降级层据此把「不匹配」与「不知道」分开）。
 
-    为什么不只看非空（验证证伪）：SCEA 补上抽样得来的 tissue 后，记录会从「不知道」
+    为什么不只看非空（2026-07-16 对抗评审证伪）：SCEA 补上抽样得来的 tissue 后，记录会从「不知道」
     静默升格成「已知」——实测 `tissue=alveolus` 查询下，人类肺图谱 `E-ANND-1` 命中 0、caveat 也不再
     报它、连 lenient 都捞不回；而修复前它至少还被算进「另有 160 条无法核验」。抽样值**命中**是可信
     证据（搜「肺」照常命中，走 `_field_contains`，不经本函数）；抽样值**不命中**不构成否证 → 必须
     仍报 caveat、仍可被 lenient 纳入。诚实层原本只有二态，这里补上第三态「已标注但值集不完整」。
 
-    为什么不只看空字符串（全盘审计）：判空曾是裸 `.strip()`，于是 `disease="unknown"`
+    为什么不只看空字符串（2026-07-17 全盘审计）：判空曾是裸 `.strip()`，于是 `disease="unknown"`
     被当成「已核验的真取值」。冻结 base 767 条里这样的有 **298 条（38.9%，296 个 "unknown" + 2 个
     "n/a"）** → 搜「肿瘤」时 caveat 恒空、lenient 一条都捞不回，而同一界面的卡片对同一条记录显示
     「疾病：未说明」（introduction 认哨兵、这里不认）。**两个模块对同一条记录给出互相矛盾的结论**，
@@ -140,7 +141,7 @@ def constraint_satisfied(record: DatasetRecord, dim: str, terms: list[str], leni
         return _field_contains(_technology_text(record), terms)
     if dim == "modality":
         # 门级：modality 是新维，若无此分支则 constraint_satisfied 末尾 return True 使硬过滤恒真=静默 no-op，
-        # spatial 记录会漏进单细胞结果、违反裁判 → 冻结门当场 FAIL（实测 Top1 97.6→92.7）。精确等值匹配存字段。
+        # spatial 记录会漏进单细胞结果、违反裁判 → 冻结门当场 FAIL（评审实测 Top1 97.6→92.7）。精确等值匹配存字段。
         return (record.modality or "").lower() in terms
     return True
 
@@ -186,8 +187,8 @@ def passes_hard_filter(record: DatasetRecord, intent: QueryIntent) -> bool:
 #   （retrieve 第 4 步终检仍对每条重核硬约束）。
 FACET_ORDER = ["source", "species", "tissue", "disease", "modality", "platform", "assay", "has_raw_data", "year"]
 FACET_LABELS = {
-    "source": "数据来源", "species": "物种", "tissue": "组织", "disease": "疾病",
-    "modality": "模态", "platform": "平台", "assay": "技术", "has_raw_data": "原始数据", "year": "发表年份",
+    **V.DIM_LABELS_CN,  # 维度中文名锚点在 vocabulary，勿再抄一份
+    "source": "数据来源", "has_raw_data": "原始数据", "year": "发表年份",
 }
 # 缺失哨兵判定走 normalizer 的单一真源（此前这里另有一套、与 introduction 的那套互不相同，
 # 而 _dim_field_present 干脆一套都不用 → 诚实层在 base 的 disease 维上恒失效）。
@@ -201,7 +202,7 @@ def _facet_source(record: DatasetRecord) -> str:
     raw = record.raw if isinstance(record.raw, dict) else {}
     # 缺来源的记录如实落「未标注来源」桶——此前静默默认 "10x Genomics"，会把无源记录
     # 计进 10x 的分面计数、caveat 的按来源分组，还在「优先 10x」时白吃来源加权
-    # （把「不知道来源」当成「是 10x」）。
+    # （把「不知道来源」当成「是 10x」，2026-08-15 触发点。
     return (str(raw.get("source") or "").strip()) or "未标注来源"
 
 
@@ -295,7 +296,7 @@ def _word_hit(token: str, text: str) -> bool:
 def _term_hits_text(term: str, text: str) -> bool:
     """单个查询自由词对一段文本的命中判定（短 ASCII 词边界 / 长词子串）。
 
-    拆出供 `_rank_score` 与受控同义扩展复用，判据与 之前逐字相同。
+    拆出供 `_rank_score` 与受控同义扩展复用，判据与 2026-07-22 之前逐字相同。
     """
     if not term or not text:
         return False
@@ -344,14 +345,14 @@ class DatasetRetriever:
                 score += PREFERENCE_BOOST
         # 词面相关性：查询自由词命中标题(权重高)/描述
         #
-        # **短 ASCII 自由词按词边界判定**（场景覆盖回归测试）：此前是裸子串，于是
+        # **短 ASCII 自由词按词边界判定**（2026-07-22 夜场景覆盖测试）：此前是裸子串，于是
         # 查「AD」时 'ad' 命中了标题里的 **ad**ult —— 前 5 条全是 adult 肠/肝图谱、分数 2.5
         # 高出基线，排得整整齐齐、看不出任何异常，而库里真正的 37 条阿尔茨海默数据一条没露面。
-        # 这与 alias 侧 白天修的 `integrated` 里的 `rat` 是同一个病根（裸子串），
+        # 这与 alias 侧 2026-07-22 白天修的 `integrated` 里的 `rat` 是同一个病根（裸子串），
         # 只是 alias 那半修了、自由词打分这半没修。
         # 只对 **≤3 字符** 的 ASCII 词加词边界：短词才会被长单词偶然包含；长词（如 fibrosis、
         # pbmc、xenium）保持子串匹配，以免 'atlas' 匹配不到 'atlases' 这类正常的形态变化。
-        # 受控同义扩展（synonyms.py）：命中判定改为「原词或任一登记同义词」，
+        # 2026-08-18 受控同义扩展（synonyms.py）：命中判定改为「原词或任一登记同义词」，
         # 只放宽召回（原本命中的仍命中、加分规则不变）；未登记词零行为变化。
         # 缺口来自实测：硬约束层 targets 双形无损，但标题只写 carcinoma 的记录在搜
         # cancer 时拿不到这 +1.0（自由词只认 query 原词），排不上来。
@@ -372,7 +373,7 @@ class DatasetRetriever:
         # is_missing_value（模块单一真源）：本函数在冻结评测热路径上，is_missing_value 多认的
         # 哨兵（n/a / not provided / - / 未说明…）会改变 filled 计数 → 动 score 与并列序 → 可能动
         # Top1/Top5 基线。差集在 base 上实测零出现，无功能差异；若日后做受控重基线再收敛。
-        # 抽样维不计：SCEA 的 tissue/disease 可能取自 0.1%~2.5%
+        # 抽样维不计（xdc1 追加发现，2026-07-19）：SCEA 的 tissue/disease 可能取自 0.1%~2.5%
         # 抽样（`metadata_provenance.complete=False`）——「抽样碰巧看到值」不等于「字段填得全」，
         # 与整读确认有值的记录拿同样的 +0.15 会让抽样记录系统性地排在真未标注之前。改为：
         # `_dim_value_set_complete(record, dim) is False` 的维不计入 filled。base/cellxgene/hca/ae
@@ -724,7 +725,7 @@ class DatasetRetriever:
         - 精确区分「不匹配」与「不知道」：记录 D 字段**有值但不同** → 属真实不匹配，不计入（诚实判负）；
           仅 D 字段**未标注/值集不全** → 计入（无法核验）。
         - **只数「你还没看见的」**：D 上抽样值已经命中、记录本就在结果列表里的，不得再计进「另有 N 条」
-          （修，见下方 `not constraint_satisfied` 守卫）。
+          （2026-07-17 修，见下方 `not constraint_satisfied` 守卫）。
         - **与当前存活集同口径**：若有活跃分面 `facet_filters`，unknown 集也套用 `record_passes_facets`
           （与 `matched_survivors` 同源）——保证 caveat 计数 == 点「也纳入」后真正新增数（前端重跑保留分面），
           不越过分面把用户已过滤掉的来源/记录算进「另有 N 条」。
@@ -749,7 +750,7 @@ class DatasetRetriever:
                 # 同时「D 上抽样值命中 → 已在结果列表里」且「_dim_field_present=False → 值集不穷尽」，
                 # 于是被重复计进「另有 N 条无法核验」。实测：勾 EBI 搜「人类肺组织」报 92、点「也纳入」
                 # 实增 78，差额 14 条全在上方列表里；横幅还对它们说「未标注组织」——而 E-ANND-1 的
-                # tissue 明明写着 "lower lobe of left lung"（正是这类误判的标志案例）。
+                # tissue 明明写着 "lower lobe of left lung"（正是上一轮拿来当标志案例的那条记录）。
                 # caveat 计数 == lenient 新增数 是本层的核心不变量，也是它全部价值所在（数字不准 = 骗人）。
                 and not constraint_satisfied(r, dim, terms)
                 and (not facet_filters or record_passes_facets(r, facet_filters))

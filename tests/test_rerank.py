@@ -139,3 +139,47 @@ def test_no_key_default_caller_falls_back():
     c = _cands(3)
     out = rerank.rerank_candidates("q", c, backend="llm", config=None)
     assert _names(out) == _names(c)
+
+
+# ---------------------------------------------------------------------------
+# _REWRITE_FILLER 顺序契约：replace 链顺序敏感，DECL 全序即行为（勿按长度重排——
+# 「数据集」先于「数据资料」的历史异序会影响残尾切削，重排会改变空转判定）。
+_HISTORICAL_FILLER_ORDER = (
+    "数据集", "数据资料", "数据", "资料", "信息", "相关", "研究", "图谱",
+    "我想找", "我想", "想找", "帮我找", "帮我", "请帮", "一些", "关于", "有关",
+    "请", "帮", "找一下", "一下", "找找", "找", "的", "了", "吧", "呢",
+)
+
+
+def test_rewrite_filler_tuple_is_historical_order():
+    assert rerank._REWRITE_FILLER == _HISTORICAL_FILLER_ORDER
+
+
+def test_rewrite_core_order_sensitive_cases():
+    # 「数据集」先于「数据资料」：先删「数据集」不命中，「数据资料」删后留下「…集」
+    # 残尾再被「数据」削成「集」。长度序（先「数据资料」后「数据集」）会多削一格。
+    assert rerank._rewrite_core("肺癌数据数据资料集") == "肺癌集"
+    # 「想找」先于「找一下」：否则「想找一下」被删成「想」；2026-08-31
+    # 起残尾「一下」由新补的原子词兜底削净（本断言曾是错误期望 "一下乳腺癌"，
+    # 把那轮漏判钉成了行为）。
+    assert rerank._rewrite_core("想找一下乳腺癌") == "乳腺癌"
+    # 常规空转判定不受影响：换措辞/加填充词后同核。
+    assert rerank._rewrite_core("帮我找乳腺癌数据集") == "乳腺癌"
+    assert rerank._rewrite_core("乳腺癌") == "乳腺癌"
+
+
+def test_rewrite_core_pure_filler_combinations():
+    """2026-08-31：纯填充词组合的 core 必须归空——缺「一下」时
+    「我想找一下」只剩残尾，伪改写被误判为有效改写。实体词保真：「腋下」不含
+    「一」，不受「一下」切削误伤。"""
+    assert rerank._rewrite_core("我想找一下") == ""
+    assert rerank._rewrite_core("帮我找找") == ""
+    assert rerank._rewrite_core("肺癌腋下转移") == "肺癌腋下转移"
+
+
+def test_validated_rewrite_rejects_pure_filler_rewrite():
+    """同上：「我想找一下肺癌」对「肺癌」是空转（去填充词后同核），必须拒收；
+    真改写（换核）照常放行。"""
+    assert rerank._validated_rewrite("我想找一下肺癌", "肺癌") == ""
+    assert rerank._validated_rewrite("帮我找找肺癌数据集", "肺癌") == ""
+    assert rerank._validated_rewrite("human lung cancer", "肺癌") == "human lung cancer"

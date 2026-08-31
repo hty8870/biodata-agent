@@ -13,7 +13,7 @@ export var CB_DIM_LABEL = {
     platform: "平台", assay: "技术", modality: "模态",
     has_raw_data: "原始数据", date: "发表时间"
 };
-/* 撤销栈上限（20→50 的理由：帧只是筛选态快照、纯内存不落盘，
+/* 撤销栈上限（2026-08-08 约束放松批 20→50：帧只是筛选态快照、纯内存不落盘，
    实测 50 帧×20 条响应下限约 3.5MB，现代浏览器无感；回放只渲染当前帧）。 */
 export var CB_MAX_FRAMES = 50;
 
@@ -181,3 +181,74 @@ export function cbIsNoop(before, after) {
         && String(before.date_from || "") === String(after.date_from || "")
         && String(before.date_to || "") === String(after.date_to || "");
 }
+
+/* ==================== 每条系统回复的反馈操作条（2026-08-28 msgfb） ====================
+   赞 / 倒赞 / 评论 / 分支 四键的**纯逻辑**部分。UI 壳在 board.js（cbRenderHistory 渲染、
+   cbHistoryClick 接线），这里只放确定性计算，好让 node 直接跑行为规格。 */
+
+/* 赞/倒赞互斥切换：点已选中的那颗 = 取消（回 ""）；点另一颗 = 换边。
+   返回值只有 ""|"up"|"down" 三态，调用方把它原样存回 entry.msgFb 并打点。 */
+export function cbMsgFbNext(current, action) {
+    var cur = (current === "up" || current === "down") ? current : "";
+    if (action !== "up" && action !== "down") return cur;
+    return cur === action ? "" : action;
+}
+
+/* 评论入队文本：用户正文 + 一行指向所评回复的引用尾（消息 id + 内容摘段），
+   让开发者能把意见对回具体那句回复。摘段截断到 maxSnippet 字（默认 60）。
+   只组装纯文本；遮蔽/截断/幂等仍由 feedback_core.feedbackEnqueue 兜底。 */
+export function cbMsgCommentText(userText, mid, snippet, maxSnippet) {
+    var text = String(userText || "").trim();
+    var snip = String(snippet || "").replace(/\s+/g, " ").trim();
+    var cap = (typeof maxSnippet === "number" && maxSnippet > 0) ? maxSnippet : 60;
+    if (snip.length > cap) snip = snip.slice(0, cap) + "…";
+    var ref = "—— 针对回复「" + (snip || "（原文不在本地）") + "」（" + String(mid || "") + "）";
+    return text + "\n" + ref;
+}
+
+/* 这条系统回复能不能作为分支点：只有挂在存活检索帧上的回复才能分支
+   （?fork= 机制按「前 N 轮检索快照」重建，纯对话回音之前没有任何快照可重建）。
+   frameLinked 由调用方算（frameId 是否还在帧栈里），这里只合并两个判据。 */
+export function cbMsgForkable(frameId, frameLinked) {
+    return frameId != null && frameLinked === true;
+}
+
+/* ==================== 检索落地回执句（条件板/执行层共用锚点） ==================== */
+
+/* 「库中共 N 条匹配，结果区展示前 M 条」——检索落地事实句的唯一真源。
+   facts = {total, shown}；prefixZh 由调用方定（完成回执「检索完成：」、执行汇报「前置检索：」）。
+   零结果兜底「这次检索没有找到匹配的记录。」只在未自带零结果多口径分支的调用路径浮现
+   （条件板主回执的零结果按 resolution_status 分口径，在调用侧另行分支，不进本函数）。 */
+export function searchFactsReceiptText(facts, prefixZh) {
+    var total = Number(facts && facts.total) || 0;
+    if (!total) return "这次检索没有找到匹配的记录。";
+    return String(prefixZh || "") + "库中共 " + total + " 条匹配，结果区展示前 "
+        + (Number(facts && facts.shown) || 0) + " 条。";
+}
+
+/* ==================== 纯检索计划判定（条件板/执行层共用锚点） ==================== */
+
+/* 唯一气泡规则的判定件：检索族动词（环内 rank/rerank/search.rerun）。
+   纯检索计划 → 批次回执就是最终总结（actFinish 闭嘴）；混合计划 → actFinish 是最终总结
+   （批次回执闭嘴）。两分支都只有一颗气泡。 */
+export var PLAN_RETRIEVAL_VERBS = { "rank": true, "rerank": true, "search.rerun": true };
+
+/* 计划是否纯检索：steps 非空取逐步 verb，否则取 plan.verb；verb 全集落在检索族里才算。
+   无 plan / 取不到任何 verb → false（按非纯检索处理，不抑制任何回执）。 */
+export function planIsRetrievalOnly(plan) {
+    if (!plan || typeof plan !== "object") return false;
+    var verbs;
+    if (Array.isArray(plan.steps) && plan.steps.length) {
+        verbs = plan.steps.map(function (s) { return String((s && s.verb) || "").trim(); }).filter(Boolean);
+    } else {
+        var v = String(plan.verb || "").trim();
+        verbs = v ? [v] : [];
+    }
+    return verbs.length > 0 && verbs.every(function (v) { return !!PLAN_RETRIEVAL_VERBS[v]; });
+}
+
+/* ==================== 取消态回音（条件板/执行层共用锚点） ==================== */
+
+/* 取消态 reason_zh 缺省时的前端兜底句——与后端 action_plan.py 极性门的
+   「你说先不做这一步，所以这次没有执行。」逐字同源，改一边必须同步另一边。 */
+export var PLAN_CANCELLED_FALLBACK_ZH = "你说先不做这一步，所以这次没有执行。";

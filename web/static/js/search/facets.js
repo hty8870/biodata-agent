@@ -4,7 +4,7 @@
    （live binding 读 + 原地改 push/splice；**重赋值**必经属主 setFacetState）、board 的
    cbLogPush/swSync、search 的 runRecommend 经 import 取（facets↔board / facets↔search 成环，
    绑定都只在函数体内使用，ESM 允许）。
-   search/board/results/shell 经 import 取本文件导出。 */
+   search/board/results/shell 经 import 取本文件导出（绞杀桥已全退役）。 */
 import { MOTION, $, escapeHtml, prettyFacetValue, toast } from "#core";
 import { cbLabelForFilterId } from "#board_core";
 import { _facetFilters, _queryHits, _suppressed, setFacetState } from "#results";
@@ -15,12 +15,12 @@ import { runRecommend } from "#search";
 
 function _facetIdx(dim, value) { return _facetFilters.findIndex((f) => f.dim === dim && f.value === value); }
 
-/* ============ 数据细化「提交」暂存============
+/* ============ 数据细化「提交」暂存（用户 2026-07-24 反馈）============
    在侧栏「数据细化」面板里，勾选分面取值不再逐点立即重搜，而是先攒进草稿 _facetStage，点「提交」才一次性应用，
    并把这批改动拼成一条「加入：X；去掉：Y」的消息进对话（如手绘图 2）。
    **单一 choke point**：_facetStage 的清空只发生在 renderFacets 顶部——任何真检索/回放都会走到 renderFacets，
    于是「攒了草稿又点了别的动作（撤销/忽略/新查询…）」时草稿被丢弃、grid 高亮回退（可见反馈），
-   不会散在各按钮里各自漏一处（验证）。renderFacets 只读 _facetStage 渲染 grid 高亮 + 提交条，不写。 */
+   不会散在各按钮里各自漏一处。renderFacets 只读 _facetStage 渲染 grid 高亮 + 提交条，不写。 */
 let _facetStage = null;   // null=未暂存（已应用集即真相）；数组=待提交草稿（_facetFilters 的一份副本再编辑）
 // 暂存态仅在分面 grid 落在侧栏「数据细化」面板时启用（那儿才有「提交」按钮）；结果区/移动端无提交入口 → 保持立即应用。
 function facetStageActive() { const g = $("facetGroups"); return !!(g && g.closest("#sideFacetBody")); }
@@ -61,7 +61,7 @@ function renderFacetStage() {
 export function facetStageSubmit() {
     if (_facetStage === null) return;
     const _sb = $("submitBtn");
-    if (_sb && _sb.disabled) { toast("上一步还在检索，稍等一下再提交"); return; }   //  在途互斥（验证）
+    if (_sb && _sb.disabled) { toast("上一步还在检索，稍等一下再提交"); return; }   // 在途互斥
     const diff = facetStageDiff();
     if (!diff.added.length && !diff.removed.length) { _facetStage = null; renderFacetStage(); return; }   // 无实质改动
     setFacetState({ facetFilters: _facetStage.map((f) => Object.assign({}, f)) });   // 重赋值经属主 setter（live binding 只读）
@@ -81,7 +81,7 @@ export function facetStageSubmit() {
     runRecommend({ keepFacets: true });
 }
 export function facetStageCancel() { _facetStage = null; renderFacetStage(); }
-/* 草稿**将被丢弃**时的统一出口：核心承诺是「未提交的改动不静默丢失」。验证确认了几条会绕过提交、
+/* 草稿**将被丢弃**时的统一出口：核心承诺是「未提交的改动不静默丢失」。有几条会绕过提交、
    又把草稿静默清掉的路径——① 攒着草稿时收起侧栏/缩窗 → placeFacetBar 把分面条搬出侧栏，facetStageActive() 翻假，
    下一次点击落进「立即应用」分支绕开草稿；② 提交在途时又攒了一份新草稿，这次检索回来时被 choke point 清掉。
    两处都改成走这里：脏就 toast 一声再清，UI 同步。 */
@@ -117,7 +117,7 @@ function removeFacet(dim, value) {
 /* 就地切换一条**原始命中**（查询语句解析出的硬约束）的生效状态：
    忽略＝把该维度加入抑制表 → 重跑时后端在检索前放宽该约束；还原＝从抑制表移除 → 该约束重新生效
    （还原入口：condBoard「已忽略」分区 / 对话「回退至此」/ 撤销步进条「恢复全部条件」）。
-   被忽略的命中不再渲染进「查询条件」排（④：那里只展示当前真正在筛的条件），
+   被忽略的命中不再渲染进「查询条件」排（那里只展示当前真正在筛的条件），
    但快照 _queryHits 保留全量，供撤销帧/条件板还原。 */
 export function toggleQueryHit(filterId) {
     if (!filterId) return;
@@ -129,13 +129,13 @@ export function toggleQueryHit(filterId) {
     runRecommend({ keepFacets: true });
 }
 
-/* 「查询条件」chips 行（#facetActive）的唯一渲染口（普查）。两处调用：
+/* 「查询条件」chips 行（#facetActive）的唯一渲染口。两处调用：
    ① renderFacets：真检索落地，hits = _queryHits 去掉被忽略（_suppressed）的原始命中；
    ② results.js applyRelaxation：放宽预览，hits = 预览**实际生效**的条件（原 query_constraints
      去掉被放宽项；未收录词降级预览用后端 active_filters）。两处共用同一渲染，chip 结构/
-   「忽略」按钮行为不漂移。hits 为空且无细化筛选时整条收起（④：栏里不再放恢复入口；
+   「忽略」按钮行为不漂移。hits 为空且无细化筛选时整条收起（栏里不再放恢复入口；
    还原走 condBoard「已忽略」分区 / 对话「回退至此」/ 撤销步进条「恢复全部条件」）。
-   （圈2）：后加的细化筛选与原始命中**同款待遇**——同一 accent 底、同一「忽略」按钮，
+   2026-08-04 起：后加的细化筛选与原始命中**同款待遇**——同一 accent 底、同一「忽略」按钮，
    不再用 ❝ 标记/× 按钮/中性底区分来源；只剩 ⊘（排除）/ ↑（软偏好）两枚**行为**标记保留。 */
 export function renderActiveChips(hits) {
     const active = $("facetActive");
@@ -186,25 +186,25 @@ export function renderActiveChips(hits) {
    下排 = 各维度可点取值。仅当有命中 / 已细化 / 可细化维度时显示；空则整条收起。命中总数在结果计数旁提示。 */
 export function renderFacets(data) {
     const bar = $("facetBar"), groups = $("facetGroups");   // chips 行渲染已收口进 renderActiveChips，它自取 #facetActive
-    //  单一 choke point：一旦有结果被（重新）应用——真检索 / 缓存命中 / 撤销重做 / 回退查看，
+    // 单一 choke point：一旦有结果被（重新）应用——真检索 / 缓存命中 / 撤销重做 / 回退查看，
     // 都会走到这里——就丢弃「数据细化」里还没提交的草稿，grid 重建成干净态。不散在各按钮里各自清一处。
-    //  用 facetStageDiscardIfDirty 而非裸 `=null`：脏草稿被丢时 toast 一声（提交在途又攒新草稿这类并发下有真损失，验证）。
+    // 用 facetStageDiscardIfDirty 而非裸 `=null`：脏草稿被丢时 toast 一声（提交在途又攒新草稿这类并发下有真损失）。
     // 提交路径 facetStageSubmit 已在发起前把 _facetStage 置 null，故这里对它不误报。
     facetStageDiscardIfDirty();
     const facets = (data && data.facets) || [];
     const qc = (data && data.query_constraints) || [];   // 放宽后的原始命中：被忽略的维度已不在其中（仅当无忽略时=完整集）
     // 「库中匹配 N 条」计数已并入结果摘要卡（renderResultSummary 的方法句），此处不再单独渲染 #resultsTotal。
 
-    //  「查询条件」框要做**实时命中镜像**（用户）：每次都从后端最新 query_constraints 刷新——
+    // 「查询条件」框要做**实时命中镜像**（用户 2026-07-24）：每次都从后端最新 query_constraints 刷新——
     // 不再冻结（旧行为是忽略后冻住快照、好让被忽略的 chip 留在原位；现在被忽略的 chip 整条不渲染，
     // 冻结反而会让框显示「忽略之前」的过期条件，与「实时」直接冲突）。qc 已是「放宽后的原始命中」
-    //  （被忽略维度不在其中），刷新后 _queryHits 天然=当前生效集。还原路径（④ 用户：
+    // （被忽略维度不在其中），刷新后 _queryHits 天然=当前生效集。还原路径（用户 2026-08-01：
     // 本框只展示当前命中的关键词，不再放恢复入口）：condBoard 的「已忽略」分区可逐条恢复
     // （从 filter_id 还原条件名，不依赖 _queryHits，见 board_core cbRowsFrom），整批还原则走
     // 对话「回退至此」/ 撤销步进条的「恢复全部条件」。
     setFacetState({ queryHits: qc.map((g) => ({ filter_id: g.filter_id || g.dim, polarity: g.polarity || "include", dim: g.dim, label: g.label, values: (g.values || []).slice() })) });   // 重赋值经属主 setter（live binding 只读）
 
-    //  「查询条件」＝**实时正在被命中的关键词镜像**（用户；④ 收敛为「只展示
+    // 「查询条件」＝**实时正在被命中的关键词镜像**（用户 2026-07-24；2026-08-01 收敛为「只展示
     // 当前命中的关键词」）：只显示当前真正在筛的条件（原始命中 + 后加的细化筛选），被忽略
     // （_suppressed）的原始命中**整条不渲染**（不再灰显残留），增删历史交给对话记录/「回退至此」。
     // _queryHits 快照仍保留被忽略的维度（撤销帧/条件板还原要用），只是渲染层过滤掉它们。
@@ -228,7 +228,7 @@ export function renderFacets(data) {
     // 整条：有查询命中约束 / 已细化筛选 / 可细化维度，任一即显示
     bar.hidden = !(qc.length || _facetFilters.length || facets.length || _suppressed.length);
     renderFacetStage();   // grid 刚重建 → 同步暂存高亮 + 提交条（此刻 _facetStage 已在顶部清空，故为干净态）
-    placeFacetBar();   // 有活跃筛选 → 分面条移入左侧栏下半（Task3）；否则留在结果区上方
+    placeFacetBar();   // 有活跃筛选 → 分面条移入左侧栏下半；否则留在结果区上方
 }
 /* 分面条的落位：有活跃筛选且侧栏展开 → 移入左侧栏「数据细化」面板（侧栏纵向二分）；
    否则（无筛选 / 侧栏收起）→ 回到结果区上方原位。侧栏收起时回退到上方，保证任何情况下都能看到并移除筛选。
@@ -248,7 +248,7 @@ export function placeFacetBar(animateNav = true, animateFade = animateNav) {
         setFacetsActive(true, animateNav);
     } else {
         const wrap = $("resultsWrap"), grid = $("resultsGrid");
-        //  回到 grid 之前的原位：视图交换态 grid 整节点搬在侧栏 #sideBoardScroll，
+        // 回到 grid 之前的原位。2026-08-16 起：视图交换态 grid 整节点搬在侧栏 #sideBoardScroll，
         // 不是 wrap 的子节点——insertBefore 锚点非子节点会抛 NotFoundError，把本函数末尾的 swSync
         // 整条落位链炸断（交换态收起侧栏/过断点时真实踩到）。锚点不在就退化为 append（末尾）。
         if (wrap && grid && bar.parentElement !== wrap) {
@@ -262,7 +262,7 @@ export function placeFacetBar(animateNav = true, animateFade = animateNav) {
     // **必须挂在这里，不能挂在 syncFacetsCard 末尾**——那个函数有两个提前 return
     //（无 gsap / reduced-motion·隐藏页·animate=false），收展侧栏走的正是第二个，
     // 挂在末尾的调用永远执行不到：卡片一直 hidden、页签一直 disabled，看起来像功能没做。
-    //  这就是本项目反复栽的「守卫把代码变成不可达」那一类，验证第一次验证就抓到了。
+    // 这就是本项目反复栽的「守卫把代码变成不可达」那一类，真机第一次验证就抓到了。
     // 刻意不加 typeof 守卫：board.js 在 boot.js 之前加载，运行期必定已定义；
     // 加守卫只会把「函数名打错」变成永久静默短路。
     swSync();
@@ -282,7 +282,7 @@ function setFacetsActive(active, animate = true) {
     const firsts = items.map((el) => el.getBoundingClientRect());   // FLIP First：切布局前各项位置
     const h0 = card.getBoundingClientRect().height;                 // 变前卡高（含在跑动画的中间值，作 FLIP 起点）
     document.body.classList.toggle("facets-active", active);        // 应用新布局：导航 单列↔两列 + 卡 填满↔内容高
-    gsap.killTweensOf(card); card.style.height = "";                //  杀掉上一段未收尾的卡高 tween/inline，量准新自然高（验证：否则收尾跳变）
+    gsap.killTweensOf(card); card.style.height = "";                // 杀掉上一段未收尾的卡高 tween/inline，量准新自然高（否则收尾跳变）
     const h1 = card.getBoundingClientRect().height;                 // 变后自然卡高
     const lasts = items.map((el) => el.getBoundingClientRect());    // FLIP Last：新布局下各项的最终位（top-aligned、稳）
     if (Math.abs(h0 - h1) > 1) gsap.fromTo(card, { height: h0 }, { height: h1, duration: 0.5, ease: "power3.inOut", clearProps: "height", overwrite: true });
@@ -302,7 +302,7 @@ function syncFacetsCard(animate) {
     if (!facets) return;
     const show = document.body.classList.contains("facets-active") && document.body.classList.contains("on-query");
     if (typeof gsap === "undefined") { facets.style.visibility = show ? "visible" : "hidden"; facets.style.opacity = show ? "1" : "0"; return; }
-    //  gsap.set 也带 overwrite：否则上一次 show 分支留下的 delay:0.1 延迟
+    // gsap.set 也带 overwrite（2026-08-03）：否则上一次 show 分支留下的 delay:0.1 延迟
     // tween 会在 set(0) 之后照样开跑，把内联 autoAlpha 写回 1——与真实状态相反的样式残留。
     if (!MOTION || document.hidden || !animate) { gsap.set(facets, { autoAlpha: show ? 1 : 0, y: 0, overwrite: true }); return; }
     if (show) gsap.to(facets, { autoAlpha: 1, y: 0, duration: 0.42, ease: "power2.out", delay: 0.1, overwrite: true });

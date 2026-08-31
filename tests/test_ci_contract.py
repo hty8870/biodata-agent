@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 from packaging.version import Version
@@ -63,10 +62,10 @@ def test_ci_uses_one_manifest_runner_across_fixed_linux_and_windows_legs():
     assert 'python: "3.10"' in workflow
     assert 'python: "3.12"' in workflow
     assert 'python: "3.14"' in workflow
-    # 本仓 CI 统一跑 fast 契约门：full profile 不可跑，
-    # 并把「full 不出现」反向钉死，防止误把全量门带回公开 CI。
-    assert "profile: full" not in workflow
+    # 公仓刻意全 fast：本仓不含 eval/ 等重资产，full profile 的 pytest 全量与
+    # 评测门不可跑；full 腿与 runtime_smoke 冒烟统一在私仓 CI 执行。
     assert "profile: fast" in workflow
+    assert "profile: full" not in workflow
     assert re.search(
         r"label: windows-primary-fast\s+os: windows-2025\s+python: \"3\.12\"\s+profile: fast",
         workflow,
@@ -79,27 +78,26 @@ def test_ci_uses_one_manifest_runner_across_fixed_linux_and_windows_legs():
     assert "--profile ${{ matrix.profile }}" in workflow
     assert re.search(r"(?m)^  gate:\s*$", workflow)
     assert re.search(r"(?m)^    name: gate\s*$", workflow)
-    assert "needs: [quality]" in workflow
+    # 公仓 gate 只聚合 quality 与 delivery_scan；runtime_smoke 依赖是私仓完整形态，
+    # 此处断言防未来同步把私仓 needs 覆盖进公仓 fast 门。
+    assert "needs: [quality, delivery_scan]" in workflow
     assert "if: always()" in workflow
 
 
-@pytest.mark.skipif(
-    not (ROOT / "docs" / "agent").exists(),
-    reason="runtime_smoke 需要本仓不含的发布输入，公开 CI 不设该 job",
-)
-def test_ci_runs_native_source_zip_first_launch_on_three_platforms():
+def test_ci_scans_delivery_surface_for_internal_or_sensitive_content():
+    """源头防污门：每次 push/PR 即复核交付白名单集合，污染当场翻红，不再攒到专项清洗。"""
     workflow = _text(WORKFLOW)
-    assert re.search(r"(?m)^  runtime_smoke:\s*$", workflow)
-    for platform, os_name in (
-        ("windows", "windows-2025"),
-        ("macos", "macos-15"),
-        ("linux", "ubuntu-24.04"),
-    ):
-        assert re.search(
-            rf"platform: {platform}\s+os: {re.escape(os_name)}", workflow
-        )
-    assert "python scripts/smoke_release_first_launch.py --platform ${{ matrix.platform }}" in workflow
-    assert "RUNTIME_SMOKE_RESULT: ${{ needs.runtime_smoke.result }}" in workflow
+    assert re.search(r"(?m)^  delivery_scan:\s*$", workflow)
+    assert "python scripts/make_delivery.py --check" in workflow
+    assert "DELIVERY_SCAN_RESULT: ${{ needs.delivery_scan.result }}" in workflow
+
+
+def test_ci_intentionally_omits_runtime_smoke_in_public_mirror():
+    """公仓镜像刻意精简：三平台原生 source-zip 首启冒烟（runtime_smoke）在私仓 CI 执行，
+    公仓不含该 job。此测试是反向契约：防未来同步把私仓完整 CI 形态误覆盖公仓 fast 门。"""
+    workflow = _text(WORKFLOW)
+    assert re.search(r"(?m)^  runtime_smoke:\s*$", workflow) is None
+    assert "smoke_release_first_launch" not in workflow
 
 
 def test_ci_is_offline_after_install_and_never_runs_real_llm_or_model_fetch():
@@ -178,7 +176,7 @@ def test_dependabot_covers_python_and_workflow_dependencies_weekly():
     assert "package-ecosystem: pip" in config
     assert "package-ecosystem: github-actions" in config
     assert config.count("interval: weekly") == 2
-    # 一级目录整理：requirements 群迁入 requirements/，pip 生态目录随迁；
+    # 2026-08-27 一级目录整理：requirements 群迁入 requirements/，pip 生态目录随迁；
     # github-actions 生态目录恒为仓库根。
     directories = re.findall(r"(?m)^    directory: (.+)$", config)
     assert directories == ["/requirements", "/"]

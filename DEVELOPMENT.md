@@ -149,7 +149,7 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 
 ## 6. HTTP API
 
-当前 Web API 版本为 `2.7.0`。FastAPI 会在 `/docs` 生成当前版本的请求和响应模型。以下表格用于快速定位（**与 `webapp.py` 的路由装饰器一一对应，共 59 个**；改路由时同步这张表）：
+当前 Web API 版本为 `2.9.0`。FastAPI 会在 `/docs` 生成当前版本的请求和响应模型。以下表格用于快速定位（**与 `webapp.py` 的路由装饰器一一对应，共 64 个**；改路由时同步这张表）：
 
 | 方法 | 路径 | 作用 | 是否写数据 |
 |---|---|---|---|
@@ -166,6 +166,9 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 | POST | `/api/account/switch` | 一键切换账号（校验记住的会话 token → 重设 cookie） | 是 |
 | GET | `/api/account/whoami` | 返回当前登录账户 | 否 |
 | GET | `/api/account/trial-quota` | 限量试用通道当日额度回显（可用性/锁定模型/已用/剩余；仅护栏形态，本机 404） | 否 |
+| POST | `/api/account/mcp-token` | 铸在线 MCP 接入令牌（返回明文一次 + 即用的 url/headers 配置；落盘只存 sha256 摘要；仅护栏形态，本机 404） | 是 |
+| GET | `/api/account/mcp-tokens` | 列出当前账户的在线 MCP 令牌（摘要视图：id/label/prefix/时间，无明文；仅护栏形态） | 否 |
+| POST | `/api/account/mcp-token/revoke` | 吊销当前账户的一枚在线 MCP 令牌（仅属主；仅护栏形态） | 是 |
 | POST | `/api/interpret` | 解析来源、时间和生物条件，不执行检索 | 否 |
 | POST | `/api/recommend` | 执行推荐主管线 | 否 |
 | POST | `/api/feasibility` | 研究问题→可行性概览（候选数/总细胞量下限/分布/缺口） | 否 |
@@ -193,6 +196,7 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 | POST | `/api/curate-examples/approve` | 候选勾选迁入正式库（注入侧只读正式库；库内去重计 duplicated） | 是 |
 | POST | `/api/curate-examples/dismiss` | 候选忽略（只清池不进库） | 是 |
 | POST | `/api/act/summary` | 执行结果的 LLM 中文总结（只总结不执行，事实行由调用方上报，ok=False 绝不说「已」，fail-open） | 否 |
+| POST | `/api/search/reply` | 检索回执的 LLM 中文改写（确定性事实句先行上屏、本端点只改写不检索，建议只许从 can_suggest 白名单挑，fail-open） | 否 |
 | GET | `/spec/upload` | 返回上传规范 | 否 |
 | POST | `/api/diagnose` | 用 JSON 请求体诊断 LLM 配置和网络 | 否 |
 | GET | `/api/sources` | 返回来源及记录数 | 否 |
@@ -207,6 +211,9 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 | POST | `/api/download/start` | 真下载第二步：磁盘预检 → 建目录 → 起后台线程真下载（逐数据集子文件夹 + README/manifest） | 是（写本机 Downloads） |
 | GET | `/api/download/status` | 真下载任务状态轮询（逐文件进度与校验结果） | 否 |
 | POST | `/api/download/cancel` | 取消真下载（.part 保留可续传） | 否 |
+| GET | `/api/guide/agent-prompt` | 返回 MCP 本地接入提示词全文（text/markdown；复制给自家 agent 代完成接入；只读资源经 RESOURCE_ROOT 解析、同源闸、ASCII 文件名） | 否 |
+| GET | `/api/guide/online-prompt` | 在线 MCP 接入提示词模板（text/markdown；含 `__BIODATA_MCP_URL__`/`__BIODATA_MCP_TOKEN__` 占位符，前端铸币成功后代入真值再复制给用户） | 否 |
+| GET | `/api/guide/skill.zip` | 随包 skill 目录现场打成 zip 附件返回（内存构建零落盘、确定性构建、`X-SHA256` 摘要头） | 否 |
 
 最小推荐请求：
 

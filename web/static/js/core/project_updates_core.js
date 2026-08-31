@@ -1,13 +1,13 @@
 "use strict";
 
-/* 追踪更新检查 · 纯逻辑核（追踪更新检查闭环）
+/* 追踪更新检查 · 纯逻辑核（设计 v2 §4「追踪更新检查闭环」）
  *
  * ## 本文件是什么 / 不是什么
  *
  * - 是：更新检查的**纯逻辑**——diff（相对保存的 baseline 比 `/api/watch/check` 确定性重跑
  *   结果）、material change 判定（真实新增/消失/指纹变化；排序/score/文案不算）、
  *   截断语义（>200 不得声称「某条已从全部结果消失」）、「检索规则已更新」单列、
- * 上游同步编排与语料代哨兵的纯推导（全体批量按钮已撤）。
+ *   上游同步编排与语料代哨兵的纯推导（2026-08-26 全体批量按钮已撤）。
  * - 不是：DOM、IndexedDB、网络、墙钟。时间一律经参数注入（updatesSetClock 注入点，
  *   node 规格可逐字段断言）；请求 /api/watch/check、写库（baseline/候选回填）、
  *   会话内「待查看更新」内存态全在 UI 壳 project_updates.js。
@@ -21,25 +21,25 @@
  *   record_fingerprint_schema v1 只哈希 {dataset_uid, sample_size, raw_data_status}）。
  * - **截断不撒谎**：`r.truncated=true`（本次结果 >200）时，baseline 里没出现在本次
  *   前 200 的 uid ≠ 从全部结果消失（可能在 201+）——removed 判定关闭，UI 如实写
- *   「结果超 200 条被截断，无法判定消失」（原文）。
+ * 「结果超 200 条被截断，无法判定消失」（原文）。
  * - 对称地：`baseline.truncated=true`（上次快照本身 >200、只存了前 200）时，本次
  *   uid 集合里「新出现」的 uid 可能本来就在 201+ ——added 判定关闭，如实提示
  *   「上次结果超 200 条被截断，无法判定新增」。**双侧都在前 200 的 uid 的指纹比较
  *   恒可靠**（交集不受截断影响）。
  * - **检索规则升级单列**：请求用的 spec_version 与响应 executed_spec.spec_version
- *   不一致 → `ruleUpdated=true`（「检索规则已更新」），不伪装成目录变化。
+ *   不一致 → `ruleUpdated=true`（「检索规则已更新」），不伪装成目录变化（§4.3）。
  */
 
 import { artifactsUidSet } from "./artifacts.js";
 
-/* ---------- 常量（文案是上屏承诺，不许漂） ---------- */
+/* ---------- 常量（数值与逐字对齐；文案是上屏承诺，不许漂） ---------- */
 
 /* 检索规格版本（与后端 `RECORD_FINGERPRINT_SCHEMA` / `WatchCheckRequest.spec_version`
    校验同值，见 webapp.py:2956-2960/3008-3013）。前后端各自硬编码、契约门对拍。
-   保存的 spec.spec_version 与它不一致 → 「检索规则已更新」单列提示。 */
+   保存的 spec.spec_version 与它不一致 → 「检索规则已更新」（§4.3 单列）。 */
 export const WATCH_SPEC_VERSION = "v1";
 
-/* ---------- 上游同步编排 + 语料代哨兵 ----------
+/* ---------- 2026-08-26：上游同步编排 + 语料代哨兵 ----------
  * 「检查 N 个追踪的更新」全体按钮已撤（用户：点一下太耗费资源），批量面板随之退役
  * （WATCH_BATCH_MAX/watchBatchSlice/watchBatchRestText/watchSummaryText 一并删除）；
  * 批量诉求由「登录后语料代哨兵自动刷新」承接（零 LLM 顺序重跑，见 project_updates.js）。 */
@@ -144,7 +144,7 @@ export function watchAutoRefreshToast(changedCount) {
  *     added[], fpChanged[], removed[],   // 各自保持确定性顺序（r.uids / r.uids / baseline.uids）
  *     addedTrusted, removedTrusted,      // 截断语义开关（见文件头注释）
  *     ruleUpdated, resultTotal, truncated, baselineTruncated }
- * 语义：集合比较（artifactsUidSet 去重归一），**绝不按数组下标比名次**；
+ * 语义：集合比较（artifactsUidSet 去重归一），**绝不按数组下标比名次**（§4.3 不比较名次）；
  * 指纹变化只比双侧交集（同 uid 才可比，交集不受截断影响）。 */
 export function watchDiff(r, baseline, sentSpecVersion) {
     const res = (r && typeof r === "object") ? r : {};
@@ -187,11 +187,11 @@ export function watchDiff(r, baseline, sentSpecVersion) {
     const removed = removedTrusted ? baseUids.filter((u) => !resSet.has(u)) : [];
 
     /* 指纹变化 = 双侧都在结果里（交集）且语义指纹不同的 uid——交集不受截断影响，
-       恒可判定；sample_size/raw_data_status 变化是 material change。 */
+       恒可判定；sample_size/raw_data_status 变化是 material change（§4.3）。 */
     const fpChanged = resUids.filter((u) => baseSet.has(u) && String(resFps[u] || "") && String(resFps[u]) !== String(baseFps[u] || ""));
 
     /* 检索规则升级单列：请求携带的 spec_version 与后端规范化后的 executed_spec.spec_version
-       不一致 → 「检索规则已更新」，不伪装成目录变化。sentSpecVersion 缺省不判。 */
+       不一致 → 「检索规则已更新」（§4.3），不伪装成目录变化。sentSpecVersion 缺省不判。 */
     const executed = (res.executed_spec && typeof res.executed_spec === "object") ? res.executed_spec : {};
     const ruleUpdated = Boolean(sentSpecVersion !== null && sentSpecVersion !== undefined && executed.spec_version)
         && String(sentSpecVersion) !== String(executed.spec_version);
@@ -211,7 +211,7 @@ export function watchDiff(r, baseline, sentSpecVersion) {
 }
 
 /* 待查看更新条目数（material change 合计，只看可判定的部分）：
-   新增 + 指纹变化 + 真实消失。排序/score/文案变化不在其中。 */
+   新增 + 指纹变化 + 真实消失。排序/score/文案变化不在其中（§4.3）。 */
 export function watchChangedCount(diff) {
     const d = diff || {};
     return d.added.length + d.fpChanged.length + d.removed.length;
@@ -230,7 +230,20 @@ export function watchDeltaEntries(diff) {
     return out;
 }
 
-/* 单追踪检查后的状态行文案（包描述逐字）：
+/* diff 三态计数（新增/信息变化/消失）——供单追踪检查结构化 outcome 与列表徽章用。 */
+export function watchDiffCounts(diff) {
+    if (!diff || diff.kind !== "diff") return { added: 0, fp: 0, removed: 0 };
+    const entries = watchDeltaEntries(diff) || [];
+    let added = 0, fp = 0, removed = 0;
+    entries.forEach((d) => {
+        if (d.kind === WATCH_KIND_ADDED) added++;
+        else if (d.kind === WATCH_KIND_FP) fp++;
+        else if (d.kind === WATCH_KIND_REMOVED) removed++;
+    });
+    return { added, fp, removed };
+}
+
+/* 单追踪检查后的状态行文案（/ 包描述逐字）：
    - 无变化 → 「本次检查无变化 · 刚检查过」
    - 有变化 → 「发现 N 项变化，见下方待查看更新」（逐条处理入口在挂载区）
    - 截断提示单独行（watchTruncatedNote，见下）；ruleUpdated 提示单独行
@@ -240,7 +253,7 @@ export function watchStatusText(count) {
     return n > 0 ? "发现 " + n + " 项变化，见下方待查看更新" : WATCH_NO_CHANGE_COPY;
 }
 
-/* 单追踪检查回执（「结果汇总如实呈现」+ 用户口径「检查了 N 个，X 个有更新，
+/* 单追踪检查回执（「结果汇总如实呈现」+ 用户口径「检查了 N 个，X 个有更新
    Y 个已是最新」）：resultTotal = 本次确定性重跑的结果总数；changed = material change 数
    （watchChangedCount）；counts = {added, fp, removed}（watchDiffCounts）。
    有更新 → 「检查了 N 条记录，X 条有更新（新增a · 信息变化b · 消失c），Y 条与上次一致」；

@@ -3,7 +3,6 @@
 /* 追踪 UI 壳（一级导航「我的库」+ 我的库浮窗追踪页签 + 追踪详情 +
  * 「存为追踪」入口 + 上下文 chip + 首次保存 coachmark）。
  *
- * 设计：概念模型/追踪/上下文 chip/首次保存就地引导（见各分区注释）。
  * 数据层全部走 `artifacts.js`（IndexedDB）；纯逻辑在 `projects_core.js`；本文件只管 DOM。
  *
  * ## 交互契约
@@ -14,12 +13,12 @@
  * - 「存为追踪」按钮与「生成任务包/可行性概览」同区（results-head-acts），由 results.js
  *   渲染钩子（setAfterRenderHook，注册式反转防环）驱动显隐。
  * - 上下文 chip 经 board.js 注册反转（setArtifactCtxProvider / setArtifactCtxAfterSend）附加
- *   `artifact_context` 请求体字段（独立字段、不拼进用户原话）。后端合并前
+ * `artifact_context` 请求体字段（独立字段、不拼进用户原话）。后端合并前
  *   extra=forbid 会 422 → 发送失败如实降级（chip 上标注「未随上一条消息发出」，不崩不装成功）。
- * - accounts.js 在 profile 切换重置点调 artifactsOnProfileSwitched() 钩子；本模块经
+ * - accounts.js 在 profile 切换重置点调 artifactsOnProfileSwitched()；本模块经
  *   setAccountChangedHook（注册反转，防 accounts→projects 成环）再清上下文 chip/活动追踪 UI 态。
  *
- * ## 埋点（计数型无文本，usage_log 既有通道；追踪名/query/uid 不进遥测）
+ * ## 埋点（计数型无文本，usage_log 既有通道；追踪名/query/uid 不进遥测——）
  * - project_created / project_resumed（打开追踪详情）/ context_card_used{once}
  */
 
@@ -40,7 +39,7 @@ import { setAccountChangedHook } from "#accounts";
 import { setCtxDataSetHandler } from "#fav_folders";   // 注册数据集上下文 chip 设置接口（注册反转防 fav_folders→projects 环）
 import { projectsContextSerialize, projectsDraftFromSearch, projectsLastCheckedText, projectsProjectId,
     projectsSpecFromRequest, projectsStatusCounts } from "#projects_core";
-import { updateDetailMount, runProjectCheck, pendingDeltaCount, checkFailed,
+import { p4DetailMount, runProjectCheck, pendingDeltaCount, checkFailed,
     setWatchesRefreshedHook } from "#project_updates";   // 更新检查交互（探测式降级，见挂载点）
 
 /* ---------- 模块内状态（本文件唯一有状态区；其余函数每次从 DB 现读现渲） ---------- */
@@ -51,7 +50,7 @@ let _ctxCard = null;           // 活动上下文卡：{kind:"track"|"dataset", 
 let _ctxCounted = new Set();   // context_card_used{once} 会话内去重（同追踪只计一次）
 let _detailUI = { goalEditing: false, reasonUid: null, reasonAction: null };  // 详情内联编辑态
 
-/* 行级操作三按钮的内联 SVG（lucide 同族描边语言；行级重复操作用图标钮）。 */
+/* 行级操作三按钮的内联 SVG（视觉 spec §3.2：lucide 同族描边语言；行级重复操作用图标钮）。 */
 const _REFRESH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>';
 const _CHAT_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
 const _TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
@@ -61,7 +60,7 @@ function _scope() { return currentAccountScope(); }
 function _esc(v) { return escapeHtml(v); }
 function _fmtDate(iso) { return iso ? fmtTime(iso) : ""; }
 
-/* 候选卡片化：每条候选 → .prj-cand-wrap（buildCard(variant:"library")
+/* 候选卡片化（视觉 spec §6）：每条候选 → .prj-cand-wrap（buildCard(variant:"library")
    + 操作条 + 理由折叠；状态徽标收进卡片 .badges 行首，不再浮贴出界）。
    目录三态（catalogLookup）：found → 卡片；not_found → 文字行 + 「已下架」；
    load_error → 文字行 + 「目录未加载」（不冒充已下架）并触发全量加载后重渲当前详情。
@@ -214,7 +213,7 @@ async function projectsRenderList() {
             counts["已排除"] ? "已排除 " + counts["已排除"] : "",
         ].filter(Boolean).join(" · ");
         const timeBits = [checked, "更新于 " + _fmtDate(p.updated_at)].filter(Boolean).join(" · ");
-        // 行拆 .prj-card-main（button 语义承载点击进详情）+ .prj-row-acts（sibling 三按钮），
+        // 视觉 spec §3.1：行拆 .prj-card-main（button 语义承载点击进详情）+ .prj-row-acts（sibling 三按钮），
         // 杜绝交互嵌套；三个按钮 click + keydown 都 stopPropagation（不误触进详情）。
         return '<div class="prj-card" data-prj="' + _esc(p.project_id) + '" tabindex="0" role="button" aria-label="打开追踪：' + _esc(p.name) + '">'
             + '<div class="prj-card-main">'
@@ -239,8 +238,8 @@ async function projectsRenderList() {
         el.addEventListener("click", open);
         el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
         const checkBtn = el.querySelector("[data-prj-check]");
-        /* 行按钮检查完要重渲列表行——检查时间 / 「待查看 N」徽章 / 行内失败标记
-           都靠这次重渲上屏（补：此前不调 outcome、不重渲，时间戳要重开窗才刷新）。
+        /* 设计 §3.1：行按钮检查完要重渲列表行——检查时间 / 「待查看 N」徽章 / 行内失败标记
+           都靠这次重渲上屏（此前不调 outcome、不重渲，时间戳要重开窗才刷新）。
            outcome.checking=重入短路，不重渲。 */
         if (checkBtn) checkBtn.addEventListener("click", async (e) => {
             e.stopPropagation();
@@ -290,7 +289,7 @@ function renderProjectDetail(p) {
     const ui = _detailUI;
 
     /* 检查条件展示区：展示实际保存的规范化检索规格 + display_query。
-       本节内容为空时不渲染（不伪造条件）；更新检查交互挂点。 */
+       本节内容为空时不渲染（不伪造条件）；更新检查交互挂点（data-p4-mount-check）在卡末。 */
     let checkHtml = "";
     if (hasCheck) {
         const rows = [];
@@ -311,18 +310,17 @@ function renderProjectDetail(p) {
             + "</div>"
             + (cc.display_query ? '<div class="prj-check-query">原始检索句：' + _esc(cc.display_query) + "</div>" : "")
             + '<div class="prj-check-spec">' + rows.join("") + "</div>"
-            + '<div class="prj-check-mount" data-update-mount-check hidden></div><!-- PROJECT_UPDATES_MOUNT -->'
+            + '<div class="prj-check-mount" data-p4-mount-check hidden></div><!-- ENG-P4-MOUNT：P4 在此挂「检查更新/重试基线」交互；无 P4 时不渲染 -->'
             + "</section>";
     }
 
-    /* 导出区：导出中心挂点。区域默认整段隐藏——导出中心模块（project_exports.js）
-       经 MutationObserver 发现 `[data-export-mount]` 后渲染并展开本节；无导出中心时不渲染
-       （保持「空时不渲染」语义，不出现空标题）。挂点带追踪 id 供导出功能读库。 */
-    /* PROJECT_EXPORTS_MOUNT */
-    const exportHtml = '<section class="prj-sec" data-export-mount-section hidden>'
+    /* 导出区：挂点 data-p5-mount-export。区域默认整段隐藏——导出模块（project_exports.js）
+       经 MutationObserver 发现 `[data-p5-mount-export]` 后渲染并展开本节；导出模块未加载时不渲染
+       （保持「空时不渲染」语义，不出现空标题）。挂点带追踪 id 供导出模块读库。 */
+    const exportHtml = '<section class="prj-sec" data-p5-mount-section hidden>'
         + '<div class="prj-sec-title">导出</div>'
-        + '<div class="prj-export-mount" data-export-mount data-prj-id="' + _esc(p.project_id) + '"></div>'
-        + '<!--：导出中心在此挂导出按钮与导出记录台账；无导出中心时不渲染 --></section>';
+        + '<div class="prj-export-mount" data-p5-mount-export data-prj-id="' + _esc(p.project_id) + '"></div>'
+        + '<!-- ENG-P5-MOUNT：P5 在此挂导出按钮与导出记录台账；无 P5 时不渲染 --></section>';
 
     /* 研究目标（可编辑） */
     const goalHtml = ui.goalEditing
@@ -342,7 +340,7 @@ function renderProjectDetail(p) {
             + "</div>";
     };
 
-    /* 候选列表（卡片化）：目录能解析到 → buildCard(variant:"library") 包 .prj-cand-wrap
+    /* 候选列表（卡片化，视觉 spec §6）：目录能解析到 → buildCard(variant:"library") 包 .prj-cand-wrap
        （状态徽标收进卡片 .badges 行首 + 操作条 + 理由输入折叠）；not_found → 文字行 + 「已下架」；
        load_error → 文字行 + 「目录未加载」（不冒充已下架）并触发重载后再重渲。待核验 → 已核验/已排除（必填理由）；可移除。 */
     const candNodes = _buildCandNodes(p, ui);
@@ -356,7 +354,7 @@ function renderProjectDetail(p) {
         + '<button class="btn btn-primary" type="button" data-prj-use title="把追踪内容放进输入框里的上下文 chip，随下一条消息发给你配置的 AI">在对话中使用</button>'
         + '<button class="btn prj-del" type="button" data-prj-del title="删除这个追踪">删除追踪</button>'
         + "</div></div>"
-        + exportHtml   //  导出区从详情底部挪到页面顶部（头卡之下第一区）——批量导出不再要翻过长候选列表
+        + exportHtml   // 导出区从详情底部挪到页面顶部（头卡之下第一区）——批量导出不再要翻过长候选列表
         + checkHtml   // 检查条件卡靠前（追踪的可检查规格是复查/更新的入口，先于研究目标）
         + '<div class="prj-sec"><div class="prj-sec-title">研究目标<span class="prj-sec-note">候选 ' + (p.candidates || []).length + " · 待核验 " + counts["待核验"] + " · 已核验 " + counts["已核验"] + " · 已排除 " + counts["已排除"] + "</span></div>"
         + goalHtml + "</div>"
@@ -378,10 +376,10 @@ function renderProjectDetail(p) {
         if (ri) { try { ri.focus(); } catch (_e) {} }
     }
 
-    /* （更新检查交互）：检查条件区挂点 div 由更新检查壳填充——「检查更新/
-       重试生成基线」按钮 + 双时间戳 + 待查看更新逐条处理；更新检查未加载（#project_updates
-       未加载，updateDetailMount 不存在）探测式降级：挂点保持 hidden，不渲染不报错。 */
-    if (typeof updateDetailMount === "function") { try { updateDetailMount(p); } catch (_e) {} }
+    /* 更新检查交互：检查条件区挂点 div 由 project_updates 模块填充——「检查更新/
+       重试生成基线」按钮 + 双时间戳 + 待查看更新逐条处理；模块未加载
+       （p4DetailMount 不存在）时探测式降级：挂点保持 hidden，不渲染不报错。 */
+    if (typeof p4DetailMount === "function") { try { p4DetailMount(p); } catch (_e) {} }
 }
 
 function bindProjectDetailEvents(body, p) {
@@ -516,7 +514,7 @@ function bindProjectDetailEvents(body, p) {
 }
 
 /* ============================================================================
- * 上下文 chip（注入文本 + kind 追踪/数据集； 全面返工：双挂点 + 发送即清）
+ * 上下文 chip（注入文本 + kind 追踪/数据集；双挂点 + 发送即清）
  *  - 主输入框 #queryInput（.console-main 内 #artifactCtxMain）：完整胶囊 chip（图标 + 名称截断 + ✕），
  *    绝对定位叠在输入框第一行左侧、与首行文本同一中线；textarea 首行 text-indent 按 chip 实测宽度同步。
  *  - 侧栏继续对话 #chatInput（.cb-bar 内 #artifactCtx）：窄框态缩成 20px 小圆徽章 .ctx-dot，
@@ -647,7 +645,7 @@ function _renderCtxSide() {
    chip 绝对定位叠在 #queryInput 第一行左侧；textarea 首行 text-indent 按 chip 实测宽度同步，
    挂点从隐藏祖先（结果态主框收起）里露出时经 ResizeObserver 补测。
    chip 在场时暂隐主框 placeholder：首行 text-indent 挤压会让长示例文案折行、第二行被
-   单行 textarea 裁出半截灰字（视觉核验），chip 移除后原文恢复。 */
+   单行 textarea 裁出半截灰字，chip 移除后原文恢复。 */
 let _ctxSavedPlaceholder = null;
 function _renderCtxMain() {
     const mount = $("artifactCtxMain");
@@ -755,7 +753,7 @@ async function projectsSaveFromSearch() {
         await artifactsCreateProject(scope, draft.input);
 
         /* 基线：确定性重跑（strategy=fixed 等由后端强制）；失败不掀翻追踪——
-           追踪仍保存（spec 留着供后续重试基线），如实提示。 */
+           追踪仍保存（spec 留着供重试基线），如实提示。 */
         try {
             const res = await fetch(API.watchCheck, {
                 method: "POST", headers: { "Content-Type": "application/json" },
@@ -820,7 +818,7 @@ function projectsShowCoachmark() {
 
 /* ============================================================================
  * profile 切换接线（accounts.js 在 onAccountChanged 调用）：
- * 清内存缓存（经 artifactsOnProfileSwitched 钩子）+ 清上下文卡/活动追踪 UI 态
+ * 清内存缓存（artifacts.js 钩子）+ 清上下文卡/活动追踪 UI 态
  * ========================================================================== */
 export function projectsOnProfileSwitched() {
     artifactsOnProfileSwitched();
@@ -845,7 +843,7 @@ export function projectsAfterResultsSync(data) {
  * 启动（boot.js 调用；全部 DOM 访问 null 守卫——dataset.html 也登记 importmap 但不加载本模块）
  * ========================================================================== */
 export function initProjects() {
-    /*追踪面板注册为「我的库」浮窗的 tracks 页签渲染器（骨架在 shell.js initLibWin；
+    /* 追踪面板注册为「我的库」浮窗的 tracks 页签渲染器（骨架在 shell.js initLibWin；
        原 #projectsNav 一级导航与 #artifactsWin 拖动/缩放自接线一并退役）。 */
     setLibRenderer("tracks", () => { projectsRenderWindow(); });
     const saveBtn = $("saveProjectBtn");
@@ -857,7 +855,7 @@ export function initProjects() {
     if (typeof setCtxDataSetHandler === "function") setCtxDataSetHandler(projectsCtxSetData);   // 收藏「在对话中使用」→ 数据集上下文 chip（注册反转）
     // 账户切换钩子（accounts.js 注册式反转）：切 profile 清上下文 chip/活动追踪 UI 态
     if (typeof setAccountChangedHook === "function") setAccountChangedHook(projectsOnProfileSwitched);
-    //  语料代哨兵自动刷新完成钩子（注册式反转防环）：重渲列表，
+    // 语料代哨兵自动刷新完成钩子（2026-08-26 注册式反转防环）：重渲列表，
     // 让有 delta 的追踪行上「待查看 N」徽标（pendingDeltaCount 既有口径）
     if (typeof setWatchesRefreshedHook === "function") setWatchesRefreshedHook(() => { projectsRenderWindow(); });
 }

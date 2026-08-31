@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LLM 中文介绍层的**确定性**测试（无网络）。
+"""N5 · LLM 中文介绍层的**确定性**测试（无网络）。
 
 覆盖：默认关零成本、mock 短路（`call_mock_llm` 绝不用于介绍）、体裁门、无 key 门、成功路径、
 fail-open（provider 失败/异常→确定性保留）、prompt 接地护栏、additive（确定性字段不变）。
@@ -17,7 +17,7 @@ for p in (str(ROOT / "src"), str(ROOT)):
 
 import pytest
 
-from dataset_recommender.llm import intro_llm
+from dataset_recommender.llm import act_summary_llm, intro_llm, llm_client
 from dataset_recommender.content import summary_genre
 from dataset_recommender.content.introduction import build_dataset_introduction
 from dataset_recommender.llm.llm_client import LLMConfig, LLMResult
@@ -56,9 +56,9 @@ def _cfg(enable=True, provider="openai-compatible", key="sk-test", mock=False):
 def test_default_off_returns_disabled(monkeypatch):
     """默认关（config.enable_llm=False）→ llm_summary=None、status=disabled，且**绝不**调 provider。
     config 经 `load_llm_config`（含 .env）加载——刻意不做 os.getenv 快路径（那会在新进程里把 .env 已开
-    误判成关，集成 E2E 抓到过）。"""
-    monkeypatch.setattr(intro_llm, "load_llm_config", lambda *a, **k: _cfg(enable=False))
-    monkeypatch.setattr(intro_llm, "call_openai_compatible",
+    误判成关，真机 E2E 抓到过）。"""
+    monkeypatch.setattr(act_summary_llm, "load_llm_config", lambda *a, **k: _cfg(enable=False))
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不该调 provider")))
 
     out = intro_llm.enrich_introduction_with_llm(_prose_item())
@@ -69,15 +69,15 @@ def test_default_off_returns_disabled(monkeypatch):
 
 def test_config_loaded_from_env_not_os_getenv(monkeypatch):
     """回归：ENABLE_LLM 只在 .env、不在 os.environ 时，也必须走 load_llm_config 检测到「开」
-    （防 os.getenv 快路径复活——那正是集成 webapp 里 LLM 层静默失效的根因）。"""
+    （防 os.getenv 快路径复活——那正是真机 webapp 里 LLM 层静默失效的根因）。"""
     monkeypatch.delenv("ENABLE_LLM", raising=False)   # os.environ 里没有
-    monkeypatch.setattr(intro_llm, "load_llm_config", lambda *a, **k: _cfg(enable=True))  # 但 .env 载出来是开
+    monkeypatch.setattr(act_summary_llm, "load_llm_config", lambda *a, **k: _cfg(enable=True))  # 但 .env 载出来是开
     called = {}
     def fake(prompt, cfg):
         called["yes"] = True
         return LLMResult(text="导读", attempted=True, succeeded=True, response_used=False,
                          provider="openai-compatible", model="m")
-    monkeypatch.setattr(intro_llm, "call_openai_compatible", fake)
+    monkeypatch.setattr(llm_client, "call_openai_compatible", fake)
     out = intro_llm.enrich_introduction_with_llm(_prose_item())
     assert called.get("yes") is True and out["llm_status"] == "ok"
 
@@ -92,7 +92,7 @@ def test_mock_is_short_circuited():
 
 def test_mock_config_never_calls_provider(monkeypatch):
     """即便显式传 mock config（enable=True），也回退确定性、绝不调任何 provider。"""
-    monkeypatch.setattr(intro_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("mock 不该走真 provider")))
     out = intro_llm.enrich_introduction_with_llm(_prose_item(), config=_cfg(mock=True))
     assert out["llm_summary"] is None
@@ -124,7 +124,7 @@ def test_ready_when_all_conditions_met():
 # ---------------------------------------------------------------- 成功 / fail-open
 
 def test_success_attaches_llm_summary(monkeypatch):
-    monkeypatch.setattr(intro_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda prompt, cfg: LLMResult(text="这是一段中文导读。", attempted=True,
                                                       succeeded=True, response_used=False,
                                                       provider="openai-compatible", model="gpt-x"))
@@ -140,7 +140,7 @@ def test_success_attaches_llm_summary(monkeypatch):
 def test_fail_open_on_provider_failure(monkeypatch):
     """provider 返回失败 → llm_summary=None、status=failed:*，确定性 summary 一字不动。"""
     det = build_dataset_introduction(_prose_item())
-    monkeypatch.setattr(intro_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda prompt, cfg: LLMResult(text=None, attempted=True, succeeded=False,
                                                       response_used=False, provider="openai-compatible",
                                                       model="gpt-x", error="HTTP 500 boom"))
@@ -153,7 +153,7 @@ def test_fail_open_on_provider_failure(monkeypatch):
 
 def test_fail_open_on_provider_exception(monkeypatch):
     det = build_dataset_introduction(_prose_item())
-    monkeypatch.setattr(intro_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network down")))
     out = intro_llm.enrich_introduction_with_llm(_prose_item(), config=_cfg())
     assert out["llm_summary"] is None
@@ -163,7 +163,7 @@ def test_fail_open_on_provider_exception(monkeypatch):
 
 
 def test_empty_llm_text_fails_open(monkeypatch):
-    monkeypatch.setattr(intro_llm, "call_openai_compatible",
+    monkeypatch.setattr(llm_client, "call_openai_compatible",
                         lambda prompt, cfg: LLMResult(text="   ", attempted=True, succeeded=True,
                                                       response_used=False, provider="openai-compatible",
                                                       model="gpt-x"))
@@ -178,7 +178,7 @@ def test_prompt_prose_has_guardrails_and_residual():
     item = _prose_item()
     intro = build_dataset_introduction(item)
     prompt = intro_llm.build_intro_prompt(intro, item, summary_genre.GENRE_PROSE)
-    assert "开创性" in prompt or "独占性" in prompt        # 禁开创性/独占性断言（受众不变量措辞）
+    assert "开创性" in prompt or "独占性" in prompt        # 禁开创性/独占性断言（N2 受众不变量措辞）
     assert "忠实改写" in prompt
     assert "immune cells of human lung" in prompt          # residual 接地进 prompt
     assert "未标注" in prompt or "未说明" in prompt
@@ -327,7 +327,7 @@ def test_enrich_sends_grounded_prompt_to_provider(monkeypatch):
         sent["prompt"] = prompt
         return LLMResult(text="导读", attempted=True, succeeded=True, response_used=False,
                          provider="openai-compatible", model="m")
-    monkeypatch.setattr(intro_llm, "call_openai_compatible", fake)
+    monkeypatch.setattr(llm_client, "call_openai_compatible", fake)
     out = intro_llm.enrich_introduction_with_llm(_prose_item(), config=_cfg())
     assert out["llm_status"] == "ok"
     assert "----- 术语规范（" in sent["prompt"]

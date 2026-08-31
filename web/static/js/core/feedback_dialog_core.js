@@ -1,6 +1,6 @@
 "use strict";
 
-/* 意见反馈对话框 · 纯逻辑核心（UI 壳在 feedback.js）
+/* 意见反馈对话框 · 纯逻辑核心（2026-08-22，UI 壳在 feedback.js）
  *
  * 纯逻辑、零 DOM、零网络、零存储、零墙钟依赖（now/id 由调用方注入或本模块生成但不读
  * localStorage）：只做对话框状态要用的确定性计算——
@@ -8,17 +8,19 @@
  *   同源，避免「UI 说能写、入队被悄悄截断」的两套口径）；
  * - `feedbackDiagBuild()`：把 usage 事件数组交给 feedback_core.buildDiagSnapshot 聚合，
  *   并生成给用户看的**中文摘要行**（版本/平台/最近错误/功能使用计数；遥测关闭 events=null
- *   → available:false + 「无可用统计」，**不得为诊断重启采集**）；
+ *   → available:false + 「无可用统计」，**不得为诊断重启采集**——设计 §8）；
  * - `feedbackEntryBuild()`：构造入队用的不可变记录条目（feedback_id/授权时间/遮蔽由
  *   feedback_core.feedbackEnqueue 兜底，这里只定格授权语义）；
  * - `feedbackClipboardText()`：复制到剪贴板的正文（勾选附诊断时追加诊断块）；
- * - `feedbackNewId()`：feedback_id 生成（与 feedback_core._makeFeedbackId 同格式约定）。
+ * - `feedbackNewId()`：feedback_id 生成（唯一实现本就在 feedback_core，本模块 re-export
+ *   供 UI 壳一处取齐，格式永不分叉）。
  *
  * 分层（与 usage_core/benchfb_core 同哲学）：本文件只被 UI 壳 feedback.js 相对 import，
  * 不进 importmap/静态图、不进任何 import 环；存储（per-profile feedback_pending 队列）在
  * feedback_core.js，唯一出网通道在 usage_upload.js（sendFeedback），本文件一个都不碰。
  */
-import { FEEDBACK_MAX_TEXT, buildDiagSnapshot } from "./feedback_core.js";
+import { FEEDBACK_MAX_TEXT, buildDiagSnapshot, feedbackNewId } from "./feedback_core.js";
+export { feedbackNewId };
 
 /* 诊断摘要里功能计数的中文标签（键与 feedback_core.FEEDBACK_DIAG_KINDS 同值同源；ai 在
    buildDiagSnapshot 里只产 ai_ok（ok:false 的 ai 并入错误计数、不另立 ai_fail），err 并入
@@ -29,7 +31,7 @@ export const FEEDBACK_DIALOG_DIAG_LABELS = {
     ai_ok: "AI 成功",
 };
 
-/* 遥测关闭/无事件可用时对话框如实显示的文案（显示「无可用统计」，不采集）。 */
+/* 遥测关闭/无事件可用时对话框如实显示的文案（设计 §8：显示「无可用统计」，不采集）。 */
 export const FEEDBACK_DIAG_UNAVAILABLE_TEXT = "无可用统计（遥测未开启，不为此采集）";
 
 /* ---------- 意见正文校验 ---------- */
@@ -123,11 +125,4 @@ export function feedbackClipboardText(text, diag) {
     return lines.join("\n");
 }
 
-/* ---------- feedback_id 生成（格式约定与 feedback_core._makeFeedbackId 同源） ---------- */
-
-export function feedbackNewId() {
-    try {
-        if (typeof crypto !== "undefined" && crypto.randomUUID) return "fb-" + crypto.randomUUID();
-    } catch (_e) {}
-    return "fb-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
-}
+/* ---------- feedback_id 生成（唯一实现在 feedback_core.feedbackNewId，本模块 re-export） ---------- */

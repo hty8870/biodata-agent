@@ -6,9 +6,10 @@
    interactions 的 autoGrow/resetHistClear/initSourceChips、fav_folders 的 renderFavFolderBar/
    renderFavFolderGroups/setFavRerender、reuse_pack 的 syncReuseBar、board 的 renderCondBoard/cbRestoreConversation
    经 import 取（browse↔interactions 成环，绑定都只在函数体内使用，ESM 允许。
-    验证：browse↔fav_folders 环已切——renderFavorites 由本文件在模块求值期
+   2026-08-10：browse↔fav_folders 环已切——renderFavorites 由本文件在模块求值期
    经 setFavRerender 注册给 fav_folders，fav_folders→browse 反向边消失，见 fav_folders.js 头部）。
-   shell/accounts/boot 与 interactions/fav_folders/reuse_pack 同样经 import 取本文件导出。 */
+   shell/accounts/boot 与 interactions/fav_folders/reuse_pack 同样经 import 取本文件导出
+   （绞杀桥已全退役）。 */
 import { API, LS, REDUCE_MOTION, $, countUp, escapeHtml, fmtTime, getFavs, getHist, isFav, itemKey, killRevealST, nsKey, prettyPlatform, revealCards, toast, writeJSON } from "#core";
 import { buildCard } from "#cards";
 import { resetSubmitButton } from "#progress";
@@ -21,20 +22,20 @@ import { ACCOUNTS_READY } from "#accounts";
 import { renderFavFolderBar, renderFavFolderGroups, setFavRerender, setCatalogLookup, setCatalogEnsure } from "#fav_folders";
 import { syncReuseBar } from "#reuse_pack";
 
-/*  注册反转：把 renderFavorites 注册给 fav_folders（它不再 import 本文件，沿 core.js
+/* 注册反转：把 renderFavorites 注册给 fav_folders（它不再 import 本文件，沿 core.js
    setHistHooks 同一范式）。函数声明提升使模块求值期即可注册；fav_folders 侧全部调用点都在
    用户交互路径上，注册必定先于任何触发；不加载本文件的页面（dataset.html）由 fav_folders
    侧的空值守卫兜底——那些页面本就没有收藏视图，调用点本来也不可达。 */
 setFavRerender(renderFavorites);
-/*把 catalogLookup 注册给 fav_folders（收藏操作条「更新」需要目录三态访问器；浏览→收藏
+/* 把 catalogLookup 注册给 fav_folders（收藏操作条「更新」需要目录三态访问器；浏览→收藏
    反向边保持切断，fav_folders 不 import 本文件）。 */
 if (typeof setCatalogLookup === "function") setCatalogLookup(catalogLookup);
-/*连同目录加载器一起注册——收藏页签「更新」在目录未加载时先拉目录再重查一次
+/* 连同目录加载器一起注册——收藏页签「更新」在目录未加载时先拉目录再重查一次
    （否则没进过浏览视图的用户点「更新」永远只得「目录未加载」，重试也落空）。
    ensureDatasetsLoaded 是函数声明，提升后模块求值期可引用。 */
 if (typeof setCatalogEnsure === "function") setCatalogEnsure(ensureDatasetsLoaded);
 
-/* ---------- browse 状态（所有来源并列展示，可按来源筛选；自 search.js 末尾归位） ---------- */
+/* ---------- browse 状态（所有来源并列展示，可按来源筛选） ---------- */
 let allDatasets = null;
 export const bs = { source: "", species: "", platform: "", fastq: false, q: "", yearFrom: "", yearTo: "", page: 1, pageSize: 24 };
 
@@ -136,7 +137,7 @@ export async function ensureDatasetsLoaded(force) {
     browseLoadFailed = false;
     $("browseGrid").innerHTML = `<div class="muted-block">加载全部数据集…</div>`;
     // 首载在途窗口就把计数区复位成「—」——否则它整窗显示 HTML 静态默认的
-    // 「符合条件 0 条 / 第 1 / 1 页」（还没加载就报 0 条，正是要消灭的伪精确；二次进入
+    // 「符合条件 0 条 / 第 1 / 1 页」（还没加载就报 0 条的伪精确；二次进入
     // 走 allDatasets 缓存不经过这里）。与 renderBrowse 的加载中分支同一口径；落地后由它覆写真实值。
     $("browseCount").textContent = "—";
     $("browsePageInfo").textContent = "—";
@@ -159,7 +160,7 @@ export async function ensureDatasetsLoaded(force) {
         bs.page = 1; renderBrowse();   // renderBrowse → renderBrowseTimeline，时间线随之建好
     } catch (err) {
         browseLoadFailed = true;
-        // A4：拉取失败别把时间线永久停在「正在统计…」占位——一并复位到明确失败态，不给"还在加载"的错觉。
+        // 拉取失败别把时间线永久停在「正在统计…」占位——一并复位到明确失败态，不给"还在加载"的错觉。
         allDatasets = null; browseYearFacets = []; browseUnknownYears = 0; browseUnknownYearsLive = 0;
         const bars = $("timelineBars"); if (bars) bars.innerHTML = `<div class="timeline-empty">时间线加载失败</div>`;
         const unk = $("timelineUnknown"); if (unk) unk.textContent = "未标注发表日期 —";
@@ -170,7 +171,7 @@ export async function ensureDatasetsLoaded(force) {
         renderBrowse();
     }
 }
-/* 目录三态访问器：区分「真不在目录」与「/api/datasets 加载失败/未完成」。**无 DOM 副作用**，
+/* 目录三态访问器（设计 §4）：区分「真不在目录」与「/api/datasets 加载失败/未完成」。**无 DOM 副作用**，
    只读 allDatasets（allDatasets 私有问题由该访问器封装给 projects/fav_folders 用）。
    load_error 一律不标「已下架」而是「目录未加载，稍后重试」。 */
 export function catalogLookup(uid) {
@@ -179,7 +180,7 @@ export function catalogLookup(uid) {
     const item = allDatasets.find((it) => String(it && it.dataset_uid) === u || itemKey(it) === u);
     return item ? { status: "found", item } : { status: "not_found" };
 }
-/* 翻页 / 改每页条数后平滑滚回列表顶部（L2）：锚点是「数据集」结果头（grid 正上方），
+/* 翻页 / 改每页条数后平滑滚回列表顶部：锚点是「数据集」结果头（grid 正上方），
    reduced-motion 下直接跳转（behavior:"auto"），不做平滑。 */
 export function scrollBrowseTop() {
     const head = $("browseGrid") && $("browseGrid").previousElementSibling;
@@ -229,8 +230,8 @@ export function renderBrowse() {
     const slice = list.slice(start, start + bs.pageSize);
     countUp($("browseCount"), list.length);
     const grid = $("browseGrid");
-    /* 网格重建幂等：卡片集没变就不动 DOM；只收藏态变（账户切换）就地翻心形。
-       根因之一（普查 -③「加载后 ~1s 内首次点心形偶发无反应」）：启动期 whoami 落定 →
+    /* 网格重建幂等（2026-08-04）：卡片集没变就不动 DOM；只收藏态变（账户切换）就地翻心形。
+       根因之一（「加载后 ~1s 内首次点心形偶发无反应」）：启动期 whoami 落定 →
        onAccountChanged 按「视图==browse」再调一次 renderBrowse（命名空间没变时内容逐字相同），
        旧实现无条件 innerHTML 重建 → revealCards 入场重播（gsap.set autoAlpha:0 + y 位移）——
        刚浮现的心形被打回隐藏/移动态，受信点击在命中测试时落空（JS el.click() 不做命中测试故
@@ -240,10 +241,10 @@ export function renderBrowse() {
        yearSig；页码/计数/时间线在守卫外照常更新。 */
     const itemsTok = datasetsGen + "\n" + slice.map(itemKey).join("\n");
     const favsTok = slice.map((it) => (isFav(it) ? "1" : "0")).join("");
-    /* E3b点心形不许触发浏览器默认聚焦滚动（-③ 根因之二）。心形半露出视口边缘时，
+    /* 点心形不许触发浏览器默认聚焦滚动（2026-08-04）。心形半露出视口边缘时，
        mousedown 的默认聚焦会把页面滚到心形完全可见——这次由开场点击**自己**引发的滚动落在
        popover 的「滚动即关」监听登记**之后**，刚开的 popover 被自己的点击关掉（观感=点了没反应；
-       插桩实证：closeFavPopover ← _onFavPopoverPassiveClose ← #document scroll）。
+       真机插桩实锤：closeFavPopover ← _onFavPopoverPassiveClose ← #document scroll）。
        preventDefault 阻断聚焦即阻断这条滚动；键盘 Tab 聚焦不经 mousedown，可达性不受影响。
        绑在静态 grid 上（卡片重建不影响监听本身），一次即可。 */
     if (!grid.dataset.favGuard) {
@@ -284,7 +285,7 @@ export function renderFavorites() {
     if (typeof renderFavFolderGroups === "function") renderFavFolderGroups(favs, grid);
     revealCards(grid.querySelectorAll(".card"), false);
 }
-/* 历史按**对话**分组：一段对话会一轮一行地写进历史，
+/* 历史按**对话**分组（用户 2026-07-29 反馈）：一段对话会一轮一行地写进历史，
    分开列会把一段连贯的对话拆成一串近乎相同的行。同 `convId` 的行合成一组，组内**新→旧**，
    组的先后按其最新一轮（历史本身就是倒序，故按首次出现即可）。
    老历史行没有 convId → 各自成组，显示与从前逐字相同。 */
@@ -305,7 +306,7 @@ function histGroups(hist) {
 function viewHistorySnapshot(group) {
     const chron = Array.isArray(group) ? group.slice().reverse() : [group];   // 旧→新
     const h = chron[chron.length - 1];                                        // 落在最后一轮上
-    //  仅对话行：当时一句检索都没跑过，没有结果快照可落——如实回到
+    // 仅对话行（2026-08-04）：当时一句检索都没跑过，没有结果快照可落——如实回到
     // 「只有对话没有结果」的态：作废在途、退出结果态（屏上旧结果/分面/条件板随之收起；
     // 其 cbClear 会先归档屏上未归档的对话，同一口径），再把整条对话搬回主区。
     if (h && h.chatOnly) {
@@ -328,7 +329,7 @@ function viewHistorySnapshot(group) {
         showView("query"); $("queryInput").value = (h && h.query) || ""; autoGrow($("queryInput")); runRecommend(); return;
     }
     // 关键：让**在途 runRecommend** 失效——否则它稍后到达时 myGen===_recSeq 仍会落地，
-    //  把刚渲染的快照顶掉、且用当前（快照的）_facetFilters 回灌一条错配历史（验证）。
+    // 把刚渲染的快照顶掉、且用当前（快照的）_facetFilters 回灌一条错配历史。
     bumpRecSeq();   // 属主是 search.js（ESM）：作废在途 runRecommend 必经其写口（原 ++_recSeq 裸写在 getter 桥上会 TypeError）
     resetSubmitButton();   // 取消在途请求的进度 rAF + 同步复位（其 finally 因 myGen 失配会跳过收尾）
     showView("query");
@@ -348,10 +349,10 @@ function viewHistorySnapshot(group) {
     cbRestoreConversation(chron);
     toast(chron.length > 1 ? `已回看这条对话，共 ${chron.length} 轮` : "已回看这次检索的结果快照");
 }
-/* ---------- 历史记录（独立浮窗 #histWin； 拆回单页签）----------
+/* ---------- 历史记录（独立浮窗 #histWin；后拆回单页签）----------
    浮窗骨架（开合/拖动/缩放/落位）唯一属主在 shell.js（initHistWinSkeleton），
    本文件只管历史渲染：initHistWin 把 renderHistory 经 setHistRenderer 注册进历史浮窗。
-   行交互：**点行本体**＝在本标签页找回这条对话（viewHistorySnapshot：
+   行交互（2026-08-03 用户反馈）：**点行本体**＝在本标签页找回这条对话（viewHistorySnapshot：
    对话记录+细化+最后一轮结果整体找回；老格式无快照自动回退重跑）；行尾三个动作——
    新标签页打开（?conv= 链接）、按当前库重新检索、删除（二段确认，仿 histClear armed 模式）。 */
 
@@ -425,13 +426,13 @@ function deleteHistoryGroup(g) {
 }
 
 export function initHistWin() {
-    /* 历史拆回独立浮窗 #histWin（骨架在 shell.js initHistWinSkeleton），
+    /* 2026-08-23：历史拆回独立浮窗 #histWin（骨架在 shell.js initHistWinSkeleton），
        收藏迁入 #libWin 收藏页签；本函数（boot.js 调用不变）职责：① 把历史渲染注册进 #histWin
        （setHistRenderer 注册反转）与收藏渲染注册进 #libWin favs 页签（setLibRenderer）；② ?conv=/?fork= 落点处理。 */
     setHistRenderer(renderHistory);
     setLibRenderer("favs", renderFavorites);
     // ?conv=：新标签页打开某条对话（同一 localStorage）。读完即擦掉参数——刷新不重复触发。
-    // ?fork=<convId>:<N>：分支落点（点7）——以第 N 轮为起点，把前 N 轮历史重建进本标签页，
+    // ?fork=<convId>:<N>：分支落点——以第 N 轮为起点，把前 N 轮历史重建进本标签页，
     // 并换新 convId（cbAdoptAsBranch）：之后这条分支的检索与原对话分成两条历史，互不串行。
     // 两个落点都必须等启动期 whoami 落定（ACCOUNTS_READY）再跑：onAccountChanged 里有 cbClear()，
     // whoami 晚回来一步会把刚找回的对话再清掉（真实复现过的竞态——分支新标签页聊天记录为空）。

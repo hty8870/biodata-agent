@@ -60,7 +60,7 @@ def _run_node(script: str, payload: object, suffix: str = ".cjs") -> object:
     if not node:
         pytest.skip("未解析到 node.js —— 跳过执行层真行为门（full 质量门的语法检查环节必有 node）。")
     # act.js 长大之后 `node -e <script>` 会撞 Windows 命令行长度上限（WinError 206，
-    # curate.* 接线后验证触发）——脚本落临时文件再跑。门的语义不变：
+    # 2026-08-01 curate.* 接线后实测触发）——脚本落临时文件再跑。门的语义不变：
     # 仍是加载真 act_core.js、在 node 里跑真函数。
     fd, script_path = tempfile.mkstemp(suffix=suffix, prefix="biodata_act_gate_")
     try:
@@ -80,7 +80,7 @@ def _run_node(script: str, payload: object, suffix: str = ".cjs") -> object:
 def _act_in_node(expr: str, payload: object) -> object:
     """在 node 里加载执行层的纯函数（act_core.js 纯核），跑一段表达式。
 
-    act_core.js 已是 ES Module——不能再文本拼接进 CJS 脚本。
+    act_core.js 已是 ES Module（Phase C · C1）——不能再文本拼接进 CJS 脚本。
     改为临时 .mjs：经 file:// URL import 纯核命名空间、挂上 globalThis 后跑表达式。
     传入表达式只引用 act_core 的符号（act.js 不需要进 node）；act_core 顶层不碰 DOM，无需桩。"""
     script = (
@@ -111,7 +111,7 @@ def _function_source(src: str, name: str) -> str:
 
 
 def _browser_helper_in_node(src: str, name: str, expr: str, payload: object) -> object:
-    """：执行 results/act 中的纯 helper，避免静态字符串钉再次误绿。"""
+    """2026-08-18：执行 results/act 中的纯 helper，避免静态字符串钉再次误绿。"""
     script = (
         'const { readFileSync } = require("node:fs");\n'
         + _function_source(src, name) + "\n"
@@ -127,7 +127,7 @@ def _card_in_node(src: str, name: str, expr: str, payload: object, deps: "list[s
     act.js 的卡片构造函数引用从 #core / #act_core 导入的 `escapeHtml` / `tpBytes`
     （与 act_core 顶层不同，act.js 顶层依赖浏览器）——node 里给**行为与真实现一致**的
     纯函数桩（escapeHtml 逐字符同 core.js；tpBytes 从 act_core.js 抽取真函数、不再手桩——
-     曾因手桩掩盖 act.js 漏 import tpBytes 的 ReferenceError，import 缺失由结构门
+    曾因手桩掩盖 act.js 漏 import tpBytes 的 ReferenceError，import 缺失由结构门
     单独钉死）；API 只供 citationsDownload 常量，卡片只读它。deps：被测函数引用的其它
     act.js 具名函数（如 actLoopStepCardHtml 分发的四个构造函数），一并抽取进 node 作用域。
     断言渲染出的 HTML 结构/措辞。"""
@@ -139,6 +139,9 @@ def _card_in_node(src: str, name: str, expr: str, payload: object, deps: "list[s
         'const API = { citationsDownload: "/api/citations/download" };\n'
     )
     deps_src = "".join(_function_source(src, d) + "\n" for d in (deps or []))
+    # arxRow 是 act.js 卡片行骨架的文件级共享助手：卡片函数普遍引用，随真源码一并抽取。
+    if "function arxRow(" in src:
+        deps_src += _function_source(src, "arxRow") + "\n"
     script = (
         'const { readFileSync } = require("node:fs");\n'
         + stubs
@@ -169,12 +172,12 @@ def test_the_failure_template_structurally_cannot_say_it_was_done():
 
 
 def test_the_summary_factual_line_comes_from_the_same_template():
-    """对话流里那条执行总结的事实句与回执**必须同源**（总结长在对话流，不再设结果区回执卡）。
+    """对话流里那条执行总结的事实句与回执**必须同源**（p10 起总结长在对话流，不再设结果区回执卡）。
 
     第一版 `board.js` 自己写死了一句「已按你说的执行，回执在结果区」，只要执行层返回了
     truthy 就贴上去 —— 于是「上一步还在跑」「屏上没结果」「产包失败」三档全都：
     回执写着「这一步没有完成」，聊天里写着「已按你说的执行」。同一件事，两句相反的话。
-    落法：事实句只由 act_core 的 actWhatHappened 构造（成功支带「已」、失败支结构上
+    p10 的落法：事实句只由 act_core 的 actWhatHappened 构造（成功支带「已」、失败支结构上
     取不到「已」），board.js 不许自己造文案（它拿到的 true 只表示「执行层已全程呈现」，
     挂的是空注记）。LLM 总结只是对这句事实句的改写层（act.js actFetchLlmSummary），
     不改写时事实句原样留存。"""
@@ -196,7 +199,7 @@ def test_busy_and_blocked_paths_never_claim_the_step_was_done():
     body = re.search(r"async function actDispatchPlan\([^)]*\)\s*\{(.*?)\n\}", ACT, re.S)
     assert body, "找不到 actDispatchPlan"
     dispatch = _strip_comments(body.group(1))
-    # 返回值契约：true=行动流全程呈现（调用方只标 action、不挂文案）；字符串=以注记挂上
+    # p10 返回值契约：true=行动流全程呈现（调用方只标 action、不挂文案）；字符串=以注记挂上
     # （取消 reason / 忙碌）；false=不属执行。true 之所以安全：文案从来不由调用方造。
     assert "ACT_BUSY_NOTE" in dispatch, "忙碌档要如实回忙碌注记"
     assert "plan.reason_zh" in dispatch, "取消档要原样回后端 reason_zh"
@@ -218,8 +221,10 @@ def test_a_failed_blob_download_is_not_reported_as_done():
         body = re.search(r"async function " + runner + r"\([^)]*\)\s*\{(.*?)\n\}", ACT, re.S)
         assert body, runner
         code = _strip_comments(body.group(1))
-        assert "= downloadTextBlob(" in code and "if (!saved)" in code, (
-            f"{runner} 没有消费 downloadTextBlob 的返回值"
+        # 返回值消费纪律钉在共用锚点上：autoDownloadReuseTrio 返回 {md, ris, bib} 布尔，
+        # 两个 runner 都必须取回并用 !saved 判败（锚点内部转发 downloadTextBlob 的真伪）。
+        assert "= autoDownloadReuseTrio(" in code and "if (!saved)" in code, (
+            f"{runner} 没有消费 autoDownloadReuseTrio 的返回值"
         )
 
 
@@ -297,7 +302,7 @@ def test_every_frontend_source_state_has_a_sentence():
 def test_the_dispatcher_never_consults_confidence():
     """堵死旧哲学的回插口。
 
-    验证抓到 `confidence` 是个悬空字段——没人消费的 `"low"`，后人最自然的动作就是加一句
+    评审抓到 `confidence` 是个悬空字段——没人消费的 `"low"`，后人最自然的动作就是加一句
     「是这个意思吗？」，于是「低置信度转确认」这个旧哲学最体面的马甲会从空白处长出来。
     派发函数里**一次都不许出现** confidence：它只能影响回执排版（在 actReceiptFrom 里）。
     """
@@ -319,9 +324,9 @@ def test_every_exec_verb_has_a_runner_and_no_runner_is_invented():
     """封闭词表与派发表必须一一对应：多一个 = 前端能做后端没授权的事；少一个 = 静默不响应。
 
     例外机制只有 `FRONTEND_UNWIRED_EXEC_VERBS`（后端模块级常量，不在这里手抄）——只准放
-    「有独立执行入口、前端暂未接线」的动词。curate.* 六动词已全部毕业（前四个已接线、
-    restore 随统一对话窗口接线、check_updates 亦接线）。
-    清单现只含 search.rerun（检索工具化）：环内专属动词，**永久豁免**——
+    「有独立执行入口、前端暂未接线」的动词。curate.* 六动词已全部毕业（前四个 2026-08-01 、
+    restore 同日随统一对话窗口接线、check_updates 2026-08-03 随批接线）。
+    清单现只含 search.rerun（2026-08-16 检索工具化）：环内专属动词，**永久豁免**——
     前端只渲染步骤卡、刻意不写 runner（runner 直打 /api/recommend 会绕过后端机械择优闸）。"""
     table = re.search(r"const ACT_RUNNERS = \{(.*?)\};", ACT, re.S)
     assert table, "找不到 ACT_RUNNERS"
@@ -338,7 +343,7 @@ def test_act_is_actually_wired_to_the_screen():
     assert re.search(r"\bfunction\s+initAct\b", ACT)
     assert "initAct()" in BOOT, "boot.js 没有初始化执行层（纠错按钮会点了没反应）"
     assert 'id="cbHistory"' in HTML, "index.html 缺少对话流挂点 #cbHistory（行动流与总结都长在这里）"
-    assert '$("cbHistory")' in ACT, "纠错 chips 的点击委托必须挂在对话流上（chips 长在总结泡里）"
+    assert '$("cbHistory")' in ACT, "纠错 chips 的点击委托必须挂在对话流上（p10 起 chips 长在总结泡里）"
     assert "arxOnChange(cbRenderHistory)" in ACT, "行动流的重画必须收口到对话流"
     assert "survey" not in BOOT, "问卷弹窗已随执行侧全自动化退役（boot 不该再初始化它）"
     assert ACT.count('"/api/action/plan"') == 0, "act.js 里不该再手写一遍端点地址"
@@ -364,10 +369,10 @@ def test_board_and_search_both_route_through_the_execution_layer():
     assert SEARCH.count("actAfterSearch(") == 2, "runRecommend 的两个成功落地点都要接"
 
 
-# ---------------------------------------------------------------- 零命中救回
+# ---------------------------------------------------------------- 零命中救回（sr1，检索工具化 Phase 2）
 
 def test_landing_goes_through_one_shared_entry():
-    """设计约定：runRecommend 两个落地点与救回换屏**同走 landRecommendResult**——
+    """：runRecommend 两个落地点与救回换屏**同走 landRecommendResult**——
     条件板推帧/回填三件套只许出现在共享函数体内，不许第二调用方各抄一份
     （抄出去 = 「回到上一步」帧语义两边漂移的起点）。"""
     assert re.search(r"export function landRecommendResult\(data, query, opts\)", SEARCH)
@@ -377,7 +382,7 @@ def test_landing_goes_through_one_shared_entry():
     assert SEARCH.count("landRecommendResult(data, query, { noScroll") == 1, "真请求落地点没走共享入口"
     # 救回换屏路径已退役（救回不再发 /api/agent/search-rescue），共享入口只剩缓存 + 真请求
     # 两处调用。推帧仍在（preliminary 先行帧与 final a 档换屏按住进度泡不蜕变）。
-    # 初步结果先行：推帧加第三参 popts.keepProgress（preliminary 先行帧
+    # prelim1（2026-08-16 初步结果先行）：推帧加第三参 popts.keepProgress（preliminary 先行帧
     # 与 final a 档换屏按住进度泡不蜕变）——钉字刻意更新为三参形态。
     land = re.search(r"export function landRecommendResult\([^)]*\)\s*\{(.*?)\n\}", SEARCH, re.S)
     assert land and "cbPushCurrent(data, query, { keepProgress:" in land.group(1), (
@@ -409,7 +414,7 @@ def test_rescue_option_strip_is_wired_in_board():
 
 
 def test_rescue_option_derivation_lives_in_batch_select():
-    """：零命中救回纯逻辑集中在 batch_select.js——isZeroHitBatch（payload.results 空数组）、
+    """：零命中救回纯逻辑集中在 batch_select.js——isZeroHitBatch（payload.results 空数组）
     deriveRescueOptions（relaxation_options → degraded_search → query_constraints → 兜底换词）、
     latestActiveBatchId（最后一个回执 entry 的活跃批）。board 从它取用，不各抄一份。
     「点击处理」只在零命中批是最新结果（最后回执 entry 的活跃批）时出现。"""
@@ -442,7 +447,7 @@ def test_plansteps_wiring_is_kept_for_trace_summary():
 
 
 def test_adopt_swap_sys_line_prefers_batch_disclosure():
-    """ rescue2 披露句移植进环（评估迁移步骤 2 的前端消费侧）：换屏的 sys 留痕
+    """2026-08-18 rescue2 披露句移植进环（评估迁移步骤 2 的前端消费侧）：换屏的 sys 留痕
     优先读活跃批随行的 disclosure_zh（确定性披露：哪些词没被理解/被丢弃），批上无该键时
     回退既有通用句——回退句不许删（无披露句的采纳批仍要有留痕）。披露读取
     与「已更新」词句一并收进共享应用函数 _applyBatchDecision（search a 档与 route=tool 档共用）。"""
@@ -455,7 +460,7 @@ def test_adopt_swap_sys_line_prefers_batch_disclosure():
 
 
 def test_search_rerun_step_card_is_summary_only_and_never_a_runner():
-    """search_rerun 步骤卡（设计约定）：只出摘要三要素（改写词 + 采纳/拒绝 + n_before→n_after），
+    """search_rerun 步骤卡：只出摘要三要素（改写词 + 采纳/拒绝 + n_before→n_after）
     动作链恒 replace_screen=false——卡片措辞绝不暗示换屏；前端**刻意无 runner**
     （runner 直打 /api/recommend 会绕过后端机械择优闸，豁免理由在 action_plan.py 常量注释）。"""
     assert 's.card_kind === "search_rerun"' in ACT
@@ -635,15 +640,16 @@ def test_fair_check_card_renders_readiness_counts_and_details():
 def test_act_finish_passes_four_tool_cards_through_html_channel():
     """：actDispatchPlan 图内通道收集四工具卡（按执行顺序拼接）交给 actFinish 的 html 通道
     （.cbh-sys-extra，entry.html 是重画真源 → 历史重画随 html 一起恢复）；非四工具步不上卡
-    （精简不回流）；actSummaryHtml 的 精简契约保持不动。"""
+    （精简不回流）；actSummaryHtml 的精简契约保持不动。"""
     disp = _strip_comments(_fn_body(ACT, "export async function actDispatchPlan(plan, said)"))
     assert "FOUR_TOOL_CARD_KINDS" in disp and "actLoopStepCardHtml(s)" in disp
     assert "cardsHtml: cardsHtml" in disp, "图内通道必须把卡片交给 actFinish"
     finish = _strip_comments(_fn_body(ACT, "function actFinish(plan, outcome, said, opts)"))
     assert "opts.cardsHtml" in finish and 'cbLogPush("sys", factual' in finish
     assert "execSummary" not in finish, "执行摘要通道已退役（摘要归信息流压缩行）"
-    assert "cbExecReceiptCovered" in finish and "_actRetrievalOnly" in finish, (
+    assert "cbExecReceiptCovered" in finish and "planIsRetrievalOnly" in finish, (
         "唯一气泡规则：纯检索计划且批次回执已接管时 actFinish 必须抑制第二颗气泡"
+        "（纯检索判定锚点：board_core.planIsRetrievalOnly）"
     )
     assert "detailLines:" not in finish, "明细折叠区不得回流"
     summ = _strip_comments(_fn_body(ACT, "function actSummaryHtml(opts)"))
@@ -686,7 +692,7 @@ def test_combo_turn_step_sequence_dispatches_cite_card():
 
 
 def test_rollback_step_receipt_uses_real_result_not_generic_write_claim():
-    """ 真行为钉：拒绝不谎称改库；成功按实际恢复/失败文件数播报。"""
+    """2026-08-18 真行为钉：拒绝不谎称改库；成功按实际恢复/失败文件数播报。"""
     payload = {
         "refused": {"card_kind": "rollback", "ok": True, "readonly": False,
                     "result": {"rolled_back": False, "note_zh": "本轮没有可回滚的写操作。",
@@ -703,11 +709,11 @@ def test_rollback_step_receipt_uses_real_result_not_generic_write_claim():
     assert "改动了本地库" not in out[0]
     assert "3 个文件" in out[1] and "1 项未能恢复" in out[1]
     assert 's.card_kind === "rollback"' in ACT
-    assert "这一步已经跑完，没有需要展示的内容。" in ACT, "空回执措辞不得回退"
+    assert "这一步已经跑完，没有需要展示的内容。" in ACT, "上一批空回执措辞不得回退"
 
 
 def test_batch_pill_texts_are_unique_for_every_collision_shape():
-    """ 真行为钉：跨 kind、同 kind、20 字截断撞名后，pill 文案仍两两唯一。"""
+    """2026-08-18 真行为钉：跨 kind、同 kind、20 字截断撞名后，pill 文案仍两两唯一。"""
     batches = [
         {"kind": "preliminary", "label": "同一句", "payload": {}},
         {"kind": "rank", "label": "同一句", "payload": {}},
@@ -745,7 +751,7 @@ def test_auto_execution_only_fires_on_a_hand_typed_submit():
 
 
 def test_the_route_llm_follows_api_capability_not_a_master_switch():
-    """设置三维度化：大模型总开关退役，`getConfig().use_llm` 由
+    """2026-08-03 设置三维度化：大模型总开关退役，`getConfig().use_llm` 由
     **API 可用性**（llmCapable 单一判据：已配 key 必可用；mock 演示恒 true）门控，
     AI 润色是独立开关 `cfgPolish`（getConfig 另发 `polish` 字段）。
     统一路由（ubRouteBody）读它——API 不可用时路由走规则兜底/降级气泡，如实回音，
@@ -760,7 +766,7 @@ def test_the_route_llm_follows_api_capability_not_a_master_switch():
 
 
 def test_the_merged_agent_exec_switch_is_a_first_class_setting():
-    """「AI 执行」（维度 C，合并旧「说了就直接做」+「Agent 规划执行」）：
+    """「AI 执行」（维度，2026-08-03 合并旧「说了就直接做」+「Agent 规划执行」）：
     设置面板里的一等开关（与润色平级、不埋进 #rerankDetail），可持久化，
     act.js 的 actEnabled 与 getConfig 的 auto_act/agent 都读它。"""
     assert 'id="nodeAgentExec"' in HTML and 'id="cfgAgentExec"' in HTML
@@ -799,7 +805,7 @@ def test_the_receipt_never_offers_an_undo_for_a_file_already_on_disk():
 
 
 def test_undo_chip_is_offered_only_for_curate_write_verbs():
-    """ 用户：最近一次执行直接给「撤回这次执行」钮。
+    """2026-08-04 用户：最近一次执行直接给「撤回这次执行」钮。
     只给 curate 系写动词（文件粒度互逆：import/search_online↔remove、remove↔restore）；
     落盘产物（pack/cite/reuse，见上门）与只读动词坚决不给。"""
     assert "actFixChips(plan, said, outcome)" in ACT, "chips 需要 outcome 才能解析撤回对象"
@@ -819,8 +825,8 @@ def test_undo_chip_is_offered_only_for_curate_write_verbs():
     assert restore_fn and "restored_name" in restore_fn.group(1), "restore 的撤回键（restored_name）没进 artifact"
 
 
-def test_research_and_off_fix_chips_retired():
-    """「按原话重新检索」「以后别自动执行」两颗 chip 退役（agent 能力已足够）。
+def test_research_and_off_fix_chips_retired_pack1():
+    """2026-08-16 pack1：「按原话重新检索」「以后别自动执行」两颗 chip 退役（agent 能力已足够）。
     断言**不存在**防回退；panel / undo / 婉拒候选 chip 保留；退役分支的清尾（runRecommend /
     syncAiGates 不再被 act.js 引用）一并钉住。"""
     code = _strip_comments(ACT)
@@ -836,10 +842,10 @@ def test_research_and_off_fix_chips_retired():
     assert "data-act-say" in code, "curate 失败的婉拒候选 chip 保留"
 
 
-def test_task_pack_preview_no_longer_auto_opens_panel():
-    """预览不再自动打开面板——previewTaskPack / renderTaskPackPlan 体内
+def test_task_pack_preview_no_longer_auto_opens_panel_pack1():
+    """2026-08-16 pack1：预览不再自动打开面板——previewTaskPack / renderTaskPackPlan 体内
     没有 panel.hidden=false（显式开面板的调用方自己 unhide；pack.download 保持关闭，
-    用户手动关面板后迟到的 fetch 也不再重开）。"""
+    用户手动关面板后迟到的 fetch 也不再重开——vs3 在册 race 随本批消掉）。"""
     tp = _read("act/task_pack.js")
     prev = re.search(r"export async function previewTaskPack\([^)]*\)\s*\{(.*?)\n\}", tp, re.S)
     assert prev, "找不到 previewTaskPack"
@@ -856,7 +862,7 @@ def test_task_pack_preview_no_longer_auto_opens_panel():
 
 
 def test_preview_and_build_return_values_are_actually_consumed():
-    """ 把 previewTaskPack / buildTaskPack 改成有返回值，就是为了这一刻。
+    """P0 把 previewTaskPack / buildTaskPack 改成有返回值，就是为了这一刻。
     这里钉住「真的用了返回值」——不然回执又会退回「只能照成功渲染」。"""
     for symbol in ("pre.ok", "built.ok", "built.artifact", "out.ok"):
         assert symbol in ACT, f"act.js 没有消费 {symbol}"
@@ -889,7 +895,7 @@ def test_curate_endpoints_live_in_the_core_api_dict():
     assert '"/api/curate/plan"' in CORE and '"/api/curate/apply"' in CORE
     assert ACT.count('"/api/curate/plan"') == 0 and ACT.count('"/api/curate/apply"') == 0
     assert "API.curatePlan" in ACT and "API.curateApply" in ACT
-    # check_updates（只读无 token）同纪律：地址只在 core.js，act.js 只认常量。
+    # check_updates（2026-08-03 只读无 token）同纪律：地址只在 core.js，act.js 只认常量。
     assert "curateCheckUpdates:" in CORE and '"/api/curate/check-updates"' in CORE
     assert ACT.count('"/api/curate/check-updates"') == 0
     assert "API.curateCheckUpdates" in ACT
@@ -907,7 +913,7 @@ def test_curate_apply_sends_back_the_plan_confirm_token():
 
 def test_curate_apply_failure_says_nothing_was_changed():
     """apply 被拒（token_mismatch / duplicate_content / 400）时后端 fail-closed 零写入——
-    失败总结必须照实带「本次没有任何改动」（接管页退役，改由行动流失败条目 + 失败总结呈现）。"""
+    失败总结必须照实带「本次没有任何改动」（p10：接管页退役，改由行动流失败条目 + 失败总结呈现）。"""
     fails = re.findall(r"if \(!applied\.ok\) return \{ ok: false, error: ([^}]+)\}", ACT)
     assert len(fails) >= 4, f"四个写动作的 apply 都该有失败出口，只找到 {len(fails)} 处"
     for f in fails:
@@ -928,7 +934,7 @@ def test_curate_search_online_marks_the_network_fetch_before_it_happens():
 
 
 def test_the_decision_survey_is_retired_by_full_automation():
-    """执行侧全自动化：问卷弹窗（survey.js）整建制拆除——
+    """2026-08-03 执行侧全自动化：问卷弹窗（survey.js）整建制拆除——
     文件、挂点、初始化、importmap、执行层引用全部清除，grep 零残留。"""
     assert not (STATIC / "js" / "survey.js").exists(), "survey.js 文件必须删除"
     assert 'id="surveyModal"' not in HTML, "index.html 不得再留问卷弹窗挂点"
@@ -940,7 +946,7 @@ def test_the_decision_survey_is_retired_by_full_automation():
 
 
 def test_pending_receipt_branch_is_gone_with_two_step_confirm():
-    """两步确认（预览面板→用户亲手点确认）随 全自动化拆除：前端 runner 链式
+    """两步确认（预览面板→用户亲手点确认）随 2026-08-03 全自动化拆除：前端 runner 链式
     plan→apply 无人工停点，生产侧再无任何路径产出 outcome.pending——ACT_LEAD.pending
     模板与 actWhatHappened 的 pending 分支已成死代码，删除后不许回插
     （若未来恢复人工确认闸，连模板带门一起重写，别复活旧分支）。"""
@@ -950,7 +956,7 @@ def test_pending_receipt_branch_is_gone_with_two_step_confirm():
 
 
 def test_the_dead_chat_note_and_prefill_strip_patch_are_gone():
-    """ 清理清单（设计约定）：actChatNote 已无生产调用方（执行全程由行动流 +
+    """ 清理清单：actChatNote 已无生产调用方（p10 起执行全程由行动流 +
     总结 sys 呈现），删除后不许回插；ACT_PREFILL_STRIP 正则剥词补丁同期退役——
     「检查更新」语义已从 search_online 拆出成 curate.check_updates，预填改由规划侧槽位
     （plan.slots.keywords/species）与 /api/interpret 确定性解析供给。"""
@@ -968,7 +974,7 @@ def test_the_dead_chat_note_and_prefill_strip_patch_are_gone():
 
 
 
-# ----------------------------------------------------------------check_updates / cfgAgent / plan.trace
+# ---------------------------------------------------------------- check_updates / cfgAgent / plan.trace
 
 def test_curate_check_updates_is_a_readonly_surveyless_runner():
     """curate.check_updates（新动词，「检查来源更新」从 search_online 拆出）：
@@ -1026,8 +1032,8 @@ def test_curate_db_status_runner_uses_observation_then_endpoint_fallback():
 
 
 def test_the_route_body_carries_the_agent_exec_switch():
-    """AI 执行开关（cfgAgentExec，默认开；合并旧 autoAct+agent）随
-    /api/utterance 请求带给后端（契约 设计约定）：ubRouteBody 读 getConfig().agent；
+    """AI 执行开关（cfgAgentExec，默认开；2026-08-03 合并旧 autoAct+agent）随
+    /api/utterance 请求带给后端（契约 §2.4）：ubRouteBody 读 getConfig().agent；
     开关是设置面板一等项（#nodeAgentExec）、可持久化；
     启动后经 /api/health 探测（llm_server 门控 + extensions.agent 扩展可用性标注）。"""
     body = re.search(r"function ubRouteBody\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
@@ -1059,7 +1065,7 @@ def test_the_route_phase_renders_real_backend_trace_steps():
     )
 
 
-# ----------------------------------------------------------------流式规划（设计约定）+ 一句话收尾（设计约定）
+# ---------------------------------------------------------------- 流式规划+ 一句话收尾（§5.3）
 
 PROGRESS = _read("core/progress.js")
 
@@ -1072,8 +1078,8 @@ def _fn_body(src: str, signature: str) -> str:
 
 
 def test_streaming_route_only_fires_when_agent_on_and_extension_available():
-    """流式规划（claudecode 式，设计约定）：`stream:true` 只在 AI 执行开且扩展可用时出现。
-    流式档**也起跑 startProgress**
+    """流式规划（claudecode 式）：`stream:true` 只在 AI 执行开且扩展可用时出现。
+    （2026-08-04 产品方钦点改行为）：流式档**也起跑 startProgress**
     ——只挂 loading 静态视觉时没有在途旗标，进度泡不显示；数字里程表退役，loading 与
     行动流真实步骤并滚，一个报「还在干活」、一个报「干到哪步」，互不冒充。不确定态「规划中…」
     进度泡照旧。"""
@@ -1115,7 +1121,7 @@ def test_streaming_sse_parser_frames_across_chunks_and_fails_loud():
 
 
 def test_streamed_steps_are_not_rendered_twice():
-    """（用户重申三段结构）：流式期间过程展示**全部**归信息流工具行（flowPushEvent，
+    """（用户重申三段结构）：流式期间过程展示**全部**归信息流工具行（flowPushEvent
     一工具一行、无 detail）——行动流（arx）不在流式期间开播（它把分流共识/理解意图等非工具
     节点连同 detail 搬上屏，是用户点名的冗余）；真实执行的 arx 由 actDispatchPlan 自开。
     _traceStreamed 去重标保留：流式回来的 plan 不许再把 plan.trace 渲染进行动流（步骤
@@ -1139,16 +1145,27 @@ def test_streamed_steps_are_not_rendered_twice():
 
 
 def test_brief_summary_replaces_body_and_exec_disclosure_is_lean():
-    """一句话收尾（设计约定）+ 执行披露精简：/api/act/summary 带 brief:true；
+    """一句话收尾+ 执行披露精简：/api/act/summary 带 brief:true
     拿到 summary_zh 后原位替换总结泡**正文**（「AI 总结」标保留）。
-     工具结果卡 / 「明细」/「执行过程」折叠条撤下；旧的 execSummary
+    起工具结果卡 / 「明细」/「执行过程」折叠条撤下；的 execSummary
     摘要句通道也退役——工具调用计数压缩句由 flow_trace.compressFlow 产出、渲染为回执
     气泡上方可展开的一行（entry.flow），本泡不再携带；LLM 缺席时正文回退为事实句一句话，
     不伪造简洁。"""
-    body = _strip_comments(_fn_body(ACT, "function actFetchLlmSummary(plan, outcome, said, factual, entry)"))
+    body = _strip_comments(_fn_body(ACT, "function actFetchLlmSummary(plan, outcome, said, factual, entry, searchFacts)"))
     assert "brief: true" in body, "/api/act/summary 必须带 brief:true（一句话模式）"
     assert "cbUpdateEntry(entry, { text: String(d.summary_zh), llmTag: true })" in body, (
         "summary_zh 必须原位替换总结泡正文并保留「AI 总结」标"
+    )
+    # p11 混合轮：searchFacts（actFinish 一次性消费传入）非空时「前置检索」行前置进 done_lines，
+    # LLM 的一句话把检索与执行两段合并写完（全轮单泡的事实来源）。
+    assert "if (searchFacts && Number(searchFacts.total) > 0)" in body, (
+        "p11：前置检索行必须有 total>0 守卫（0 命中的措辞由 act.js 检索回执侧负责，不进总结）"
+    )
+    assert 'doneLines.push(searchFactsReceiptText(searchFacts, "前置检索："))' in body, (
+        "p11：searchFacts 非空时「前置检索」行必须经 board_core 锚点前置进 done_lines（检索+执行合并成一句话）"
+    )
+    assert "库中共 " in _read("panel/board_core.js"), (
+        "措辞字面量的唯一真源在 board_core.searchFactsReceiptText（锚点丢失则措辞漂移）"
     )
     finish = _strip_comments(_fn_body(ACT, "function actFinish(plan, outcome, said, opts)"))
     assert 'cbLogPush("sys", factual' in finish, "LLM 缺席时正文回退为事实句一句话"
@@ -1164,8 +1181,8 @@ def test_brief_summary_replaces_body_and_exec_disclosure_is_lean():
 
 
 def test_loading_never_double_fires_with_streaming():
-    """：loading 全程只挂一次——startProgress 的幂等守卫在（runRecommend 接手不重启）；
-    流式档与非流式档同走这一个起跑点（之后不再手工占 loading），
+    """：loading 全程只挂一次——startProgress 的幂等守卫在（runRecommend 接手不重启）
+    流式档与非流式档同走这一个起跑点（/ 后不再手工占 loading）
     且流式失败回退不得摘 loading 重起跑。数字里程表已退役，不存在「倒滚」。"""
     assert 'if (btn.classList.contains("loading")) return;' in PROGRESS, (
         "startProgress 的 loading 幂等守卫不在了——接手方会重复挂 loading"
@@ -1180,12 +1197,12 @@ def test_loading_never_double_fires_with_streaming():
 
 
 def test_loading_is_indeterminate_and_cache_hit_finishes():
-    """：数字里程表退役——startProgress 只挂 loading 态与在途旗标（不再起 rAF 翻数），
+    """：数字里程表退役——startProgress 只挂 loading 态与在途旗标（不再起 rAF 翻数）
     finishProgress 同步摘 loading（无补满尾巴）；缓存命中用**完成**语义收尾（finishProgress），
     不用取消语义 resetSubmitButton（结果秒出＝这次检索瞬间完成）。"""
     start = _strip_comments(_fn_body(PROGRESS, "export function startProgress(expectedMs)"))
     finish = _strip_comments(_fn_body(PROGRESS, "export function finishProgress()"))
-    assert "requestAnimationFrame" not in start, "数字里程表已退役，startProgress 不许再起 rAF 翻数"
+    assert "requestAnimationFrame" not in start, "数字里程表退役，startProgress 不许再起 rAF 翻数"
     assert "_pctActive = true" in start, "startProgress 必须置在途旗标（board.js 据此挂三点动画）"
     assert 'classList.add("loading")' in start, "startProgress 必须挂 loading 静态态"
     assert 'classList.contains("loading")' in start, "loading 幂等守卫必须还在（接手方不重启）"
@@ -1199,39 +1216,33 @@ def test_loading_is_indeterminate_and_cache_hit_finishes():
 
 # ---------------------------------------------------------------- 真实下载 UX 契约
 
-def test_download_endpoints_declared_in_core_api():
-    """：4 个 /api/download/* 端点必须在 core.js API 集中声明（照 citationsDownload 模式）——
-    task_pack.js 只许引用 API.downloadXxx，不许手写路径（见下一条，两门互补）。"""
+def test_retired_server_download_endpoints_not_declared_in_core_api():
+    """dl-browser-queue 后一切浏览器下载走统一下载引擎（core/downloads.js + /api/files），
+    没有任何前端代码再调 /api/download/*（服务端代下状态机已退役，见 task_pack.js 文件头）。
+    端点本身保留在后端供 MCP 消费方使用；core.js API 表只声明浏览器真调的端点，
+    零消费的 download* 声明一律不许回流。"""
     core = _read("core/core.js")
-    for key, path in (("downloadPlan", "/api/download/plan"), ("downloadStart", "/api/download/start"),
-                      ("downloadStatus", "/api/download/status"), ("downloadCancel", "/api/download/cancel")):
-        assert f'{key}: "{path}"' in core, f"core.js API 缺 {key}: {path}"
+    for key in ("downloadPlan", "downloadStart", "downloadStatus", "downloadCancel", "downloadUpdate"):
+        assert f"{key}:" not in core, f"core.js API 出现零消费声明 {key}（/api/download/* 浏览器无人调）"
 
 
-def test_task_pack_download_calls_use_api_declarations():
-    """：task_pack.js 的下载区只经 API.downloadXxx 调端点——字面路径一出现就与 core.js 声明漂移。"""
+def test_task_pack_has_primary_browser_download_and_pack_fallback():
+    """dl-browser-queue（2026-08-30 取代双按钮契约）：面板底部主按钮「下载勾选的数据集文件」
+    （把勾选交给统一下载引擎 dlqEnqueueDatasets，浏览器直下主文件），次按钮「仍生成任务包」
+    走既有 zip 链兜底；下载区是 downloads.js 的 dlqRender/dlqBind 薄适配。
+    的 _dl 服务端代下状态机（plan/confirm/running/poll/update/cancel）已退役，遗物不得留。"""
     tp = _strip_comments(_read("act/task_pack.js"))
-    for key in ("downloadPlan", "downloadStart", "downloadStatus", "downloadCancel"):
-        assert f"API.{key}" in tp, f"task_pack.js 必须引用 API.{key}"
-    for path in ("/api/download/plan", "/api/download/start", "/api/download/status", "/api/download/cancel"):
-        assert path not in tp, f"task_pack.js 不许手写端点路径 {path}"
-
-
-def test_task_pack_has_primary_real_download_and_fallback_buttons():
-    """：面板底部主/次双按钮——主按钮「直接下载真实数据」（/api/download/plan 有 supported 才显示），
-    次按钮「仍生成任务包」走既有 zip 链兜底；无 supported 诚实降级；409/取消/进度文案必须齐。"""
-    tp = _strip_comments(_read("act/task_pack.js"))
-    assert 'id="tpDlStartBtn"' in tp and "直接下载真实数据" in tp, "主按钮「直接下载真实数据」必须在"
+    assert 'id="tpDlEnqueueBtn"' in tp and "下载勾选的数据集文件" in tp, "主按钮「下载勾选的数据集文件」必须在"
     assert 'id="taskPackBuildBtn"' in tp and "仍生成任务包" in tp, "次按钮「仍生成任务包」兜底必须在"
-    assert "这批暂不支持直接下载" in tp, "无 supported 时必须诚实降级，不显示主按钮"
-    assert "有下载任务进行中" in tp, "409 job_conflict 必须如实提示"
-    assert "已取消，已下载的部分保留在" in tp, "取消终态必须说清已下载部分保留在哪"
-    assert "正在下载" in tp and "个文件 · " in tp, "进度行「正在下载 a/b 个文件 · x.x/y.y GB」必须在"
+    assert "dlqEnqueueDatasets" in tp, "主按钮必须把勾选交给统一下载引擎 dlqEnqueueDatasets"
+    assert "dlqRender" in tp and "dlqBind" in tp, "下载区必须是 downloads.js 的 dlqRender/dlqBind 薄适配"
+    for dead in ("_dl", "tpDownloadConfirm", "tpDownloadStart", "dlReset", "tpDlStartBtn"):
+        assert dead not in tp, f"服务端代下时代遗物 {dead} 不许留在 task_pack.js（单通道原则）"
 
 
 def test_pack_bytes_label_says_real_data_size_not_zip_size():
     """（B 文案）：按钮 label 的体积数字必须是「真实数据共约 X」——
-    它是 download_plan 逐文件 bytes 求和（真实文件体积），不是 zip 体积。
+    它是 preview 逐文件 bytes 求和（真实文件体积），不是 zip 体积。
     旧文案「约 X 下载量」被反复读成 zip 体积，前端按钮链路不得再现。"""
     tp = _strip_comments(_read("act/task_pack.js"))
     assert "真实数据共约" in tp, "按钮 label 必须写「真实数据共约 X」（真实文件体积）"
@@ -1239,8 +1250,8 @@ def test_pack_bytes_label_says_real_data_size_not_zip_size():
 
 
 def test_cache_hit_branch_wraps_finally_around_the_reset():
-    """缓存命中分支用 try/finally 包住「渲染 + 收尾」——
-    landRecommendResult / 打点任何一步抛错（典型：新旧 JS 混合缓存的 ReferenceError，FRONTEND.md 设计约定）
+    """（小修）：缓存命中分支用 try/finally 包住「渲染 + 收尾」——
+    landRecommendResult / 打点任何一步抛错（典型：新旧 JS 混合缓存的 ReferenceError，FRONTEND.md §4.3）
     也要复位按钮；否则 submitBtn/chatSendBtn 卡 loading、ubSubmit 在途闸（submitBtn.disabled）
     拦下所有后续输入。收尾仍按「有无在途加载态」分完成/取消两语义。"""
     search = _strip_comments(_read("search/search.js"))
@@ -1252,54 +1263,171 @@ def test_cache_hit_branch_wraps_finally_around_the_reset():
     )
 
 
-def test_dl_final_stats_are_honest():
-    """ 真行为门：终态文件统计（dlFileStats 真函数）——成功字节只算 ok/size_ok；
-    md5_mismatch/skipped/error/cancelled 各自分组、绝不混进成功数。"""
-    payload = {
-        "files": [
-            {"filename": "a.h5", "status": "ok", "bytes": 100},
-            {"filename": "b.h5", "status": "size_ok", "bytes": 200},
-            {"filename": "c.h5", "status": "md5_mismatch", "bytes": 300, "error": "md5 与来源声明不符"},
-            {"filename": "d.h5", "status": "skipped", "bytes": 400, "error": "巡检发现有问题，跳过"},
-            {"filename": "e.h5", "status": "error", "bytes": 500, "error": "网络错误"},
-            {"filename": "f.h5", "status": "cancelled", "bytes": 600},
-        ]
-    }
-    out = _browser_helper_in_node(_read("act/task_pack.js"), "dlFileStats",
-                                  "dlFileStats(_in.files)", payload)
-    assert len(out["ok"]) == 1 and len(out["sizeOk"]) == 1
-    assert len(out["mismatch"]) == 1 and out["mismatch"][0]["filename"] == "c.h5"
-    assert len(out["skipped"]) == 1 and len(out["errs"]) == 1 and len(out["cancelled"]) == 1
-    assert out["doneBytes"] == 300, "成功字节只算 ok + size_ok（300 = 100 + 200），失败/取消/跳过不得计入"
-
-
-def test_pack_download_verb_starts_real_download_automatically():
-    """pack.download 动词入口（actRunPackDownload）分级 OK 后**直接开始真实下载**，
-    不再停确认闸——调可复用的启动内核 tpDownloadStart；失败如实降级任务包兜底。旧「请在面板点
-    开始下载确认」的确认闸措辞必须消失（这是目的性变更，不是改测试凑绿）。"""
+def test_pack_download_verb_goes_browser_direct_automatically():
+    """dl-browser-queue（取代 dl-auto-1）：pack.download 动词入口（actRunPackDownload）preview 后
+    把勾选交给 dlqEnqueueDatasets——浏览器直下、全形态一致（网页版护栏也放行：通道本身就是
+    浏览器，不再服务端代下）；零直下文件自动落任务包兜底。旧确认闸措辞与服务端代下调用必须消失。"""
     body = _strip_comments(_fn_body(ACT, "async function actRunPackDownload(plan)"))
-    assert "tpDownloadConfirm" in body, "动词入口必须先调 /api/download/plan 分级"
-    assert "tpDownloadStart" in body, "分级 OK 后必须直接调可复用的启动内核（不再停确认闸）"
-    assert "可直接下载真实数据" in body, "分级结果必须播报（N 个可直接下载，共约 X）"
-    assert "暂不支持直接下载" in body, "无 supported 必须诚实降级"
-    assert "buildTaskPack()" in body, "降级兜底（原 zip 链）必须仍在"
-    assert "已开始下载" in body, "成功回执必须改为「已开始下载…」并带目录/可增删"
-    assert "请在面板点" not in body, "旧「请在面板点开始下载确认」确认闸措辞必须消失"
-    assert "要等你在面板点" not in body, "旧「要等你点开始下载才真正开始」措辞必须消失"
+    assert "dlqEnqueueDatasets" in body, "动词入口必须把勾选交给统一下载引擎 dlqEnqueueDatasets"
+    assert '"browser-download"' in body, "成功回执 artifact.mode 必须是 browser-download"
+    assert "已开始下载" in body, "成功回执必须是「已开始下载 N 个数据文件…」"
+    assert "Ctrl+J" in body, "回执必须如实指向浏览器下载管理（Ctrl+J）"
+    assert "buildTaskPack()" in body, "零直下文件的诚实降级（任务包 zip 链）必须仍在"
+    for dead in ("tpDownloadConfirm", "tpDownloadStart", "webGuardOn", "real-download",
+                 "请在面板点", "要等你在面板点"):
+        assert dead not in body, f"旧服务端代下/确认闸措辞 {dead} 必须消失"
     imp = _strip_comments(ACT)
-    assert "tpDownloadConfirm" in imp, "act.js 必须从 #task_pack import tpDownloadConfirm"
-    assert "tpDownloadStart" in imp, "act.js 必须从 #task_pack import tpDownloadStart"
+    assert "dlqEnqueueDatasets" in imp and "dlqFireBlob" in imp, "act.js 必须从 #downloads import 引擎"
+    assert "tpDownloadConfirm" not in imp and "tpDownloadStart" not in imp, "act.js 不许再 import 服务端代下"
+    assert "webGuardOn" not in imp, "护栏分支退役后 act.js 不许再 import webGuardOn"
 
 
-def test_reset_task_pack_guards_an_in_flight_download():
-    """ 集成抓到（回归钉）：下载进行中（_dl.stage==='running'）resetTaskPack 必须跳过整个重置——
-    晚到的检索落地（慢 LLM 的 /api/recommend 可能十几秒才回）走 renderResults→syncTaskPackBar→
-    resetTaskPack，若照常清空面板会抹掉下载进度、dlReset 杀掉轮询（服务端线程照下、界面停在半截）。
-    守卫是「下载进度 UI 不被打断」的唯一防线，删了就会复现。"""
+def test_reset_task_pack_no_longer_guards_server_download():
+    """dl-browser-queue（反向钉，取代守卫钉）：_dl 服务端代下状态机已退役——浏览器下载
+    队列状态收在 downloads.js，resetTaskPack 不触碰。旧的「下载进行中跳过重置」守卫
+    （_dl.stage）与 dlReset 不得再出现：留着只会误导后来者以为还有第二条下载通道。"""
     tp = _strip_comments(_read("act/task_pack.js"))
     seg = tp.split("export function resetTaskPack()", 1)[1].split("export function syncTaskPackBar", 1)[0]
-    assert '_dl.stage === "running"' in seg, "resetTaskPack 必须带「下载进行中」守卫"
-    assert "return" in seg.split('_dl.stage === "running"', 1)[1].split(";", 1)[0], "守卫命中时必须 return（跳过 dlReset/清空）"
+    assert "_dl.stage" not in seg, "_dl 守卫必须随状态机一起退役"
+    assert "dlReset" not in seg, "dlReset 必须随状态机一起退役"
+
+
+def test_pack_download_receipt_carries_dlq_panel_pill():
+    """2026-08-30 任务2（用户定）：下载面板的打开开关 = 回执气泡内**每批一颗 pill**
+    （与检索结果 pill 同通道 flowSetPills→entry.pills、同位气泡内文字下方）。
+    act.js 的 pack.download 三条落地路径（新发射 / 全部已在队列未重复下载 / 零直下降级 zip）
+    都必须挂 dlq pill；面板 chip 对 pack.download 退役（同一面板不留两个开关），
+    pack.preview 不触发下载、chip 保留。board.js 负责渲染 data-dlq-pill 且点击开面板。"""
+    body = _strip_comments(_fn_body(ACT, "async function actRunPackDownload(plan)"))
+    assert body.count("flowSetPills") >= 3, "新发射/已在队列/降级 zip 三条路径都必须 flowSetPills 挂 dlq pill"
+    assert "dlq: true" in body and "下载队列" in body, "pill 必须是 dlq 类、文案「下载队列」"
+    imp = _strip_comments(ACT)
+    assert "flowSetPills" in imp, "act.js 必须从 #board import flowSetPills"
+    chips = _strip_comments(_fn_body(ACT, "function actFixChips(plan, said, outcome)"))
+    assert 'verb === "pack.preview"' in chips, "面板 chip 只留给 pack.preview（它不触发下载）"
+    assert 'verb === "pack.download"' not in chips, "pack.download 的面板 chip 必须退役（pill 取代，不留双开关）"
+    board = _strip_comments(BOARD)
+    assert 'data-dlq-pill="1"' in board and "ft-pill--dlq" in board, "board.js 必须渲染 dlq pill"
+    click_seg = board.split('closest("[data-dlq-pill]")', 1)
+    assert len(click_seg) == 2, "board.js 必须有 data-dlq-pill 的点击分支"
+    branch = click_seg[1][:1000]
+    assert "taskPackPanel" in branch and "previewTaskPack()" in branch and "scrollIntoView" in branch, (
+        "dlq pill 点击 = 开下载面板（unhide + previewTaskPack 重渲复活队列区 + 滚进视野）"
+    )
+    assert "tpDlZone" in branch, "有队列时必须滚到 #tpDlZone 队列本身，而不是面板顶的勾选清单"
+    css = (STATIC / "css" / "app.css").read_text(encoding="utf-8")
+    assert ".ft-pill--dlq" in css, "app.css 必须有 dlq pill 的区分样式"
+
+
+def test_cite_and_reuse_receipts_carry_dlq_pill():
+    """2026-08-31（用户定「pill 与工具执行绑定」，泛下载一视同仁）：引文导出与投稿材料
+    也是下载——actRunCiteExport / actRunReusePack / 环内 cite_export 自动下载三条路径
+    都必须给回执气泡挂 dlq pill（与 pack.download 同通道 flowSetPills、同文案「下载队列」），
+    点它开结果区下载面板。"""
+    cite = _strip_comments(_fn_body(ACT, "async function actRunCiteExport(plan)"))
+    assert "flowSetPills" in cite and "dlq: true" in cite, "actRunCiteExport 必须挂 dlq pill"
+    reuse = _strip_comments(_fn_body(ACT, "async function actRunReusePack(plan)"))
+    assert "flowSetPills" in reuse and "dlq: true" in reuse, "actRunReusePack 必须挂 dlq pill"
+    fin = _strip_comments(_fn_body(ACT, "function actFinish(plan, outcome, said, opts)"))
+    cite_dl = _strip_comments(_fn_body(ACT, "function actAutoDownloadCiteFiles(r)"))
+    assert "return fired" in cite_dl, "actAutoDownloadCiteFiles 必须返回新发起数（供 pill 计数）"
+    assert "_citeFired" in fin and "flowSetPills" in fin, (
+        "actFinish 必须把环内 cite_export 的新发起下载挂成 dlq pill")
+
+
+def test_flow_set_pills_merges_by_kind():
+    """2026-08-31（用户定「pill 与工具执行绑定」）：flowSetPills 按族分治——入件里的
+    下载 pill（dlq）追加不顶替（已持件的检索 pill 原样保留）；入件里的检索结果 pill
+    同族顶替、下载 pill 不动，且检索 pill 恒排前。混合轮（先 rank 后 pack.download）
+    因此两类 pill 同挂一颗回执气泡；空入件不清场（清场只归 flowReset）。"""
+    body = _strip_comments(_fn_body(BOARD, "export function flowSetPills(pills)"))
+    assert "inDlq" in body and "inResult" in body and "stagedDlq" in body, (
+        "flowSetPills 必须分出「新 dlq / 新检索 pill / 已持件 dlq」三段")
+    assert "concat(inDlq)" in body, "下载 pill 必须追加到已持件序列尾部"
+    assert "inResult.concat(stagedDlq)" in body, "检索 pill 必须同族顶替且排在 dlq 之前"
+    assert "if (!incoming.length) return" in body, "空入件不许清场（否则 dlq 持件会被随手抹掉）"
+
+
+def test_action_hint_cleared_when_action_executed():
+    """2026-08-31（用户指认自相矛盾）：「你提到了下载——检索本身不包含这一步」指路条
+    只在该动作没被执行时才该挂着。同轮真执行成（pack.download/cite.export 等）时必须摘掉
+    （results.js clearActionHint，actFinish 成功收尾时调）；失败/取消保留作手动退路。"""
+    res = _strip_comments(RESULTS)
+    assert "export function clearActionHint()" in res, "results.js 必须导出 clearActionHint"
+    act = _strip_comments(ACT)
+    imp = [ln for ln in act.splitlines() if "#results" in ln]
+    assert any("clearActionHint" in ln for ln in imp), "act.js 必须从 #results import clearActionHint"
+    fin = _strip_comments(_fn_body(ACT, "function actFinish(plan, outcome, said, opts)"))
+    assert "actCoversActionHint(plan)" in fin and "clearActionHint()" in fin, (
+        "actFinish 必须在动作执行成功时摘掉指路条")
+    assert "outcome.ok && !outcome.cancelled && actCoversActionHint(plan)" in fin.replace("  ", " ") or (
+        "outcome.ok" in fin and "cancelled" in fin), "只在成功时摘——失败/取消保留指路条"
+    helper = _strip_comments(_fn_body(ACT, "function actCoversActionHint(plan)"))
+    for v in ('"pack.download"', '"cite.export"', '"reuse.pack"'):
+        assert v in _strip_comments(ACT), f"指路条核销动词表必须含 {v}"
+    assert "plan.steps" in helper, "环内 steps 里的 cite.export 也算执行成"
+
+
+# -------------------------------------- dl-browser-queue：统一下载队列引擎契约
+
+def test_downloads_engine_module_contract():
+    """core/downloads.js 是全站唯一浏览器下载通道（AGENTS.md §2 单通道原则锚点）。
+    导出面必须齐全；fired 措辞只许「已交给浏览器」（绝不许暗示「已下载完成」）；
+    面板脚注必须如实指向浏览器下载管理（Ctrl+J）与「是否允许下载多个文件」授权询问。"""
+    dlc = _strip_comments(_read("core/downloads.js"))
+    for fn in ("dlqEnqueue", "dlqEnqueueDatasets", "dlqFireBlob", "dlqRender", "dlqBind",
+               "initDownloads", "dlqCancelItem", "dlqCancelQueued", "dlqRetryItem",
+               "dlqClearFinished", "dlqSnapshot", "dlqResume"):
+        assert f"export function {fn}" in dlc or f"export async function {fn}" in dlc, \
+            f"downloads.js 必须导出 {fn}"
+    assert "已交给浏览器" in dlc, "fired 措辞必须是「已交给浏览器」"
+    assert "已下载完成" not in dlc, "页面拿不到在途进度，绝不许说「已下载完成」"
+    assert "Ctrl+J" in dlc, "脚注必须指向浏览器下载管理（Ctrl+J）"
+    assert "是否允许下载多个文件" in dlc, "脚注必须提示浏览器的多文件授权询问"
+
+
+def test_downloads_engine_is_a_leaf_importer():
+    """downloads.js 是汇点：只许 import core/act_core/usage_core/usage_log；绝不许反向 import
+    task_pack/act/cards/reuse_pack（「为这部分生成任务包」靠 dlqBind 回调注入，不靠 import——
+    这是它不进 import 环的原因，环门在 test_frontend_import_graph.py）。"""
+    dl = _strip_comments(_read("core/downloads.js"))
+    for bad in ('from "#task_pack"', 'from "#act"', 'from "#cards"', 'from "#reuse_pack"',
+                'from "#board"', 'from "#search"'):
+        assert bad not in dl, f"downloads.js 不许 import {bad}（用 dlqBind 回调解耦）"
+    for ok in ('from "#core"', 'from "#act_core"', 'from "#usage_core"', 'from "#usage_log"'):
+        assert ok in dl, f"downloads.js 应 import {ok}"
+
+
+def test_downloads_registered_everywhere():
+    """#downloads 必须在两页 importmap 与 package.json 登记；boot.js init() 必须调
+    initDownloads()（document 级委托拦截 data-dlq 锚/动作），dataset 页 dsInit 同挂（本页无 boot）。"""
+    assert '"#downloads": "/static/js/core/downloads.js' in HTML, "index.html importmap 缺 #downloads"
+    dataset = (STATIC / "dataset.html").read_text(encoding="utf-8")
+    assert '"#downloads": "/static/js/core/downloads.js' in dataset, "dataset.html importmap 缺 #downloads"
+    pkg = (ROOT / "package.json").read_text(encoding="utf-8")
+    assert '"#downloads": "./web/static/js/core/downloads.js"' in pkg, "package.json imports 缺 #downloads"
+    assert "initDownloads();" in _strip_comments(BOOT), "boot.js init() 必须调 initDownloads()"
+    dp = _strip_comments(_read("search/dataset_page.js"))
+    assert "initDownloads();" in dp, "dsInit 必须挂 initDownloads()"
+
+
+def test_download_anchors_carry_dlq_attrs():
+    """卡片 CTA / 介绍 bare 行 / 文件弹窗 / 数据集页页头的「下载数据」直链必须带 data-dlq
+    属性组（document 级委托拦截进队列）——裸 href+download 会绕过队列、下载面板里不留痕。"""
+    cards = _strip_comments(_read("search/cards.js"))
+    assert cards.count('data-dlq="data"') >= 3, "cards.js 至少三处 data-dlq（CTA/介绍行/文件弹窗）"
+    dp = _strip_comments(_read("search/dataset_page.js"))
+    assert 'data-dlq="data"' in dp, "dataset_page.js 页头下载按钮必须带 data-dlq"
+
+
+def test_no_second_download_channel_besides_engine():
+    """单通道守门员：downloadBlobAs 只许存在两处——core.js 定义 + downloads.js 包一层
+    （dlqFireBlob）。其他任何文件 import/调用 downloadBlobAs = 开第二条下载通道，当场红。"""
+    for rel in ("act/act.js", "act/task_pack.js", "act/reuse_pack.js",
+                "core/benchfb.js", "panel/project_exports.js", "search/cards.js",
+                "search/dataset_page.js"):
+        src = _strip_comments(_read(rel))
+        assert "downloadBlobAs" not in src, f"{rel} 不许再碰 downloadBlobAs（统一走 #downloads）"
 
 
 # ---------------------------------------------------------------- 批次覆盖语义（设计约定）
@@ -1320,7 +1448,7 @@ def test_batch_rank_suffix_labels_the_sorting_layer() -> None:
 
 
 def test_batch_select_spec_passes_in_node() -> None:
-    """（设计约定）真行为：node 直跑 batch_select_spec.mjs（断言失败 → 非零退出）。"""
+    """真行为：node 直跑 batch_select_spec.mjs（断言失败 → 非零退出）。"""
     node = _resolve_node()
     assert node, "未找到 node（BIODATA_NODE 或 PATH）"
     spec = ROOT / "tests" / "js" / "batch_select_spec.mjs"
@@ -1329,7 +1457,7 @@ def test_batch_select_spec_passes_in_node() -> None:
 
 
 def test_relax_phrase_templates_consistent_results_and_batch_select() -> None:
-    """契约钉：results.js 空态卡放宽 chips（RELAX_GROUPS.verb）与 batch_select.js
+    """ 契约钉：results.js 空态卡放宽 chips（RELAX_GROUPS.verb）与 batch_select.js
     选择条选项（deriveRescueOptions → _relaxUtterance）必须用**同一套** drop/only 短语模板——同一放宽
     动作在空态卡与选择条两处文案不许漂移。batch_select 是可 node 直 import 的纯核，真跑 deriveRescueOptions
     取输出作真源；results.js 的 RELAX_GROUPS.verb 是字符串拼接函数，静态提取片段并断言能拼出同句。
@@ -1352,3 +1480,246 @@ def test_relax_phrase_templates_consistent_results_and_batch_select() -> None:
     assert re.search(r'只按「"\s*\+\s*\w+\s*\+\s*"」搜，其它条件都放开', res), (
         "results.js RELAX_GROUPS 的 only verb 必须与 batch_select.js 一致"
         "（只按「X」搜，其它条件都放开）——空态卡与选择条文案不许漂移")
+
+
+# ---------------------------------------------------------------- p11系统回复 = LLM final answer
+
+def test_search_reply_endpoint_lives_in_core_api_dict():
+    """检索回执 LLM 改写端点集中声明在 core.js 的 API 常量表；任何模块不手写端点字面量
+    （与 act/summary 同纪律——第二入口就是漂移的起点）。"""
+    assert 'searchReply: "/api/search/reply"' in CORE, "core.js API 常量表缺 searchReply"
+    for name in ("panel/board.js", "act/act.js", "search/search.js", "core/interactions.js"):
+        assert _read(name).count('"/api/search/reply"') == 0, f"{name} 手写了 /api/search/reply 端点地址"
+    assert "API.searchReply" in BOARD, "board.js 的检索回执改写必须走 API 常量表"
+
+
+def test_search_receipt_is_llm_rewritten_in_place_with_honest_fallback():
+    """p11 核心不变量①：纯检索轮——cbProgressDone 把进度泡蜕变成**确定性事实句**并交出回执 entry，
+    cbFetchSearchReply 随后异步请 LLM 改写、成功才原位替换+挂「AI 总结」标；fail-open 留事实句。
+    事实句先行（LLM 再慢用户也立刻有真话），改写绝不另起一颗泡。"""
+    assert "return cbLogPush(\"sys\", hint ? (hint + \"；\" + text) : text) || false;" in BOARD, (
+        "cbProgressDone 必须返回回执 entry（LLM 改写的锚点），不能还是裸 true")
+    assert re.search(r"export function cbFetchSearchReply\(entry, facts\)", BOARD), (
+        "cbFetchSearchReply 不在（检索回执的 LLM 改写层缺失）")
+    assert "cbUpdateEntry(entry, { text: String(d.reply_zh), llmTag: true })" in BOARD, (
+        "LLM 成功时必须原位替换正文并挂「AI 总结」标（归因诚实）")
+    fn = _strip_comments(_fn_body(BOARD, "export function cbFetchSearchReply(entry, facts)"))
+    assert 'cfg.provider === "mock"' in fn.split("fetch(")[0], (
+        "mock 必须结构性短路（后端同判否），省一次注定无果的往返")
+    code = _strip_comments(BOARD)
+    assert re.search(r"const _receiptEntry = cbProgressDone\(_doneText\);\s*\n\s*if \(_receiptEntry\) cbFetchSearchReply\(",
+                     code), "cbPushCurrent 须在回执落地后立刻接 LLM 改写（同一处，不许分叉）"
+
+
+def test_hybrid_turn_lands_exactly_one_bubble():
+    """p11 核心不变量②：混合轮（「小鼠空间转录组，并下载top5」这类 先检索后派发）——
+    cbPushCurrent 据 popts.actPending **抑制**检索模板回执（进度泡留给 actDispatchPlan 接管），
+    检索事实经 act.js _actTurnSearchFacts 并进执行汇报那颗泡；全轮只有一颗系统气泡。"""
+    assert "actPending: !!opts.actPending" in SEARCH, "共享落地入口必须把 actPending 透传进 cbPushCurrent"
+    assert SEARCH.count("actPending: !!opts.actPlan") == 2, (
+        "runRecommend 两个落地点（缓存命中 + 真请求）都要标 actPending——漏一个，缓存命中那次就退回双泡")
+    code = _strip_comments(BOARD)
+    assert re.search(r"if \(popts && popts\.actPending\)", code), (
+        "cbPushCurrent 缺 actPending 抑制分支（混合轮会再次冒出检索模板泡）")
+    # act.js 侧：stash → actFinish 一次性消费 → actFetchLlmSummary 的 done_lines 前置检索行
+    assert "_actTurnSearchFacts" in ACT, "act.js 缺 _actTurnSearchFacts（前置检索事实的一次性stash）"
+    assert re.search(r"const searchFacts = _actTurnSearchFacts;\s*\n\s*_actTurnSearchFacts = null;", _strip_comments(ACT)), (
+        "actFinish 必须一次性消费 stash（取走即清，绝不泄漏到下一轮纯执行句）")
+    assert "actFetchLlmSummary(plan, outcome, said, factual, entry, searchFacts)" in ACT, (
+        "前置检索事实必须进 LLM 一句话总结的 done_lines（合并覆盖检索+执行两段）")
+    assert "searchFactsReceiptText" in ACT and "库中共 " in _read("panel/board_core.js"), (
+        "前置检索事实行的措辞锚点缺失（唯一真源：board_core.searchFactsReceiptText）")
+    # 边界：执行没接住（取消/busy/未接住/AI 执行被中途关掉）时进度泡绝不悬空——actAfterSearch 补诚实收尾
+    assert re.search(r"function actAfterSearch\(query, opts\) \{[\s\S]*?cbProgressDone\(", ACT), (
+        "actAfterSearch 必须在派发没接住的边界用 cbProgressDone 收尾（泡不悬空）")
+    assert "cbProgressDone" in ACT.split('from "#board"')[0], "act.js 必须从 board import cbProgressDone"
+
+
+def test_search_reply_llm_layer_exists_and_reuses_the_single_gate():
+    """后端：search_reply_llm 复用 act_summary_llm._summarize_with_prompt（闸口/通道/fail-open
+    唯一实现，抄第二份必漂移）；端点挂在 webapp 并带同源闸。"""
+    src = (ROOT / "src" / "dataset_recommender" / "llm" / "search_reply_llm.py").read_text(encoding="utf-8")
+    assert "from .act_summary_llm import _summarize_with_prompt" in src, (
+        "检索回执层必须复用执行总结层的调用核心（同一闸口同一 fail-open 纪律）")
+    assert "原样挑一条" in src, "建议白名单硬约束必须写进 prompt 铁律"
+    webapp_src = (ROOT / "src" / "dataset_recommender" / "app" / "webapp.py").read_text(encoding="utf-8")
+    assert '@app.post("/api/search/reply")' in webapp_src
+    assert "_require_same_origin(request)" in webapp_src.split('@app.post("/api/search/reply")')[1], (
+        "检索回执端点必须过同源闸（与 act/summary 同口径）")
+
+
+def test_all_search_receipt_sites_route_through_the_llm_rewrite():
+    """p11 补网：「系统回复 = LLM final answer」不许只覆盖 cbPushCurrent 一条路径。
+    检索回执的全部落地站点都必须接 cbFetchSearchReply 原位改写：
+    ① cbPushCurrent 主路径（真 /api/recommend 落地）；② _applyBatchDecision 采纳留痕（_aNote，
+    含 legacy 单批兜底用 _view 本身作事实源）；③ dedupe/alternate 如实回执（decision.sysText）；
+    ④ ubDispatch b 档 preliminary_final 收尾；⑤ act.js 混合轮边界（AI 执行中途关/取消·busy/
+    未接住/派发抛错，经 _receiptWithLlm 一处收口）。漏一处，那条路径的用户就继续吃模板句。"""
+    code = _strip_comments(BOARD)
+    assert code.count("cbFetchSearchReply(") == 5, (
+        f"board.js 应有 1 定义 + 4 调用点（cbPushCurrent/_aNote/dedupe/b档），当前 {code.count('cbFetchSearchReply(')} 处")
+    assert "export function cbSearchReplyFacts(data, utterance, query, note)" in BOARD, (
+        "公共事实构造器缺失——各站点数字口径（result_total 优先）会各抄一份必漂移")
+    assert re.search(r"const _ab = _batchById\(_view\.result_batches, decision\.activeBatchId\);\s*\n\s*if \(_e\)", code), (
+        "_aNote 必须用屏上活跃批作事实源（legacy 单批回退 _view）")
+    assert "decision.sysText" in code and re.search(
+        r"if \(!_actWillReceipt && decision && decision\.sysText\) \{\s*\n\s*const _e = cbLogPush\("
+        r"[\s\S]*?cbFetchSearchReply\(_e,", code), "dedupe/alternate 回执没接 LLM 改写"
+    assert re.search(r"const _bEntry = cbProgressDone\(_bNote\);[\s\S]*?cbFetchSearchReply\(_bEntry,", code), (
+        "b 档（preliminary_final）收尾回执没接 LLM 改写")
+    act = _strip_comments(ACT)
+    assert "cbFetchSearchReply" in act.split('from "#board"')[0] and "cbSearchReplyFacts" in act.split('from "#board"')[0], (
+        "act.js 必须从 board import cbFetchSearchReply 与 cbSearchReplyFacts")
+    assert re.search(r"const _receiptWithLlm = function \(entry, note\)", act), (
+        "act.js 混合轮边界缺 _receiptWithLlm 收口（三处收尾会各写各的）")
+    assert act.count("_receiptWithLlm(") == 3, (
+        f"act.js 边界三出路（AI 执行中途关/取消·busy·未接住/派发抛错）各调一次 _receiptWithLlm，"
+        f"当前 {act.count('_receiptWithLlm(')} 处")
+
+
+def test_rewrite_disclosure_folds_into_the_single_receipt_bubble():
+    """p11 补网：_aNote 的「我把这句按『X』检索。」不再单独成泡（一个动作两颗泡正是投诉形态），
+    并入回执正文与事实包 note，由 LLM 合并说清；fail-open 的确定性句同样一字不少。
+    通用回退句「深入思考后找到了更匹配的结果，已更新。」仍是缺省正文（既有锚钉的同源句）。"""
+    code = _strip_comments(BOARD)
+    assert 'if (rewritten) cbLogPush("sys", "我把这句按「"' not in code, (
+        "改写披露不许再单独成泡（折叠进唯一回执）")
+    assert re.search(r"const _note = \(rewritten \? \"我把这句按「\"[\s\S]*?_disc \|\| \"深入思考后找到了更匹配的结果，已更新。\"\)", code), (
+        "改写披露与披露句/通用句必须合并成唯一回执正文")
+    assert re.search(r"cbFetchSearchReply\(_e, cbSearchReplyFacts\(_ab \? _ab\.payload : _view, text,", code), (
+        "_aNote 的 LLM 改写必须把合并后的 _note 与真实批次事实一起上报")
+
+
+def test_act_source_token_re_matches_backend_alias_tables():
+    """ACT_SOURCE_TOKEN_RE（act.js 兜底分词的来源名剔除表）与后端两张别名表同口径：
+    后端的来源别名（corpus_net.SOURCE_ALIASES 的键 + 检索侧
+    search_request.SOURCE_ALIASES 的 ASCII 别名）前端必须**全覆盖**——漏一个，来源名就会
+    混进兜底关键词里再搜一遍。反向前端刻意多收 bare "encode"（剔除是保守方向，见 act.js 注释）。
+    非 ASCII 别名（中文说法）不进本钉：free_text_terms 只产 ASCII 词。
+    通用联网分发通道的别名（候选键仅 ddg 的一组：ddg/duckduckgo/web/generic/通用）不是
+    数据来源名，不进剔除表——"web"/"generic" 是正常检索词，剔除会误伤。"""
+    from dataset_recommender.corpus import corpus_net as CN
+    from dataset_recommender.retrieval import search_request as SR
+
+    m = re.search(r"ACT_SOURCE_TOKEN_RE = /\^(.*?)\$/i", ACT)
+    assert m, "act.js 缺 ACT_SOURCE_TOKEN_RE"
+    token_re = re.compile(r"^(?:" + m.group(1) + r")$", re.I)
+
+    missing = [k for k, cands in CN.SOURCE_ALIASES.items()
+               if cands != ("ddg",) and k.isascii() and not token_re.match(k)]
+    assert not missing, f"前端来源剔除表漏了后端来源别名：{missing}"
+    missing2 = [a for _src, aliases in SR.SOURCE_ALIASES for a in aliases
+                if a.isascii() and not token_re.match(a)]
+    assert not missing2, f"前端来源剔除表漏了检索侧 SOURCE_ALIASES 别名：{missing2}"
+
+
+# ---------------------------------------------------------------- 去重批锚钉（2026-08-30 web8）
+#
+# 前端去重批（2026-08-30 web8）把一批平行实现/复制变体/文案多锚点收成了单真源。
+# 静态检查与 node --check 都测不出「哪天又有人手抄一份回来」，这里给其中五个锚点各钉一道门：
+# 单实现钉（消费方不得再自带）、字面量唯一出处钉、真行为钉、前后端逐字同源钉。
+
+def test_copy_text_any_is_the_single_clipboard_implementation():
+    """剪贴板写入能力基元只有一份：core.js 的 copyTextAny（clipboard API 优先、
+    textarea + execCommand 兜底）。消费方只许 import 调用；在消费方源码里再出现
+    execCommand / 兜底函数名即红线（那就是第二份实现又长回来了）。"""
+    assert "export function copyTextAny" in CORE
+    for name in ("core/interactions.js", "core/feedback.js", "search/cards.js", "act/reuse_pack.js"):
+        src = _strip_comments(_read(name))
+        assert "copyTextAny(" in src, f"{name} 应消费 core.copyTextAny"
+        for forbidden in ("execCommand", "_copyTextLegacy", "_fallbackCopy"):
+            assert forbidden not in src, f"{name} 又自带了剪贴板兜底（{forbidden}）"
+
+
+def test_search_facts_receipt_wording_lives_only_in_board_core():
+    """「库中共 N 条匹配，结果区展示前 M 条」落地事实句唯一真源是
+    board_core.searchFactsReceiptText；board/act 只许调用、不再各留字面量。
+    （results.js 结果摘要/放宽提示里的「库中共」是另一特性的句子，不在本钉范围。）"""
+    assert "库中共 " in _read("panel/board_core.js")
+    for name, src in (("board.js", BOARD), ("act.js", ACT)):
+        body = _strip_comments(src)
+        assert "库中共 " not in body, f"{name} 又自带了回执句字面量"
+        assert "searchFactsReceiptText(" in body, f"{name} 应调用 searchFactsReceiptText"
+
+
+def test_plan_is_retrieval_only_single_verdict_in_board_core():
+    """纯检索计划判定唯一真源是 board_core.planIsRetrievalOnly（动词表 PLAN_RETRIEVAL_VERBS）；
+    act.js 的 _ACT_RETRIEVAL_VERBS 与 board.js 的 _RETRIEVAL_VERBS 两份手抄表已退役，
+    两侧只许调判定函数（board.js 保留 _planVerbs 取动词数，不含动词表）。"""
+    src = _strip_comments(_read("panel/board_core.js"))
+    assert "export function planIsRetrievalOnly" in src
+    assert "PLAN_RETRIEVAL_VERBS" in src
+    for name in ("act/act.js", "panel/board.js"):
+        body = _strip_comments(_read(name))
+        assert "_RETRIEVAL_VERBS" not in body, f"{name} 又自带了检索动词表"
+        assert "planIsRetrievalOnly(" in body, f"{name} 应调用 planIsRetrievalOnly"
+
+
+def test_plan_is_retrieval_only_behavior_in_node():
+    """真行为门（node 里跑真 board_core）：全检索动词（含 steps 形态）→ true；
+    混入非检索动词 → false；取不到任何 verb / 无 plan → 保守 false（不抑制任何回执）。"""
+    plans = [
+        {"verb": "rank"},
+        {"steps": [{"verb": "rank"}, {"verb": "search.rerun"}]},
+        {"verb": "curate.list"},
+        {"steps": [{"verb": "rank"}, {"verb": "task_pack.build"}]},
+        {"steps": []},
+        None,
+    ]
+    script = (
+        f'import * as ns from "{(STATIC / "js" / "panel" / "board_core.js").as_uri()}";\n'
+        'import { readFileSync } from "node:fs";\n'
+        "const _in = JSON.parse(readFileSync(0, \"utf-8\"));\n"
+        "console.log(JSON.stringify(_in.map((p) => ns.planIsRetrievalOnly(p))));\n"
+    )
+    out = _run_node(script, plans, suffix=".mjs")
+    assert out == [True, True, False, False, False, False]
+
+
+def test_content_disposition_filename_parsing_lives_only_in_downloads():
+    """Content-Disposition 文件名解析唯一真源是 downloads.dlqFilenameFrom；
+    task_pack / project_exports 只许 import 调用，不再各带一份 filename=" 正则。"""
+    assert "export function dlqFilenameFrom" in _read("core/downloads.js")
+    for name in ("act/task_pack.js", "panel/project_exports.js"):
+        src = _strip_comments(_read(name))
+        assert "dlqFilenameFrom(" in src, f"{name} 应调用 dlqFilenameFrom"
+        assert 'filename="' not in src, f"{name} 又自带了文件名解析正则"
+
+
+def test_plan_cancelled_fallback_wording_matches_backend_verbatim():
+    """计划取消兜底句前后端逐字同源：后端 action_plan.py 极性门缺省 reason_zh 与前端
+    board_core.PLAN_CANCELLED_FALLBACK_ZH 必须是同一句话（board_core 注释钉了
+    「改一边必须同步另一边」）；act.js/board.js 只许消费常量、不留字面量。"""
+    backend = (ROOT / "src" / "dataset_recommender" / "agent" / "action_plan.py").read_text(encoding="utf-8")
+    m_be = re.search(r'reason_zh"\]\s*=.*?\bor\s+"(?P<s>[^"]+)"', backend)
+    assert m_be, "action_plan.py 找不到 reason_zh 缺省句"
+    m_fe = re.search(r'PLAN_CANCELLED_FALLBACK_ZH\s*=\s*"(?P<s>[^"]+)"', _read("panel/board_core.js"))
+    assert m_fe, "board_core.js 缺 PLAN_CANCELLED_FALLBACK_ZH"
+    assert m_fe.group("s") == m_be.group("s"), (
+        f"前后端取消兜底句漂移：前端 {m_fe.group('s')!r} ≠ 后端 {m_be.group('s')!r}")
+    for name in ("act/act.js", "panel/board.js"):
+        body = _strip_comments(_read(name))
+        assert "PLAN_CANCELLED_FALLBACK_ZH" in body, f"{name} 应消费该常量"
+        assert m_fe.group("s") not in body, f"{name} 又留了兜底句字面量"
+
+
+def test_flow_verb_label_matches_action_plan_zh():
+    """flow_trace.FLOW_VERB_LABEL 对拍门：非流式合成行的展示名必须逐键等于
+    action_plan.VERB_BY_NAME[verb].zh（动作中文名唯一真源），键集 = LOOP_TOOLS
+    全部动词减 route.request（ROUTE 类不上工具行）——前端不手抄第二份名单，
+    改 verb 中文后两处不齐即红。"""
+    from dataset_recommender.agent.agent_exec import LOOP_TOOLS
+
+    src = _read("core/flow_trace.js")
+    m = re.search(r"FLOW_VERB_LABEL\s*=\s*\{(?P<body>.*?)\};", src, re.S)
+    assert m, "flow_trace.js 缺 FLOW_VERB_LABEL"
+    pairs = re.findall(r'"([^"]+)":\s*"([^"]+)"', m.group("body"))
+    labels = dict(pairs)
+    assert len(pairs) == len(labels), "FLOW_VERB_LABEL 出现重复键"
+
+    expected = {v: AP.VERB_BY_NAME[v].zh for v in LOOP_TOOLS if v != "route.request"}
+    assert set(labels) == set(expected), (
+        f"键集漂移：多 {set(labels) - set(expected)} 少 {set(expected) - set(labels)}")
+    for verb, zh in expected.items():
+        assert labels[verb] == zh, (
+            f"FLOW_VERB_LABEL[{verb}] = {labels[verb]!r} ≠ 唯一真源 {zh!r}")

@@ -1,8 +1,8 @@
 "use strict";
-/* 意见反馈 · 核心模块（后端/核心层；UI 对话框在 feedback.js）
+/* 意见反馈 · 核心模块（2026-08-22，后端/核心层；对话框侧见 feedback_dialog_core）
  *
  * 纯逻辑、零 DOM、零网络、零墙钟（id/时间由调用方注入）：只做
- * - 开发者公钥配置点（已配置）；
+ * - 开发者公钥配置点（FEEDBACK_PUBKEY_B64）：2026-08-22 已填生产公钥；
  * - per-profile `feedback_pending` 队列（不可变 feedback_id/授权时间/正文/诊断快照）；
  * - WebCrypto ECDH(P-256)+HKDF-SHA256+AES-256-GCM 加密（明文 → 密文载荷）；
  * - `buildDiagSnapshot()` 组装诊断信息（版本/平台/错误计数/功能计数 allowlist 聚合）；
@@ -11,7 +11,7 @@
  * 分层：存储（localStorage）在本模块（与 usage_core 的「零存储纯核」不同——队列是
  * 意见记录的不可变账本，读写在核心层集中，node 规格用 MemoryStorage mock）；
  * 唯一出网通道在 usage_upload.js（sendFeedback，见该文件）；正文遮蔽复用
- * usage_core.telemetryMaskString（含 追加的 API Key 形态——加密前第一层，
+ * usage_core.telemetryMaskString（含 API Key 形态——加密前第一层，
  * 接收端解密后还有第二层，双层同规则）。
  *
  * 加密协议（与接收端 app.py 逐字段同源，改动必须两端同步）：
@@ -24,7 +24,7 @@
 import { telemetryMaskString } from "./usage_core.js";
 
 /* ============================================================================
- * —— 开发者公钥配置点（已配置）
+ * FEEDBACK_PUBKEY_B64 —— 开发者公钥配置点（2026-08-22 已填生产公钥）
  * ----------------------------------------------------------------------------
  * P-256 公钥，未压缩点（0x04||X||Y，65 字节）的 base64；与接收端环境变量
  * FEEDBACK_DECRYPT_KEY 里的私钥配对（私钥只在服务器，绝不入库）。若清空 =
@@ -67,7 +67,9 @@ function _b64Decode(text) {
     return out;
 }
 
-function _makeFeedbackId() {
+/* feedback_id 生成的唯一实现：crypto.randomUUID 优先，老环境退时间戳+随机串。
+   对话框侧（feedback_dialog_core re-export）与入队兜底（feedbackEnqueue）同用本函数。 */
+export function feedbackNewId() {
     try {
         if (typeof crypto !== "undefined" && crypto.randomUUID) return "fb-" + crypto.randomUUID();
     } catch (_e) {}
@@ -101,7 +103,7 @@ export function feedbackPendingForScope(scope) {
 export function feedbackEnqueue(scope, entry, opts) {
     opts = opts || {};
     const rows = _readPending(scope);
-    const fid = String((entry && entry.feedback_id) || _makeFeedbackId());
+    const fid = String((entry && entry.feedback_id) || feedbackNewId());
     if (rows.some(function (r) { return String(r.feedback_id) === fid; })) return rows.length;
     let text = String((entry && entry.text) || "").trim();
     if (text.length > FEEDBACK_MAX_TEXT) {
@@ -119,7 +121,7 @@ export function feedbackEnqueue(scope, entry, opts) {
         created_at: Date.now(),
     });
     // 上限：优先丢最旧已发送记录（导出账本保留在文件里，队列只留近期）；全 pending 时
-    // 丢最旧 pending（与 usage FIFO 同哲学——新近的意见价值最高）。
+    // 丢最旧 pending（记录在案，与 usage FIFO 同哲学——新近的意见价值最高）。
     while (rows.length > FEEDBACK_MAX_PENDING) {
         let idx = -1;
         for (let i = 0; i < rows.length; i++) {
@@ -166,7 +168,7 @@ export function feedbackClearScope(scope) {
 
 /* 公钥为空或 WebCrypto 不可用 → false。UI 据此走「复制到剪贴板」兜底；
    sendFeedback（usage_upload.js）也会先问它，false 时绝不组包出网。
-   pubkeyB64 参数仅供测试/未来可配置覆盖（生产默认取 常量）。 */
+   pubkeyB64 参数仅供测试/未来可配置覆盖（生产默认取 FEEDBACK_PUBKEY_B64 常量）。 */
 export function hasSendChannel(pubkeyB64) {
     const pub = (pubkeyB64 === undefined) ? FEEDBACK_PUBKEY_B64 : pubkeyB64;
     if (!pub) return false;
@@ -182,7 +184,7 @@ export function hasSendChannel(pubkeyB64) {
 /* 加密一条意见 → 密文载荷（含 feedback_id/identity 元数据；identity 由调用方按
    profile/install 标识语义传入，与接收端幂等键口径一致）。任何一步失败抛错，
    调用方（sendFeedback）保留记录待重试——密文每次重试重新生成（新 ephemeral/nonce）。
-   pubkeyB64 缺省取 常量（生产路径）；测试传入自备公钥。 */
+   pubkeyB64 缺省取 FEEDBACK_PUBKEY_B64 常量（生产路径）；测试传入自备公钥。 */
 export async function feedbackEncrypt(entry, identity, pubkeyB64) {
     const pub = (pubkeyB64 === undefined) ? FEEDBACK_PUBKEY_B64 : pubkeyB64;
     if (!hasSendChannel(pub)) throw new Error("feedback send channel unavailable");
@@ -216,7 +218,7 @@ export async function feedbackEncrypt(entry, identity, pubkeyB64) {
 
 /* ---------- 诊断快照 ---------- */
 
-/* 组装诊断信息（版本/平台/最近错误计数/功能计数 allowlist 聚合值）。
+/* 组装诊断信息（设计 §8：版本/平台/最近错误计数/功能计数 allowlist 聚合值）。
    events：usage 事件数组；**null 或非数组 = 遥测关闭/无可用统计** → 返回
    {available:false}，UI 显示「无可用统计」，**不得为诊断重启采集**（隐私口径）。
    统计只做 allowlist 聚合：错误计数 = err 事件 + ai 失败（ok:false）；功能计数 =
