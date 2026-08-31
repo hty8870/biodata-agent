@@ -121,11 +121,21 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # 纯确定性成本闸，见 mcp_server「在线形态」块）。挂载不用 app.mount 而是直挂 Route：保持
 # PATH_INFO=/mcp 不变地转交子应用（其内部路由恰是 /mcp），避开 Mount 的前缀剥离语义。
 # 本机形态同样挂载但铸币端点仅护栏形态开放 → 无令牌可发 → 恒 401，攻击面无变化。
-from . import mcp_server as _mcp_server  # noqa: E402  # 单点 import：MCP 域装配集中在此
+# 最小运行时（requirements/requirements.txt，其文件头注释指路 使用教程/MCP安装）刻意
+# 不含 mcp 包：无 mcp 的干净源码/便携安装降级为不挂 /mcp——web 本体与令牌管理 API
+# （mcp_tokens 仅 stdlib）不受影响；本地 MCP 走独立 stdio 进程，不依赖此挂载。
 from starlette.routing import Route as _Route  # noqa: E402
 
-_ONLINE_MCP_APP = _mcp_server.build_online_mcp_app()
-app.router.routes.append(_Route("/mcp", endpoint=_ONLINE_MCP_APP, methods=["GET", "POST", "DELETE"]))
+try:
+    from . import mcp_server as _mcp_server  # noqa: E402  # 单点 import：MCP 域装配集中在此
+except ModuleNotFoundError as exc:  # 仅「mcp 包未安装」才降级；mcp_server 自身其他断链照常抛出
+    if exc.name != "mcp":
+        raise
+    _mcp_server = None
+
+if _mcp_server is not None:
+    _ONLINE_MCP_APP = _mcp_server.build_online_mcp_app()
+    app.router.routes.append(_Route("/mcp", endpoint=_ONLINE_MCP_APP, methods=["GET", "POST", "DELETE"]))
 
 
 @asynccontextmanager
@@ -133,7 +143,10 @@ async def _lifespan_with_mcp(_app):
     """宿主 lifespan：挂载不走子应用 lifespan → 在此驱动 MCP 会话管理器任务组
     （stateless 模式 handle_request 同样要求任务组已启动，SDK 实读确认）。
     session manager 每实例只能 run 一次 → 每次进入前先 reset_online_runtime() 重建，
-    测试反复进出 lifespan 由此幂等。"""
+    测试反复进出 lifespan 由此幂等。无 mcp 包的最小安装（_mcp_server=None）直接空转。"""
+    if _mcp_server is None:
+        yield
+        return
     _mcp_server.reset_online_runtime()
     async with _mcp_server.mcp.session_manager.run():
         yield

@@ -266,7 +266,10 @@ export async function dlqEnqueueDatasets(uids, opts) {
         fresh.push(it);
     });
     const added = dlqEnqueue(fresh, { auto: opts.auto });
-    res.queued = added.filter(function (q) { return q.status === "queued"; }).length;
+    /* auto:true 时 dlqEnqueue 内已同步泵出队首（本批第一个 queued→fired），统计必须含 fired——
+       只数 queued 会把单文件直下错算成 0：调用方误判「零直下」走降级打包分支、遥测漏记
+       （2026-08-31 PR#7 自动评审实锤）。unsupported/error 条目无 url，天然排除在外。 */
+    res.queued = added.filter(function (q) { return q.url && (q.status === "queued" || q.status === "fired"); }).length;
     /* 遥测语义点 = 「数据文件真的开始交给浏览器」（与旧服务端代下「真启动才记」同纪律）。
        只在这一个出口记：面板主按钮 / act.js 动词 / 未来任何调用方都经本函数，单通道不单漏。
        blob 类（引文/任务包/导出）的打点留在各自调用方（它们有产物自证，语义点不同）。 */

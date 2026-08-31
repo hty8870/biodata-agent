@@ -346,8 +346,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260831-web1"  # 2026-08-31 web1（令牌号从 20260830-web9 升 20260831-web1、指纹重算）：混合轮检索回执同挂检索/下载 pill、引文导出与任务包回执挂下载 pill、指路条在动作执行成功后摘除 + board.js/flow_trace.js/results.js 注释去内部代号（纯注释）。更早代际的逐代变更史见 git 历史与本地开发日志（公开面卫生：内嵌全史已移出交付面）。
-STATIC_ASSETS_SHA256 = "b2f8149df9df7c5c5cecb4f370ebb69dc15af666ea7211620b0c55334e72fc1d"
+CACHE_GENERATION = "20260831-web2"  # 2026-08-31 web2（令牌号从 20260831-web1 升 20260831-web2、指纹重算）：downloads.js 修复 res.queued 计数少算 1（auto 泵同步打 fired 后只数 queued，单文件直下被误判「零直下」降级、遥测漏记）+ tests/js/downloads_spec.mjs 新增计数语义钉。更早代际的逐代变更史见 git 历史与本地开发日志（公开面卫生：内嵌全史已移出交付面）。
+STATIC_ASSETS_SHA256 = "8c9fb290ef17dc169245b90050efa7eab3fb57adfa572758814aeac5e34b3374"
 
 
 def _static_assets_digest() -> str:
