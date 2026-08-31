@@ -2,7 +2,7 @@
  *
  * 体裁边界（决定了这个面板的全部文案）：产出的**不是** Data Availability Statement 主句。
  * 主句讲的是用户自己产出的数据去向；那句本工具帮不上，也按设计不接收相关输入。
- * 这条边界原本还有一段 `pack.boundary` 置顶陈述， 按产品要求整段删除
+ * 这条边界原本还有一段 `pack.boundary` 置顶陈述，2026-07-29 按产品方要求整段删除
  * （面板标题与英文段落已经把范围说清，那段是在用户没问时辩解一件不会发生的事）。后端字段一并移除。
  *
  * 隐私：走 **POST**。GET 会把每个 dataset_uid 打进 uvicorn access log = 事实上的埋点，
@@ -12,8 +12,9 @@
 /* 本文件是 ES Module：core 的存储 CRUD/工具与 usage 层经 import 取（CURRENT_USER 是 core 的
    可变 let，live import 只读——本文件从不写它）。cards/act（downloadTextBlob）、accounts
    （resetReuseScope）、browse（syncReuseBar）、interactions（buildReusePack/setReuseScope）
-   经 import 取本文件导出。 */
-import { API, CURRENT_USER, $, downloadBlobAs, escapeHtml, favFolderIdOrDefault, favFolderNameById, favFolderOf, getFavFolders, getFavs, isHttp, toast } from "#core";
+   经 import 取本文件导出（绞杀桥已全退役）。 */
+import { API, CURRENT_USER, $, copyTextAny, escapeHtml, favFolderIdOrDefault, favFolderNameById, favFolderOf, getFavFolders, getFavs, isHttp, toast } from "#core";
+import { dlqFireBlob } from "#downloads";
 import { USAGE_KINDS } from "#usage_core";
 import { usageLog } from "#usage_log";
 
@@ -43,20 +44,20 @@ export function setReuseScope(v) {
    但一句话执行层要据它渲染回执——没有返回值的话，Blob/URL 那一步抛异常时也只 toast 一句
    「下载失败」，回执却照样写「已导出引文：… 22.0 KB」，把一件没发生的事说成发生了。 */
 export function downloadTextBlob(text, filename, mime, okMsg, failMsg, ctx) {
-    try {
-        downloadBlobAs(new Blob([text], { type: mime }), filename);
-        toast(okMsg);
-        // 同 task_pack：只在真下载成功的分支记。文件名的**后缀**足以区分引文/清单/材料，
-        // 不记文件名本身（它带用户的收藏夹名）。
-        //  ctx（可选）：单条引文导出的归因上下文（cards.js 传 {uid}；批量导出不传）。
-        //  v3：引文（数据集详情页）与投稿材料/清单（收藏页）都不在结果页——
-        // 显式 tid/iid=null，不冒领当前检索轮/当前展示（结果页的 pack/script 打点在
-        // task_pack.js，不走这里，仍由全局注入当前轮）。
-        usageLog(USAGE_KINDS.dl, Object.assign(
-            { what: /\.(ris|bib)$/i.test(String(filename || "")) ? "cite" : "reuse" },
-            { tid: null, iid: null }, ctx || {}));
-        return true;
-    } catch (_e) { toast(failMsg); return false; }
+    // 2026-08-30：导出统一进浏览器下载队列（core/downloads.js）。
+    // dlqFireBlob 内部已 try/catch、失败返回 false —— 照旧走 failMsg 分支，
+    // 绝不把没存下来的事说成存下来了（返回值契约不变）。
+    const kind = /\.(ris|bib)$/i.test(String(filename || "")) ? "cite" : "reuse";
+    if (!dlqFireBlob(filename, new Blob([text], { type: mime }), { kind })) { toast(failMsg); return false; }
+    toast(okMsg);
+    // 同 task_pack：只在真下载成功的分支记。文件名的**后缀**足以区分引文/清单/材料，
+    // 不记文件名本身（它带用户的收藏夹名）。
+    // ctx（可选）：单条引文导出的归因上下文（cards.js 传 {uid}；批量导出不传）。
+    // 引文（数据集详情页）与投稿材料/清单（收藏页）都不在结果页——
+    // 显式 tid/iid=null，不冒领当前检索轮/当前展示（结果页的 pack/script 打点在
+    // task_pack.js，不走这里，仍由全局注入当前轮）。
+    usageLog(USAGE_KINDS.dl, Object.assign({ what: kind }, { tid: null, iid: null }, ctx || {}));
+    return true;
 }
 
 /* 收藏夹里的 uid（keys-only：只送键，不送内容）。空 uid 的老收藏跳过——
@@ -92,7 +93,7 @@ export function syncReuseBar() {
     // 显隐按**全部收藏**判：范围为某空夹时条仍要留着，否则用户切不回「全部收藏」
     bar.style.display = getFavs().length ? "flex" : "none";
     const btn = $("reusePackBtn");
-    if (btn && !_packBusy) btn.textContent = `生成投稿材料（${reuseScopeLabel()} · ${uids.length} 条）`;   // 与 index.html 静态文案同词（普查 #34）——运行时覆写不许把旧词换回来
+    if (btn && !_packBusy) btn.textContent = `生成投稿材料（${reuseScopeLabel()} · ${uids.length} 条）`;   // 与 index.html 静态文案同词——运行时覆写不许把旧词换回来
     // 收藏变化后旧清单就过期了（条数对不上会误导），直接收起而不是留着一份陈旧的。
     // 陈旧判定三维：条数（dataset.n）+ 账户（dataset.u）+ 范围（dataset.f）——
     // 同账户同条数但换了收藏夹范围，旧清单同样必须判陈旧收起。
@@ -127,7 +128,7 @@ export async function buildReusePack() {
         renderReusePack(data.pack, data.markdown || "", data.ris || "", data.bibtex || "", reuseScopeLabel());
         // 生成成功即**自动**把三个文件（.md + .ris + .bib）落进浏览器下载目录；
         // 面板上方的三个「下载」按钮保留为重下入口。
-        autoDownloadReuseFiles(data.markdown || "", data.ris || "", data.bibtex || "");
+        autoDownloadReuseTrio({ md: data.markdown || "", ris: data.ris || "", bib: data.bibtex || "" });
         // 同时记录生成时的账户 + 范围指纹：syncReuseBar 据此识别「条数相同但属于另一账户/另一夹」的陈旧清单。
         if (panel) { panel.dataset.n = String(uids.length); panel.dataset.u = (CURRENT_USER && CURRENT_USER.id) || ""; panel.dataset.f = _reuseScope; }
     } catch (e) {
@@ -148,21 +149,28 @@ export async function buildReusePack() {
     }
 }
 
-/* 投稿材料生成成功后自动落三个文件（.md + .ris + .bib）。空值不下载；
-   单文件失败不阻断其余（各自 toast）。面板三个「下载」按钮保留为重下入口。 */
-function autoDownloadReuseFiles(markdown, ris, bibtex) {
-    if (markdown) {
-        downloadTextBlob(markdown, "reused-public-datasets.md", "text/markdown;charset=utf-8",
-            "已下载 reused-public-datasets.md", "下载失败，请改用「复制 Markdown」");
-    }
-    if (ris) {
-        downloadTextBlob(ris, "reused-public-datasets.ris", "application/x-research-info-systems;charset=utf-8",
-            "已下载 reused-public-datasets.ris", "引文下载失败");
-    }
-    if (bibtex) {
-        downloadTextBlob(bibtex, "reused-public-datasets.bib", "application/x-bibtex;charset=utf-8",
-            "已下载 reused-public-datasets.bib", "引文下载失败");
-    }
+/* 复用清单三件套（.md 投稿材料 + .ris/.bib 引文）的文件名唯一真源——面板自动下载、
+   面板手动重下、act 执行层（引文导出/投稿材料）三处共用，改文件名只动这里。 */
+export const REUSE_FILE_NAMES = {
+    md: "reused-public-datasets.md",
+    ris: "reused-public-datasets.ris",
+    bib: "reused-public-datasets.bib",
+};
+
+/* 三件套自动下载的共用锚点（面板生成成功即落盘、act 执行层引文导出/投稿材料共用）。
+   files = { md?, ris?, bib? }：空值不下载、对应键返回 false；单文件失败不阻断其余
+   （各自 toast）。返回 { md, ris, bib } 三个布尔，调用方必须消费——downloadTextBlob
+   内部 try/catch 只 toast，不看返回值就会在浏览器没存下文件时照样写「已下载」。 */
+export function autoDownloadReuseTrio(files) {
+    files = files || {};
+    const out = {};
+    out.md = files.md ? downloadTextBlob(files.md, REUSE_FILE_NAMES.md, "text/markdown;charset=utf-8",
+        "已下载投稿材料", "下载失败") : false;
+    out.ris = files.ris ? downloadTextBlob(files.ris, REUSE_FILE_NAMES.ris,
+        "application/x-research-info-systems;charset=utf-8", "已下载引文（ris）", "引文下载失败") : false;
+    out.bib = files.bib ? downloadTextBlob(files.bib, REUSE_FILE_NAMES.bib,
+        "application/x-bibtex;charset=utf-8", "已下载引文（bib）", "引文下载失败") : false;
+    return out;
 }
 
 function renderReusePack(pack, markdown, ris, bibtex, scopeLabel) {
@@ -222,11 +230,7 @@ function renderReusePack(pack, markdown, ris, bibtex, scopeLabel) {
             : `<p class="rp-clean">本清单没有发现需要额外核实的项。</p>`)
         + `</section>`;
 
-    const copy = (text, okMsg) => {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(() => toast(okMsg)).catch(() => toast("复制失败，请手动选择"));
-        } else { toast("此浏览器不支持自动复制，请手动选择"); }
-    };
+    const copy = (text, okMsg) => copyTextAny(text, { okMsg });
     const btnCopy = panel.querySelector(".rp-copy");
     if (btnCopy) btnCopy.addEventListener("click", () => copy(pack.paragraph || "", "已复制投稿段落"));
     const btnMd = panel.querySelector(".rp-copy-md");
@@ -235,19 +239,19 @@ function renderReusePack(pack, markdown, ris, bibtex, scopeLabel) {
     const downloadText = downloadTextBlob;
     const btnDl = panel.querySelector(".rp-dl");
     if (btnDl) btnDl.addEventListener("click", () =>
-        downloadText(markdown, "reused-public-datasets.md", "text/markdown;charset=utf-8",
-            "已下载 reused-public-datasets.md", "下载失败，请改用「复制 Markdown」"));
-    // 引文导出：数据集条目（RIS TY-DATA / BibTeX @misc），非论文类型。
+        downloadText(markdown, REUSE_FILE_NAMES.md, "text/markdown;charset=utf-8",
+            "已下载 " + REUSE_FILE_NAMES.md, "下载失败，请改用「复制 Markdown」"));
+    // N10 引文导出：数据集条目（RIS TY-DATA / BibTeX @misc），非论文类型。
     const btnRis = panel.querySelector(".rp-dl-ris");
     if (btnRis) btnRis.addEventListener("click", () => {
         if (!ris) { toast("暂无可下载的引文"); return; }
-        downloadText(ris, "reused-public-datasets.ris", "application/x-research-info-systems;charset=utf-8",
-            "已下载 reused-public-datasets.ris", "下载失败");
+        downloadText(ris, REUSE_FILE_NAMES.ris, "application/x-research-info-systems;charset=utf-8",
+            "已下载 " + REUSE_FILE_NAMES.ris, "下载失败");
     });
     const btnBib = panel.querySelector(".rp-dl-bib");
     if (btnBib) btnBib.addEventListener("click", () => {
         if (!bibtex) { toast("暂无可下载的引文"); return; }
-        downloadText(bibtex, "reused-public-datasets.bib", "application/x-bibtex;charset=utf-8",
-            "已下载 reused-public-datasets.bib", "下载失败");
+        downloadText(bibtex, REUSE_FILE_NAMES.bib, "application/x-bibtex;charset=utf-8",
+            "已下载 " + REUSE_FILE_NAMES.bib, "下载失败");
     });
 }

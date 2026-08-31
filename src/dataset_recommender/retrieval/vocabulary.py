@@ -1,7 +1,7 @@
 """
 双语受控词表（catalog）+ 平台/assay 归一规则 + 停用词。
 
-设计要点（经对抗评审收敛）：
+设计要点（与 Codex 辩论收敛结论一致）：
 - hard_filter 的可靠性 = 约束抽取的召回率。词表尽量覆盖语料真实词汇 + 常见别名，
   并**收录库中不存在的已知实体**（如 elephant/大象），好让解析器"看见"约束→正确返回无结果。
 - platform_family（Visium/Xenium/Chromium/Atera）与 assay（ATAC/Multiome/Flex/CNV/GEX…）
@@ -53,7 +53,7 @@ def derive_assay(chemistry: str) -> str:
 
 
 # ---------- modality（数据模态：解离式单细胞 / 空间·原位 / 未知）----------
-# 背景（验证反馈 + 3 视角验证收敛）：`单细胞` 原硬映射成 platform=chromium，多源检索会静默排除
+# 背景（反馈 + 3 视角对抗评审收敛）：`单细胞` 原硬映射成 platform=chromium，多源检索会静默排除
 # 非 10x 单细胞技术（Smart-seq2/Drop-seq/sci-RNA-seq…）。改成独立 modality 维：单细胞=**解离式悬液**模态，
 # 不等于某一平台。**base 767 全有 platform_family** → 只走规则 1/2（chromium→single-cell；visium/xenium/atera→
 # spatial），派生纯确定、冻结门逐位不变；chemistry 扫描仅对外部（platform_family 为空）记录生效。
@@ -105,15 +105,15 @@ def derive_modality(platform_family: str, chem_text: str) -> str:
 
 # ---------- 受控词表：alias(中/英) -> 该维度字段应包含的规范 target ----------
 # 匹配语义：查询命中任一 alias => 该维度约束 = targets；hard_filter 要求对应记录字段包含任一 target。
-# alias 覆盖扩展（tissue+species）：并入 Uberon(组织)/NCBI Taxonomy(物种) 常见同义词 + 中文口语/临床变体（如
+# alias 覆盖批次1（tissue+species）：并入 Uberon(组织)/NCBI Taxonomy(物种) 常见同义词 + 中文口语/临床变体（如
 #   homo sapiens/mus musculus/表皮/乳房/骨骼肌…）。只扩 aliases 提召回，**不动 targets(规范键)**；匹配是子串+长优先消费，
 #   故新增同义词只会把原本会 fail-closed 弃权的说法正确解析，绝不改变 hard_filter 的 0% 违规保证。
-# alias 覆盖扩展（外部平台库对齐）：基础库(10x)为 base、外部平台库(CELLxGENE/HCA/EBI SCEA/ArrayExpress/ENCODE，约4900条)
+# alias 覆盖批次2（外部平台库对齐）：基础库(10x)为 base、外部平台库(CELLxGENE/HCA/EBI SCEA/ArrayExpress/ENCODE，约4900条)
 #   含大量 base 没有的 species/tissue/disease/技术（拟南芥/线虫/酵母/胸腺/小脑/视网膜/新冠/阿尔茨海默/帕金森/糖尿病/
-#   Smart-seq2/Drop-seq/Slide-seq/MERFISH…）。这些说法此前一律 fail-closed 弃权 → 漏掉数百条真实外部记录。**新增受控项**
+#   Smart-seq2/Drop-seq/Slide-seq/MERFISH…）。这些说法此前一律 fail-closed 弃权 → 漏掉数百条真实外部记录。本批**新增受控项**
 #   （非仅扩别名）：每条仍是「alias→子串 target」结构，0% 违规由 hard_filter 结构性保证不变；新 target 只让对应约束能被识别+硬过滤。
 #   技术类（Smart-seq2 等）归入 assay 维度（匹配 assay+chemistry 子串），不走 platform 的精确 family 匹配，避免改核心归一。
-#   纪律：每次扩充后跑 scripts/evaluate_recommendation.py（54 题冻结门，base-only），确认 Constraint_Violation 仍=0%、Top5/NoResult 不退化，再合。
+#   纪律：每批扩充后跑 scripts/evaluate_recommendation.py（54 题冻结门，base-only），确认 Constraint_Violation 仍=0%、Top5/NoResult 不退化，再合。
 CATALOG: dict[str, list[dict[str, object]]] = {
     "species": [
         {"aliases": ["人类", "人", "人体", "human", "homo sapiens", "sapiens"], "targets": ["human"], "display": "Human"},
@@ -126,7 +126,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         # 模式植物/微生物/其它模式动物：基础库(10x)无、外部平台库(CELLxGENE/HCA/EBI/ArrayExpress/ENCODE)有，
         # 收录以便正确解析并检出外部记录（此前这些说法会 fail-closed 弃权 → 漏掉数百条真实数据）。
         {"aliases": ["拟南芥", "arabidopsis", "thaliana"], "targets": ["arabidopsis", "thaliana"], "display": "Arabidopsis"},
-        # 玉米（R6，dev 集 dv28/dv29/dv33）：base 有 2 条 species="Maize" 记录，
+        # 玉米（2026-08-06 dev 集 dv28/dv29/dv33）：base 有 2 条 species="Maize" 记录，
         # 此前「玉米 / maize」均未收录 → 整句 unresolved_term 弃权。"zea" 3 字符但有 ASCII 词边界保护。
         {"aliases": ["玉米", "maize", "zea mays", "zea"], "targets": ["maize", "zea mays"], "display": "Maize"},
         {"aliases": ["水稻", "oryza sativa", "oryza"], "targets": ["oryza"], "display": "Rice"},
@@ -194,16 +194,16 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["甲状腺", "thyroid"], "targets": ["thyroid"], "display": "Thyroid"},
         {"aliases": ["食管", "食道", "esophagus", "esophageal", "oesophagus"], "targets": ["esophag", "oesophag"], "display": "Esophagus"},
         {"aliases": ["胎盘", "placenta", "placental"], "targets": ["placenta"], "display": "Placenta"},
-        # ── 语料实证覆盖扩充（组织）──────────────────────────────
+        # ── 2026-07-22 夜 批次3：语料实证覆盖扩充（组织）──────────────────────────────
         # 挑选依据不是拍脑袋，是**查询侧覆盖率实测**：拿 106 个常见中文检索词逐个跑 parse_query，
         # 挑出「语料里确实有数据、却因为词表没这个词而整句 unresolved_term 弃权」的那些
         # （皮层 332 条 / 口腔 97 / 纹状体 72 / 膀胱 35 / 肾上腺 28 / 下丘脑 25 …共 66 个）。
         # 每个 target 子串都回语料核对过它到底命中哪些取值，专门防「过宽」：
         #   · 裸 "oral" 会命中 middle temp**oral** gyrus（39 条颞叶数据混进口腔）→ 改用 oral cavity/buccal/mouth；
         #   · 裸 "caudate" 会命中 caudate lobe of liver（29 条肝尾状叶混进纹状体）→ 改用 caudate nucleus/-putamen；
-        #   · 裸 "bone" 里 189/225 是 bone marrow（已有独立概念）→ **不收**「骨」，宁可继续弃权。
+        #   · 裸 "bone" 里 189/225 是 bone marrow（已有独立概念）→ 本批**不收**「骨」，宁可继续弃权。
         # 同理**不收**「白质」：它是「蛋**白质**」的真子串，会把蛋白质组学查询劫持成组织=白质
-        # （正是要消灭的那类事故），只收无歧义的「脑白质」形不值当，留待后续保护机制落地后再议。
+        # （正是本轮要消灭的那类事故），只收无歧义的「脑白质」形不值当，留待 F2 保护机制后再议。
         {"aliases": ["膀胱", "bladder", "urinary bladder"], "targets": ["bladder"], "display": "Bladder"},
         {"aliases": ["耳蜗", "内耳", "cochlea", "cochlear"], "targets": ["cochlea"], "display": "Cochlea"},
         {"aliases": ["肾上腺", "adrenal", "adrenal gland"], "targets": ["adrenal"], "display": "Adrenal Gland"},
@@ -225,7 +225,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["输卵管", "fallopian", "fallopian tube", "oviduct"], "targets": ["fallopian", "oviduct"], "display": "Fallopian Tube"},
         # 「子宫内膜」此前被登记成 disease=Endometrial Cancer —— 维度归属反了：它是**组织**，
         # 语料里 endometrium 组织 22 条、endometrial 癌 5 条。查子宫内膜的人多数要的是组织。
-        # 拆开：组织归这里，癌症在 disease 侧改名为「子宫内膜癌」。
+        # 本批拆开：组织归这里，癌症在 disease 侧改名为「子宫内膜癌」。
         {"aliases": ["子宫内膜", "endometrium"], "targets": ["endometrium"], "display": "Endometrium"},
         {"aliases": ["牙齿", "牙髓", "牙", "tooth", "dental pulp"], "targets": ["tooth", "dental"], "display": "Tooth"},
         {"aliases": ["软骨", "cartilage"], "targets": ["cartilage"], "display": "Cartilage"},
@@ -256,7 +256,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
          "targets": ["hepatocellular", "liver cancer"], "display": "Liver Cancer"},
         # 「非霍奇金」词首「非」是词素、非排除（此前误报 unsupported_negation）。
         # 不收 3 字裸缩写 "nhl"：会子串误命中域内知名机构名 NHLBI（→静默注入 disease=lymphoma），全称/中文形已足够。
-        # 霍奇金亚型拆出独立条目（见下）——此前「霍奇金淋巴瘤」泛化到 lymphoma，
+        # 2026-08-06 （dev 集 dv34）：霍奇金亚型拆出独立条目（见下）——此前「霍奇金淋巴瘤」泛化到 lymphoma，
         # base 里 rank-1 被 small lymphocytic lymphoma（非霍奇金亚型）抢走，是 holdout 首跑唯一硬违规的问题。
         # 「非霍奇金」各形必须留在本条（泛称）：它们比霍奇金条目的对应别名长（非霍奇金淋巴瘤>霍奇金淋巴瘤、
         # non-hodgkin lymphoma>hodgkin lymphoma、non-hodgkin>hodgkin），最长优先消费保证它们到不了霍奇金条目。
@@ -273,7 +273,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["黑色素瘤", "melanoma"], "targets": ["melanoma"], "display": "Melanoma"},
         {"aliases": ["胶质母细胞瘤", "胶质瘤", "glioblastoma", "glioma", "gbm"], "targets": ["glioblastoma", "glioma"], "display": "Glioblastoma"},
         {"aliases": ["胃癌", "gastric cancer", "gastric adenocarcinoma"], "targets": ["gastric"], "display": "Gastric Cancer"},
-        # aml / acute myeloid 从泛称条目移入下方急髓专条——
+        # 2026-08-06 （dev 集 dv37/dv38）：aml / acute myeloid 从泛称条目移入下方急髓专条——
         # 此前「急性髓系白血病」落到泛称 leukemia，base 里 rank 被其他白血病亚型抢走（dv37 Top1/Top5 双失）。
         {"aliases": ["白血病", "leukemia", "leukaemia", "cll"], "targets": ["leukemia"], "display": "Leukemia"},
         # 急性髓系白血病（dv37，急髓/AML）：base 4 条 "Acute myeloid leukemia (AML)"。
@@ -317,7 +317,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["囊性纤维化", "cystic fibrosis"], "targets": ["cystic fibrosis"], "display": "Cystic Fibrosis"},
         {"aliases": ["银屑病", "牛皮癣", "psoriasis", "psoriatic"], "targets": ["psoriasis", "psoriatic"], "display": "Psoriasis"},
         {"aliases": ["神经母细胞瘤", "neuroblastoma"], "targets": ["neuroblastoma"], "display": "Neuroblastoma"},
-        # ── 语料实证覆盖扩充（疾病）──────────────────────────────
+        # ── 2026-07-22 夜 批次3：语料实证覆盖扩充（疾病）──────────────────────────────
         # 除了补覆盖，这一批还顺手修掉一整类**静默错筛**：中文别名是裸子串匹配，短别名会被更长的
         # 不同概念词包含，于是「高血压」命中「血」→ 组织=Blood、「骨髓瘤」命中「骨髓」→ 组织=Bone Marrow、
         # 「肺炎/肾炎/肝炎/胃炎/肾病」各自退化成对应器官。界面上会挂一个看起来很正常的
@@ -377,7 +377,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["肾小球肾炎", "肾病", "肾炎", "nephropathy", "nephritis", "glomerulonephritis"],
          "targets": ["nephropathy", "nephritis"], "display": "Nephropathy/Nephritis"},
         {"aliases": ["肺炎", "pneumonia"], "targets": ["pneumonia"], "display": "Pneumonia"},
-        # 回归验证：「血管瘤」此前命中裸「血管」→ 组织=Blood Vessel/Artery/Vein，
+        # 2026-07-22 夜对抗评审：「血管瘤」此前命中裸「血管」→ 组织=Blood Vessel/Artery/Vein
         # 用户搜血管瘤，拿到 11 条血管组织数据、没有一条是血管瘤。语料里 hemangioma 确有 1 条
         #（normal, liver hemangioma），所以这里**登记本体**而不是塞进保护表——保护表会让它
         # 弃权说「系统未收录」，而库里明明有，那是另一种撒谎。
@@ -429,7 +429,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["multiome", "多组学"], "targets": ["multiome"], "display": "Multiome"},
         {"aliases": ["flex", "固定rna", "fixed rna"], "targets": ["flex"], "display": "Flex"},
         {"aliases": ["cnv", "拷贝数"], "targets": ["cnv"], "display": "CNV"},
-        # ① 补「V(D)J」带括号形、「免疫受体（库）」、「TCR/BCR」别名——
+        # 2026-08-06 （dev 集 dv23-dv27）：① 补「V(D)J」带括号形、「免疫受体（库）」、「TCR/BCR」别名——
         # 此前 "vdj" 裸形匹配不到用户常写的 "V(D)J"，「免疫受体库」未收录，均整句弃权；
         # ② target 增列 "v(d)j"：base 774 条里 12 条 V(D)J 记录的 chemistry 写作 "…Single Cell V(D)J v1.1"，
         # 没有任何记录的 assay/chemistry 含 "immune"——旧单 target "immune" 在 base 上零命中，
@@ -446,7 +446,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["merfish"], "targets": ["merfish"], "display": "MERFISH"},
         {"aliases": ["seq-well", "seqwell"], "targets": ["seq-well"], "display": "Seq-Well"},
         {"aliases": ["cite-seq", "citeseq"], "targets": ["cite-seq"], "display": "CITE-seq"},
-        # 此前一律 unresolved_term 弃权的单细胞/空间技术专名。
+        # 2026-07-22 批次：此前一律 unresolved_term 弃权的单细胞/空间技术专名。
         # 全部 ASCII、≥5 字符、高辨识度，不会误命中普通中文查询。语料里没有的 target 也照收——
         # 词表设计原则就是「收录库中不存在的已知实体」，好让解析器看见约束后诚实返回无结果，
         # 而不是把整句判成看不懂。
@@ -461,7 +461,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["strt-seq"], "targets": ["strt-seq"], "display": "STRT-seq", "absent_ok": True},
         {"aliases": ["split-seq", "splitseq"], "targets": ["split-seq"], "display": "Split-seq", "absent_ok": True},
         {"aliases": ["cellplex"], "targets": ["cellplex"], "display": "CellPlex", "absent_ok": True},
-        # HuBMAP chemistry 高频的空间/多重成像技术专名。
+        # 2026-08-06 批次（HuBMAP 接入）：HuBMAP chemistry 高频的空间/多重成像技术专名。
         # ASCII 别名有词边界保护（query_parser._alias_occurrences），不收 Resolve（普通英文动词，
         # 误命中风险大于收益，该家族记录量也极小）。10X Multiome 已被既有 multiome 条目的子串覆盖。
         {"aliases": ["codex"], "targets": ["codex"], "display": "CODEX", "absent_ok": True},
@@ -474,11 +474,11 @@ CATALOG: dict[str, list[dict[str, object]]] = {
         {"aliases": ["hifi-slide", "hifislide"], "targets": ["hifi-slide"], "display": "HiFi-Slide", "absent_ok": True},
         {"aliases": ["pixel-seq", "pixel-seqv2", "pixelseq"], "targets": ["pixel-seq"], "display": "Pixel-seqV2", "absent_ok": True},
         {"aliases": ["molecular cartography"], "targets": ["molecular cartography"], "display": "Molecular Cartography", "absent_ok": True},
-        # ── SCP/GEO NL 检索补盲：两源 description 里验证高频、此前一律
+        # ── 2026-08-06 批次（SCP/GEO NL 检索补盲）：两源 description 里实测高频、此前一律
         # unresolved_term 弃权的单细胞方法学专名（词边界计数：perturb-seq 14 / snuc-seq 9 /
         # dronc-seq 4 / pick-seq 4 / div-seq 2 条记录）。全部 ≥6 字符带连字符（无连字符变体
         # ≥7 字符），ASCII 词边界保护下不与普通英文词碰撞；只收连字/全称形，不收裸词根
-        # （div/pick/snuc 裸形太泛，会误命中日常英语）。target 即方法名子串：反标富化会把
+        # （div/pick/snuc 裸形太泛，会误命中日常英语）。target 即方法名子串：T37 反标富化会把
         # display 写进 chemistry 字段（corpus_enrich），硬过滤按 assay+chemistry 子串命中，
         # 故提升后 target 在语料字段中真实存在——不需要 absent_ok（该旗标只是文档性标注，
         # 供「库里可能真没有」的条目用，本条目不属此类）。
@@ -494,7 +494,7 @@ CATALOG: dict[str, list[dict[str, object]]] = {
 RAW_REQUIRED_ALIASES = [
     "fastq", "原始数据", "有原始数据", "raw data", "from fastq",
     "可重新跑", "重新跑流程", "重新比对", "重新分析", "可复现", "重跑",
-    # 「要原始文件 / 原始序列」此前不是 raw 说法，「原始」两字落进残差门 →
+    # 2026-07-22 夜：「要原始文件 / 原始序列」此前不是 raw 说法，「原始」两字落进残差门 →
     # 整句 unresolved_term 弃权。补齐同义写法；注意必须**收进 raw 别名**而不是丢进 filler，
     # 否则「要原始文件」会变成静默不筛 raw（用户明确要了原始数据却没筛，比弃权更糟）。
     "原始文件", "原始序列", "原始测序数据", "原始 fastq", "原始fastq",
@@ -505,7 +505,7 @@ RAW_NOT_REQUIRED_ALIASES = ["无需fastq", "不需要fastq", "不需要原始数
 # ---------- fail-closed 残差门：停用词/填充词 ----------
 # 命中词表后，从查询里去掉这些 + 已匹配 alias，若仍剩≥2 连续中文/未知实体词 => abstain。
 #
-# （静默丢词诚实层）：把原单表 FILLER_TOKENS 拆成两组，语义不同、用途不同。
+# 2026-07-18（静默丢词诚实层）：把原单表 FILLER_TOKENS 拆成两组，语义不同、用途不同。
 # **FILLER_TOKENS = FILLER_GRAMMAR + FILLER_DOMAIN 的并集**，成员逐位不变 → _residual_salient /
 # 残差门 / 弃权阈值 / 冻结 767 全部行为不变。拆分只为让「静默丢词」诚实层能区分该不该回显。
 #
@@ -519,7 +519,7 @@ RAW_NOT_REQUIRED_ALIASES = ["无需fastq", "不需要fastq", "不需要原始数
 #     诚实层据此回显 unused_query_terms「以下词未作为筛选维度」。按定义这些词都**不是任何维度的头词**，
 #     故回显不存在「头/值」歧义、不会误报已落维度。
 # ---------- 执行类说法：不是检索条件，但也不该炸掉检索 ----------
-# 验证：「人类肺数据，帮我打包前20条」「人类肺癌数据，生成下载脚本」「导出引文」——
+# 实测：「人类肺数据，帮我打包前20条」「人类肺癌数据，生成下载脚本」「导出引文」——
 # 这些说法**每一句都整句弃权**，连人类肺数据都查不到。用户想的是「检索完顺手打包」，
 # 得到的却是「查询里有系统未收录的词：打包前」。
 #
@@ -529,7 +529,7 @@ RAW_NOT_REQUIRED_ALIASES = ["无需fastq", "不需要fastq", "不需要原始数
 #     所以另出一个只读的 `query_parser.detect_action_markers` 回显，把「你说了打包，功能在这儿」讲清楚。
 #     这是「一句话检索 + 下载」那条想法的**确定性半边**：识别意图、指路，但**不替用户执行**。
 #
-# 拆表：**动作**与**对象**必须分开，因为它们承担的职责不同。
+# 2026-07-25 拆表：**动作**与**对象**必须分开，因为它们承担的职责不同。
 #   · 动作词（ACTION_VERBS）表示「去做一件事」，是**路由依据**：据它把一句话交给任务包那条路。
 #   · 对象词（ACTION_NOUNS）是产物的名字，不是动作。它们仍然进填充词表（不炸检索）、仍然参与回显，
 #     但**不能拿来路由**——实测这 5 句都被裸子串劫持成「打开打包面板」，用户那半句真实诉求当场蒸发：
@@ -549,7 +549,7 @@ ACTION_NOUNS = (
 )
 
 #: 回显与填充词表用**并集**——「你说了打包/引文」这类如实回音不该因为拆表而少掉一半。
-#: 程序并，不手抄（本仓库在两份条件板投影上栽过多次）。
+#: 程序并，不手抄（本仓库在 .gitignore↔.deliveryignore、两份条件板投影上栽过多次）。
 ACTION_MARKERS = tuple(dict.fromkeys(ACTION_VERBS + ACTION_NOUNS))
 
 #: 管护类操作短语：「AI 执行」关闭时路由层的**规则**降级检测用
@@ -583,7 +583,7 @@ FILLER_GRAMMAR = [
     "经典", "典型", "常见", "最新", "高质量", "优质", "标准", "好", "好的", "优秀",
     "一份", "几个", "若干", "各种", "各类", "所有", "全部", "更多", "经典的",
     "帮忙", "看一下", "了解", "关注", "研究", "做", "用", "适合", "合适", "常用",
-    # ── 出处/介词/动词虚词 ───────────────────────────────────
+    # ── 2026-07-22 批次：出处/介词/动词虚词 ───────────────────────────────────
     # 起因：`推荐有 FASTQ 的人类乳腺癌数据，来自10x` 整句弃权，理由是「系统未收录的词：来自」。
     # 「来自」是**介词**，不是约束——把它当未收录实义词而整句弃权，是残差门把虚词误判成实词。
     # 本组全部是**功能词**（介词/连词/一般动词/量词/程度词），按定义不是任何维度的头或值，
@@ -610,7 +610,7 @@ FILLER_GRAMMAR = [
     # （这句话在收紧词边界之前更糟：`integrated` 里的 `rat` 让它悄悄多出一个物种约束。）
     "integrated", "curated", "annotated", "processed", "aggregated", "combined",
     "merged", "harmonized", "reference", "public", "collection", "resource", "database",
-    # ── 已收「来自/出自/基于」，但**同一类**的还剩一批仍在整句弃权。
+    # ── 2026-07-22 夜：上一轮补了「来自/出自/基于」，但**同一类**的还剩一批仍在整句弃权。
     # 实测：「2022 年之后发表」卡在「发表」、「要原始 FASTQ」卡在「要原始」——和「来自」一模一样，
     # 都是动词/虚词被当成未识别实义词。这次按词性成批收，不再一个一个补。
     "发表", "已发表", "出版", "汇总", "覆盖",
@@ -620,7 +620,7 @@ FILLER_GRAMMAR = [
     # 别名、在残差门之前就被消费掉了），裸写时只是句子里的通用名词。
     # 实测「人类肝癌的单细胞 RNA 和 ATAC 联合数据」就卡在裸「rna」这三个字母上整句弃权。
     "rna", "dna", "mrna", "cdna", "seq", "omics",
-    # ── 查询电池回归：仍在整句弃权的**纯功能词/已落维度的头词** ──────────
+    # ── 2026-07-22 夜 85 条查询电池：仍在整句弃权的**纯功能词/已落维度的头词** ──────────
     # 判别标准仍是那三条筛子（不是任何维度的值 / 不切碎受控词表 / 不含否定语素），
     # 且必须是「报出来会撒谎」的那一类，才进 GRAMMAR 而不是 DOMAIN：
     #   · 「一下」：纯语气助词。实测「给我拉取一下人类肝脏的单细胞数据」整句弃权在「一下」上——
@@ -628,7 +628,7 @@ FILLER_GRAMMAR = [
     #   · 「感染」：实测「巨细胞病毒感染的单细胞数据」弃权在「感染」上，可 disease 已经落成
     #     Cytomegalovirus **Infection** ——它就是已落维度那个值的尾巴，回显「感染未作为筛选维度」
     #     是彻头彻尾的谎话。
-    #     刻意**不**顺手收「综合征/病变」这类病名尾巴：它们没有实测背书，而且一旦成了 filler，
+    #     刻意**不**顺手收「综合征/病变」这类病名尾巴：它们没有本轮实测背书，而且一旦成了 filler，
     #     「代谢综合征」这种整句都是 filler 的写法会从「诚实弃权」变成「把整个库倒出来 + 一行脚注」。
     #   · 「整合/整合分析」：与已在表里的「联合/结合」同类，是对数据怎么用的描述，不是维度值。
     #     实测「我需要一些多组学的人类数据集用来做整合分析」弃权在这里。
@@ -636,7 +636,7 @@ FILLER_GRAMMAR = [
     #     不是 catalog alias），裸留在句子里就成了 7 个字母的「未识别实义词」。
     #     实测「10x Genomics 的人类外周血单个核细胞数据」整句弃权。与已在表里的 "omics" 同族。
     "一下", "感染", "整合", "整合分析", "genomics",
-    # ── 2026-07-25 基线变更：「或」与 hedge 从「整句弃权」改为「照做」，两者的**残留**
+    # ── 2026-07-25 产品哲学修正：「或」与 hedge 从「整句弃权」改为「照做」，两者的**残留**
     # 必须有落点，否则会从 unsupported_boolean_or / unsupported_hedge 掉进 unresolved_term
     # ——换了个弃权理由而已，用户照样什么都拿不到。
     #   · 「或 / 或者」：与已在表里的「和 / 与」同族的并列连词。同维度多值本身就是「或」的语义
@@ -647,7 +647,7 @@ FILLER_GRAMMAR = [
     #   · 「希望」：请求动词（同「想要 / 需要」），不进偏好表。
     "或", "或者", "最好", "尽量", "如果可以", "可以的话", "如果有", "希望", "如果",
     "preferably", "ideally", "possible",
-    # ── 口语虚词，此前各自把整句卡进 unresolved_term 弃权 ──────────
+    # ── 2026-08-06 （dev 集）：口语虚词，此前各自把整句卡进 unresolved_term 弃权 ──────────
     # 过同样三条筛子（不是任何维度的值 / 不切碎受控词表 / 不含否定语素）：
     #   · 「都行」（dv07/dv10）：「斑马鱼或者果蝇，哪个都行」的口语收尾，实体已落维，残留「哪都行」弃权。
     #   · 「就是」（dv07）：「…都行，就是别带脑组织的」的强调副词。
@@ -668,7 +668,7 @@ FILLER_GRAMMAR = [
 # 执行类动作词并入语法填充词——**用程序并，不手抄**。
 # 两份手抄的清单必然漂移，这一轮当场就漂了一次：ACTION_MARKERS 里有「批量下载」，
 # 手抄进 FILLER_GRAMMAR 时只抄了「下载」，于是「人类肺数据，批量下载」照样整句弃权。
-# 本项目已在别处栽过同型（两份手抄清单从未对账），不再重复。
+# 本项目已在别处栽过同型（.gitignore ↔ .deliveryignore 两份手抄从未对账），不再重复。
 FILLER_GRAMMAR += [m for m in ACTION_MARKERS if m not in set(FILLER_GRAMMAR)]
 # 结构上无筛选维度的实义描述词（性别/年龄/发育/受试者/功能类）——静默丢词诚实层据此回显 unused_query_terms。
 # 仍作 filler 参与残差门（无对应可过滤维度 → 不因它们弃权，避免正常查询被误伤），只是**额外**被回显。
@@ -676,7 +676,7 @@ FILLER_DOMAIN = [
     "患者", "病人", "受试者", "供体", "捐赠者", "免疫",
     "成人", "成年", "儿童", "婴儿", "胎儿", "新生儿", "青少年", "老年", "年轻",
     "男性", "女性", "雄性", "雌性", "男", "女",
-    # ── 实义描述词，系统结构上确实没有对应筛选维度 ──────────────
+    # ── 2026-07-22 批次：实义描述词，系统结构上确实没有对应筛选维度 ──────────────
     # 这些词此前一律走 unresolved_term 整句弃权：用户写「转移性乳腺癌」连乳腺癌都查不到。
     # 它们既不是任何维度的头词、也没有可过滤的字段，正是 FILLER_DOMAIN 的定义域：
     # 不因它们弃权（否则整句白写），但**必须回显**「以下词未作为筛选维度」，否则就是静默丢词。
@@ -696,7 +696,7 @@ FILLER_DOMAIN = [
     # 数据形态与工具（没有 file_format / software 维度；文件清单另有专门入口）
     "表达矩阵", "计数矩阵", "矩阵", "注释", "counts", "loom", "barcode", "matrix",
     "ranger", "cellranger", "seurat", "scanpy",
-    # ── 验证里仍在整句弃权、但结构上确实没有对应筛选维度的研究主题词。
+    # ── 2026-07-22 夜：实测里仍在整句弃权、但结构上确实没有对应筛选维度的研究主题词。
     # 「肿瘤微环境的单细胞数据」此前连「肿瘤」都查不到，就因为「微环境」不认识。
     # 它们不是任何维度的头词，故回显「未作为筛选维度」不会误报已落维度。
     "微环境", "肿瘤微环境", "免疫微环境", "浸润", "免疫浸润",
@@ -707,7 +707,7 @@ FILLER_DOMAIN = [
     # 见 ALIAS_PROTECTED_COMPOUNDS：先整体保护、再按描述词回显。
     "毛细胞", "单核细胞", "干细胞", "免疫细胞", "肿瘤细胞", "基质细胞", "间充质",
     "成体", "胚系",
-    # ── 查询电池回归：病名**限定语**。系统只按病名落维，限定语没有对应字段。
+    # ── 2026-07-22 夜 85 条查询电池：病名**限定语**。系统只按病名落维，限定语没有对应字段。
     # 「特发性肺纤维化的单细胞转录组」实测整句弃权，而「肺纤维化单细胞数据」有 19 条——
     # 差别只在「特发性」三个字。它必须进 DOMAIN 而不是 GRAMMAR：disease 落的是 Pulmonary
     # Fibrosis（各种成因混在一起），把 idiopathic 这个限定悄悄丢掉、还不吭声，就是静默丢词；
@@ -716,7 +716,7 @@ FILLER_DOMAIN = [
 ]
 
 # ---------- 别名保护复合词：整体屏蔽，防短别名把长词劫持 ----------
-# 病根：中文别名是**裸子串**匹配（英文侧 已按词边界收紧，中文侧没有——中文本来不分词）。
+# 病根：中文别名是**裸子串**匹配（英文侧 2026-07-22 已按词边界收紧，中文侧没有——中文本来不分词）。
 # 于是「单核细胞」(monocyte) 里的「单核」被当成 modality=single-cell、「皮质醇」里的「皮质」被当成组织。
 # 这和「非编码RNA 被拆成排除 编码RNA」是同一类事故，所以沿用同一套办法：在 alias 消费**之前**
 # 把整词屏蔽掉。屏蔽后它不再落任何维度，按 FILLER_DOMAIN 语义回显「未作为筛选维度」，不静默丢弃。
@@ -727,7 +727,7 @@ ALIAS_PROTECTED_COMPOUNDS = (
     "胸腺嘧啶",      # 含「胸腺」→ 会被当成组织 Thymus
     "血管紧张素",    # 含「血管」「血」→ 会被当成组织 Blood Vessel / Blood
     "胰岛素",        # 含「胰」→ 会被当成组织 Pancreas
-    # ── 验证：上面只收了「胰岛素」一个，**同一族**的其余成员全在裸奔。
+    # ── 2026-07-22 夜对抗评审：上面只收了「胰岛素」一个，**同一族**的其余成员全在裸奔。
     # 实测（全库 5665）每一条都挂上了看起来完全正常的组织标签：
     "肾上腺素",      # 含「肾上腺」→ 组织 Adrenal Gland
     "去甲肾上腺素",  # 同上（长词优先，必须单列，否则被「肾上腺素」切一半）
@@ -740,12 +740,12 @@ ALIAS_PROTECTED_COMPOUNDS = (
     "咽炎", "喉炎",
 )
 # 刻意**不收**「皮质醇 / 糖皮质激素」这一族：办法是不登记裸「皮质」别名（只收「皮层 / 大脑皮层 /
-# 大脑皮质」），从源头上就不产生劫持。能靠别名取舍避开的，就不要靠保护表兜——保护表越短越可信，
+# 大脑皮质」），从源头上就不产生劫持。能靠别名选型避开的，就不要靠保护表兜——保护表越短越可信，
 # tests/test_alias_collision_guard.py::test_protected_list_has_no_dead_entries 会把空转条目打红。
 FILLER_TOKENS = FILLER_GRAMMAR + FILLER_DOMAIN
 
 # ---------- 「或」组合：不再弃权，如实按引擎真实能力执行 ----------
-# 2026-07-25 基线变更后重新审视：`OR_MARKERS` 曾让整句弃权（`unsupported_boolean_or`），
+# 2026-07-25 产品哲学修正后重新审视：`OR_MARKERS` 曾让整句弃权（`unsupported_boolean_or`），
 # 而**引擎本来就支持同维度的「或」**——`retriever.passes_hard_filter` 逐字写着「正向：须含任一 target」，
 # 也就是 `constraints[dim] = [A, B]` 的语义就是 A 或 B。于是：
 #   · 「人或小鼠的脑数据」→ species=[human, mouse] + tissue=[brain] —— **精确就是用户要的**；
@@ -758,7 +758,7 @@ FILLER_TOKENS = FILLER_GRAMMAR + FILLER_DOMAIN
 OR_MARKERS = ["或者", "或", " or "]
 
 # ---------- hedge：从「一律弃权」改为「按软偏好照做」 ----------
-# 旧注释（已作废）说「最好 / 尽量」改起来属于受控重基线、需要单独授权——产品方
+# 旧注释（已作废）说「最好 / 尽量」改起来属于受控重基线、需要单独授权 —— 2026-07-25 产品方
 # 已给出该授权，并明确纠正了「宁可弃权也不返回违背用户意图的结果」这条底线。
 #
 # 实测证据（同一天量的）：
@@ -789,15 +789,15 @@ PREFER_CONNECTOR_CHARS = "是用选取要有带的"
 #: 允许「的」会把它读成「偏好人类」，把硬要求降级成加权 —— 那是反向的静默偏离。
 #: 「最好是 / 尽量用 Xenium」这些真偏好写法都不靠「的」连接，所以去掉它零损失。
 HEDGE_CONNECTOR_CHARS = "是用选取要有带"
-#: 两族合成一张表供解析层遍历。**程序并，不手抄**（本仓库在 `ACTION_MARKERS↔FILLER_GRAMMAR`
-#: 上栽过两次手抄漂移）。
+#: 两族合成一张表供解析层遍历。**程序并，不手抄**（本仓库在 `.gitignore↔.deliveryignore`、
+#: `ACTION_MARKERS↔FILLER_GRAMMAR` 上栽过两次手抄漂移）。
 PREFER_PREFIXES_ALL = tuple(SOFT_PREFER_PREFIX_CN) + tuple(HEDGE_PREFER_PREFIX_CN)
 
 # 兼容旧引用：并集，供仍 import NEGATION_MARKERS 的调用方（现解析走下方结构化白名单/guard，不再靠此列表判定）
 NEGATION_MARKERS = ["不要", "不需要", "无需", "别", "除了", "排除", "非", "不含", "不包含", "no ", "without", "exclude"]
 
 # ============================================================================
-# 否定 / 排除语法（v2：小白名单执行 + 大兜底弃权；经两轮对抗评审收敛）
+# 否定 / 排除语法（v2：小白名单执行 + 大兜底弃权；与 Codex 两轮对抗辩论收敛）
 # ----------------------------------------------------------------------------
 # 原则：只有整条负向 clause 完全落在白名单里才提交 exclusion；任何未被白名单覆盖的否定
 # 成分必然触发 guard 或残差门弃权 —— 结构性保证「绝不静默反向」，而非靠穷举自然语言。
@@ -812,12 +812,12 @@ EXEC_NEG_PREFIX_CN = (
     "不带", "不含", "不包含", "不包括",
     "排除", "剔除", "去除", "去掉", "排掉",
     "拒绝",
-    # 「别带X」口语排除（「就是别带脑组织的」）。
+    # 2026-08-06 （dev 集 dv07/dv08）：「别带X」口语排除（「就是别带脑组织的」）。
     # 单字「别」仍留在 guard（只检测不执行）；「别带」是动宾复合、作用域明确，收为可执行前缀。
     "别带",
 )
 # 可执行否定前缀（英文，词边界 + 紧邻 typed target）
-# （h41 英文否定改写盲区）：补 "not" 与 "free of"。环内 rerank 会把中文否定句
+# 2026-08-17（h41 英文否定改写盲区）：补 "not" 与 "free of"。环内 rerank 会把中文否定句
 # （「淋巴瘤的不要」）改写成英文措辞重检，"not X"/"free of X" 此前只检测不执行 → 排除约束丢失。
 # 执行口径与中文完全同款：词边界 + 紧邻受控词表实体列表才执行，其余一律落到 guard/残差门弃权。
 # 「non」**刻意不收**：non-small cell lung cancer 的 non- 是词素不是排除操作符（同「非小细胞肺癌」
@@ -826,12 +826,12 @@ EXEC_NEG_PREFIX_EN = ("no", "not", "without", "exclude", "excluding", "free of")
 # 可执行环缀（开, 闭）：闭合词均为双字，避免 bare「外」在「外周血」首字误闭合
 EXEC_NEG_CIRCUMFIX_CN = (("除了", "以外"), ("除了", "之外"), ("除", "以外"), ("除", "之外"))
 # 可执行后缀（X 除外）
-# 否定后缀两族——「X的不要」（淋巴瘤的不要）与
+# 2026-08-06 （dev 集 dv03-dv06）：否定后缀两族——「X的不要」（淋巴瘤的不要）与
 # 「X的就不用给了」（小鼠的就不用给了）。后缀以「的」起首：消费逻辑要求实体链**紧邻后缀左侧**结尾，
 # 「的」作所有格黏在实体与否定谓语之间，必须连它一起圈进后缀，否则实体与「不要」之间永远隔着一个字。
 EXEC_NEG_SUFFIX_CN = ("除外", "的不要", "的就不用给了")
 # 实体列表连接词（仅这些安全）。用于否定子句与软偏好的「同段紧邻实体列表」消费。
-# 加入「或 / 或者」：不加的话「不要小鼠或大鼠」只会排除掉小鼠，大鼠照样返回
+# 2026-07-25 加入「或 / 或者」：不加的话「不要小鼠或大鼠」只会排除掉小鼠，大鼠照样返回
 # ——那是**静默的部分执行**，比整句弃权更糟（用户以为两个都排除了）。
 # 语义上也正好：否定侧 ¬(A∨B) = ¬A∧¬B，正向侧同维度多值本来就是「或」，
 # 两边都不需要额外规则，唯一缺的就是这个连接词本身。
@@ -856,8 +856,8 @@ NEGATION_GUARDS_EN = (
 
 #: 否定语素全集（可执行否定前缀 ∪ 只检测 guard），长词优先。**程序并，不手抄**：
 #: `board._NEG_MORPHEMES` 与执行层的极性门（`action_plan`）都消费这一份。
-#: 本仓库在 `ACTION_MARKERS↔FILLER_GRAMMAR`、
-#: `SOURCE_PREFER_PREFIX_RE↔SOFT_PREFER_PREFIX_CN` 上栽过手抄漂移，这里不再开口子。
+#: 本仓库在 `.gitignore↔.deliveryignore`、`ACTION_MARKERS↔FILLER_GRAMMAR`、
+#: `SOURCE_PREFER_PREFIX_RE↔SOFT_PREFER_PREFIX_CN` 上栽过三次手抄漂移，这里不再开第四次口子。
 NEG_MORPHEMES_CN = tuple(sorted(set(EXEC_NEG_PREFIX_CN) | set(NEGATION_GUARDS_CN), key=len, reverse=True))
 NEG_MORPHEMES_EN = tuple(sorted(set(EXEC_NEG_PREFIX_EN) | set(NEGATION_GUARDS_EN), key=len, reverse=True))
 # 否定豁免复合词：词首 非/non- 是词素、整体为正向生物学术语，非排除操作符。命中即在 _leftover_negation
@@ -884,7 +884,7 @@ RAW_FORBIDDEN_PATTERNS = tuple(_re.compile(p) for p in (
     r"(?:fastq|原始数据)\s*除外",
     r"(?:除了|除)\s*(?:fastq|原始数据)\s*(?:以外|之外)",
     r"(?<![a-z0-9_])no(?:\s+|-)(?:fastq|raw(?:\s+|-)data)(?![a-z0-9_])",
-    # not/free of 随 EXEC_NEG_PREFIX_EN 转正后必须在 raw 专用层同步收编。
+    # 2026-08-18：not/free of 随 EXEC_NEG_PREFIX_EN 转正后必须在 raw 专用层同步收编。
     # raw span 不是结构化 dim；若落到 query_parser 4d 的通用 _apply_exclude，它会被完整
     # excise 却不会写 staged_raw，形成「看似执行、实际不筛 FASTQ」的静默反向。故这里
     # 先按 raw 真语义设置 has_raw_data_required=False；非 raw 对象仍走 4d typed exclusion。
@@ -909,11 +909,20 @@ RAW_OPTIONAL_PATTERNS = tuple((_re.compile(p), action) for p, action in (
 # 背景：rerank_audit 让 LLM 对照原句审核规则抽词是否完整，不完整则**改写**成规则更易正确解析的句式。
 # 改写要落到规则真正认识的词面上，故把 CATALOG 各维度的 display 规范名按维度列给 LLM 作候选。
 # 只列 display（规范名，紧凑）、不列全部 alias（太长）；absent 物种也列（让规则"看见"约束→诚实无结果）。
-# 纯读 CATALOG、无副作用；供 workflow 构造审核提示词时调用，rerank.py 不直接 import 本模块（保持分层解耦）。
-_DIM_LABELS_CN: dict[str, str] = {
+# 纯读 CATALOG、无副作用；供 workflow 构造审核提示词时调用（rerank.py 只消费本模块的
+# FILLER_GRAMMAR/DIM_LABELS_CN 词表锚点，不直接调本函数——审核输入仍由 workflow 算好传入）。
+#: 维度中文名的**全局锚点**（6 键与 query_parser.DIMENSIONS 的维度集对齐；不能反向 import
+#: query_parser——那会成环，键集对齐靠注释与测试守护）。query_parser 的筛选项标签、
+#: retriever 的 FACET_LABELS 等所有「维度中文名」消费方都从这里取。
+DIM_LABELS_CN: dict[str, str] = {
     "species": "物种", "tissue": "组织", "disease": "疾病",
-    "platform": "平台", "assay": "实验技术", "modality": "数据模态",
+    "platform": "平台", "assay": "技术", "modality": "模态",
 }
+
+#: LLM hint 语境的措辞覆盖：给模型看的提示里 assay/modality 用更完整的说法（比 UI 标签啰嗦无妨）。
+_DIM_LABELS_LLM_HINT_OVERRIDE: dict[str, str] = {"assay": "实验技术", "modality": "数据模态"}
+
+_DIM_LABELS_CN: dict[str, str] = {**DIM_LABELS_CN, **_DIM_LABELS_LLM_HINT_OVERRIDE}
 
 
 def known_terms_hint(max_per_dim: int = 60) -> str:

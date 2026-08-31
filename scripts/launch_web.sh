@@ -26,7 +26,7 @@ set -euo pipefail
 # 检测漂移；tests/test_release_version_contract.py 钉住 fallback 与 WEB_API_VERSION 同步）。
 # ---------------------------------------------------------------------------
 EXPECTED_SERVICE='dataset-recommender-web'
-EXPECTED_VERSION_FALLBACK='2.7.0'
+EXPECTED_VERSION_FALLBACK='2.9.0'
 EXPECTED_VERSION="$EXPECTED_VERSION_FALLBACK"
 
 # 复用的「哪份安装」由健康检查 /api/health 回填（同版本多份安装并存时绝不静默吸附）。
@@ -324,7 +324,7 @@ local_model_present() {
 install_local_semantic_model() {
   local root="$1" py="$2"
   local req="$root/requirements-embeddings.txt"
-  # 仓库克隆布局（一级目录整理）：requirements 群在 requirements/ 下。
+  # 仓库克隆布局（2026-08-27 一级目录整理）：requirements 群在 requirements/ 下。
   [ -f "$req" ] || req="$root/requirements/requirements-embeddings.txt"
   local fetch="$root/scripts/fetch_embedding_model.py"
   if [ ! -f "$req" ] || [ ! -f "$fetch" ]; then
@@ -358,7 +358,7 @@ install_local_semantic_model() {
 install_agent_exec_deps() {
   local root="$1" py="$2"
   local req="$root/requirements-langchain.txt"
-  # 仓库克隆布局（一级目录整理）：requirements 群在 requirements/ 下。
+  # 仓库克隆布局（2026-08-27 一级目录整理）：requirements 群在 requirements/ 下。
   [ -f "$req" ] || req="$root/requirements/requirements-langchain.txt"
   if [ ! -f "$req" ]; then
     printf '    requirements-langchain.txt is not part of this package - skipped.\n'
@@ -559,7 +559,7 @@ main() {
 
   # 依赖检查与安装（仅首启需要联网；失败给清晰中文自救提示）。
   if ! webdeps_ok "$python"; then
-    # 仓库克隆布局（一级目录整理）：requirements 群在 requirements/ 下。
+    # 仓库克隆布局（2026-08-27 一级目录整理）：requirements 群在 requirements/ 下。
     local req_main="$root/requirements.txt"
     [ -f "$req_main" ] || req_main="$root/requirements/requirements.txt"
     if [ ! -f "$req_main" ]; then
@@ -588,8 +588,8 @@ main() {
     return 1
   fi
 
-  # CI/发布候选首启验证：必须由全新 zip 自建项目内运行 venv，Web 依赖可导入，
-  # 且生产 requirements 没把 pytest 带进来。验证在向导、浏览器和服务启动前退出。
+  # CI/发布候选首启探针：必须由全新 zip 自建项目内运行 venv，Web 依赖可导入，
+  # 且生产 requirements 没把 pytest 带进来。探针在向导、浏览器和服务启动前退出。
   if [ "${BIODATA_LAUNCH_PROBE:-0}" = "1" ]; then
     if [ "$python" != "$venv_python" ]; then
       err "Launch probe did not use the project-local venv: $python"

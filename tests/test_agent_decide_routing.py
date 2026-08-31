@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""复杂度路由（45 例验证定标）的确定性门。
+"""复杂度路由的确定性门。
 **全离线**：
 
 - decide_lane 定标钉：K/L 断链族进 complex；克制类（h01 型）与单步（a 型）守 simple；
-  贴边界两例（2 分进 / 1 分守）逐字钉死——词表或阈值一动，这里立刻红。
+  贴边界两例（k08=2 分进 / b08=1 分守）逐字钉死——词表或阈值一动，这里立刻红。
 - decide 接线钉：ctx.decide_model 非 None 时 decide 只用它（首答/重问/回灌同档不换脑），
   trace 留「长链档」档标；None 时回退 chat_model。
 - 构建钉：env 未配置 → 恰建一个 client（路由关闭 = 现状）；env 配置 + complex 车道 →
@@ -22,7 +22,7 @@ from dataset_recommender.llm.llm_client import LLMConfig  # noqa: E402
 
 CFG = LLMConfig(enable_llm=True, api_key="sk-route-test")
 
-# 清单函数的真引用（import 期存根——autouse fixture 会 stub 掉模块属性，
+# 清单函数的真引用（import 期存根——autouse fixture 会 stub 掉模块属性
 # 需要真函数的钉用这份存根后执行 setattr 恢复）。
 _REAL_CHECKLIST_CALL = agent_exec._task_checklist_call
 
@@ -68,7 +68,7 @@ def _stub_loop_tools(monkeypatch):
         "curate.db_status": {
             "run": lambda slots, root: {"total_records": 0, "sources": [],
                                         "external_files": [], "recycle": [], "ledger": {}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True,
         },
         "curate.check_updates": {
@@ -91,8 +91,8 @@ class _Runtime:
         self.context = ctx
 
 
-#: 一条 complex 车道长链原话（score=4）。
-CHECK_THEN_SEARCH_LIKE = ("检查ArrayExpress有没有更新，有新的人类肺数据就搜来入库，"
+#: 一条 complex 车道长链原话（k01 型；score=4）。
+K01_LIKE = ("检查ArrayExpress有没有更新，有新的人类肺数据就搜来入库，"
             "然后检查下ENCODE，最后告诉我库里多少条")
 
 
@@ -100,17 +100,17 @@ CHECK_THEN_SEARCH_LIKE = ("检查ArrayExpress有没有更新，有新的人类�
 
 @pytest.mark.parametrize("utterance,expected", [
     # K/L 断链族（v11 实测 decide 断链）必须进 complex：
-    (CHECK_THEN_SEARCH_LIKE, "complex"),                       # 2 连接 + 1 条件 + 2 来源 = 4
+    (K01_LIKE, "complex"),                       # k01/k02：2 连接 + 1 条件 + 2 来源 = 4
     ("检查ArrayExpress更新，有新的人类肺数据就搜来入库；mouse brain 也顺便搜了入库；最后告诉我库里多少条",
-     "complex"),                                  # 4 连接 + 1 条件 = 5
+     "complex"),                                  # k10：4 连接 + 1 条件 = 5
     ("看看ArrayExpress有没有新数据，没有的话就把ENCODE和10x都检查一遍",
-     "complex"),                                  # 1 条件 + 3 来源 = 3
+     "complex"),                                  # k06：1 条件 + 3 来源 = 3
     ("检查10x、ArrayExpress和ENCODE有没有更新，完了看看库里多少条",
-     "complex"),                                  # 1 条件 + 3 来源 = 3
+     "complex"),                                  # k09：1 连接 + 3 来源 = 3
     ("联网搜 human lung 数据入库，然后检查ENCODE更新，再告诉我库里多少条",
-     "complex"),                                  # 恰 2 连接 = 贴阈值下界（阈值抬 1 就漏它）
+     "complex"),                                  # k08：恰 2 连接 = 贴阈值下界（阈值抬 1 就漏它）
     # 克制类 / 短链 / 单步必须守 simple：
-    ("检查10x是否有更新，若有则下载下来", "simple"),  # 条件短链——reasoner 过动回落区
+    ("检查10x是否有更新，若有则下载下来", "simple"),  # h01：条件短链——reasoner 过动回落区
     ("库里现在有多少条数据", "simple"),               # 库容独句 = 单事项
     ("只看小鼠的", "simple"),
     ("把这批结果的引用格式导出来", "simple"),
@@ -122,10 +122,10 @@ def test_decide_lane_calibration(utterance, expected):
 
 
 @pytest.mark.parametrize("utterance,expected", [
-    # 库容加档（实证：chat 3/3 断链、reasoner 3/3 治愈）：库容问句 + 另一事项信号 → complex。
-    ("检查一下ENCODE有没有更新，顺便看看库里多少条", "complex"),
-    ("同步一下ArrayExpress的更新，完了告诉我库里多少条", "complex"),
-    ("看看库里现在多少条，再检查下ENCODE有没有更新", "complex"),
+    # 库容加档（坐实：chat 3/3 断链、reasoner 3/3 治愈）：库容问句 + 另一事项信号 → complex。
+    ("检查一下ENCODE有没有更新，顺便看看库里多少条", "complex"),   # b08 本例
+    ("同步一下ArrayExpress的更新，完了告诉我库里多少条", "complex"),  # b13 同族
+    ("看看库里现在多少条，再检查下ENCODE有没有更新", "complex"),    # i08 同族
     # 克制守卫优先于库容加档：
     ("别查更新了，就告诉我库里多少条", "simple"),
 ])
@@ -144,7 +144,7 @@ def test_decide_lane_empty_and_garbage_are_simple():
     ("不用下载了，就检查一下ArrayExpress有没有更新就行", "simple"),       # c05 型
     # 「分别」是多事项标记不是叫停（(?<!分)别 豁免）：分别 + 2 点名来源 = 2 分 → complex。
     ("麻烦分别查一下 10x 和 GEO 的更新", "complex"),
-    # 词表增补（另外/以及/并且）能被计分；克制型两分句 score 1，但叠库容加档 → complex
+    # 词表增补（另外/以及/并且）能被计分；l04 型两分句 score 1，但叠库容加档 → complex
     # （这正是加档要收的「检查 + 报库容」两分链；纯库容独句仍 simple，见上组钉）。
     ("检查下ArrayExpress有没有更新，另外帮我看看库里多少条", "complex"),
 ])
@@ -207,7 +207,7 @@ def test_env_unset_means_single_client_even_on_complex_lane(monkeypatch):
 
     monkeypatch.setattr(agent_exec, "_build_chat_model", _builder)
     plan, trace = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None)
     assert built == [CFG.model], "未配置 LLM_MODEL_COMPLEX 时恰建一个 client（路由关闭=现状）"
     assert not any(t["node"] == "decide" and "长链档" in t["detail"] for t in trace)
@@ -231,7 +231,7 @@ def test_env_armed_complex_lane_builds_and_uses_second_client(monkeypatch):
 
     monkeypatch.setattr(agent_exec, "_build_chat_model", _builder)
     plan, trace = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None)
     assert built == [CFG.model, "complex-model-x"]
     assert len(decide_fake.invocations) == 1, "decide 必须走第二 client"
@@ -267,14 +267,14 @@ def test_injected_chat_model_never_builds_second_client(monkeypatch):
     monkeypatch.setattr(agent_exec, "_build_chat_model", _boom)
     fake = _three_answer_fake()
     plan, trace = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None, chat_model=fake)
     assert plan["verb"] == "curate.check_updates"
     assert not any(t["node"] == "decide" and "长链档" in t["detail"] for t in trace)
 
 
 def test_explicit_decide_model_seam_is_used(monkeypatch):
-    """显式 decide_model 注入缝（验证）：给了就用它，即使 chat_model 也是注入的。"""
+    """显式 decide_model 注入缝：给了就用它，即使 chat_model 也是注入的。"""
     monkeypatch.delenv("LLM_MODEL_COMPLEX", raising=False)  # env 不配置也必须生效
     chat_fake = _FakeModel(
         _tool_call("curate.check_updates", quoted="检查ArrayExpress有没有更新",
@@ -283,7 +283,7 @@ def test_explicit_decide_model_seam_is_used(monkeypatch):
     )
     decide_fake = _FakeModel(AIMessage(content='{"done": true}'))
     plan, trace = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None,
         chat_model=chat_fake, decide_model=decide_fake)
     assert len(decide_fake.invocations) == 1, "decide 必须走显式注入的 decide_model"
@@ -350,7 +350,7 @@ def test_thinking_only_env_builds_second_client(monkeypatch):
 
     monkeypatch.setattr(agent_exec, "_build_chat_model", _builder)
     plan, trace = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None)
     assert built == [(CFG.model, None, None), (CFG.model, True, "low")]
     assert len(decide_fake.invocations) == 1, "decide 必须走 thinking 第二 client"
@@ -371,7 +371,7 @@ def test_thinking_off_without_model_name_stays_single_client(monkeypatch):
 
     monkeypatch.setattr(agent_exec, "_build_chat_model", _builder)
     plan, _ = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None)
     assert built == [(CFG.model, None)]
     assert plan["verb"] == "curate.check_updates"
@@ -379,7 +379,7 @@ def test_thinking_off_without_model_name_stays_single_client(monkeypatch):
 
 def test_model_name_plus_thinking_off_sends_disabled(monkeypatch):
     """模型名 + thinking=off → 建第二 client 且显式发 disabled（关别名自带思考，
-    如 deepseek-reasoner 别名默认思考开—— 验证）。"""
+    如 deepseek-reasoner 别名默认思考开——2026-08-08 实测）。"""
     monkeypatch.setenv("LLM_MODEL_COMPLEX", "deepseek-reasoner")
     monkeypatch.setenv("LLM_COMPLEX_THINKING", "off")
     built = []
@@ -396,7 +396,7 @@ def test_model_name_plus_thinking_off_sends_disabled(monkeypatch):
 
     monkeypatch.setattr(agent_exec, "_build_chat_model", _builder)
     plan, _ = agent_exec.plan_with_agent(
-        CHECK_THEN_SEARCH_LIKE, has_results=False, result_total=0, config=CFG,
+        K01_LIKE, has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="", current_filters=None)
     assert built == [(CFG.model, None), ("deepseek-reasoner", False)]
     assert plan["verb"] == "curate.check_updates"
@@ -663,7 +663,7 @@ def test_checklist_unavailable_falls_back_without_blocking(monkeypatch):
     chat_fake = _FakeModel(
         _tool_call("curate.check_updates", quoted="检查ArrayExpress有没有更新，完了告诉我库里多少条",
                    source="ArrayExpress", confidence="high", reason="查更新"),
-        AIMessage(content='{"done": true}'),          # decide：done（无清单→既有口径）
+        AIMessage(content='{"done": true}'),          # decide：done（无清单→旧闸口径）
         AIMessage(content="检查无新增。"),            # narrate
     )
 
@@ -777,7 +777,7 @@ def test_unsupported_items_exempt_one_per_declined():
 
 
 def test_sync_named_source_half_gate():
-    """sync_updates 纳入点名源一致性**半闸**——
+    """2026-08-15：sync_updates 纳入点名源一致性**半闸**——
     填了 source 就必须是用户点名源之一（写操作不依赖模型自觉）；不填 = 同步全部（覆盖
     点名源），合法放行。全闸动词（check/search）的空槽必填语义不变。"""
     utter = "检查ArrayExpress和ENCODE有没有更新，有新增就同步入库"
@@ -800,7 +800,7 @@ def test_sync_named_source_half_gate():
 
 
 def test_sync_empty_source_named_scope_helper():
-    """点名单源 + sync 空槽 = 按全部在线源同步——
+    """2026-08-15 （exec-gates M5）：点名单源 + sync 空槽 = 按全部在线源同步——
     半闸放行语义不变，但 `_sync_all_online_named` 必须把「写面超出点名范围」供给
     validate/decide trace 与 narrate 汇报留痕。非 sync / 已填 source / 未点名 → 不留痕。"""
     utter = "检查GEO有没有更新，有新增就同步"
@@ -816,7 +816,7 @@ def test_sync_empty_source_named_scope_helper():
 
 
 def test_curate_extra_named_sources():
-    """：curate 侧补充点名表（Zenodo 等）；GEO 裸词命中是检索词表既有行为（第一趟），
+    """：curate 侧补充点名表（Zenodo 等）；GEO 裸词命中是检索词表既有行为（第一趟）
     非本趟引入——本趟只管补充表里原 6 源外的 curate 可检源。"""
     assert "Zenodo" in agent_exec._named_sources_in("检查Zenodo有没有新数据集")
     assert "NCBI GEO" in agent_exec._named_sources_in("顺便看下 GEO 有没有更新")
@@ -825,7 +825,7 @@ def test_curate_extra_named_sources():
 
 
 def test_canonical_source_knows_curate_only_sources():
-    """ 自对抗复查：`_canonical_source` 此前只认检索 SOURCE_ALIASES（9 源），
+    """2026-08-09 自对抗复查：`_canonical_source` 此前只认检索 SOURCE_ALIASES（9 源），
     curate-only 的 Zenodo canon=None → Zenodo 检查步清单核销永远落空、
     `_step_covered_sources` 连 result.sources 条目回退也失灵。钉死第三趟。"""
     assert agent_exec._canonical_source("Zenodo") == "Zenodo"

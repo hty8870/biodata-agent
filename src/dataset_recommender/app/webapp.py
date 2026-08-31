@@ -17,9 +17,9 @@ import traceback
 import urllib.parse
 import zipfile
 from collections import OrderedDict, deque
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import Annotated, Any, Iterator
+from typing import Annotated, Any, Callable, Iterator
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -29,16 +29,18 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..corpus.corpus import available_sources, corpus_cache_generation, corpus_snapshot, invalidate_external_cache, known_source_values, load_full_corpus, load_normalized_corpus, locate_record, source_of, BASE_SOURCE
+from ..corpus.corpus import available_sources, corpus_cache_generation, corpus_snapshot, invalidate_external_cache, known_source_values, load_full_corpus, load_normalized_corpus, locate_record, BASE_SOURCE
 from ..corpus.downloads import file_count, files_for, primary_url
 from . import accounts
 from . import llm_quota
-from ..llm import act_summary_llm, dream
+from . import mcp_tokens  # 在线 MCP 接入令牌库（轻量，import 零 I/O）
+from ..llm import act_summary_llm, dream, search_reply_llm
 from ..content import item_view
 from ..llm.config import get_settings
 from .accounts import AccountError, SESSION_COOKIE
 from ..retrieval.fair import build_fair_report
-from ..llm.llm_client import ZHIPU_PROVIDER_ALIASES, LLMConfig, diagnose_network, healthcheck, load_llm_config
+from ..llm.llm_client import LLMConfig, diagnose_network, healthcheck, load_llm_config
+from ..llm.llm_client import _normalize_provider as _llm_normalize_provider
 from ..retrieval.query_parser import parse_query
 from ..content.reuse_pack import ReusePackError, build_pack_for_uids, sanitize_uids, to_bibtex, to_ris
 from ..content.reuse_pack import to_markdown as pack_to_markdown
@@ -78,11 +80,17 @@ def _validate_or_400(fn, *args, **kwargs):
         ) from exc
 
 
+def _status_for(code: str, table: dict[str, int]) -> int:
+    """机器码 → HTTP 状态的唯一翻译口（缺省 400）：账户/令牌/dream/下载各错误码表
+    都经它查表，不再各写 `.get(code, 400)` 或内联三元。"""
+    return table.get(code, 400)
+
+
 from .runtime_paths import get_app_paths, instance_data_dir_for, resource_file_for
 from .model_installer import cancel_model_install, model_install_status, start_model_install
 from .limits import MAX_DATASETS_LIMIT  # 全库浏览分页上限单一真源（与 MCP browse_datasets 同源）
 
-# 运行时路径解耦（安装器工程）：单一真源 runtime_paths.get_app_paths()。
+# W1 运行时路径解耦（安装器工程）：单一真源 runtime_paths.get_app_paths()。
 # - PROJECT_ROOT = 实例数据根（source/portable = 项目根，历史逐字节一致；frozen = %LOCALAPPDATA%/BioDataAgent）：
 #   所有**写盘**侧（accounts/upload/curate/trace/citations/oov/账本）以它为基，落 data 层。
 # - CONFIG_ROOT  = LLM env 候选根（frozen = data_root/config；source = 项目根/.env 不变）：load_llm_config 专用。
@@ -100,7 +108,7 @@ DATA_DIR = PATHS.shipped_base_dir
 
 ENV_LOCK = threading.Lock()
 
-WEB_API_VERSION = "2.7.0"
+WEB_API_VERSION = "2.9.0"
 
 app = FastAPI(title="BioData Agent Web UI", version=WEB_API_VERSION)
 # 大列表/API JSON 在回环上也会占用显著的序列化与 WebView 传输时间。仅压缩 >=1KiB
@@ -108,7 +116,32 @@ app = FastAPI(title="BioData Agent Web UI", version=WEB_API_VERSION)
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# webobs：webapp 此前整体无
+# ---------------------------------------------------------------- 在线 MCP
+# 同一 FastMCP 实例的在线形态：`/mcp` = streamable-HTTP + Bearer 令牌闸（账户级补丁作用域 +
+# 纯确定性成本闸，见 mcp_server「在线形态」块）。挂载不用 app.mount 而是直挂 Route：保持
+# PATH_INFO=/mcp 不变地转交子应用（其内部路由恰是 /mcp），避开 Mount 的前缀剥离语义。
+# 本机形态同样挂载但铸币端点仅护栏形态开放 → 无令牌可发 → 恒 401，攻击面无变化。
+from . import mcp_server as _mcp_server  # noqa: E402  # 单点 import：MCP 域装配集中在此
+from starlette.routing import Route as _Route  # noqa: E402
+
+_ONLINE_MCP_APP = _mcp_server.build_online_mcp_app()
+app.router.routes.append(_Route("/mcp", endpoint=_ONLINE_MCP_APP, methods=["GET", "POST", "DELETE"]))
+
+
+@asynccontextmanager
+async def _lifespan_with_mcp(_app):
+    """宿主 lifespan：挂载不走子应用 lifespan → 在此驱动 MCP 会话管理器任务组
+    （stateless 模式 handle_request 同样要求任务组已启动，SDK 实读确认）。
+    session manager 每实例只能 run 一次 → 每次进入前先 reset_online_runtime() 重建，
+    测试反复进出 lifespan 由此幂等。"""
+    _mcp_server.reset_online_runtime()
+    async with _mcp_server.mcp.session_manager.run():
+        yield
+
+
+app.router.lifespan_context = _lifespan_with_mcp
+
+# 2026-08-15 （触发点审计 app-routes F2 / webapp 此前整体无
 # logging，route_turn 兜底零堆栈零日志，是"难以定位"的最大残余盲区。这里建统一日志通道：
 # 请求日志走下方 `_request_logging` middleware，异常兜底走 `logger.exception`（完整堆栈）。
 # 无 handler 时挂一个 stderr handler 让日志默认可见；uvicorn/测试已配置过则不重复挂。
@@ -125,12 +158,12 @@ if not logger.handlers:
 @app.exception_handler(RequestValidationError)
 def _redacted_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """安全：不回显用户提交的原始值（如密码 / API Key）——请求体校验失败时只保留 loc/msg/type，
-    剔除 pydantic 默认带回的 `input` / `ctx`（覆盖全部端点）。"""
+    剔除 pydantic 默认带回的 `input` / `ctx`（对抗评审 #3；覆盖全部端点）。"""
     errors = [{"loc": list(e.get("loc", [])), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()]
     return JSONResponse(status_code=422, content={"detail": errors}, media_type="application/json; charset=utf-8")
 
 
-# 公开字符串/数组参数统一预算：请求模型解析期直接拦（超限 422），缺省/合法值不受影响。
+# 公开字符串/数组参数统一预算（SEC-H01）：请求模型解析期直接拦（超限 422），缺省/合法值不受影响。
 # 数值都留足正常使用余量（净化逻辑里另有更严的收敛值，如 facet_filters ≤12）——这里拦的是
 # 「解析期不设防」的原始体量，避免攻击者用巨型数组/超长字符串在模型解析前制造大分配。
 _MAX_SOURCES_ITEMS = 50          # sources 来源池数组上限（现有来源十余个，余量充足）
@@ -141,6 +174,12 @@ _MAX_CURRENT_FILTERS_ITEMS = 100  # current_filters 数组上限
 _MAX_UIDS_ITEMS = 500            # task-pack selected_uids 数组上限
 _MAX_API_KEY_CHARS = 512         # 请求级 API Key 长度上限
 _MAX_MODEL_CHARS = 200           # 自定义模型名长度上限
+
+# 跨端点重复的 schema 说明串单一真源：description 进 OpenAPI 文案，逐字共用，改文案只改这里。
+_DESC_PROVIDER = "mock / zhipuai / openai-compatible / trial（T3 限量试用）"
+_DESC_REQUEST_API_KEY = "本次请求临时 key，不持久化"
+_DESC_CUSTOM_BASE_URL = "自定义 API 接口地址"
+_DESC_CUSTOM_MODEL = "自定义模型名"
 
 
 class _ExperimentContract(BaseModel):
@@ -159,11 +198,11 @@ class _ExperimentContract(BaseModel):
 
 class RecommendRequest(_ExperimentContract):
     query: str = Field(..., min_length=1, description="用户查询")
-    provider: str = Field(default="mock", description="mock / zhipuai / openai-compatible / trial（限量试用）")
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False, description="大模型总开关：门控润色与一切请求级 LLM 能力")
     mock_llm: bool = Field(default=False)
     polish: bool = Field(default=True, description="AI 润色推荐说明（只改说明文字，不动结果与排序）。总开关 use_llm 之下的独立子开关：use_llm=true 且 polish=false 时润色不启用，其余 LLM 能力（重排/审核）不受影响")
-    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次请求临时 key，不持久化")
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
     top_k: int | None = Field(default=None, ge=1, le=50, description="返回结果最大数量（默认 10，最大 50）")
     rerank: str = Field(default="off", description="可选 LLM 重排：off / llm")
     rerank_top_n: int | None = Field(default=None, ge=1, le=50, description="启用重排时喂给 LLM 的候选池大小")
@@ -234,12 +273,12 @@ class ActionPlanRequest(BaseModel):
     utterance: str = Field(..., min_length=1, description="用户这一句原话")
     has_results: bool = Field(default=False, description="调用方屏幕上当前是否已有一批检索结果")
     result_total: int = Field(default=0, ge=0, description="当前这批结果的命中总数（调用方自述）")
-    provider: str = Field(default="mock", description="mock / zhipuai / openai-compatible / trial（限量试用）")
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False)
     mock_llm: bool = Field(default=False)
-    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次请求临时 key，不持久化")
-    base_url: str | None = Field(default=None, description="自定义 API 接口地址")
-    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description="自定义模型名")
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
 
 
 class UtteranceRequest(_ExperimentContract):
@@ -257,7 +296,7 @@ class UtteranceRequest(_ExperimentContract):
     query: str = Field(default="", description="产生当前这批结果的那句话（refine 改写以它为底）")
     current_filters: list[dict] | None = Field(default=None, max_length=_MAX_CURRENT_FILTERS_ITEMS, description="上一次 /api/recommend 返回的 active_filters 原样")
     sources: list[str] | None = Field(default=None, max_length=_MAX_SOURCES_ITEMS, description="当前选中的来源池（规则匹配概览按它取）")
-    # ---- 课题上下文卡（additive）----
+    # ---- 课题上下文卡（2026-08-22 additive）----
     artifact_context: str | None = Field(
         default=None,
         max_length=2000,
@@ -265,7 +304,7 @@ class UtteranceRequest(_ExperimentContract):
                     "独立字段、不拼进用户原话：只进入 agent prompt 作结构化上下文块（首行带类型，标注「仅供参考」），"
                     "不进 identifier 快速道/query parser/quoted 证据/检索 query；本地演示/无 AI 模式被安全忽略",
     )
-    # ---- 下一步行动建议动作（additive）----
+    # ---- 下一步行动建议动作（2026-08-22 additive）----
     suggested_recipe: str | None = Field(
         default=None,
         max_length=64,
@@ -275,30 +314,30 @@ class UtteranceRequest(_ExperimentContract):
                     "（动词选择面收窄），不得绕过参数校验/执行开关/安全闸。编辑过模板 = 普通路由不携带",
     )
     # ---- LLM 配置覆盖（请求级，不持久化）----
-    provider: str = Field(default="mock", description="mock / zhipuai / openai-compatible / trial（限量试用）")
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False)
     mock_llm: bool = Field(default=False)
-    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次请求临时 key，不持久化")
-    base_url: str | None = Field(default=None, description="自定义 API 接口地址")
-    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description="自定义模型名")
-    # ---- 「AI 执行」开关（LLM 分流器的总闸）----
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
+    # ---- 「AI 执行」开关（维度；2026-08-03 起 = LLM 分流器的总闸）----
     agent: bool = Field(
         default=True,
         description="开：所有消息 100% 过 LLM 分流（langgraph agent 优先、单次分类保底）；"
                     "关：LLM 分流器永不启动——一切输入按规则检索处理（操作句只回降级气泡）",
     )
-    # ---- 流式开关 ----
+    # ---- 流式开关----
     stream: bool = Field(
         default=False,
         description="true 时改发 text/event-stream：agent 规划节点 step* → final（final 体与非流式逐位同形）",
     )
-    # ---- 幂等请求号（修复）----
+    # ---- 幂等请求号（2026-08-08 修复）----
     req_id: str | None = Field(
         default=None,
         description="调用方生成的请求号：断流重发**同一句**时原样回传，服务端占用去重（重发拿缓存结果，"
                     "不二次执行写工具）；两次独立提交必须各自新号。None=无幂等，行为与不传逐位一致",
     )
-    # ---- 当前检索参数（additive；缺省=现状行为）----
+    # ---- 当前检索参数（2026-08-16 prelim1，additive；缺省=现状行为）----
     # 前端 ubRouteBody 与 runRecommend 发 /api/recommend 同源构造；后端只用于 pre-loop
     # 确定性检索与 preliminary_final 判定，校验口径与 /api/recommend 完全相同。
     top_k: int | None = Field(default=None, ge=1, le=50, description="返回结果最大数量（默认 10，最大 50）")
@@ -314,7 +353,7 @@ class UtteranceRequest(_ExperimentContract):
 
 
 class SearchRescueRequest(BaseModel):
-    """检索救回端点 `/api/agent/search-rescue` 的入参。
+    """检索救回端点 `/api/agent/search-rescue` 的入参（2026-08-16 检索工具化 Phase 1）。
 
     当前查询零命中时，让 agent 在**收敛面**（只允许 search.rerun / none）下尝试
     换一组查询词重跑本地检索；采纳与否由工具内机械择优闸裁定。LLM 配置覆盖沿用
@@ -325,7 +364,7 @@ class SearchRescueRequest(BaseModel):
     sources: list[str] | None = Field(default=None, max_length=_MAX_SOURCES_ITEMS, description="当前选中的来源池（重检按它取，不因改写漂移换池）")
     current_filters: list[dict] | None = Field(default=None, max_length=_MAX_CURRENT_FILTERS_ITEMS, description="当前生效条件（现场回显用）")
     result_total: int = Field(default=0, ge=0, description="当前结果的命中总数（调用方自述，仅回显）")
-    # screen-scope：字段名、默认值与 UtteranceRequest 逐位同义；老调用方
+    # 2026-08-18 screen-scope：字段名、默认值与 UtteranceRequest 逐位同义；老调用方
     # 不传时全空，保持原行为。换词只准换 query，不准静默清掉这些筛选条件。
     facet_filters: list[dict] | None = Field(default=None, max_length=_MAX_FACET_FILTERS_ITEMS, description="分面细化（同 /api/recommend）")
     suppressed_constraints: list[str] | None = Field(default=None, max_length=_MAX_SUPPRESSED_ITEMS, description="忽略的筛选条件 dim（同 /api/recommend）")
@@ -333,22 +372,22 @@ class SearchRescueRequest(BaseModel):
     date_from: str | None = Field(default=None, description="发表时间范围起（ISO YYYY-MM-DD，含）；非法 → 400（同 /api/recommend）")
     date_to: str | None = Field(default=None, description="发表时间范围止（ISO YYYY-MM-DD，含）；非法 → 400（同 /api/recommend）")
     # ---- LLM 配置覆盖（请求级，不持久化，与 /api/utterance 同约）----
-    provider: str = Field(default="mock", description="mock / zhipuai / openai-compatible / trial（限量试用）")
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False)
     mock_llm: bool = Field(default=False)
-    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次请求临时 key，不持久化")
-    base_url: str | None = Field(default=None, description="自定义 API 接口地址")
-    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description="自定义模型名")
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
 
 
 class InterpretRequest(BaseModel):
     query: str = Field(..., min_length=1, description="待预览解析的用户查询")
-    sources: list[str] | None = Field(default=None, description="自动来源模式下的允许来源池，或手动模式下的显式来源")
+    sources: list[str] | None = Field(default=None, max_length=_MAX_SOURCES_ITEMS, description="自动来源模式下的允许来源池，或手动模式下的显式来源")
     auto_parse_sources: bool = Field(default=False, description="是否从 query 自动识别数据来源专名")
 
 
 class DiagnoseRequest(BaseModel):
-    provider: str = Field(default="zhipuai", description="mock / zhipuai / openai-compatible / trial（限量试用）")
+    provider: str = Field(default="zhipuai", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=True)
     mock_llm: bool = Field(default=False)
     api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次诊断临时 key，不持久化")
@@ -387,7 +426,7 @@ class CurateCheckUpdatesRequest(BaseModel):
 
 
 class CurateSyncUpdatesRequest(BaseModel):
-    """`POST /api/curate/sync-updates` 入参（「工作流即工具」`curate.sync_updates`）。
+    """`POST /api/curate/sync-updates` 入参（2026-08-06 `curate.sync_updates`）。
 
     检查更新 → 有新增则自动入库的复合流：写侧是 uploads 管线 + 账本 + 回收站可撤回
     （与 search_online 同一授权口径），故无 confirm_token——原子调用没有信任边界要跨。"""
@@ -417,7 +456,7 @@ class WatchCheckRequest(BaseModel):
     """`POST /api/watch/check` 入参：课题保存的**确定性检索 spec**。
 
     与 /api/recommend 入参子集同构（关键词/来源/分面/已删约束/宽放维度/日期 + spec_version）。
-    端点**强制** strategy=fixed、recall=off、rerank=off、polish=false 重跑（基线语义：
+    端点**强制** strategy=fixed、recall=off、rerank=off、polish=false 重跑（基线语义 §4.1：
     不拿可能经 LLM/语义重排的显示结果当基线）。spec_version 当前只支持 v1（与
     record_fingerprint_schema 同版——检索规格与指纹 schema 一起版本化，未来升级同步加档）。"""
     model_config = ConfigDict(extra="forbid")
@@ -427,19 +466,19 @@ class WatchCheckRequest(BaseModel):
         description="确定性检索规格版本（当前支持 v1；与 record_fingerprint_schema 同版）",
     )
     query: str = Field(default="", description="检索关键词（display_query 的解析结果）")
-    sources: list[str] | None = Field(default=None, description="来源白名单；null/缺省 = 默认检索池")
+    sources: list[str] | None = Field(default=None, max_length=_MAX_SOURCES_ITEMS, description="来源白名单；null/缺省 = 默认检索池")
     facet_filters: list[dict] | None = Field(
-        default=None, description="分面细化过滤（同 /api/recommend 口径）")
+        default=None, max_length=_MAX_FACET_FILTERS_ITEMS, description="分面细化过滤（同 /api/recommend 口径）")
     suppressed_constraints: list[str] | None = Field(
-        default=None, description="「已命中里被删掉的」维度（同 /api/recommend 口径）")
+        default=None, max_length=_MAX_SUPPRESSED_ITEMS, description="「已命中里被删掉的」维度（同 /api/recommend 口径）")
     lenient_dims: list[str] | None = Field(
-        default=None, description="宽放维度——字段为空的记录视作通过（同 /api/recommend 口径）")
+        default=None, max_length=_MAX_LENIENT_ITEMS, description="宽放维度——字段为空的记录视作通过（同 /api/recommend 口径）")
     date_from: str = Field(default="", description="发表时间起（YYYY-MM-DD）")
     date_to: str = Field(default="", description="发表时间止（YYYY-MM-DD）")
 
 
 class ExportPackRequest(BaseModel):
-    """`POST /api/artifacts/export-pack` 入参（导出中心）。
+    """`POST /api/artifacts/export-pack` 入参（2026-08-22 导出中心）。
 
     入参是课题**当前状态快照**：导出类型 + 课题的键与状态（name/goal/纳入排除条件/
     candidates（uid+status+reason+verified_at）/check_condition/provenance）。
@@ -458,7 +497,7 @@ class ExportPackRequest(BaseModel):
 
 
 class ActSummaryRequest(BaseModel):
-    """执行结果 LLM 总结的入参。**只总结，不执行**——done/gap/policy 行由调用方
+    """执行结果 LLM 总结的入参（p10）。**只总结，不执行**——done/gap/policy 行由调用方
     从真实返回值构造后上报，本端点不核实、也不新增任何事实；LLM 缺席/失败 → fail-open，
     `summary_zh=None`，调用方原样保留自己的事实句。"""
     model_config = ConfigDict(extra="forbid")
@@ -469,18 +508,44 @@ class ActSummaryRequest(BaseModel):
     done_lines: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=30, description="做到的事实行（每条 ≤500 字）")
     gap_lines: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=30, description="没做到的事实行（每条 ≤500 字）")
     policy_lines: list[Annotated[str, Field(max_length=500)]] = Field(default_factory=list, max_length=30, description="口径说明行（每条 ≤500 字）")
-    # ---- 一句话模式开关 ----
+    # ---- 一句话模式开关----
     brief: bool = Field(
         default=False,
         description="true 时走一句话模式（≤35 字、只用事实、ok=false 直说没做成，铁律写死在 prompt）；响应形状不变",
     )
     # ---- LLM 配置覆盖（与 /api/action/plan 同契约，请求级、不持久化）----
-    provider: str = Field(default="mock", description="mock / zhipuai / openai-compatible / trial（限量试用）")
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False)
     mock_llm: bool = Field(default=False)
-    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次请求临时 key，不持久化")
-    base_url: str | None = Field(default=None, description="自定义 API 接口地址")
-    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description="自定义模型名")
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
+
+
+class SearchReplyRequest(BaseModel):
+    """检索回执 LLM 改写的入参（2026-08-30 p11）。**只解说，不检索、不执行**——命中数/展示数/
+    命中关键词/解析状态由调用方（前端 board.js，数字全部取自真实检索响应）构造后上报，
+    本端点不核实、也不新增任何事实；LLM 缺席/失败 → fail-open，`reply_zh=None`，
+    调用方原样保留自己的确定性事实句。`can_suggest` 是下一步建议的**白名单**：
+    LLM 只许从中原样挑一条，为空则禁止给任何建议（护栏写进 `search_reply_llm._SEARCH_REPLY_RULES_ZH`）。"""
+    model_config = ConfigDict(extra="forbid")
+
+    utterance: str = Field(default="", max_length=500, description="用户那句原话")
+    query: str = Field(default="", max_length=500, description="实际检索词（可能被改写过）")
+    note: str = Field(default="", max_length=200, description="前置说明（如「我把这句按『X』检索」/改条件留痕）；空=无")
+    total: int = Field(default=0, ge=0, description="库中命中总条数")
+    shown: int = Field(default=0, ge=0, description="结果区实际展示条数")
+    hit_keywords: list[Annotated[str, Field(max_length=100)]] = Field(default_factory=list, max_length=30, description="命中的关键词（原文）")
+    resolution_status: str = Field(default="", max_length=50, description="解析状态（空=正常；abstained / clarification_required 等）")
+    has_relax: bool = Field(default=False, description="结果区是否给出了可以直接点的放宽方式")
+    can_suggest: list[Annotated[str, Field(max_length=200)]] = Field(default_factory=list, max_length=5, description="可建议动作白名单（空=禁止给建议）")
+    # ---- LLM 配置覆盖（与 /api/act/summary 同契约，请求级、不持久化）----
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
+    use_llm: bool = Field(default=False)
+    mock_llm: bool = Field(default=False)
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
 
 
 # 净化逻辑已上移到 workflow.sanitize_facet_filters / sanitize_suppressed（Web+MCP 单一真源）。
@@ -504,29 +569,20 @@ def _require_iso_date(value: str | None, *, name: str) -> str:
     """发表时间入参：空 → ""（不限）；否则必须是格式与日历都合法的 YYYY-MM-DD，非法 → 400。
 
     为什么不能静默吞（旧行为：非「年份打头」一律当没传）：用户给了筛选条件、系统悄悄丢掉，
-    结果和预期对不上却无任何提示；更糟的是 "" 这种不存在的日期曾被当作已生效
+    结果和预期对不上却无任何提示；更糟的是 "2020-13-45" 这种不存在的日期曾被当作已生效
     条件回显上屏。诚实方向只有一个：给了就校验，不合法就明说。
     （本函数为薄委托：真源在 app/request_validation.validate_iso_date，与 MCP 同一份。）"""
     return _validate_or_400(validate_iso_date, value, name=name)
 
 
 def _normalize_provider(provider: str | None) -> str:
-    normalized = (provider or "zhipuai").strip().lower()
-    if normalized in ZHIPU_PROVIDER_ALIASES:   # 别名集单一真源在 llm_client，勿再抄字面量
-        return "zhipuai"
-    if normalized == "mock":
-        return "mock"
-    if normalized == "trial":
-        # 限量试用通道：端点/模型锁定、凭据只认服务端 BIODATA_TRIAL_API_KEY
-        # （缺省回落 BIODATA_EMBED_API_KEY——与 embedding 共用智谱 key）。
-        # 必须独立成类——漏掉这条会落进下方 zhipuai 兜底，试用请求错烧正式 key。
-        return "trial"
-    if normalized in {"openai", "openai-compatible"}:
-        return "openai-compatible"
-    return "zhipuai"
+    """webapp 设置面口径（封闭集）：默认 zhipuai、额外收编 trial，其余未知值一律回落 zhipuai
+    （产品意图：用户输入静默收敛到已知通道，不报错）。真源在 llm_client._normalize_provider，
+    勿再抄映射表。trial 必须独立成类——漏掉会落进 zhipuai 兜底，试用请求错烧正式 key。"""
+    return _llm_normalize_provider(provider, default="zhipuai", extra_aliases={"trial"})
 
 
-# 卡片行投影的真源已迁入 app.recommend_rows.rows_from_retrieved
+# 2026-08-16 检索工具化 Phase 1：卡片行投影的真源已迁入 app.recommend_rows.rows_from_retrieved
 #（search.rerun 的采纳载荷与 /api/recommend 共用一份；落 recommend_rows 而非 workflow 是
 # 冻结 767 评测路径的 import 闭包不许碰 introduction → summary_genre → provenance 链），
 # 本模块保留同名别名——既有调用点与测试 import 零漂移。
@@ -565,7 +621,7 @@ def _validate_endpoint_url(raw_url: str | None) -> str:
     value = (raw_url or "").strip()
     if not value:
         return ""
-    # 护栏模式（BIODATA_REQUIRE_ACCOUNT=1）下一律拒绝请求级
+    # 公网护栏硬化：护栏模式（BIODATA_REQUIRE_ACCOUNT=1）下一律拒绝请求级
     # 自定义接口地址——上面的 SSRF 校验是「哪些地址合法」，这道是「网页版根本不接受自定义」。
     # 本函数是所有带 base_url 入口（recommend/diagnose/utterance/act/summary 等）的唯一必经
     # 校验点，收口一处即全覆盖；BYOK 的 api_key 不受影响（烧用户自己的 key）。闸关逐字节不变。
@@ -656,7 +712,7 @@ def _endpoint_identity(url: str | None) -> tuple[str, str, int, str] | None:
     return parsed.scheme.lower(), hostname, port, path
 
 
-#: 部署期受信 Host 白名单：`BIODATA_TRUSTED_HOSTS` 显式给出公网 IP/域名
+#: 部署期受信 Host 白名单（网页版灰度）：`BIODATA_TRUSTED_HOSTS` 显式给出公网 IP/域名
 #: （逗号或空白分隔）。逐项严格校验（IP 字面量或 ≥2 段合法域名标签；拒绝端口/scheme/
 #: userinfo/内网后缀域名），非法条目**启动即抛**（fail-closed，配置写错宁可不起服务）。
 #: 缺省为空 → 与历史行为逐字节一致（仅 loopback），本机形态零影响。
@@ -697,7 +753,7 @@ def _is_supported_local_request_host(hostname: str | None) -> bool:
     """Accept loopback hosts, plus any host explicitly trusted for server deployment.
 
     本机形态（缺省）只认 loopback；服务器部署经 ``BIODATA_TRUSTED_HOSTS`` 显式放行
-    服务器部署入口（公网 IP / 未来域名），白名单逐项校验过、不含通配。"""
+    灰度入口（公网 IP / 未来域名），白名单逐项校验过、不含通配。"""
     normalized = (hostname or "").strip().lower().rstrip(".")
     if normalized == "localhost":
         return True
@@ -764,7 +820,13 @@ def _cross_origin_detail(origin: str, *, scheme: str, hostname: str, port: int |
     return None
 
 
-# ---------------------------------------------------------------- 原始 body 上限
+#: Host 闸两处（路由前 middleware + 端点内纵深防御）共用文案（与 `_cross_origin_detail`
+#: 同理：同源判定的措辞只有一份，防两处分叉）。
+_HOST_INVALID_DETAIL = "Host 无效。"
+_UNTRUSTED_HOST_DETAIL = "仅接受本机 loopback Host。"
+
+
+# ---------------------------------------------------------------- 原始 body 上限（SEC-H01）
 # 全站统一预算：单细胞元数据 JSON 远小于 64 MB，超出的只可能是误操作或本机 DoS 试探。
 # 与 /api/upload、/api/curate 的 payload 闸同值（`_MAX_UPLOAD_BYTES = _MAX_RAW_BODY_BYTES`，
 # 一处常量，防口径再分叉）。上限在中间件**调用时**读取模块全局，测试 monkeypatch 常量即可生效。
@@ -782,7 +844,7 @@ def _raw_body_too_large_response() -> JSONResponse:
 
 
 class _RawBodyLimitMiddleware:
-    """原始请求 body 字节上限：Content-Length 预检 + 实际字节计数双闸。
+    """原始请求 body 字节上限（SEC-H01）：Content-Length 预检 + 实际字节计数双闸。
 
     - Content-Length 头存在且超限 → 不读 body、直接 413 —— JSON/表单在 FastAPI/Pydantic
       模型解析**之前**被拒绝（payload_json 的 64 MB 检查不再发生在解析之后）。
@@ -848,7 +910,7 @@ _AUTH_OPEN_PATHS = frozenset({
     "/api/account/login",
     "/api/account/logout",
     "/api/account/whoami",
-    # 管理端点「开放但自认证」——token（BIODATA_ADMIN_TOKEN，
+    # 2026-08-26：管理端点「开放但自认证」——token（BIODATA_ADMIN_TOKEN
     # X-Admin-Token 头，hmac.compare_digest 比对）+ 仅 loopback 对端双闸自足，不绑账户会话
     # （cron 从容器内 127.0.0.1 调用，没有也不该有登录态）。未配置 token → 403 fail-closed，
     # 放行进集合不等于放行请求（见 _require_admin）。
@@ -868,7 +930,7 @@ async def _account_gate(request: Request, call_next):
     path = request.url.path.rstrip("/") or "/"
     user = None
     if path.startswith("/api/"):
-        # 补丁包机制（基线+补丁包）：会话解析提前到闸前、且不受护栏开关控制——只要
+        # 任务 3（2026-08-26 基线+补丁包）：会话解析提前到闸前、且不受护栏开关控制——只要
         # 请求带有效会话（含本机登录态），本请求的语料读写就绑定该账户的补丁包；无会话/匿名
         # → user None → 不绑定，读写路径与历史逐字节一致。resolve_session 是进程内 dict 命中
         # （_hydrate_sessions 一次性把会话库载入内存），每请求成本可忽略。
@@ -896,12 +958,12 @@ async def _require_loopback_host(request: Request, call_next):
     `test_every_post_route_checks_the_origin` 也要求每个写端点都调它）。"""
     parts = _raw_request_host(request)
     if parts is None:
-        return JSONResponse(status_code=403, content={"detail": "Host 无效。"})
+        return JSONResponse(status_code=403, content={"detail": _HOST_INVALID_DETAIL})
     hostname, port = parts
     if not _is_supported_local_request_host(hostname):
         return JSONResponse(
             status_code=403,
-            content={"detail": "仅接受本机 loopback Host。"},
+            content={"detail": _UNTRUSTED_HOST_DETAIL},
         )
     origin = (request.headers.get("origin") or "").strip()
     if origin and request.method in _UNSAFE_METHODS:
@@ -951,7 +1013,7 @@ async def _security_headers(request: Request, call_next):
 
 @app.middleware("http")
 async def _request_logging(request: Request, call_next):
-    """统一请求日志（webobs）。
+    """统一请求日志（2026-08-15 触发点/ "webapp 整体无 logging" 收口）。
 
     每请求一行：method + 路径 + 状态码 + 耗时。注册在最后 → 栈上最外层，Host 守卫直返的
     403、`_security_headers` 兜出的 500 也能记到最终状态码；5xx 升 WARNING 便于定位。
@@ -975,9 +1037,9 @@ def _require_same_origin(request: Request) -> None:
         expected = urllib.parse.urlsplit(str(request.base_url))
         expected_port = expected.port  # 访问即校验畸形端口（与旧实现同语义；主闸在 middleware）
     except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Host 无效。") from exc
+        raise HTTPException(status_code=403, detail=_HOST_INVALID_DETAIL) from exc
     if not _is_supported_local_request_host(expected.hostname):
-        raise HTTPException(status_code=403, detail="仅接受本机 loopback Host。")
+        raise HTTPException(status_code=403, detail=_UNTRUSTED_HOST_DETAIL)
 
     origin = (request.headers.get("origin") or "").strip()
     if not origin:
@@ -992,11 +1054,11 @@ def _require_same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail=detail)
 
 
-# ---------------------------------------------------------------- 简单频率限制
+# ---------------------------------------------------------------- 简单频率限制（SEC-H03）
 # 服务端共享 LLM Key 的可产生费用入口（`/api/introduction?llm=1`，GET）需要一道轻量闸：
 # 同源检查（复用 `_require_same_origin`）+ 进程内滑动窗口频率限制。**不做权限体系**——
 # 公网认证是已暂缓的独立 epic；本闸只挡「脚本高频烧服务端共享 Key」这类滥用，本机单
-# 用户正常使用远低于配额。多进程/多实例部署需外置 Redis 级限流。
+# 用户正常使用远低于配额。多进程/多实例部署需外置 Redis 级限流（见交接）。
 _LLM_INTRO_RATE_LIMIT = 30        # 每分钟最多 N 次 llm=1 介绍
 _LLM_INTRO_RATE_WINDOW = 60.0     # 秒
 _rate_buckets: "dict[str, deque[float]]" = {}
@@ -1102,7 +1164,7 @@ def _build_request_overrides(
             overrides.update({key: "" for key in _LLM_SECRET_ENV_KEYS})
 
     # 自定义端点/模型：只在显式提供时注入对应 env（缺省不写 → 保留服务器 .env 配置）。
-    # 让「填受校验的 OpenAI 兼容端点即可用」在网页端自助生效：DeepSeek/实现/Qwen/OpenRouter/本地皆走此路。
+    # 让「填受校验的 OpenAI 兼容端点即可用」在网页端自助生效：DeepSeek/Kimi/Qwen/OpenRouter/本地皆走此路。
     if provider == "zhipuai":
         if base_url:
             overrides["LLM_BASE_URL"] = base_url
@@ -1118,6 +1180,66 @@ def _build_request_overrides(
             overrides["LLM_MODEL"] = model
             overrides["OPENAI_MODEL"] = model
     return overrides
+
+
+def _resolve_llm_request(
+    provider: str | None,
+    *,
+    use_llm: bool,
+    mock_llm: bool,
+    base_url: str | None,
+) -> tuple[str, str, bool, bool]:
+    """请求级 LLM 四元组归一化（各端点同径）：provider 归一化 → mock/trial 丢弃请求级
+    地址 → mock 推导 → use_llm 推导，返回 ``(provider, requested_base_url, mock_llm, use_llm)``。
+
+    provider 只在启用 LLM 时才有意义：provider==mock 仅当 use_llm 时才当作 mock，
+    否则 use_llm=false 会被 "provider==mock" 强行拉回 mock（那样"关闭 LLM"就形同虚设）。
+    mock 从不联网、trial 地址锁定服务端托管值，两者的请求级 base_url 一律为空
+    （也不经 `_validate_endpoint_url`——锁定的通道不接受任何请求级端点）。"""
+    provider = _normalize_provider(provider)
+    requested_base_url = "" if provider in ("mock", "trial") else _validate_endpoint_url(base_url)
+    mock_llm = bool(mock_llm) or (provider == "mock" and bool(use_llm))
+    use_llm = bool(use_llm or mock_llm)
+    return provider, requested_base_url, mock_llm, use_llm
+
+
+def _materialize_request_llm_config(
+    provider: str,
+    *,
+    use_llm: bool,
+    mock_llm: bool,
+    api_key: str | None,
+    base_url: str | None,
+    model: str | None,
+    project_root: Path = CONFIG_ROOT,
+    within: Callable[[], None] | None = None,
+) -> LLMConfig:
+    """请求级 LLM 配置物化唯一通道：ENV_LOCK 内以服务器真实配置为信任基准构造 env 覆盖，
+    `_temporary_env` 窗口内物化不可变 LLMConfig——请求级 provider/key/endpoint 冻结进配置
+    对象，并发请求的 env 覆盖串行安全，锁外下游不再读 os.environ（PERF-H01：锁内只做
+    「读配置/物化」，网络 I/O 一律在锁外）。
+
+    `within`（可选）在同一 env 窗口内执行——需顺带物化其它对象的调用方
+    （/api/recommend 的 workflow 与 auto_llm_available）经它挂上，不另开窗口。"""
+    with ENV_LOCK:
+        # Trust baseline is the server's *actual* configuration (no request
+        # provider override), so a provider switch that would route a generic
+        # server key to another vendor's default endpoint is detected too.
+        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
+        env_overrides = _build_request_overrides(
+            provider=provider,
+            use_llm=use_llm,
+            mock_llm=mock_llm,
+            api_key=(api_key or "").strip() or None,
+            base_url=base_url,
+            model=model,
+            server_provider=server_cfg.provider,
+            server_base_url=server_cfg.base_url,
+        )
+        with _temporary_env(env_overrides):
+            if within is not None:
+                within()
+            return load_llm_config(project_root=project_root)
 
 
 # ---------------------------------------------------------------- LLM 日配额（账号护栏）
@@ -1161,7 +1283,7 @@ def _gate_llm_quota(
     api_key: str | None,
     requested_base_url: str = "",
 ) -> None:
-    """账号级 LLM 日配额闸：本请求将真实消耗**服务端** LLM → 计数 + 超限 429。
+    """T3 账号级 LLM 日配额闸：本请求将真实消耗**服务端** LLM → 计数 + 超限 429。
 
     - `cfg` 已物化 → 直接据它判定；`cfg=None`（流式分支尚未物化）→ ENV_LOCK 内按请求
       覆盖链复算一份（与端点物化同径，绝不捞到别的请求临时注入的 env）。
@@ -1176,20 +1298,9 @@ def _gate_llm_quota(
     if provider == "mock" or mock_llm or not use_llm:
         return
     if cfg is None:
-        with ENV_LOCK:
-            server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-            env_overrides = _build_request_overrides(
-                provider=provider,
-                use_llm=use_llm,
-                mock_llm=mock_llm,
-                api_key=None,
-                base_url=requested_base_url,
-                model=None,
-                server_provider=server_cfg.provider,
-                server_base_url=server_cfg.base_url,
-            )
-            with _temporary_env(env_overrides):
-                cfg = load_llm_config(project_root=CONFIG_ROOT)
+        cfg = _materialize_request_llm_config(
+            provider, use_llm=use_llm, mock_llm=mock_llm,
+            api_key=None, base_url=requested_base_url, model=None)
     if cfg.mock_llm or not (cfg.enable_llm and cfg.api_key):
         return  # 服务端没 key / 未启用：LLM 根本不会真烧，不计
     user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
@@ -1218,7 +1329,7 @@ def _json_utf8(payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
 # GET+HEAD：健康检查/预取工具会对 `/` 发 HEAD，裸 @app.get 会回 405；显式允许 HEAD 保持幂等。
 # Cache-Control: no-cache——HTML 骨架必须每次回源再验证（FileResponse 自带 ETag，未变则 304，成本一次往返）。
 # 缺了它浏览器会启发式缓存旧 HTML：旧骨架（没有新挂点）+ 新 JS（查询串被 StaticFiles 忽略、照样给新内容）
-# 混跑 = 新功能静默退回旧样式（集成踩到「过时的侧边栏样式」正是这一族）。
+# 混跑 = 新功能静默退回旧样式（2026-08-03 p10 后真机踩到「过时的侧边栏样式」正是这一族）。
 @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
@@ -1260,27 +1371,27 @@ def api_health(request: Request) -> JSONResponse:
             "version": WEB_API_VERSION,
             # additive：本实例的安装根路径。同版本多份安装并存时（开发副本 vs
             # 提交包副本），启动器复用分支据此告诉用户「复用的是哪一份」，绝不静默吸附。
-            # 仅环回监听，路径不涉密。语义 = runtime_paths.install_root（frozen = exe 所在目录；
+            # 仅环回监听，路径不涉密。W1 起语义 = runtime_paths.install_root（frozen = exe 所在目录；
             # source/portable = 项目根，与历史逐字节一致）。
-            # 护栏模式下整条 key 不下发（公网实例的容器内路径
+            # 公网护栏硬化：护栏模式下整条 key 不下发（公网实例的容器内路径
             # 不暴露给匿名请求）；本机形态原样保留。
             "install_root": str(PATHS.install_root),
-            # additive：运行时模式，供启动器/诊断区分 source/portable/frozen。
+            # additive（W1）：运行时模式，供启动器/诊断区分 source/portable/frozen。
             "runtime_mode": PATHS.runtime_mode,
             "zhipu_config_detected": bool(zhipu_cfg.api_key),
-            # additive：前端登录门与注册邀请框的判定源——
+            # additive（账号护栏，2026-08-25）：前端登录门与注册邀请框的判定源——
             # required=是否强制登录；invite=注册是否需要邀请码（只报「要不要」，绝不回显码本身）。
             "account": {
                 "required": _account_gate_required(),
                 "invite": bool(os.getenv(_INVITE_CODE_ENV, "").strip()),
             },
-            # 服务端 LLM 配置快照（设置门控）：前端 llmCapable 判据的服务端半边——
+            # 服务端 LLM 配置快照（2026-08-03 设置门控）：前端 llmCapable 判据的服务端半边——
             # 只报「有没有」（key_detected）与一致性比对所需的 provider/base_url，绝不回显 key 本身。
             "llm_server": {
                 "key_detected": bool(server_cfg.api_key) and server_cfg.enable_llm and server_cfg.provider != "mock",
                 "provider": server_cfg.provider,
                 "base_url": server_cfg.base_url,
-                # additive：限量试用通道——只报可用性/锁定模型名/每账号每日轮数上限，
+                # additive（T3）：限量试用通道——只报可用性/锁定模型名/每账号每日轮数上限，
                 # key 本身绝不回显。available=False 时前端「限量试用」预设按未配置处理。
                 "trial": {
                     "available": bool(trial_cfg.api_key) and trial_cfg.enable_llm,
@@ -1288,10 +1399,10 @@ def api_health(request: Request) -> JSONResponse:
                     "daily_limit": _env_int(_TRIAL_DAILY_PER_USER_ENV, 30),
                 },
             },
-            # 可选扩展可用性：langgraph/langchain 装好且未被 env 关停 → True；
+            # 可选扩展可用性：langgraph/langchain 装好且未被 env 关停 → True
             # False 时前端在「AI 执行」说明里标注用基础规划（不锁开关，后端自动回退）。
             "extensions": {"agent": _agent_exec.agent_available()},
-            # additive（方案A 放量）：智谱 API 向量召回/重排在线状态——网页版前端
+            # additive（2026-08-26 方案A 放量）：智谱 API 向量召回/重排在线状态——网页版前端
             # 据此把「本地模型未安装/在线安装」卡换成「已在线」（服务器装不了也不必装本地模型）。
             # 缺省 env off → embed/rerank 均 False，本机形态展示逐字节不变。
             "recall_api": _recall_api_health(),
@@ -1301,9 +1412,9 @@ def api_health(request: Request) -> JSONResponse:
             "corpus": {"gen": _corpus_gen_sentinel()},
         }
     if _account_gate_required():
-        # install_root 整条 key 移除（非置空）。
+        # 公网护栏硬化：install_root 整条 key 移除（非置空）。
         body.pop("install_root", None)
-        # 匿名请求再收敛 llm_server——provider/base_url/模型名
+        # 数据脱敏批：匿名请求再收敛 llm_server——provider/base_url/模型名
         # 是服务端 LLM 出口细节，登录页只需要 account 块与可用性布尔；登录后 health
         # 重取回全量（前端据此做一致性比对/试用模型名上屏，两级互不缺料）。
         if accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store()) is None:
@@ -1344,6 +1455,10 @@ def _corpus_gen_sentinel() -> "str | None":
         return None
 
 
+#: 护栏形态下本地模型写端点的统一拒绝文案（install/cancel 两处；status 只读不拦）。
+_LOCAL_MODEL_WEB_DETAIL = "网页版使用在线向量服务，无需安装本地模型。"
+
+
 @app.get("/api/local-model/status")
 def api_local_model_status() -> JSONResponse:
     """只回普通状态/体积，不暴露本机路径、uv 输出或下载源原始错误。"""
@@ -1354,10 +1469,10 @@ def api_local_model_status() -> JSONResponse:
 def api_local_model_install(request: Request) -> JSONResponse:
     """用户显式触发后台在线安装；单飞，失败不影响规则排序。"""
     _require_same_origin(request)
-    # 网页版走在线向量服务，服务器上装本地模型没有意义
+    # 公网护栏硬化：网页版走在线向量服务，服务器上装本地模型没有意义
     # （且 install 会往容器里拉数 GB 文件）；status 只读保留。
     if _account_gate_required():
-        raise HTTPException(status_code=403, detail="网页版使用在线向量服务，无需安装本地模型。")
+        raise HTTPException(status_code=403, detail=_LOCAL_MODEL_WEB_DETAIL)
     return _json_utf8({"ok": True, **start_model_install(PATHS)})
 
 
@@ -1365,7 +1480,7 @@ def api_local_model_install(request: Request) -> JSONResponse:
 def api_local_model_cancel(request: Request) -> JSONResponse:
     _require_same_origin(request)
     if _account_gate_required():
-        raise HTTPException(status_code=403, detail="网页版使用在线向量服务，无需安装本地模型。")
+        raise HTTPException(status_code=403, detail=_LOCAL_MODEL_WEB_DETAIL)
     return _json_utf8({"ok": True, **cancel_model_install(PATHS)})
 
 
@@ -1380,7 +1495,7 @@ class AccountSwitchPayload(BaseModel):
     token: str = Field(..., min_length=1, max_length=200, description="待切换账号的会话 token（前端按账号记住的）")
 
 
-_SESSION_MAX_AGE = accounts.SESSION_TTL_DAYS * 24 * 3600   # 与服务端 _SESSION_TTL 同源（30 天）
+_SESSION_MAX_AGE = accounts.SESSION_TTL_DAYS * 24 * 3600   # 与服务端 _SESSION_TTL 同源（2026-08-08 起 30 天）
 _ACCOUNT_ERROR_STATUS = {
     "bad_username": 400, "weak_password": 400, "store_full": 400,
     "username_taken": 409, "invalid_credentials": 401, "locked": 429,
@@ -1397,14 +1512,14 @@ def _sessions_store() -> Path:
 
 
 def _account_http_error(exc: AccountError) -> HTTPException:
-    return HTTPException(status_code=_ACCOUNT_ERROR_STATUS.get(exc.code, 400), detail=exc.message)
+    return HTTPException(status_code=_status_for(exc.code, _ACCOUNT_ERROR_STATUS), detail=exc.message)
 
 
 def _set_session_cookie(resp: JSONResponse, token: str, *, remember: bool = True) -> None:
     # loopback http：HttpOnly + SameSite=Strict 已足够防跨站读写；本机无 https 故不置 Secure。
-    # remember=False → 不传 max_age：浏览器会话级 cookie（关浏览器即失效）；True → 30 天。
-    # Secure 口：`BIODATA_COOKIE_SECURE=1` 时置 Secure——独立于护栏
-    # 开关的单独 env：纯 HTTP 部署阶段开了会让浏览器拒存 cookie（等于全员掉登录），故默认关，
+    # remember=False → 不传 max_age：浏览器会话级 cookie（关浏览器即失效）；True → 30 天（acct1）。
+    # Secure 口（公网护栏硬化，2026-08-26）：`BIODATA_COOKIE_SECURE=1` 时置 Secure——独立于护栏
+    # 开关的单独 env：灰度纯 HTTP 阶段开了会让浏览器拒存 cookie（等于全员掉登录），故默认关，
     # TLS 落地后再开。
     resp.set_cookie(key=SESSION_COOKIE, value=token,
                     max_age=_SESSION_MAX_AGE if remember else None,
@@ -1415,7 +1530,7 @@ def _set_session_cookie(resp: JSONResponse, token: str, *, remember: bool = True
 #: 会话 cookie 的 Secure 开关 env（默认关；公网 TLS 落地后由部署侧置 1）。与护栏开关互相独立。
 _COOKIE_SECURE_ENV = "BIODATA_COOKIE_SECURE"
 
-# 护栏模式下登录/注册的 per-IP 进程内节流（复用
+# 公网护栏硬化：护栏模式下登录/注册的 per-IP 进程内节流（复用 SEC-H03 的
 # _rate_limited 滑动窗口）。防公网批量撞库/批量占号；本机形态（闸关）完全不加、逐字节不变。
 _ACCOUNT_LOGIN_RATE_LIMIT = 10      # 每分钟每 IP 登录尝试上限
 _ACCOUNT_REGISTER_RATE_LIMIT = 5    # 每分钟每 IP 注册尝试上限
@@ -1434,7 +1549,7 @@ def api_account_register(payload: AccountCredentials, request: Request) -> JSONR
         if not _rate_limited(f"account-register:{host}",
                              limit=_ACCOUNT_REGISTER_RATE_LIMIT, window=_ACCOUNT_RATE_WINDOW):
             raise HTTPException(status_code=429, detail="注册尝试过于频繁，请稍后再试。")
-    # 注册邀请闸（仅护栏模式生效；闸关时 invite_code 字段被忽略、行为与现状逐字节一致）：
+    # T3 注册邀请闸（仅护栏模式生效；闸关时 invite_code 字段被忽略、行为与现状逐字节一致）：
     # - 邀请码已配置 → 必须全等匹配，不匹配一律 403 统一文案（不泄漏对错细节，compare_digest 防时序）；
     # - 邀请码未配置 → 注册**整体关闭**（宁可关死不留缝：护栏模式 = 公网，开放注册 = 任何人烧服务端 key）。
     if _account_gate_required():
@@ -1450,7 +1565,7 @@ def api_account_register(payload: AccountCredentials, request: Request) -> JSONR
     token = accounts.create_session(user, sessions_path=_sessions_store())
     body: dict[str, Any] = {"ok": True, "user": user.as_dict()}
     if not _account_gate_required():
-        # session_token 仅本机形态下发（前端一键切换用）；护栏模式整条 key 不出现。
+        # session_token 仅本机形态下发（前端一键切换用）；公网护栏模式整条 key 不出现（收口）。
         body["session_token"] = token
     resp = _json_utf8(body)
     _set_session_cookie(resp, token, remember=payload.remember)
@@ -1498,18 +1613,25 @@ def api_account_whoami(request: Request) -> JSONResponse:
     return _json_utf8({"ok": True, "user": user.as_dict() if user else None})
 
 
-@app.get("/api/account/trial-quota")
-def api_account_trial_quota(request: Request) -> JSONResponse:
-    """限量试用通道的当日额度回显（设置界面「今日剩余」数据源）。
-
-    additive：仅护栏形态提供（试用通道本就只存在于部署形态；本机形态 404，前端按
-    「通道不可用」隐藏额度块）。remaining=None 表示该账号不限量（豁免名单或上限≤0），
-    前端显示「不限量」；其余字段只报状态，key 绝不回显。"""
+def _require_session_user(request: Request) -> "accounts.PublicUser":
+    """护栏形态端点共用闸：护栏形态 + 有效会话，否则 404/401
+    （trial-quota 与在线 MCP 令牌端点共用）。"""
     if not _account_gate_required():
         raise HTTPException(status_code=404, detail="not found")
     user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
     if user is None:
         raise HTTPException(status_code=401, detail="auth_required")
+    return user
+
+
+@app.get("/api/account/trial-quota")
+def api_account_trial_quota(request: Request) -> JSONResponse:
+    """T3 限量试用通道的当日额度回显（设置界面「今日剩余」数据源，2026-08-25 夜）。
+
+    additive：仅护栏形态提供（试用通道本就只存在于部署形态；本机形态 404，前端按
+    「通道不可用」隐藏额度块）。remaining=None 表示该账号不限量（豁免名单或上限≤0），
+    前端显示「不限量」；其余字段只报状态，key 绝不回显。"""
+    user = _require_session_user(request)
     with ENV_LOCK:
         trial_cfg = load_llm_config(project_root=CONFIG_ROOT, provider_override="trial")
     daily_limit = _env_int(_TRIAL_DAILY_PER_USER_ENV, 30)
@@ -1529,9 +1651,9 @@ def api_account_trial_quota(request: Request) -> JSONResponse:
 
 @app.post("/api/account/switch")
 def api_account_switch(payload: AccountSwitchPayload, request: Request) -> JSONResponse:
-    """一键切换账号：校验前端记住的会话 token → 有效则把 cookie 重设到该账号。
+    """一键切换账号（acct1）：校验前端记住的会话 token → 有效则把 cookie 重设到该账号。
     token 无效/过期 → 401（前端丢弃该条记忆、退回密码登录）。
-    护栏模式下一键切换整体关闭（session_token 不再下发，
+    公网护栏硬化：护栏模式下一键切换整体关闭（session_token 不再下发，
     前端也不记 token——共用浏览器的公网场景里「点一下换成别人」不成立）。"""
     _require_same_origin(request)
     if _account_gate_required():
@@ -1544,6 +1666,73 @@ def api_account_switch(payload: AccountSwitchPayload, request: Request) -> JSONR
     return resp
 
 
+# ---------------------------------------------------------------- 在线 MCP 接入令牌
+# 网页版「接入 AI 助手」的在线形态凭证管理。仅护栏形态开放（本机形态 404，与 trial-quota
+# 同款口径：在线 MCP 只存在于部署形态）。令牌明文仅铸币响应返回一次，落盘只有 sha256 摘要；
+# 每账户上限见 mcp_tokens._MAX_TOKENS_PER_ACCOUNT。
+
+
+def _mcp_tokens_store() -> Path:
+    return mcp_tokens.default_tokens_path(PROJECT_ROOT)
+
+
+def _online_mcp_config_hint(request: Request, raw_token: str) -> dict[str, Any]:
+    """给 MCP 客户端的接入配置片段（streamable-HTTP 通用形状，Kimi Code / Claude 等同构）。
+    Host 头已经过了受信主机闸（护栏形态），直接回显无风险。"""
+    base = f"{request.url.scheme}://{request.headers.get('host', '')}"
+    return {"url": f"{base}/mcp", "headers": {"Authorization": f"Bearer {raw_token}"}}
+
+
+class McpTokenMintPayload(BaseModel):
+    """铸币请求。label 仅用户自辨识（列表回显用），不落敏感信息。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(default="", max_length=40)
+
+
+class McpTokenRevokePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token_id: str = Field(min_length=1, max_length=32)
+
+
+#: 令牌机器码 → HTTP 状态（缺省 400；超上限是冲突语义 → 409）。
+_MCP_TOKEN_ERROR_STATUS = {"too_many_tokens": 409}
+
+
+@app.post("/api/account/mcp-token")
+def api_account_mcp_token_mint(payload: McpTokenMintPayload, request: Request) -> JSONResponse:
+    """铸币 → 明文令牌仅此一次返回 + 可直接复制的客户端配置片段。"""
+    _require_same_origin(request)
+    user = _require_session_user(request)
+    try:
+        raw, rec = mcp_tokens.mint_token(user.id, user.username, payload.label,
+                                         store_path=_mcp_tokens_store())
+    except mcp_tokens.McpTokenError as exc:
+        raise HTTPException(
+            status_code=_status_for(exc.code, _MCP_TOKEN_ERROR_STATUS), detail=exc.message) from exc
+    return _json_utf8({"ok": True, "token": raw, "record": rec,
+                       "config": _online_mcp_config_hint(request, raw)})
+
+
+@app.get("/api/account/mcp-tokens")
+def api_account_mcp_tokens_list(request: Request) -> JSONResponse:
+    """本账户令牌列表（公开字段：token_id/label/prefix/created_at；绝无明文/摘要）。"""
+    user = _require_session_user(request)
+    return _json_utf8({"ok": True, "tokens": mcp_tokens.list_tokens(user.id, store_path=_mcp_tokens_store())})
+
+
+@app.post("/api/account/mcp-token/revoke")
+def api_account_mcp_token_revoke(payload: McpTokenRevokePayload, request: Request) -> JSONResponse:
+    """吊销（仅属主）：立即生效——verifier 每次请求实时查库，无缓存延迟。"""
+    _require_same_origin(request)
+    user = _require_session_user(request)
+    if not mcp_tokens.revoke_token(user.id, payload.token_id, store_path=_mcp_tokens_store()):
+        raise HTTPException(status_code=404, detail="令牌不存在或不属于当前账户。")
+    return _json_utf8({"ok": True})
+
+
 class DreamRequest(BaseModel):
     """dream 记忆整理（手动「整理记忆」按钮）：对话快照 + LLM 配置覆盖。
 
@@ -1553,10 +1742,10 @@ class DreamRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     conversations: list[dict] = Field(default_factory=list, max_length=24, description="对话快照 [{query, chat:[{k,t,n}]}]")
-    provider: str = Field(default="mock", description="mock / zhipuai / openai-compatible / trial（限量试用）")
-    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description="本次请求临时 key，不持久化")
-    base_url: str | None = Field(default=None, description="自定义 API 接口地址")
-    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description="自定义模型名")
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
 
 
 _DREAM_ERROR_STATUS = {"empty_input": 400, "no_key": 400, "llm_failed": 502}
@@ -1577,30 +1766,30 @@ def api_dream(payload: DreamRequest, request: Request) -> JSONResponse:
             model=(payload.model or "").strip(),
         )
     else:
-        # 与 /api/introduction 同口径（补漏）：ENV_LOCK 内加载
+        # 与 /api/introduction 同口径（2026-08-10 架构评审坐实漏网）：ENV_LOCK 内加载
         # 服务端 config，阻塞到并发请求的 _temporary_env 还原为止——绝不捞到别的请求临时
         # 注入 os.environ 的请求级 provider/key/endpoint。网络调用在锁外、用已捕获的 config。
-        # provider=trial（无 key 的试用请求）→ 显式按试用通道组配置（端点/模型锁定）；
+        # T3：provider=trial（无 key 的试用请求）→ 显式按试用通道组配置（端点/模型锁定）；
         # 其余维持原语义（服务端 .env 配置）。
         with ENV_LOCK:
             if _normalize_provider(payload.provider) == "trial":
                 cfg = load_llm_config(project_root=CONFIG_ROOT, provider_override="trial")
             else:
                 cfg = load_llm_config(project_root=CONFIG_ROOT)
-        # 配额闸：dream 恒为 LLM 调用（服务端 key 才计；BYOK 走上面分支不经这里）。
+        # T3 配额闸：dream 恒为 LLM 调用（服务端 key 才计；BYOK 走上面分支不经这里）。
         _gate_llm_quota(request, cfg=cfg, provider=payload.provider, use_llm=True,
                         mock_llm=False, api_key=None)
     try:
         result = dream.dream_from_conversations(payload.conversations, config=cfg)
     except dream.DreamError as exc:
-        raise HTTPException(status_code=_DREAM_ERROR_STATUS.get(exc.code, 400), detail=exc.message) from exc
+        raise HTTPException(status_code=_status_for(exc.code, _DREAM_ERROR_STATUS), detail=exc.message) from exc
     return _json_utf8(result)
 
 
 class CurateExamplesRequest(BaseModel):
-    """成功经验库候选的勾选/忽略（用户挑选入库）：候选 id 清单 + 端点坐标。
+    """成功经验库候选的勾选/忽略（2026-08-13 起用户挑选入库）：候选 id 清单 + 端点坐标。
 
-    base_url/model 只用于算端点指纹（分区键， 同口径）；api_key 永不进这个端点。"""
+    base_url/model 只用于算端点指纹（分区键，同口径）；api_key 永不进这个端点。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -1752,12 +1941,9 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
     # 弱口径，控制/不可见字符与纯符号 emoji 输入与 MCP 口径不一致；现两端口径同源同措辞。
     _validate_or_400(validate_query, query)
 
-    provider = _normalize_provider(payload.provider)
-    requested_base_url = "" if provider in ("mock", "trial") else _validate_endpoint_url(payload.base_url)
-    # provider 只在启用 LLM 时才有意义：provider==mock 仅当 use_llm 时才当作 mock，
-    # 否则 use_llm=false 会被 "provider==mock" 强行拉回 mock（那样"关闭 LLM"就形同虚设）。
-    mock_llm = bool(payload.mock_llm) or (provider == "mock" and bool(payload.use_llm))
-    use_llm = bool(payload.use_llm or mock_llm)
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
+        base_url=payload.base_url)
     # 可选 LLM 重排，与润色解耦：只接受 off/llm，其余一律 off（安全默认）。
     rerank_backend = "llm" if str(payload.rerank or "").strip().lower() == "llm" else "off"
     # 可选向量召回：只接受 dense/cross_encoder，其余一律 off（安全默认）。
@@ -1767,11 +1953,11 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
     # 旧行为「非年份打头一律静默当没传」会把用户的条件悄悄丢掉，非法日期还会冒充生效条件上屏。
     date_from = _require_iso_date(payload.date_from, name="date_from")
     date_to = _require_iso_date(payload.date_to, name="date_to")
-    # 倒挂窗口（from > to）此前被静默接受、恒零结果还冒充合法生效条件
+    # 2026-08-05：倒挂窗口（from > to）此前被静默接受、恒零结果还冒充合法生效条件
     # 上屏——用户在替一个不可能的条件读「没数据」。起晚于止必须当场 400 点名。
     # （闸体下沉共享真源，与 feasibility/task-pack/MCP 同一份。）
     _validate_or_400(validate_date_window, date_from, date_to)
-    # （其二）：来源校验对齐 MCP `_validate_sources`——未知/空白来源名
+    # 2026-08-05（其二）：来源校验对齐 MCP `_validate_sources`——未知/空白来源名
     # 此前被静默过滤成恒零结果，用户无法区分「来源写错」与「来源里真没数据」。显式 400 并列出合法名。
     # （闸体下沉共享真源 app/request_validation.validate_sources。）
     if payload.sources:
@@ -1792,33 +1978,26 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         from ..retrieval.vector_recall import recall_backend_available
         recall_available = recall_backend_available("cross_encoder")
 
-    with ENV_LOCK:
-        # Trust baseline is the server's *actual* configuration (no request
-        # provider override), so a provider switch that would route a generic
-        # server key to another vendor's default endpoint is detected too.
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(payload.api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=payload.model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            # 锁内只做「读配置/物化」——物化请求级基准 config（与 workflow 的
-            # `_effective_llm_config` 同根 project_root = get_settings().project_root），
-            # 并发请求的 env 覆盖串行安全。整条 workflow（含 60s LLM 请求）在锁外执行：
-            # `base_llm_config` 已把请求级 provider/key/endpoint 冻结进不可变配置对象，
-            # 下游不再读 os.environ。
-            workflow = DatasetRecommendationWorkflow()
-            request_llm_config = load_llm_config(project_root=get_settings().project_root)
-            auto_llm_available = None
-            if strategy == "auto":
-                auto_llm_available = bool(load_llm_config(project_root=CONFIG_ROOT).api_key) if payload.auto_allow_llm else False
-    # 配额闸：润色/AI 重排/动作审核意图为真且将走服务端 key 时计数（BYOK 不计）。
+    _workflow_box: dict[str, Any] = {}
+
+    def _attach_workflow() -> None:
+        # 与主配置同一 env 窗口执行：构造器不读 LLM env，但 auto 探测判定的是「本请求
+        # 覆盖链下服务端是否有 key」，必须罩在窗口里。
+        _workflow_box["workflow"] = DatasetRecommendationWorkflow()
+        auto_llm_available = None
+        if strategy == "auto":
+            auto_llm_available = bool(load_llm_config(project_root=CONFIG_ROOT).api_key) if payload.auto_allow_llm else False
+        _workflow_box["auto_llm_available"] = auto_llm_available
+
+    # 物化请求级基准 config（与 workflow 的 `_effective_llm_config` 同根 project_root
+    # = get_settings().project_root）；整条 workflow（含 60s LLM 请求）在锁外执行。
+    request_llm_config = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model,
+        project_root=get_settings().project_root, within=_attach_workflow)
+    workflow = _workflow_box["workflow"]
+    auto_llm_available = _workflow_box["auto_llm_available"]
+    # T3 配额闸：润色/AI 重排/动作审核意图为真且将走服务端 key 时计数（BYOK 不计）。
     # cfg 已物化（request_llm_config），流式无涉——本端点非流式。
     _gate_llm_quota(
         request, cfg=request_llm_config, provider=provider,
@@ -1828,7 +2007,7 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         RecommendParams(
             query=query,
             top_k=payload.top_k,
-            # 润色是总开关（use_llm）之下的独立子开关（polish， 设置重构）：
+            # 润色是总开关（use_llm）之下的独立子开关（polish，2026-08-03 设置重构）：
             # workflow 的 use_llm 只门控说明润色（重排/审核各有独立参数），两开关相与后传入。
             use_llm=use_llm and bool(payload.polish),
             mock_llm=mock_llm,
@@ -1860,13 +2039,13 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
     warnings: list[str] = []
     if meta.fallback_reason:
         warnings.append(meta.fallback_reason)
-    # use_llm=true 但 provider 缺省未传 → 被静默拽回 mock，
+    # 2026-08-15 触发点use_llm=true 但 provider 缺省未传 → 被静默拽回 mock，
     # 调用方预期真 LLM 润色、实际拿假策展表。行为不变，warnings 留痕让这一步可见。
     if (provider == "mock" and bool(payload.use_llm) and not bool(payload.mock_llm)
             and "provider" not in payload.model_fields_set):
         warnings.append("未指定 provider，本次按 mock 处理（如需真实 LLM，请显式指定 provider）")
 
-    # OOV 词表闭环第一段：未收录词弃权落结构化日志
+    # OOV 词表闭环第一段（2026-08-09 五机制批）：未收录词弃权落结构化日志
     # （.userdata/oov_terms.jsonl）——词表生长的真数据源；`scripts/measure_entity_gap.py
     # --oov-report` 把它聚合成 vocabulary 候选别名报告。只在本端点（真实用户查询）记，
     # 官方评测直调 retriever 结构性不经过。日志自身失败绝不掀翻检索（与联网账本同纪律）。
@@ -1882,10 +2061,10 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
                 })
     except Exception as exc:
         # 纪律不变：日志自身失败绝不掀翻检索。但全静默 = 词表生长机制悄悄停工无从发现
-        # 留一行 stderr（含异常类型），失败与「没有 OOV」可区分。
+        #（2026-08-15 触发点——留一行 stderr（含异常类型），失败与「没有 OOV」可区分。
         print(f"OOV 词表日志写入失败（{type(exc).__name__}: {exc}），本次跳过，不影响检索。", file=sys.stderr)
 
-    # 标识符精确反查：仅当 query 本身是一个标识符（DOI / E-MTAB / UUID / GEO / SRA）时非 None。
+    # N8 标识符精确反查：仅当 query 本身是一个标识符（DOI / E-MTAB / UUID / GEO / SRA）时非 None。
     # 惰性——只有识别到「本目录应含」的标识符才真正装载全库；GEO/SRA 直接 fail-closed、不装载。
     from ..content import identifiers
     identifier_lookup = identifiers.lookup(query, lambda: load_full_corpus(DATA_DIR, PROJECT_ROOT))
@@ -1902,7 +2081,7 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         for opt in getattr(meta, "relaxation_options", [])
     ]
     # 未收录词降级：同样把预览候选转成前端卡片行。**只是选项**——后端不会自动应用（见
-    # workflow.build_degraded_search 注释里对自动降级风险的量化说明）。
+    # workflow.build_degraded_search 里那张「自动降级会返回 3473 条无关数据」的实测表）。
     _deg = getattr(meta, "degraded_search", None)
     degraded_search = None
     if _deg:
@@ -1950,12 +2129,12 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         "coverage_caveats": getattr(meta, "coverage_caveats", []),
         # 执行类说法（打包/下载脚本/导出引文…）：只指路、不代劳。产包仍走原来的预览→确认流程。
         "action_markers": getattr(meta, "action_markers", []),
-        # 静默丢词诚实层：无对应筛选维度、被静默丢弃的实义描述词（性别/年龄/受试者/功能类）——回显给用户。
+        # N1 静默丢词诚实层：无对应筛选维度、被静默丢弃的实义描述词（性别/年龄/受试者/功能类）——回显给用户。
         "unused_query_terms": getattr(meta, "unused_query_terms", []),
         # 「A 或 B」的实际处理方式（exact / superset / narrower + note_zh）。空 dict = 这句话里没有「或」。
-        # 「或」不再整句弃权；引擎只能表达同维度的「或」，落到哪一档必须如实说。
+        # 2026-07-25 起「或」不再整句弃权；引擎只能表达同维度的「或」，落到哪一档必须如实说。
         "or_handling": getattr(meta, "or_handling", {}) or {},
-        # 标识符精确反查：query 是标识符时 {is_identifier,kind,value,indexed,match,external_url,message}；否则 None。
+        # N8 标识符精确反查：query 是标识符时 {is_identifier,kind,value,indexed,match,external_url,message}；否则 None。
         "identifier_lookup": identifier_lookup,
         "applied_lenient": lenient_dims,
         # 「已命中」里被用户删掉的原始命中维度（回显；前端据此持续抑制、后端已按此放宽）。
@@ -1991,7 +2170,7 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
 
 @app.post("/api/feasibility")
 def api_feasibility(payload: RecommendRequest, request: Request) -> JSONResponse:
-    """可行性概览：一个研究问题 → 有多少可复用数据、够不够、缺口在哪。
+    """N12 可行性概览：一个研究问题 → 有多少可复用数据、够不够、缺口在哪。
 
     聚合**通过硬过滤的全部候选**（top_k 放大到 5000 抓全命中集，非 top-k 排序结果），给确定性概览：
     候选数 / 总细胞量**下限** / 物种·平台·年份·来源分布 / 可下载率 / 缺口。不调用 LLM、不写盘。
@@ -2176,7 +2355,7 @@ def _preview_projection(pack: dict, run: dict) -> dict:
         "primary_only_zh": download_script.primary_only_sentence(plan),
         # 面板要在用户勾勾选选的过程中一直显示「只取主文件/全部文件」这条口径，而带数字的整句
         # 一勾选就过期。所以额外给一份**不含任何数字**的政策句：它对任何勾选组合都成立，
-        # 数字由面板按当前勾选自己算。口径按 scope 分岔（scope=all 不许出现「只取主文件」）。
+        # 数字由面板按当前勾选自己算。口径按 scope 分岔（K8：scope=all 不许出现「只取主文件」）。
         "primary_only_policy_zh": (download_script.PRIMARY_ONLY_POLICY_ZH
                                    if pack["scope"] == "primary"
                                    else download_script.ALL_FILES_POLICY_ZH),
@@ -2218,13 +2397,13 @@ def api_task_pack_build(payload: TaskPackBuildRequest, request: Request) -> Resp
     _require_same_origin(request)
     from ..content import task_pack
     # retrieval_date 会原样拼进 Content-Disposition 文件名：中文曾在这里炸成未捕获 500
-    # （latin-1 编不了），英文引号曾注入第二个响应头参数。先按 ISO 校验，
+    # （latin-1 编不了），英文引号曾注入第二个响应头参数（T3/T4）。先按 ISO 校验
     # 非法即 400，合法值只剩数字与连字符，拼 header 必然安全。
     retrieval_date = _require_iso_date(payload.retrieval_date, name="retrieval_date")
     try:
         # 指纹三件套缺一即拒：空指纹意味着调用方没走过 preview（或把字段弄丢了）。
-        # 旧实现「if 给了才比」把「根本没核对」当成「核对通过」——空指纹 + 篡改 limit 照样出包。
-        # 先 preview 拿真指纹，是产包的唯一入口。
+        # 旧实现「if 给了才比」把「根本没核对」当成「核对通过」——空指纹 + 篡改 limit 照样出包
+        # （T2）。先 preview 拿真指纹，是产包的唯一入口。
         missing_fp = [name for name, value in (("plan_token", payload.plan_token),
                                                ("snapshot_id", payload.snapshot_id),
                                                ("content_digest", payload.content_digest))
@@ -2299,7 +2478,7 @@ def _pack_mismatch(payload: "TaskPackBuildRequest", rebuilt: dict, run: dict) ->
     """哪里变了，就说哪里变了。四种情况的处理方式对用户完全不同，不能糊成一句「变了」。
 
     空指纹在端点入口已被拒（bad_param），走到这里的三件套**必然非空**——直接比对，
-    不再有「if 给了才比」的短路（那曾把「没核对」当成「核对通过」）。"""
+    不再有「if 给了才比」的短路（那曾把「没核对」当成「核对通过」， T2）。"""
     retrieval = rebuilt["retrieval"]
     if payload.snapshot_id != retrieval["snapshot_id"]:
         return {"code": "snapshot_changed",
@@ -2373,27 +2552,14 @@ def _run_action_plan(
     """
     from ..agent import action_plan as _ap
 
-    provider = _normalize_provider(provider)
-    requested_base_url = "" if provider in ("mock", "trial") else _validate_endpoint_url(base_url)
-    mock_llm = bool(mock_llm) or (provider == "mock" and bool(use_llm))
-    use_llm = bool(use_llm or mock_llm)
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        provider, use_llm=use_llm, mock_llm=mock_llm, base_url=base_url)
 
-    # 锁内只物化请求级 config，`plan_action`（可能调 LLM）在锁外执行——
+    # PERF-H01：锁内只物化请求级 config，`plan_action`（可能调 LLM）在锁外执行——
     # 显式传 `config=cfg`，plan_action 内部 `config or load_llm_config()` 不再读 env。
-    with ENV_LOCK:
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            cfg = load_llm_config(project_root=CONFIG_ROOT)
+    cfg = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=api_key, base_url=requested_base_url, model=model)
     try:
         return _ap.plan_action(
             utterance,
@@ -2422,7 +2588,7 @@ def api_action_plan(payload: ActionPlanRequest, request: Request) -> JSONRespons
     检索器 / 编排 / 冻结评测从不 import action_plan → 冻结 767 基准结构性不受影响。
     """
     _require_same_origin(request)
-    # 配额闸（cfg=None → 闸内按请求覆盖链复算；/api/utterance 的 action 分支不走本端点，
+    # T3 配额闸（cfg=None → 闸内按请求覆盖链复算；/api/utterance 的 action 分支不走本端点，
     # 已在 utterance 内计过一次，无重复计数）。
     _gate_llm_quota(
         request, cfg=None, provider=payload.provider,
@@ -2463,7 +2629,7 @@ def _utterance_principal(request: Request) -> str:
 _UTT_IDEM_TTL_SECONDS = 3600.0    # done 条目寿命：完成后缓存体保留一小时
 _UTT_IDEM_RUNNING_TTL_SECONDS = 24 * 3600.0   # running 泄漏兜底寿命（owner 崩掉的占坑上限；
                                               # 长链执行/锁排队内的正常请求远低于此——
-                                              # running 绝不按 1h TTL 淘汰）
+                                              # 评审：running 绝不按 1h TTL 淘汰）
 _UTT_IDEM_MAX_ENTRIES = 256       # 上限 FIFO 淘汰：防无限增长
 _UTT_IDEM_WAIT_TIMEOUT = 180.0    # 非 owner 等待上限（秒）：超时回 503 让客户端稍后重试
 _UTT_IDEM_LOCK = threading.Lock()
@@ -2476,7 +2642,7 @@ def _utterance_request_fp(text: str, payload: Any, provider: str,
     共享幂等槽（此前只看 req_id——两个不同 utterance/config 复用同号会错等/错收响应；
     撞指纹 → 409 如实说明，不当成同一次重发）。
 
-     补全：指纹材料加入**现场字段**（has_results/result_total/query/
+    2026-08-10 二轮评审补全：指纹材料加入**现场字段**（has_results/result_total/query/
     current_filters/sources/base_url）——断流重发会把它们原样带上（同指纹合法复用），
     而「同号不同现场」必是另一次请求（撞指纹 409）。api_key 只以其哈希入料——
     指纹材料虽不落盘，也绝不给任何调试/日志路径留原文的机会。"""
@@ -2500,7 +2666,7 @@ def _utterance_request_fp(text: str, payload: Any, provider: str,
         # 另一次请求（撞指纹 409）；断流重发原样带回同 recipe 才合法复用缓存体。
         "suggested_recipe": str(getattr(payload, "suggested_recipe", "") or ""),
         "base_url": str(getattr(payload, "base_url", "") or ""),
-        # 检索参数进指纹——同号但检索参数不同 = 另一次请求
+        # prelim1：检索参数进指纹——同号但检索参数不同 = 另一次请求
         # （撞指纹 409），不得共享幂等槽；stream 不进指纹的纪律不变。
         "top_k": getattr(payload, "top_k", None),
         "rerank": str(getattr(payload, "rerank", "") or ""),
@@ -2519,7 +2685,8 @@ def _utterance_request_fp(text: str, payload: Any, provider: str,
 
 def _sanitize_req_id(raw: str | None) -> str | None:
     """清洗 req_id：空白/缺省 → None（=无幂等）；≤64 字符原样；**超长按完整值取定长哈希**——
-    旧实现直接截 64 字符，前 64 字符相同的两条请求会错共一个幂等槽（缓存串台/重复写）。"""
+    旧实现直接截 64 字符，前 64 字符相同的两条请求会错共一个幂等槽（缓存串台/重复写，
+    评审裁决）。"""
     text = (raw or "").strip()
     if not text:
         return None
@@ -2550,7 +2717,7 @@ def _utterance_idem_claim(req_id: str, fp: str = "") -> tuple[dict, bool]:
     """占用 req_id：没见过 → 注册 running 条目并返回 (entry, True=owner)；
     已见过 → 返回 (entry, False=非 owner，调用方等/取缓存体)。
     满员且全 running → 503 拒绝新占用（宁可拒新、绝不淘汰在途 owner）。
-    同号但请求指纹不同（fp 非空且不匹配）→ 409（那不是重发，是撞号）。"""
+    同号但请求指纹不同（fp 非空且不匹配）→ 409（评审：那不是重发，是撞号）。"""
     now = time.monotonic()
     with _UTT_IDEM_LOCK:
         _prune_utterance_idem(now)   # 先清旧：过期条目不得被当成在途 owner 复用
@@ -2572,6 +2739,11 @@ def _utterance_idem_claim(req_id: str, fp: str = "") -> tuple[dict, bool]:
                  "ts": now, "fp": fp}
         _UTT_IDEM[req_id] = entry
         return entry, True
+
+
+#: route_turn 契约是永不抛——各兜底分支（流式 worker / 非流式 / 幂等收尾 / 等待方回放）
+#: 给客户端的统一通用文案只有这一句；完整堆栈只进服务端日志（webobs）。
+_UTTERANCE_INTERNAL_ERROR_DETAIL = "处理这句话时出了内部错误，请重试。"
 
 
 def _utterance_idem_store(entry: dict, body: dict) -> None:
@@ -2598,13 +2770,13 @@ def _utterance_idem_wait_response(entry: dict, *, stream: bool) -> Response:
         if body.get("ok"):
             frames = [_sse_line("final", body)]
         else:
-            frames = [_sse_line("error", {"detail": body.get("detail") or "处理这句话时出了内部错误，请重试。"})]
+            frames = [_sse_line("error", {"detail": body.get("detail") or _UTTERANCE_INTERNAL_ERROR_DETAIL})]
         return StreamingResponse(iter(frames), media_type="text/event-stream")
     return _json_utf8(body)
 
 
 def _utterance_response_body(result: dict[str, Any]) -> dict[str, Any]:
-    """`/api/utterance` 的响应体（抽出）：非流式响应与流式 final 事件
+    """`/api/utterance` 的响应体（2026-08-03 抽出）：非流式响应与流式 final 事件
     **共用这一个真源**——SSE 契约要求 final 体与非流式逐位同形，抄两份必漂移。"""
     from ..agent import agent_exec as _agent_exec
     body = {
@@ -2618,30 +2790,30 @@ def _utterance_response_body(result: dict[str, Any]) -> dict[str, Any]:
         # 降级气泡专档：「AI 执行」关 + 规则检出操作意图 → True，
         # 前端据此把回音渲染成带「设置 → AI 执行」指路的美观气泡（而非普通灰泡）。
         "needs_agent": bool(result.get("needs_agent")),
-        # 婉拒候选 chips（additive）：仅 LLM 真判 none 时非空，
+        # 婉拒候选 chips（2026-08-09 五机制批，additive）：仅 LLM 真判 none 时非空，
         # [{label, utterance}]；前端渲染成可点 chip，点击即把 utterance 重新入环。
         "suggestions": list(result.get("suggestions") or []),
         # 前端置灰/行动流标注用：available=扩展装好且未被 env 关停；used=本次真的走了 agent。
         "agent": {"available": _agent_exec.agent_available(), "used": result["via"] == "agent"},
-        # additive：result_payload=环内 search.rerun 采纳的
+        # prelim1（2026-08-16 additive）：result_payload=环内 search.rerun 采纳的
         # /api/recommend 同形载荷（前端直接换屏，不再调 recommend）；None=无采纳。
         "result_payload": result.get("result_payload"),
         # preliminary_final=true 表示初步结果即最终结果（清徽标收尾，不调 recommend）；
         # 缺省/任一条件不明恒 False（宁可重检不跳检）。
         "preliminary_final": bool(result.get("preliminary_final")),
     }
-    # （并发分流，breaking）：tool 路线 retrieval 恒 None +
+    # cr1（并发分流 r3 / ，breaking）：tool 路线 retrieval 恒 None +
     # additive retrieval_note（"skipped_action_marker"/"discarded_action_route"）——
     # 仅当 retrieval 为 None 且 note 非空时才带键（rule_direct/identifier 等早退路线的
     # None 不带，键集与现状逐位一致）。
     if result.get("retrieval") is None and result.get("retrieval_note"):
         body["retrieval_note"] = result["retrieval_note"]
-    # （多批检索结果，additive）：route_turn 组了批次才透传——flag OFF 或
+    # （2026-08-17 结果，additive）：route_turn 组了批次才透传——flag OFF 或
     # 轮内无批时两个键都不出现，响应与现状逐位一致；流式 final 与非流式共用本真源，天然同步。
     if result.get("result_batches"):
         body["result_batches"] = result["result_batches"]
         body["active_batch"] = result.get("active_batch")
-    # （可追溯性，additive）：trace 开启时 route_turn 回了 trace_turn_id
+    # trace 开启时 route_turn 回了 trace_turn_id
     # 才透传（报障给号用）；AGENT_TRACE OFF 时该键不出现，响应与现状逐位一致。
     if result.get("trace_turn_id"):
         body["trace_turn_id"] = result["trace_turn_id"]
@@ -2695,11 +2867,11 @@ def _utterance_event_stream(
 ) -> Iterator[str]:
     """`/api/utterance` 流式分支的 SSE 生成器。
 
-    事件序（并发分流重定后的真实确定性序）：
+    事件序（cr1 并发分流 v3.1 重定，r3 裁定后的真实确定性序）：
     **tool_start(共识) → step(共识) → tool_start(understand) → preliminary? → … → final**
     ——preliminary 不再保证首帧：verdict-gated 后它在 understand 节点入口（join/补跑
     完成后、构造 prompt 前）发射，恒在 tool_start(understand) 之后、final 之前；action
-    路线永不发射（路由内部出错则只发 error）。on_event 的 kind
+    路线永不发射（路由内部出错则只发 error）。prelim1 2026-08-16 起 on_event 的 kind
     透传不再一律打 step。step 是 agent 规划节点的 trace 条目
     （`turn.route_turn(on_event=...)` 透传给 `plan_with_agent_events`，每节点落定时
     回调）；保底路径（无 agent）没有节点可播，**只发 final**——前端维持非流式的
@@ -2707,7 +2879,7 @@ def _utterance_event_stream(
 
     两处刻意的结构决策：
 
-    1. **ENV_LOCK 只保护「读配置/物化」几行，SSE 泵送全程在锁外**：流式的路由
+    1. **ENV_LOCK 只保护「读配置/物化」几行，SSE 泵送全程在锁外**（PERF-H01）：流式的路由
        发生在生成器被迭代时（端点函数早已返回）。锁内先把请求级 env 覆盖物化成不可变的
        `cfg`（LLMConfig），worker 的 `route_turn` **显式接收 `config=cfg`**（turn 内部所有
        配置读取都是 `config or load_llm_config()`，config 恒非空 → 永不读 env）——于是生成
@@ -2730,7 +2902,7 @@ def _utterance_event_stream(
     done: Any = object()
 
     def on_event(kind: str, entry: dict) -> None:
-        # kind 透传不再一律打 "step"——preliminary / tool_start
+        # prelim1：kind 透传不再一律打 "step"——preliminary / tool_start
         # 与 step 同路进队列，_sse_line 对事件名无约束；旧前端对未知事件名天然忽略。
         events.put((kind, entry))
 
@@ -2762,30 +2934,19 @@ def _utterance_event_stream(
             # webobs：此前 exc 接住即弃、零日志零堆栈，触发即无法定位。
             # 完整堆栈进日志（exception 不含请求体/参数值），客户端仍只见通用文案。
             logger.exception("/api/utterance 流式 worker 兜底触发：route_turn 抛出异常")
-            body = {"ok": False, "detail": "处理这句话时出了内部错误，请重试。"}
-            events.put(("error", {"detail": "处理这句话时出了内部错误，请重试。"}))
+            body = {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}
+            events.put(("error", {"detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}))
         finally:
             if idem_entry is not None:
                 # body=None 只在 BaseException 穿透 except 时发生——同样要存错误体唤醒等待者。
-                _utterance_idem_store(idem_entry, body or {"ok": False, "detail": "处理这句话时出了内部错误，请重试。"})
+                _utterance_idem_store(idem_entry, body or {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL})
             events.put(done)
 
-    # 锁内只做「读配置/物化」——把请求级 env 覆盖冻结成不可变 `cfg`；
+    # PERF-H01：锁内只做「读配置/物化」——把请求级 env 覆盖冻结成不可变 `cfg`；
     # worker 与 SSE 泵送全程在锁外（`cfg` 显式传给 route_turn，worker 不再读 env）。
-    with ENV_LOCK:
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(payload.api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=payload.model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            cfg = load_llm_config(project_root=CONFIG_ROOT)
+    cfg = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
 
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
@@ -2803,9 +2964,9 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     """统一对话窗口的**后端路由**（turn pipeline）。**路由是真，执行也是真——
     AI 执行开启时，EXEC 动词经 agent 图（langgraph）在本端点内真实执行**
     （search_online/sync_updates 会写外部库 upload_*，记账 + 回收站可撤 +
-     起写入汇强制流水账）；「只出计划不执行」的是 `/api/action/plan`。
+    2026-08-09 起写入汇强制流水账）；「只出计划不执行」的是 `/api/action/plan`。
 
-    管线（用户定稿，唯一设计，无并行短路）——`turn.route_turn` 单一真源：
+    管线（2026-08-03 用户定稿，唯一设计，无并行短路）——`turn.route_turn` 单一真源：
     **规则匹配（一切指令都过；零命中/弃权 ≠ 无效）→ LLM 分流 →
     检索指令（search，带 effective_query）/ 工具调用（tool，EXEC plan）/ none（如实回音）**。
     LLM 缺席/失败时规则兜底（动作词 → tool 规则档；search_shaped → search；其余 → none），
@@ -2818,17 +2979,17 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     （search → `/api/recommend`，tool → 前端 act 结构派发）。
 
     `stream:true`改发 `text/event-stream`：preliminary? →
-    tool_start* → step* → final，
+    tool_start* → step* → final（prelim1 2026-08-16）
     final 体与本响应逐位同形；细节见 `_utterance_event_stream`。
 
-    `req_id`（修复）：同号在途 → 等 owner 收尾回缓存体（不再二次
+    `req_id`（2026-08-08 修复）：同号在途 → 等 owner 收尾回缓存体（不再二次
     执行路由/写工具）；同号已完成 → 直接回缓存体。占用/等待细节见 `_utterance_idem_*`。
     """
     _require_same_origin(request)
     from ..agent import action_plan as _ap
     from ..agent import turn
 
-    principal = _utterance_principal(request)   # ：成功经验库分区主体（无会话 → anonymous）
+    principal = _utterance_principal(request)   # 成功经验库分区主体（无会话 → anonymous）
 
     try:
         text = _ap.normalize_utterance(payload.utterance)
@@ -2836,12 +2997,11 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
         raise HTTPException(status_code=400, detail=str(exc),
                             headers={"X-Error-Code": exc.code}) from None
 
-    provider = _normalize_provider(payload.provider)
-    requested_base_url = "" if provider in ("mock", "trial") else _validate_endpoint_url(payload.base_url)
-    mock_llm = bool(payload.mock_llm) or (provider == "mock" and bool(payload.use_llm))
-    use_llm = bool(payload.use_llm or mock_llm)
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
+        base_url=payload.base_url)
 
-    # 当前检索参数收敛——与 /api/recommend **同一口径**（非法日期
+    # prelim1：当前检索参数收敛——与 /api/recommend **同一口径**（非法日期
     # 400、倒挂 400、垃圾值收敛安全默认，不新造规则）；只用于 pre-loop 确定性检索与
     # preliminary_final 判定。校验在幂等占用之前：400 的请求不得占幂等槽。
     sp_rerank = "llm" if str(payload.rerank or "").strip().lower() == "llm" else "off"
@@ -2849,11 +3009,7 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     sp_recall = _rec if _rec in ("dense", "cross_encoder") else "off"
     sp_date_from = _require_iso_date(payload.date_from, name="date_from")
     sp_date_to = _require_iso_date(payload.date_to, name="date_to")
-    if sp_date_from and sp_date_to and sp_date_from > sp_date_to:
-        raise HTTPException(
-            status_code=400,
-            detail=f"发表时间范围颠倒：date_from（{sp_date_from}）晚于 date_to（{sp_date_to}），这个窗口不可能成立。",
-        )
+    _validate_or_400(validate_date_window, sp_date_from, sp_date_to)
     search_params = {
         "top_k": payload.top_k,
         "rerank": sp_rerank,
@@ -2877,7 +3033,7 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
         if not is_owner:
             return _utterance_idem_wait_response(idem_entry, stream=bool(payload.stream))
 
-    # 配额闸：幂等**非 owner** 的重发在上面的等待分支直接返回缓存体，不重复计数；
+    # T3 配额闸：幂等**非 owner** 的重发在上面的等待分支直接返回缓存体，不重复计数；
     # owner（真跑路由的这个）在分流前计一次。cfg=None → 闸内按请求覆盖链复算
     # （流式分支的 cfg 物化在生成器内，这里拿不到也不该提前载——见下方决策 1）。
     _gate_llm_quota(
@@ -2898,20 +3054,9 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
             media_type="text/event-stream",
         )
 
-    with ENV_LOCK:
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(payload.api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=payload.model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            cfg = load_llm_config(project_root=CONFIG_ROOT)
+    cfg = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
 
     # owner 收尾（含异常路径）必须把最终响应体存进占用条目——等待中的同号重发靠它拿结果；
     # 异常体（ok=False）也存，等待方拿到的口径与 owner 一致。route_turn 契约是永不抛，
@@ -2941,18 +3086,18 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     except Exception:
         # webobs：与流式 worker 同口径——完整堆栈进日志，客户端只见通用文案。
         logger.exception("/api/utterance 非流式兜底触发：route_turn 抛出异常")
-        body = {"ok": False, "detail": "处理这句话时出了内部错误，请重试。"}
+        body = {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}
     finally:
         if idem_entry is not None:
             # body=None 只可能发生在 BaseException（如 KeyboardInterrupt）穿透 except 时——
             # 也要存错误体唤醒等待者，否则同号请求会干等到 180s 超时。
-            _utterance_idem_store(idem_entry, body or {"ok": False, "detail": "处理这句话时出了内部错误，请重试。"})
+            _utterance_idem_store(idem_entry, body or {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL})
     return _json_utf8(body)
 
 
 @app.post("/api/agent/search-rescue")
 def api_agent_search_rescue(payload: SearchRescueRequest, request: Request) -> JSONResponse:
-    """检索救回：零命中查询的「换词重检」入口。
+    """检索救回（2026-08-16 检索工具化 Phase 1）：零命中查询的「换词重检」入口。
 
     agent 在 rescue 收敛面（工具面只有 search.rerun / none，validate 与裁决层各有一道
     机械闸兜底）下跑一次图；search.rerun 的机械闸裁定采纳与否：
@@ -2976,12 +3121,7 @@ def api_agent_search_rescue(payload: SearchRescueRequest, request: Request) -> J
     rescue_lenient = _sanitize_lenient_dims(payload.lenient_dims)
     rescue_date_from = _require_iso_date(payload.date_from, name="date_from")
     rescue_date_to = _require_iso_date(payload.date_to, name="date_to")
-    if rescue_date_from and rescue_date_to and rescue_date_from > rescue_date_to:
-        raise HTTPException(
-            status_code=400,
-            detail=(f"发表时间范围颠倒：date_from（{rescue_date_from}）晚于 "
-                    f"date_to（{rescue_date_to}），这个窗口不可能成立。"),
-        )
+    _validate_or_400(validate_date_window, rescue_date_from, rescue_date_to)
     rescue_search_params = {
         "facet_filters": rescue_facets,
         "suppressed_constraints": rescue_suppressed,
@@ -2998,26 +3138,14 @@ def api_agent_search_rescue(payload: SearchRescueRequest, request: Request) -> J
             "agent": {"available": available, "used": False},
         })
 
-    provider = _normalize_provider(payload.provider)
-    requested_base_url = "" if provider in ("mock", "trial") else _validate_endpoint_url(payload.base_url)
-    mock_llm = bool(payload.mock_llm) or (provider == "mock" and bool(payload.use_llm))
-    use_llm = bool(payload.use_llm or mock_llm)
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
+        base_url=payload.base_url)
     # LLM 配置链与 /api/utterance 同径：ENV_LOCK + `_temporary_env` 请求级覆盖，
     # 锁内只载配置，锁外才跑图（不把网络 I/O 关在 ENV_LOCK 里）。
-    with ENV_LOCK:
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(payload.api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=payload.model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            cfg = load_llm_config(project_root=CONFIG_ROOT)
+    cfg = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
 
     if not _ax.agent_available():
         return _fail_open("agent_unavailable",
@@ -3028,11 +3156,11 @@ def api_agent_search_rescue(payload: SearchRescueRequest, request: Request) -> J
         return _fail_open("llm_unavailable",
                           f"没有重新检索：大模型不可用（{why}），当前结果未变。",
                           available=True)
-    # 配额闸：过了 agent/LLM 两道可用性检查、确定要真跑图才计数（fail-open 不计）。
+    # T3 配额闸：过了 agent/LLM 两道可用性检查、确定要真跑图才计数（fail-open 不计）。
     _gate_llm_quota(request, cfg=cfg, provider=provider, use_llm=use_llm,
                     mock_llm=mock_llm, api_key=payload.api_key)
 
-    # （可追溯性）：rescue 不经 route_turn——端点侧自建
+    # rescue 不经 route_turn——端点侧自建
     # recorder 绑 context（图内 llm_call/tool_call/finish_reason 挂钩照常落盘）；
     # AGENT_TRACE OFF 时 enabled=False——零落盘、响应不加 trace_turn_id，逐位不变。
     from ..agent import trace as _trace
@@ -3129,7 +3257,7 @@ def api_agent_search_rescue(payload: SearchRescueRequest, request: Request) -> J
 
 @app.post("/api/act/summary")
 def api_act_summary(payload: ActSummaryRequest, request: Request) -> JSONResponse:
-    """执行结果的 LLM 中文总结。**只总结，不执行、不检索、不落盘。**
+    """执行结果的 LLM 中文总结（p10）。**只总结，不执行、不检索、不落盘。**
 
     done/gap/policy 事实行由调用方（前端 act_core，数字全部取自真实返回值）构造后上报，
     本端点不核实、也绝不新增事实——护栏写进 user prompt（`act_summary_llm._RULES_ZH`），
@@ -3140,30 +3268,18 @@ def api_act_summary(payload: ActSummaryRequest, request: Request) -> JSONRespons
     （请求级 key 隔离、endpoint 校验、server 配置对照），锁内只载 config，锁外才调 provider
     （不把网络 I/O 关在 ENV_LOCK 里）。
 
-    `brief:true` 走一句话模式（≤35 字），响应形状不变。
+    `brief:true`走一句话模式（≤35 字），响应形状不变。
     """
     _require_same_origin(request)
-    provider = _normalize_provider(payload.provider)
-    requested_base_url = "" if provider in ("mock", "trial") else _validate_endpoint_url(payload.base_url)
-    mock_llm = bool(payload.mock_llm) or (provider == "mock" and bool(payload.use_llm))
-    use_llm = bool(payload.use_llm or mock_llm)
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
+        base_url=payload.base_url)
 
-    with ENV_LOCK:
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(payload.api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=payload.model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            cfg = load_llm_config(project_root=CONFIG_ROOT)
+    cfg = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
 
-    # 配额闸：cfg 已物化，将走服务端 key 时计数（BYOK/mock 不计）。
+    # T3 配额闸：cfg 已物化，将走服务端 key 时计数（BYOK/mock 不计）。
     _gate_llm_quota(request, cfg=cfg, provider=provider, use_llm=use_llm,
                     mock_llm=mock_llm, api_key=payload.api_key)
 
@@ -3203,18 +3319,66 @@ def api_act_summary(payload: ActSummaryRequest, request: Request) -> JSONRespons
     })
 
 
+@app.post("/api/search/reply")
+def api_search_reply(payload: SearchReplyRequest, request: Request) -> JSONResponse:
+    """检索回执的 LLM 中文改写（2026-08-30 p11）。**只解说，不检索、不执行、不落盘。**
+
+    命中数/展示数/命中关键词/解析状态等事实由调用方（前端 board.js cbPushCurrent，数字全部
+    取自真实检索响应）构造后上报，本端点不核实、也绝不新增事实——护栏写进 user prompt
+    （`search_reply_llm._SEARCH_REPLY_RULES_ZH`），0 命中直说没找到、建议只许从 can_suggest
+    白名单原样挑一条。LLM 缺席/失败/空回 → fail-open：`reply_zh=None`，调用方原样保留
+    自己的确定性事实句（不挂「AI 总结」标，归因诚实）。
+
+    LLM 配置链与 `/api/act/summary` 同径：ENV_LOCK + `_temporary_env` 请求级覆盖
+    （请求级 key 隔离、endpoint 校验、server 配置对照），锁内只载 config，锁外才调 provider
+    （不把网络 I/O 关在 ENV_LOCK 里）；T3 配额闸同口径。
+    """
+    _require_same_origin(request)
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
+        base_url=payload.base_url)
+
+    cfg = _materialize_request_llm_config(
+        provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
+
+    # T3 配额闸：cfg 已物化，将走服务端 key 时计数（BYOK/mock 不计）。
+    _gate_llm_quota(request, cfg=cfg, provider=provider, use_llm=use_llm,
+                    mock_llm=mock_llm, api_key=payload.api_key)
+
+    facts = {
+        "utterance": payload.utterance,
+        "query": payload.query,
+        "note": payload.note,
+        "total": int(payload.total),
+        "shown": int(payload.shown),
+        "hit_keywords": payload.hit_keywords,
+        "resolution_status": payload.resolution_status,
+        "has_relax": bool(payload.has_relax),
+        "can_suggest": payload.can_suggest,
+    }
+    result = search_reply_llm.search_reply_with_llm(facts, config=cfg)
+    return _json_utf8({
+        "ok": True,
+        "reply_zh": result["reply_zh"],
+        "reply_source": result["reply_source"],
+        "llm_status": result["llm_status"],
+        "llm_model": result["llm_model"],
+    })
+
+
 # 上传/管护导入共用同一把体积闸：单细胞元数据 JSON 远小于 64MB，
 # 超出的只可能是误操作或本机 DoS 试探（/api/upload 此前无闸，68.7MB 整读内存照收）。
 # 数值与全站原始 body 上限（`_RawBodyLimitMiddleware`）同源，一处常量防口径分叉。
 _MAX_UPLOAD_BYTES = _MAX_RAW_BODY_BYTES
-# 分块流式读的块大小：1 MiB。拒绝前绝不整读进内存。
+# 分块流式读的块大小：1 MiB。拒绝前绝不整读进内存（SEC-H01）。
 _MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 async def _read_upload_bounded(file: UploadFile, *, max_bytes: int) -> bytes:
     """分块流式读取上传文件，累计超过 `max_bytes` 立即关闭并中止（413），绝不整读复制。
 
-    旧实现 `await file.read()` 先占满内存（或 multipart 临时文件先落满盘）才检查
+    SEC-H01：旧实现 `await file.read()` 先占满内存（或 multipart 临时文件先落满盘）才检查
     `len(raw_bytes)`；缺失/非数字/谎报 Content-Length 或 chunked 的请求会在拒绝前占用完整内存。
     本函数每次只读固定块并累计，上限一到立即关闭 `UploadFile`（释放 multipart 临时文件）。"""
     chunks: list[bytes] = []
@@ -3246,7 +3410,7 @@ async def api_upload(
     if not file.filename:
         raise HTTPException(status_code=400, detail="缺少文件名。")
 
-    # 体积闸三道：① 全站 `_RawBodyLimitMiddleware` 的 Content-Length 预检 + 实际
+    # 体积闸三道（SEC-H01）：① 全站 `_RawBodyLimitMiddleware` 的 Content-Length 预检 + 实际
     # 字节计数（在路由/解析前拦，见中间件）；② 这里按 multipart 外层 Content-Length 再核一次
     #（端点级纵深防御，超限 413 人话）；③ `_read_upload_bounded` 分块流式读，文件真实字节
     # 累计超限立即关闭并中止——谎报/chunked 的请求拒绝前绝不整读占用完整内存。
@@ -3262,7 +3426,7 @@ async def api_upload(
         # Never let a user upload occupy a release-allowlisted public snapshot
         # filename, even if that public file is temporarily absent.
         safe_name = _new_upload_name(file.filename)
-        # 分块流式读 + 累计上限：超限立即关闭并 413，绝不整读复制。
+        # 分块流式读 + 累计上限（SEC-H01）：超限立即关闭并 413，绝不整读复制。
         raw_bytes = await _read_upload_bounded(file, max_bytes=_MAX_UPLOAD_BYTES)
         # ingest_dataset 是同步重活（≤64MB JSON 解析 + 写盘 + 缓存失效，可达秒级）——async
         # 端点里直接调会阻塞事件循环、拖停所有并发请求（含 /api/health），下沉线程池执行。
@@ -3291,8 +3455,8 @@ async def api_upload(
 
 
 # ---------------------------------------------------------------- /api/curate/*（对话式数据库管护）
-# 授权口径（用户明确授权）：管护动作内允许显式联网调官方公开 API。
-# 与 MCP `curate_datasets` / CLI `scripts/curate_datasets.py` 共用
+# 设计蓝本：设计文档（2026-08-01 用户明确授权：管护动作内允许显式联网
+# 调官方公开 API）。与 MCP `curate_datasets` / CLI `scripts/curate_datasets.py` 共用
 # `corpus_curation.run_curate_action` 单一真源分发；管护对象限 database/external/ 的 upload_*
 # 命名空间，database/base/ 冻结基准结构性不可达。检索器/编排/冻结评测不 import corpus_curation
 # （tests/test_curation_isolation.py AST 机械门钉死）→ 767 基准结构性不受影响。
@@ -3371,7 +3535,7 @@ def api_curate_apply(payload: CurateApplyRequest, request: Request) -> JSONRespo
 
 @app.post("/api/curate/check-updates")
 def api_curate_check_updates(payload: CurateCheckUpdatesRequest, request: Request) -> JSONResponse:
-    """检查来源更新（新能力 `curate.check_updates`，后扩在线源）。**只读**：无 confirm_token、
+    """检查来源更新（2026-08-03 新能力 `curate.check_updates`，扩在线源）。**只读**：无 confirm_token、
     不落盘（在线比对会经限速唯一出口联网，并记一行请求账本）。
 
     有在线通道的来源（ArrayExpress / ENCODE / 10x）真在线拉最新清单与本地库比对；
@@ -3384,7 +3548,7 @@ def api_curate_check_updates(payload: CurateCheckUpdatesRequest, request: Reques
     return _json_utf8({"ok": True, "result": result})
 
 
-# ---------------------------------------------------------------- 语料同步后台任务（corpus-sync 编排批）
+# ---------------------------------------------------------------- 语料同步后台任务（2026-08-26 corpus-sync 编排批）
 # 动机：sync_updates 是分钟级任务，此前 /api/curate/sync-updates 请求内阻塞——网页形态
 # （guard on）下用户触发与服务器 cron 都需要「启动即返回 + 状态轮询」。这里实现**进程内单飞
 # job**：后台线程跑 sync_updates（显式无补丁作用域 → 共享写层 upload_*，用户上传都在各自
@@ -3537,17 +3701,17 @@ def api_admin_corpus_sync_status(request: Request) -> JSONResponse:
 
 @app.post("/api/curate/sync-updates")
 def api_curate_sync_updates(payload: CurateSyncUpdatesRequest, request: Request) -> JSONResponse:
-    """检查更新 → 有新增则自动入库的复合流（「工作流即工具」`curate.sync_updates`）。
+    """检查更新 → 有新增则自动入库的复合流（2026-08-06 `curate.sync_updates`）。
 
     双消费点：① 未装 langchain 扩展时前端 runner 从这里跑同一份复合流（agent 图内 execute
     节点调的是同一个 `corpus_curation.sync_updates` 真源）；② CLI/外部直接调用。
     写侧经 uploads 管线 + 账本，可经回收站撤回；网络失败不 5xx——该来源的 note_zh 如实写明。
 
-    整任务跨进程锁：另一进程/线程的 sync 正在跑 → CurateError
+    整任务跨进程锁——另一进程/线程的 sync 正在跑 → CurateError
     (sync_busy) → HTTP 400（fail-closed 拒绝并发写，不排队）；返回扩展 operation receipt
     （operation_id / created_files[] / failed_sources[] / skipped_existing，既有字段兼容）。
 
-    corpus-sync：**仅 guard on（网页形态）**改为异步——启动/附着进程内单飞
+    2026-08-26：**仅 guard on（网页形态）**改为异步——启动/附着进程内单飞
     job（见上方「语料同步后台任务」区块），202 立即返回 `{ok, job, async: true}`（additive
     新键），前端轮询 `GET /api/curate/sync-updates/status`；guard off（本机形态）下方阻塞
     路径逐字节不变。"""
@@ -3566,7 +3730,7 @@ def api_curate_sync_updates(payload: CurateSyncUpdatesRequest, request: Request)
 
 @app.get("/api/curate/sync-updates/status")
 def api_curate_sync_updates_status(request: Request) -> JSONResponse:
-    """语料同步 job 状态轮询（登录即可——中间件闸，无 token 闸）。
+    """语料同步 job 状态轮询（2026-08-26 登录即可——中间件闸，无 token 闸）。
 
     guard off（本机形态）下也可用：job 恒 idle（本机路径走上方阻塞端点，不起 job），
     前端据此自然降级。"""
@@ -3576,10 +3740,10 @@ def api_curate_sync_updates_status(request: Request) -> JSONResponse:
 
 @app.get("/api/curate/sync-status")
 def api_curate_sync_status(request: Request) -> JSONResponse:
-    """实例级同步状态：上次同步时间 / 上次 operation / 是否 busy。
+    """实例级同步状态（2026-08-22 §7）：上次同步时间 / 上次 operation / 是否 busy。
 
     **只读、不写盘**（busy 实时探测 sync 整任务锁，跨进程准确；「上次同步」是**实例级事实**，
-    不得存 per-profile localStorage）。"""
+    不得存 per-profile localStorage——评审①#6 裁决）。"""
     _require_same_origin(request)
     from ..corpus import corpus_curation as cc
     return _json_utf8({"ok": True, "result": cc.sync_status(project_root=PROJECT_ROOT)})
@@ -3587,7 +3751,7 @@ def api_curate_sync_status(request: Request) -> JSONResponse:
 
 @app.post("/api/curate/recall")
 def api_curate_recall(payload: CurateRecallRequest, request: Request) -> JSONResponse:
-    """按 operation_id **整次撤回**一次 sync 的全部成功写入。
+    """按 operation_id **整次撤回**一次 sync 的全部成功写入（2026-08-22 §7）。
 
     回收站语义：把该 operation 的 created_files[] 移入 `.userdata/recycle/`（可逆、可重入、
     单文件失败不连累其余）；operation 不存在 → 400 unknown_operation。"""
@@ -3603,7 +3767,7 @@ def api_curate_recall(payload: CurateRecallRequest, request: Request) -> JSONRes
 
 @app.post("/api/curate/status")
 def api_curate_status(request: Request) -> JSONResponse:
-    """数据库状态汇报（`curate.db_status` 的能力端点）。**只读、离线、不抛**：
+    """数据库状态汇报（2026-08-03 `curate.db_status` 的能力端点）。**只读、离线、不抛**：
     各源条数/快照日期 + 外部库与回收站清单 + 近期联网审计摘要。
 
     双消费点：① 未装 langchain 扩展时前端 runner 从这里取同一份事实（agent 图内
@@ -3615,20 +3779,21 @@ def api_curate_status(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------- /api/watch/check（watch 确定性重跑）
+# 设计：设计文档 §4.1/§4.2（评审①阻断3 裁决）。
 # 入参是**保存的确定性检索 spec**（课题 check_condition.spec），端点以 strategy=fixed /
 # recall=off / rerank=off / polish=false 重跑确定性管线（零 LLM），返回：
 #   {result_total, uids[]（≤200 无序）, fingerprints{uid:fp}, truncated, executed_spec（规范化后）, checked_at}
 # 语义指纹 = 自定义 record_fingerprint_schema（版本化，见 RECORD_FINGERPRINT_SCHEMA）。**不许**
-# 前端分页拉全库自写一套解析排序（明确禁止）。
+# 前端分页拉全库自写一套解析排序（§4.2 明确禁止）。
 # 本区块是纯 additive：不触碰 /api/recommend 与既有 /api/curate/* 任何行为。
 
-#: watch-check 返回的 uid 集合上限（命中 ≤200：存完整无序 uid 集合）：
+#: watch-check 返回的 uid 集合上限（与「命中 ≤200：存完整无序 uid 集合」一致）：
 #: 只报告前 200 的 uid，>200 置 truncated=true 并建议收窄——此时**不得**声称「某条已从全部结果消失」。
 _WATCH_CHECK_MAX_UIDS = 200
 
 #: record_fingerprint_schema 版本（自定义 schema，版本化以便未来增字段不影响旧基线可比性）。
 #: v1 = 稳定哈希 over 规范化 {dataset_uid, sample_size(count,unit), raw_data_status(code,authoritative)}。
-#: 只覆盖「material change」定义的字段（真实新增/消失、sample_size 变化、raw_data_status 变化），
+#: 只覆盖「material change」定义的字段（§4.3：真实新增/消失、sample_size 变化、raw_data_status 变化），
 #: 排序/score/文案/格式变化**不进指纹**——排序变了指纹不能变。现有数据无「元数据版本」字段，
 #: 不虚构。spec_version 与指纹 schema 同版演进（WatchCheckRequest.spec_version 校验同值）。
 RECORD_FINGERPRINT_SCHEMA = "v1"
@@ -3692,25 +3857,14 @@ def _validate_watch_spec(payload: WatchCheckRequest) -> dict:
             detail="检查条件为空（没有关键词/来源/分面条件），没有可重跑的确定性检索。",
         )
     if payload.sources:
-        if any(not str(x).strip() for x in payload.sources):
-            raise HTTPException(status_code=400, detail="sources 含空/空白来源名；去掉空项，或整个省略 sources。")
-        _known = known_source_values(DATA_DIR, PROJECT_ROOT)
-        _unknown = [str(x) for x in payload.sources if str(x) not in _known]
-        if _unknown:
-            raise HTTPException(
-                status_code=400,
-                detail=f"未知来源：{'、'.join(_unknown)}。当前收录的来源：{'、'.join(_known)}。",
-            )
+        _validate_or_400(validate_sources, payload.sources,
+                         known=known_source_values(DATA_DIR, PROJECT_ROOT))
     facet_filters = _sanitize_facet_filters(payload.facet_filters)
     suppressed_constraints = _sanitize_suppressed(payload.suppressed_constraints)
     lenient_dims = _sanitize_lenient_dims(payload.lenient_dims)
     date_from = _require_iso_date(payload.date_from, name="date_from")
     date_to = _require_iso_date(payload.date_to, name="date_to")
-    if date_from and date_to and date_from > date_to:
-        raise HTTPException(
-            status_code=400,
-            detail=f"发表时间范围颠倒：date_from（{date_from}）晚于 date_to（{date_to}），这个窗口不可能成立。",
-        )
+    _validate_or_400(validate_date_window, date_from, date_to)
     return {
         "spec_version": RECORD_FINGERPRINT_SCHEMA,
         "query": query,
@@ -3725,7 +3879,7 @@ def _validate_watch_spec(payload: WatchCheckRequest) -> dict:
 
 @app.post("/api/watch/check")
 def api_watch_check(payload: WatchCheckRequest, request: Request) -> JSONResponse:
-    """课题更新检查的**确定性重跑**端点。
+    """课题更新检查的**确定性重跑**端点（2026-08-22 §4.1/§4.2，评审①阻断3）。
 
     入参为课题保存的确定性检索 spec；端点以 strategy=fixed、recall=off、rerank=off、polish=false
     重跑与 /api/recommend 同一条确定性管线（**零 LLM**，不读 LLM 配置），返回：
@@ -3795,7 +3949,7 @@ def api_watch_check(payload: WatchCheckRequest, request: Request) -> JSONRespons
 
 @app.post("/api/artifacts/export-pack")
 def api_artifacts_export_pack(payload: ExportPackRequest, request: Request) -> Response:
-    """课题导出中心（研究包导出）。
+    """课题导出中心（2026-08-22 「研究包」的落地形态）。
 
     入参 = 课题**当前状态快照**（前端组装：candidates 的 uid+status+reason+verified_at +
     check_condition + provenance + 导出类型 kind），服务端从**本地语料**解析数据集元数据
@@ -3862,34 +4016,25 @@ def upload_spec() -> FileResponse:
 def api_diagnose(payload: DiagnoseRequest, request: Request) -> JSONResponse:
     _require_same_origin(request)
     normalized_provider = _normalize_provider(payload.provider)
-    requested_base_url = "" if normalized_provider == "mock" else _validate_endpoint_url(payload.base_url)
+    # mock/trial 是锁定通道：trial 地址锁定服务端托管值，请求级 base_url 一律丢弃
+    #（与 `_resolve_llm_request` 同一口径——否则试用密钥可被引向攻击者端点。
+    # 2026-08-31：该安全硬化经评审裁决接受，契约钉在
+    # tests/test_webapp_endpoint_security.py::test_trial_ignores_request_base_url）。
+    requested_base_url = "" if normalized_provider in ("mock", "trial") else _validate_endpoint_url(payload.base_url)
+    # diagnose 的 mock 推导与 `_resolve_llm_request` 刻意不同（不经 use_llm 门），保持既有口径。
     mock_llm = bool(payload.mock_llm) or normalized_provider == "mock"
     use_llm = bool(payload.use_llm or mock_llm)
 
     # Diagnose and recommend intentionally share the same endpoint/key isolation
-    # contract.  A server key is retained only for the server's own configured
-    # provider+endpoint; a different provider or endpoint requires a
-    # request-scoped credential.  The trust baseline is the server's actual
-    # configuration (no request provider override).
-    with ENV_LOCK:
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=normalized_provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(payload.api_key or "").strip() or None,
-            base_url=requested_base_url,
-            model=payload.model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            cfg = load_llm_config(project_root=CONFIG_ROOT, provider_override=normalized_provider)
-            cfg.enable_llm = use_llm
-            cfg.mock_llm = mock_llm
+    # contract (now anchored in `_materialize_request_llm_config`).  The env
+    # overrides already carry LLM_PROVIDER/ENABLE_LLM/MOCK_LLM, so the loaded
+    # config needs neither provider_override nor post-load mutation.
+    cfg = _materialize_request_llm_config(
+        normalized_provider, use_llm=use_llm, mock_llm=mock_llm,
+        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
     # cfg 在锁内已物化（含请求级 key/endpoint），网络探测挪到锁外——与本文件
     # /api/utterance、/api/act/summary 同一条纪律：绝不把网络 I/O 关在 ENV_LOCK 里
-    #（一次死端点诊断曾占锁数个超时长，全进程 LLM 端点静默排队）。
+    #（2026-08-15 触发点一次死端点诊断曾占锁数个超时长，全进程 LLM 端点静默排队）。
     # healthcheck 里少量展示用 env 直读（各名 key 的 detected/missing）反映的是服务端环境；
     # 请求级 key 的回显走 cfg（"Effective API key"），不受挪出锁影响。
     health = healthcheck(cfg)
@@ -3904,33 +4049,6 @@ def api_diagnose(payload: DiagnoseRequest, request: Request) -> JSONResponse:
     )
 
 
-def _facet(counter: dict[str, int]) -> list[dict[str, Any]]:
-    # 高频在前、同频按名字，供前端筛选下拉
-    ordered = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
-    return [{"value": value, "count": count} for value, count in ordered]
-
-
-def _interleave_by_source(records: list[Any]) -> list[Any]:
-    """按来源轮转交错，让浏览页首屏就同时看到各库（「并列」）。各库内部保持原顺序。"""
-    from collections import OrderedDict
-
-    buckets: "OrderedDict[str, list[Any]]" = OrderedDict()
-    for r in records:
-        buckets.setdefault(source_of(r), []).append(r)
-    lists = [iter(v) for v in buckets.values()]
-    out: list[Any] = []
-    exhausted = 0
-    while exhausted < len(lists):
-        exhausted = 0
-        for it in lists:
-            nxt = next(it, None)
-            if nxt is None:
-                exhausted += 1
-            else:
-                out.append(nxt)
-    return out
-
-
 @app.get("/api/sources")
 def api_sources() -> JSONResponse:
     """可选数据来源清单 + 各自数据集数（供智能查询页「按来源勾选」渲染）。
@@ -3943,6 +4061,10 @@ def api_sources() -> JSONResponse:
 #: 却缺 modality/collection_doi —— 于是同一个 bug 在 Web 修好、在 MCP 依旧。
 #: 保留本别名只为让既有调用点不必改名；新代码直接用 `item_view.build_item`。
 _web_item_from_record = item_view.build_item
+
+#: 来源交错与分面计数投影同理——单一真源在 item_view，别名仅免改既有调用点。
+_facet = item_view.facet_list
+_interleave_by_source = item_view.interleave_by_source
 
 #: 全库浏览分页上限：`limit` 缺省（前端整拉）行为逐位不变；显式 `limit` 最大 100。
 #: 收口：值来自 `app/limits.MAX_DATASETS_LIMIT`（与 MCP browse_datasets 同一常量源）；
@@ -3971,10 +4093,10 @@ def _etag_matches(request: Request, etag: str) -> bool:
 def _dataset_facet_bits(record: Any) -> tuple[str, str, str, int | None]:
     """单记录 → 浏览页分面四元组 (species, platform, source, published_year)。
 
-    分面计数不再依赖构造完整展示 item（此前 limit=1 也为全库每条构造 item，
+    PERF-M01：分面计数不再依赖构造完整展示 item（此前 limit=1 也为全库每条构造 item，
     O(N) CPU/内存/JSON 分配被公网重复请求放大）。四项派生与 `item_view.build_item`
     逐字同源——platform/source/published_year 与 build_item 同式，species 与旧浏览循环
-    同式；改 build_item 派生时这里必须同步（tests/test_webapp_security.py 有 parity 钉）。"""
+    同式；改 build_item 派生时这里必须同步（tests/test_webapp_sec_s3.py 有 parity 钉）。"""
     raw = record.raw if isinstance(record.raw, dict) else {}
     species = (record.species or "").strip()
     platform = (record.platform_family or "").strip()
@@ -4038,14 +4160,14 @@ def _cached_datasets_full_response(records: list[Any], generation: tuple) -> tup
 def api_datasets(request: Request = None, limit: int | None = None, offset: int = 0) -> Response:
     """全库浏览：**所有来源并列**返回归一化记录 + 物种/平台/来源分面（前端做筛选与分页）。
 
-    基础语料每次现算（784 条，开销可忽略），故上传新增的数据即时可见；
+    基础语料每次现算（767 条，开销可忽略），故上传新增的数据即时可见；
     外部平台库为静态快照（缓存），与基础语料并列展示、每条带来源标签。
 
-    可选 `limit`/`offset`（additive）：只截 `records` 当前页；
+    可选 `limit`/`offset`（2026-08-06 additive）：只截 `records` 当前页；
     `count` 与 `facets` 恒按全库计算（前端整拉一次做客户端筛选，不受影响）。
     不传时行为逐位不变。对齐 MCP `browse_datasets` 的分页入参。
 
-    `limit` 显式传入时有上限（`_MAX_DATASETS_LIMIT`，与 MCP browse_datasets 同源
+    PERF-M01：`limit` 显式传入时有上限（`_MAX_DATASETS_LIMIT`，与 MCP browse_datasets 同源
     于 `app/limits.MAX_DATASETS_LIMIT`）；分面计数走
     `_dataset_facet_bits` 轻量投影（不再为全库每条构造完整 item），展示 item 只对
     当前页构造——公网重复请求不再放大 O(N) CPU/内存/JSON 分配。
@@ -4054,7 +4176,7 @@ def api_datasets(request: Request = None, limit: int | None = None, offset: int 
         if limit < 1:
             raise HTTPException(status_code=400, detail="limit 需 ≥ 1。")
         if limit > _MAX_DATASETS_LIMIT:
-            # 超上限是「值语义错误」→ 422（RFC 9110 语义：请求理解但无法处理）；
+            # A3：超上限是「值语义错误」→ 422（RFC 9110 语义：请求理解但无法处理）；
             # limit<1/offset<0 的格式类错误维持 400。前端按非 200 处理，不区分。
             raise HTTPException(status_code=422, detail=f"limit 最大 {_MAX_DATASETS_LIMIT}。")
     if offset < 0:
@@ -4079,6 +4201,26 @@ def api_datasets(request: Request = None, limit: int | None = None, offset: int 
     return _json_utf8(_datasets_payload(records, limit=limit, offset=offset))
 
 
+def _locate_record_or_409(uid: str, url: str, name: str, source: str):
+    """introduction/fair 共用的定位前言：三键全空 → 400；`locate_record`（Web 与 MCP
+    共用单一真源）按 uid 精确 > url 精确 > name 精确（source 消歧）定位，name 命中多条
+    且消歧失败 → 409 + candidates（如实报歧义，绝不静默任取第一条；载荷形状是前端契约）；
+    定位不到 → 404。命中则返回记录。"""
+    if not (uid or url or name):
+        raise HTTPException(status_code=400, detail="uid, url or name is required")
+    record, ambiguous = locate_record(
+        load_full_corpus(DATA_DIR, PROJECT_ROOT), uid=uid, url=url, name=name, source=source)
+    if ambiguous:
+        raise HTTPException(status_code=409, detail={
+            "error": "ambiguous_name",
+            "message": "该名称命中多条同名数据集，无法确定是哪一条；请改用 dataset_uid 精确指定。",
+            "candidates": ambiguous,
+        })
+    if record is None:
+        raise HTTPException(status_code=404, detail="dataset not found")
+    return record
+
+
 @app.get("/api/introduction")
 def api_introduction(
     request: Request = None,  # type: ignore[assignment]  # FastAPI 按注解注入；直调（单元测试）时为 None
@@ -4095,36 +4237,25 @@ def api_introduction(
     …-ff-ultima-4），uid 全参请求绝不会被靠前那条的 name 命中截胡。name 命中多条且 source 消歧
     失败 → 409 + candidates（如实报歧义，绝不静默任取第一条）。刻意**不**建跨请求缓存索引做 O(1)：
     基础语料每次现算以保证上传即时可见（见 /api/datasets），缓存索引会在上传后静默过期，
-    得不偿失。
+    得不偿失（评审结论）。
 
-    `llm=1`（opt-in）：在确定性介绍上 additive 叠加 LLM 中文导读（`introduction.llm_summary`）。
+    `llm=1`（N5，opt-in）：在确定性介绍上 additive 叠加 LLM 中文导读（`introduction.llm_summary`）。
     **双层门**：需服务端 `ENABLE_LLM` 开 **且** 本请求显式 `llm=1` 才会真调；否则 `llm_summary=None`、
     确定性介绍逐字不变（fail-open）。`llm=0`（默认）时响应与从前逐字节一致。
 
-    `llm=1` 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
+    SEC-H03：`llm=1` 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
     （`_require_same_origin`）与简单频率限制（`_rate_limited`）；`llm=0` 路径逐位不变
     （纯确定性只读，无成本，不加闸）。"""
     uid, url, name, source = (str(v or "").strip() for v in (uid, url, name, source))
     if llm:
-        # llm=1 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
+        # SEC-H03：llm=1 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
         # 与简单频率限制。`request` 由 FastAPI 自动注入（直调函数/单元测试不经 HTTP 时
         # 为 None，跳过同源检查——那是服务端内部调用，不是浏览器跨站请求）。
         if request is not None:
             _require_same_origin(request)
         if not _rate_limited("introduction:llm", limit=_LLM_INTRO_RATE_LIMIT, window=_LLM_INTRO_RATE_WINDOW):
             raise HTTPException(status_code=429, detail="AI 介绍生成过于频繁，请稍后再试。")
-    if not (uid or url or name):
-        raise HTTPException(status_code=400, detail="uid, url or name is required")
-    record, ambiguous = locate_record(
-        load_full_corpus(DATA_DIR, PROJECT_ROOT), uid=uid, url=url, name=name, source=source)
-    if ambiguous:
-        raise HTTPException(status_code=409, detail={
-            "error": "ambiguous_name",
-            "message": "该名称命中多条同名数据集，无法确定是哪一条；请改用 dataset_uid 精确指定。",
-            "candidates": ambiguous,
-        })
-    if record is None:
-        raise HTTPException(status_code=404, detail="dataset not found")
+    record = _locate_record_or_409(uid, url, name, source)
     item = _web_item_from_record(record, include_introduction=True)
     intro = item["introduction"]
     if llm:
@@ -4132,10 +4263,10 @@ def api_introduction(
         # 在 ENV_LOCK 内加载**服务端** config：阻塞到任何并发请求的 _temporary_env 还原为止 →
         # 读到的是干净的服务端 env，绝不会捞到别的请求注入 os.environ 的请求级 api_key（否则会把
         # 那把 key 发到本服务器配置的 provider）。网络调用在**锁外**、用已捕获的 config 进行，不串行化。
-        # 介绍端点本身不接收请求级 key，故只用服务端配置（唯一没被 ENV_LOCK 罩住的 LLM 读取点）。
+        # 介绍端点本身不接收请求级 key，故只用服务端配置（对抗评审 minor：唯一没被 ENV_LOCK 罩住的 LLM 读取点）。
         with ENV_LOCK:
             intro_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        # 护栏模式下 llm=1 介绍计入账号日配额（此前只有
+        # 公网护栏硬化：护栏模式下 llm=1 介绍计入账号日配额（此前只有
         # 上面的 _rate_limited 进程内桶，挡不住「多账号轮着烧」）。直接复用 _gate_llm_quota
         # 同一口径：cfg 已物化传入；BYOK/mock/未启用/服务端无 key 不计。两道闸并行，闸关零影响。
         if request is not None:
@@ -4159,18 +4290,7 @@ def api_fair(
     name 多条消歧失败 → 409 + candidates 如实报歧义）。核心走 `fair.build_fair_report`
     （Web 与 MCP 共用单一真源）；检索器/编排/冻结评测从不 import `fair` → 冻结 767 基准结构性不受影响。"""
     uid, url, name, source = (str(v or "").strip() for v in (uid, url, name, source))
-    if not (uid or url or name):
-        raise HTTPException(status_code=400, detail="uid, url or name is required")
-    record, ambiguous = locate_record(
-        load_full_corpus(DATA_DIR, PROJECT_ROOT), uid=uid, url=url, name=name, source=source)
-    if ambiguous:
-        raise HTTPException(status_code=409, detail={
-            "error": "ambiguous_name",
-            "message": "该名称命中多条同名数据集，无法确定是哪一条；请改用 dataset_uid 精确指定。",
-            "candidates": ambiguous,
-        })
-    if record is None:
-        raise HTTPException(status_code=404, detail="dataset not found")
+    record = _locate_record_or_409(uid, url, name, source)
     item = _web_item_from_record(record, include_introduction=True)
     return _json_utf8({"ok": True, "fair_report": build_fair_report(item)})
 
@@ -4212,8 +4332,8 @@ async def api_reuse_pack(request: Request) -> JSONResponse:
             "ok": True,
             "pack": pack,
             "markdown": pack_to_markdown(pack),
-            "ris": to_ris(pack),        # 数据集引文（RIS TY-DATA，非论文）
-            "bibtex": to_bibtex(pack),  # 数据集引文（BibTeX @misc，非 @article）
+            "ris": to_ris(pack),        # N10：数据集引文（RIS TY-DATA，非论文）
+            "bibtex": to_bibtex(pack),  # N10：数据集引文（BibTeX @misc，非 @article）
         }
 
     return _json_utf8(await run_in_threadpool(_build_pack_payload))
@@ -4222,7 +4342,7 @@ async def api_reuse_pack(request: Request) -> JSONResponse:
 @app.get("/api/citations/download")
 def api_citations_download(f: str = Query(default="", max_length=200)) -> Response:
     """把环内 `cite.export`（图内 LOOP_TOOLS）落盘在 `.userdata/citations/` 的引文文件
-    发回浏览器（批；additive 契约）。
+    发回浏览器（2026-08-19 批；additive 契约）。
 
     **为什么需要它**：图内 `cite.export` 的文件写在**服务端** `.userdata/citations/`
     （write 语义由 trace 快照锚定、可被 curate.rollback 看到），浏览器拿不到——旧的
@@ -4260,9 +4380,9 @@ def api_citations_download(f: str = Query(default="", max_length=200)) -> Respon
     )
 
 
-# ---------------------------------------------------------------- MCP 遥测与接入引导
+# ---------------------------------------------------------------- MCP 遥测与接入引导（批）
 # 安装版 BioDataAgentMCP.exe 是**独立进程**，与 Web 同经 runtime_paths 解析 data_root
-# （frozen = %LOCALAPPDATA%/BioDataAgent；source/portable = 项目根）——故这里读的
+# （frozen = %LOCALAPPDATA%/BioDataAgent；source/portable = 项目根）——故本批读的
 # `data_root/.userdata/mcp_calls.jsonl` 与 mcp_server 的 `_CALL_LOG_FILE` 是**同一物理文件**
 # （tests/test_mcp_call_log.py 有路径一致回归钉；schema 单一真源在 mcp_server `_CALL_LOG_SCHEMA`）。
 # 增量语义用**行号**（JSONL 每行一条记录，天然稳定）：`after` = 调用方已消费的最后一条记录
@@ -4272,7 +4392,7 @@ def api_citations_download(f: str = Query(default="", max_length=200)) -> Respon
 _TELEMETRY_LOCK = threading.Lock()
 _TELEMETRY_ACK_SCHEMA = "biodata-mcp-upload-cursor/v1"
 
-# 分页参数：limit 上限对齐接收端 MAX_MCP_RECORDS（200，单包 mcp_records 条数上限），
+# 分页参数：limit 上限对齐接收端 MAX_MCP_RECORDS（200，单包 mcp_records 条数上限）
 # 默认 100；max_bytes 是 records 原文行（UTF-8 字节）的近似预算，默认 ~500KB、上限 2MB
 # （与接收端 MAX_BODY_BYTES 同值——中继一拉一推不超接收端 body 上限）。
 _MCP_CALLS_DEFAULT_LIMIT = 100
@@ -4307,6 +4427,10 @@ def _parse_since_ts(raw: str) -> datetime.datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=datetime.timezone.utc)
 
 
+# 护栏形态下遥测中继两端点（读取/回执）的统一拒绝文案
+_TELEMETRY_RELAY_WEB_DETAIL = "网页版不由本端点中继遥测。"
+
+
 @app.get("/api/telemetry/mcp-calls")
 def api_telemetry_mcp_calls(
     request: Request = None,
@@ -4315,8 +4439,8 @@ def api_telemetry_mcp_calls(
     max_bytes: int = Query(default=_MCP_CALLS_DEFAULT_MAX_BYTES),
     since_ts: str = Query(default=""),
 ) -> JSONResponse:
-    """读 data_root/.userdata/mcp_calls.jsonl 的**行号增量**（批；additive 契约；
-     加分页与 legacy 键合成）。
+    """读 data_root/.userdata/mcp_calls.jsonl 的**行号增量**（批；additive 契约
+    加分页与 legacy 键合成）。
 
     `after` = 已消费的最后一条记录行号（1-based；0/缺省 = 从头）。响应：
       - `records`：`after` 之后的记录数组（原样 JSONL 行；**无 call_id 的旧行** additive
@@ -4335,10 +4459,10 @@ def api_telemetry_mcp_calls(
     """
     if request is not None:
         _require_same_origin(request)
-    # 该文件在服务器上是跨账号共享的全局文件（本机形态的遥测
+    # 公网护栏硬化：该文件在服务器上是跨账号共享的全局文件（本机形态的遥测
     # 中继通道），网页版不做中继——护栏模式下整条通道关闭，前端同步跳过拉取/回执。
     if _account_gate_required():
-        raise HTTPException(status_code=403, detail="网页版不由本端点中继遥测。")
+        raise HTTPException(status_code=403, detail=_TELEMETRY_RELAY_WEB_DETAIL)
     if after < 0:
         raise HTTPException(status_code=400, detail="after 需 ≥ 0。")
     if limit < 1 or limit > _MCP_CALLS_MAX_LIMIT:
@@ -4395,8 +4519,8 @@ class TelemetryAckRequest(BaseModel):
 
 @app.post("/api/telemetry/mcp-calls/ack")
 def api_telemetry_mcp_calls_ack(payload: TelemetryAckRequest, request: Request) -> JSONResponse:
-    """把已上传游标持久化到 data_root/.userdata/mcp_calls_uploaded.json（批；
-     改 CAS：**游标只前进**）。
+    """把已上传游标持久化到 data_root/.userdata/mcp_calls_uploaded.json（批
+    改 CAS：**游标只前进**）。
 
     读-比-写整个在进程内锁内：已存 offset ≥ 请求值时不落盘（回退请求视为已达成——
     中继重放旧进度不会把游标拉回去造成整段重传），响应恒为 max(请求, 已存)。
@@ -4404,9 +4528,9 @@ def api_telemetry_mcp_calls_ack(payload: TelemetryAckRequest, request: Request) 
     消费 records 后推进游标，本地进程重启后仍可续传。
     """
     _require_same_origin(request)
-    # 与上面的读取端点同闸——网页版不中继遥测，游标不落盘。
+    # 公网护栏硬化：与上面的读取端点同闸——网页版不中继遥测，游标不落盘。
     if _account_gate_required():
-        raise HTTPException(status_code=403, detail="网页版不由本端点中继遥测。")
+        raise HTTPException(status_code=403, detail=_TELEMETRY_RELAY_WEB_DETAIL)
     target = _mcp_calls_upload_cursor_path()
     with _TELEMETRY_LOCK:
         stored = 0
@@ -4452,10 +4576,29 @@ def api_guide_agent_prompt(request: Request = None) -> Response:
     )
 
 
+@app.get("/api/guide/online-prompt")
+def api_guide_online_prompt(request: Request = None) -> Response:
+    """在线 MCP 接入提示词模板（text/markdown；含 __BIODATA_MCP_URL__/__BIODATA_MCP_TOKEN__
+    占位符，由前端在铸币成功后代入真实值再复制给用户）。
+
+    与 api_guide_agent_prompt 同约束：只读资源经 RESOURCE_ROOT 解析、同源闸、ASCII 文件名。
+    """
+    if request is not None:
+        _require_same_origin(request)
+    prompt_file = RESOURCE_ROOT / "使用教程" / "MCP安装" / "在线接入提示词模板.md"
+    if not prompt_file.is_file():
+        raise HTTPException(status_code=404, detail="在线接入提示词模板文件不存在。")
+    return Response(
+        content=prompt_file.read_text(encoding="utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": 'inline; filename="online-mcp-prompt.md"'},
+    )
+
+
 @app.get("/api/guide/skill.zip")
 def api_guide_skill_zip(request: Request = None) -> Response:
-    """把随包 skill 目录现场打成 zip 返回（Content-Disposition 附件；
-     改**确定性构建**）。
+    """把随包 skill 目录现场打成 zip 返回（Content-Disposition 附件；批
+    改**确定性构建**）。
 
     安装版用户不拿源码包时，从这里下载 `biodata-dataset-discovery` 技能目录解压到自家
     agent 的 skills 目录（Skill 安装教程路线 A/B）。zip 在内存构建、零落盘；只读资源目录
@@ -4495,7 +4638,7 @@ def api_guide_skill_zip(request: Request = None) -> Response:
 
 @app.get("/api/compatible")
 def api_compatible(uid: str = "", limit: int = 20) -> JSONResponse:
-    """元数据兼容分组：给一个数据集找**同物种 + 兼容 chemistry/platform** 的其它数据集。
+    """N13 元数据兼容分组：给一个数据集找**同物种 + 兼容 chemistry/platform** 的其它数据集。
 
     **诚实边界**：只回「元数据兼容」（可整合的必要非充分条件），始终附带 caveat，绝不说「可整合」。
     只读、确定性、离线；与 MCP `find_compatible_datasets` 共用 `compatibility.find_compatible` 单一真源。
@@ -4560,7 +4703,7 @@ def api_files(
     return _json_utf8({"ok": True, "count": len(items), "files": items})
 
 
-# ---------------------------------------------------------------- 服务端真下载
+# ---------------------------------------------------------------- 服务端真下载（2026-08-19 批）
 
 class DownloadPlanRequest(BaseModel):
     """POST /api/download/plan 入参。`uids: Any` 故意放宽形状、端点内手工校验成 400：
@@ -4577,7 +4720,7 @@ class DownloadCancelRequest(BaseModel):
 
 
 class DownloadUpdateRequest(BaseModel):
-    """POST /api/download/update 入参（在途增删）。
+    """POST /api/download/update 入参（dl-auto-1 在途增删）。
     `add/remove: Any` 故意放宽形状、端点内手工校验成 400。"""
     add: Any = None
     remove: Any = None
@@ -4586,7 +4729,7 @@ class DownloadUpdateRequest(BaseModel):
 def _sanitize_download_uids(raw: Any) -> list[str]:
     """入参严格校验：uids 必须是非空字符串数组；去重、去空白。坏形状一律 400。
 
-    新增最大数量上限（`_MAX_DOWNLOAD_UIDS`，超限 422）——此前 uids 只要求非空，
+    SEC-H01：新增最大数量上限（`_MAX_DOWNLOAD_UIDS`，超限 422）——此前 uids 只要求非空，
     攻击者可控页面可一次性塞成千上万个编号，plan/start 都会随之放大 CPU/内存/磁盘。
     """
     if not isinstance(raw, list) or not raw:
@@ -4620,19 +4763,22 @@ _DOWNLOAD_ERROR_STATUS = {
     "unknown_job": 404,
 }
 
-#: 单次下载任务的最大数据集数量：uids 数组上限。下载是重 I/O 动作（逐数据集
+#: 单次下载任务的最大数据集数量（SEC-H01）：uids 数组上限。下载是重 I/O 动作（逐数据集
 #: 建目录 + 拉文件），超出的编号对任何正常使用都没有意义，只会放大 CPU/内存/磁盘。
 _MAX_DOWNLOAD_UIDS = 100
+
+#: 下载任务 404 的统一文案模板（查询/取消两处共用；job_id 占位由调用方 .format 填充）
+_DOWNLOAD_JOB_NOT_FOUND_DETAIL = "没有这个下载任务：{job_id}。"
 
 
 def _download_error_response(exc: BaseException) -> Response:
     code = getattr(exc, "code", "bad_param")
-    status = _DOWNLOAD_ERROR_STATUS.get(code, 400)
+    status = _status_for(code, _DOWNLOAD_ERROR_STATUS)
     return _json_utf8({"ok": False, "code": code, "message_zh": str(exc)}, status_code=status)
 
 
 def _reject_server_side_download() -> None:
-    """护栏模式下服务端代下数据整体关闭——真下载会把数据集
+    """公网护栏硬化：护栏模式下服务端代下数据整体关闭——真下载会把数据集
     拉进容器 home（不在 /data 持久卷），多用户公网形态语义错误且可被刷磁盘；网页版走任务包
     （客户端直连原站）。闸关（本机形态）零影响。"""
     if _account_gate_required():
@@ -4682,7 +4828,7 @@ def api_download_status(job: str = Query(default="")) -> Response:
     job_id = (job or "").strip()
     state = DM.get_status(job_id)
     if state is None:
-        raise HTTPException(status_code=404, detail=f"没有这个下载任务：{job_id or '(空)'}。")
+        raise HTTPException(status_code=404, detail=_DOWNLOAD_JOB_NOT_FOUND_DETAIL.format(job_id=job_id or "(空)"))
     return _json_utf8({"ok": True, **state})
 
 
@@ -4700,13 +4846,13 @@ def api_download_cancel(payload: DownloadCancelRequest, request: Request) -> Res
         raise HTTPException(status_code=400, detail="job_id 不能为空。")
     state = DM.cancel_job(job_id)
     if state is None:
-        raise HTTPException(status_code=404, detail=f"没有这个下载任务：{job_id}。")
+        raise HTTPException(status_code=404, detail=_DOWNLOAD_JOB_NOT_FOUND_DETAIL.format(job_id=job_id))
     return _json_utf8({"ok": True, "state": state["state"]})
 
 
 @app.post("/api/download/update")
 def api_download_update(payload: DownloadUpdateRequest, request: Request) -> Response:
-    """在途增删：对**当前运行中的**下载任务做增量 add/remove。
+    """在途增删（dl-auto-1）：对**当前运行中的**下载任务做增量 add/remove。
 
     入参 `{add: [uid...], remove: [uid...]}`（至少一个非空）。语义：
       - remove 排队中条目 → 跳过；remove 正在下载的条目 → 中止该数据集当前文件并清理它的

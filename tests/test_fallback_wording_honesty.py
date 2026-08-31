@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """回退措辞的诚实性门：「未启用」和「没能完成」不是同一件事，永远不许混。
 
-事故原文（复盘）：后端从第一天起就分得清两种回退——
+事故原文（2026-07-26 复盘）：后端从第一天起就分得清两种回退——
 `status="skipped"` = 这一层没启用，`status="fallback"` = **试过但没成**。
-`shell.js` 的开发者面板也一直守着这条（注释：「尝试过但失败才是真故障」）。
+`shell.js` 的开发者面板也一直守着这条（轮的注释：「尝试过但失败才是真故障」）。
 唯独 `results.js` 那句**用户每次检索都会读到**的摘要，把两者一律写成「本次未启用，已改用基础方式」。
 
 后果不是措辞难看，是**看不出坏了**：provider 连着几天返 400 的那段时间，界面上写的是
@@ -215,10 +215,10 @@ def _notes_in_node(steps: list[dict]) -> list[str]:
     """把 results.js 整个源码塞进一个 Function 体里，调真的 fallbackLayerNotes。
 
     刻意跑真函数而不是查字符串：这句话怎么拼出来的，只有真跑一遍才算数——
-    静态字符串门可能全绿、真行为却在撒谎。
+    上一轮就吃过「静态门全绿、真行为撒谎」的亏。
 
-    results.js 是 ES Module：先剥掉 import 行 / export 行首前缀 / window 绞杀桥
-    （桥引用浏览器才有的 window），剩余函数体与原经典形态等价。另：fallbackLayerNotes
+    C2 起 results.js 是 ES Module：先剥掉 import 行 / export 行首前缀 / window 绞杀桥
+    （桥引用浏览器才有的 window），剩余函数体与原经典形态等价。起 fallbackLayerNotes
     调 escapeHtml（import 自 #core，会被剥掉）——从 core.js 源码抠出**真** escapeHtml 前置
     注入；手抄替身会与真实现漂移，门就废了。
     """
@@ -260,7 +260,7 @@ def test_the_frontend_repeats_the_backend_wording_and_invents_none_of_its_own():
 
 
 def test_a_failed_layer_is_never_rendered_as_not_enabled():
-    """钉的就是这一条：故障那一档，界面上不许出现「未启用」四个字。"""
+    """本轮修的就是这一条：故障那一档，界面上不许出现「未启用」四个字。"""
     for reason in _TRACE_REASON_LABELS:
         if reason in _FALLBACK_MEANS_NOT_ENABLED:
             continue
@@ -289,7 +289,7 @@ def test_non_fallback_steps_and_unknown_ids_produce_no_note():
 
 
 def test_backend_note_is_html_escaped_before_innerhtml_assembly():
-    """（验证）：fallback_note 是后端任意字符串——provider 原始
+    """：fallback_note 是后端任意字符串——provider 原始
     报错可含任意字符，而本函数返回值经 innerHTML 上屏（results.js renderResultSummary），
     不转义就是 XSS 面。钉：恶意串进、转义串出，< > & " ' 一个不留；包裹层（全角括号）原样。"""
     payload = "<img src=x onerror=\"alert('xss')\"> & <b>加粗</b>"
@@ -302,10 +302,10 @@ def test_backend_note_is_html_escaped_before_innerhtml_assembly():
     assert notes[0].startswith("AI 重排（") and notes[0].endswith("）")
 
 
-# ---------------------------------------------------------------- 密钥无效（401/403）与临时故障分两句
+# ---------------------------------------------------------------- C3：密钥无效（401/403）与临时故障分两句
 
 def test_auth_failure_gets_its_own_sentence_not_the_transient_one():
-    """401/403=密钥无效/无权——重试永不自愈，用户该去改设置；
+    """2026-08-04 C3：401/403=密钥无效/无权——重试永不自愈，用户该去改设置；
     它与「临时故障（超时/5xx/空回）」必须是两句不同的话，否则密钥坏了的人对着「稍后再试」干等。"""
     from dataset_recommender.llm.llm_client import is_auth_error
 
@@ -320,7 +320,7 @@ def test_auth_failure_gets_its_own_sentence_not_the_transient_one():
 
 
 def test_auth_error_judges_only_leading_code_not_echoed_body():
-    """错误串 = f"LLM HTTPError {真实code}: {服务商正文}"——
+    """E-05（2026-08-15 触发点审计）：错误串 = f"LLM HTTPError {真实code}: {服务商正文}"——
     正文若回显上游 "HTTPError 401" 字样（网关透传/嵌套 JSON 错误描述），不得把 502/429
     误判成密钥无效（误分类会把临时故障的用户引导去改密钥）。判据已收窄为串首匹配。"""
     from dataset_recommender.llm.llm_client import is_auth_error
@@ -343,7 +343,7 @@ def test_auth_error_judges_only_leading_code_not_echoed_body():
 
 def test_rerank_marks_401_as_auth_failure_and_5xx_as_transient(monkeypatch):
     """rerank 真链路：provider 错误串经 _default_llm_call_with_error 带回，401 → llm_auth_failed，
-    503 → llm_call_failed。monkeypatch 打在 call_openai_compatible 上（错误判据真跑，不替身）。"""
+    503 → llm_call_failed。monkeypatch 打在 call_llm 上（错误判据真跑，不替身）。"""
     import dataset_recommender.retrieval.rerank as R
     from dataset_recommender.llm.llm_client import LLMResult
 
@@ -354,13 +354,13 @@ def test_rerank_marks_401_as_auth_failure_and_5xx_as_transient(monkeypatch):
         return LLMResult(text=None, attempted=True, succeeded=False, response_used=False,
                          provider="openai-compatible", model="m", error=error)
 
-    monkeypatch.setattr(R, "call_openai_compatible", lambda _p, _c: _result("LLM HTTPError 401: invalid api key"))
+    monkeypatch.setattr(R, "call_llm", lambda _p, _c: _result("LLM HTTPError 401: invalid api key"))
     auth = {}
     R.rerank_candidates("q", items, backend="llm", config=cfg, trace=auth)
     assert auth["reason"] == "llm_auth_failed", auth
     assert _fallback_note(auth).startswith(FAILED) and "401/403" in _fallback_note(auth)
 
-    monkeypatch.setattr(R, "call_openai_compatible", lambda _p, _c: _result("LLM HTTPError 503: overloaded"))
+    monkeypatch.setattr(R, "call_llm", lambda _p, _c: _result("LLM HTTPError 503: overloaded"))
     busy = {}
     R.rerank_candidates("q", items, backend="llm", config=cfg, trace=busy)
     assert busy["reason"] == "llm_call_failed", busy
@@ -379,7 +379,7 @@ def test_polish_fallback_also_splits_auth_from_transient():
 
 
 def test_summary_layers_are_highlighted_and_polish_note_stays_short():
-    """sum1（用户）：摘要句的方法层关键词（规则排序/本地精准重排/AI 重排）行内高光，
+    """sum1（2026-08-16 用户）：摘要句的方法层关键词（规则排序/本地精准重排/AI 重排）行内高光，
     润色附注精简成短句。钉四件事：
     1. results.js 两个分支（有无结果）的层名都包 <mark class="sum-layer">——只高一边等于
        「没结果时告诉用户走了哪几层」这条信息没了高光；

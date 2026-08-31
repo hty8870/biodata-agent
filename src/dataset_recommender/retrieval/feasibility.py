@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""可行性概览：一个研究问题 → 有多少可复用数据、够不够、缺口在哪。确定性、离线、只读。
+"""可行性概览（N12）：一个研究问题 → 有多少可复用数据、够不够、缺口在哪。确定性、离线、只读。
 
 聚合**通过硬过滤的全部候选**（不是 top-k 排序结果），给出：候选数、总细胞量估计（**显式标注下限**）、
 物种/平台/年份/来源分布、可下载率、缺口提示。
 
-**诚实约束**：ArrayExpress 的 `count` 覆盖率 0%（源库不提供研究级细胞数），且全库 31% 语料无细胞数。所以「总细胞量」**必然是下限**、
+**诚实约束（N14 审计的直接结论）**：ArrayExpress 的 `count` 覆盖率 0%（源库不提供研究级细胞数，见
+`docs/AE_INGEST_COVERAGE_AUDIT_2026-07-18.md`），且全库 31% 语料无细胞数。所以「总细胞量」**必然是下限**、
 会系统性少算——报告必须**显式说明**有多少数据集（含全部 AE）没有细胞数，绝不把下限当成总量。
 不被检索/排序/评测路径调用。
 """
@@ -14,9 +15,8 @@ from collections import Counter
 from typing import Any
 
 from .normalizer import is_missing_value
+from .units import _CELL_COUNT_UNITS
 from ..content.item_view import published_year
-
-_CELL_UNITS = {"cells", "nuclei", "spots"}
 
 
 def _field(item: dict[str, Any], key: str) -> str:
@@ -57,7 +57,7 @@ def build_report(survivors: list[dict[str, Any]], result_total: int, truncated: 
         src = _field(s, "source") or "未知来源"
         source_dist[src] += 1
         c, u = _count_unit(s)
-        cell_n = _as_int(c) if u.strip().lower() in _CELL_UNITS else None
+        cell_n = _as_int(c) if u.strip().lower() in _CELL_COUNT_UNITS else None
         if cell_n is not None:
             total_cells += cell_n
             counted += 1

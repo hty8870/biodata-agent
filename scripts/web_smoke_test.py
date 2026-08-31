@@ -45,7 +45,7 @@ def main() -> int:
     _JS_MODULES = re.findall(r'<script(?:\s+type="module")?\s+src="/static/js/([A-Za-z0-9_/-]+)\.js(?:\?[^"]*)?"', html)
     if len(_JS_MODULES) < 10:
         fail(f"parsed too few /static/js modules from index.html: {_JS_MODULES}")
-    # 起 js 入子文件夹：捕获段带子目录前缀（fetch 直接用全段；加载序断言也带）
+    # 2026-08-08 起 js 入子文件夹：捕获段带子目录前缀（fetch 直接用全段；加载序断言也带）
     if _JS_MODULES[0] != "core/core" or _JS_MODULES[-1] != "core/boot":
         fail(f"load-order contract violated: core must be first, boot last, got {_JS_MODULES}")
     js_parts = []
@@ -61,7 +61,7 @@ def main() -> int:
         "BioData Agent",
         "智能查询",             # nav
         "数据集浏览",           # nav / 浏览页
-        "上传后即可检索",       # 上传（动作动词统一「上传」，入库提示为「已加入 N 条」）
+        "上传后即可检索",       # 上传（C32：上传动作动词统一「上传」，入库提示改「已加入 N 条」）
         "我的库",               # 我的库（导航：追踪+收藏双页签浮窗）
         "历史记录",             # 历史记录（导航：独立浮窗）
         "帮助 / 关于",          # 帮助
@@ -70,7 +70,7 @@ def main() -> int:
         'id="cfgPolish"',       # AI 润色开关（独立开关，API 门控）
         'id="cfgRerank"',       # AI 重排开关（维度 A 三并列之一，API 门控）
         'id="cfgRecall"',       # 本地精准重排开关（维度 A，本地语义、默认关、优雅降级）
-        'id="cfgAgentExec"',    # AI 执行开关（维度 C，合并旧「说了就直接做」+「Agent 规划执行」）
+        'id="cfgAgentExec"',    # AI 执行开关（维度 C，2026-08-03 合并旧「说了就直接做」+「Agent 规划执行」）
         'id="cfgStrategy"',     # 自动选择排序策略（维度 B，开则隐藏 A 的手动项）
         'id="cfgRerankTopN"',   # 参与排序的候选数量（原「候选池」rerank_top_n）
         'id="dateFrom"',        # 发表时间范围筛选（「时间维度」）
@@ -89,11 +89,11 @@ def main() -> int:
         "/api/curate/plan",         # 管护预览（零写盘，search_online 的 plan 会联网并记账本）
         "/api/curate/apply",        # 回传 confirm_token 才真执行（前端 runner 链式直推，问卷已退役）
         "执行明细不可用（请重启后端）",  # 新前端遇到旧后端时不得猜成规则检索
-        "规则+本地精准重排",  # 覆盖策略修复：非活动备选批的排序层标注（results.js _batchRankSuffix）
+        "规则+本地精准重排",  # ku1 覆盖策略修复：非活动备选批的排序层标注（results.js _batchRankSuffix）
         'id="onboarding"',      # 首次进入轻量导览
         'id="tutorialReplay"',  # 帮助页可重放
         'id="onboardingProgress">1 / 14<',  # 14 步教程：第0步反馈承诺+高质量查询引导 + 第2屏「一句话交代整件事」能力心智 + 真实 API 配置表单 + 排序说明（规则开箱即用/两种增强随时补）+ 润色/细化/详情页实拍/条件板 + 我的库介绍 + 接进你自己的 AI 助手 + 使用反馈指路
-        'id="nodeUsage"',                  # 设置里的使用反馈开关（默认态按版本分叉：benchfb 构建开/主线关）
+        'id="nodeUsage"',                  # 设置里的使用反馈开关（默认态按版本分叉：benchfb 构建开/主线关，2026-08-13 起）
         'data-onboarding-visual="ranking"',
         'data-onboarding-visual="agent"',  # 教程「接进你自己的 AI 助手」视觉块（后移至结尾、文案精简）
         "AI 润色只改说明，不改结果",
@@ -112,7 +112,7 @@ def main() -> int:
         "模型名称",              # 任意兼容模型名输入
         "查看全部",              # 卡片「查看全部 N 个文件」展开入口
         "/api/recommend",
-        "放宽方式",             # ：coverage_caveats 展开开关文案——多档放宽策略选择（results.js）
+        "放宽方式",             # 2026-08-01：coverage_caveats 展开开关文案——多档放宽策略选择（results.js）
         "cov-strat",            # 策略按钮类名（前端没接 → 展开后两档策略静默失效）
         "relaxDimFully",        # 第二档「不按 X 筛选」入口函数
         "/api/upload",
@@ -121,17 +121,13 @@ def main() -> int:
         "/api/datasets",
         "/api/introduction",  # 浏览列表保持轻量，点击后再取单个数据集介绍
         "/api/files",           # 按需拉取某数据集全部真实文件直链
-        "/api/citations/download",  # ：环内 cite.export 引文文件的浏览器下载端点（core.js API 集中声明）
-        "/api/download/plan",       # ：真实数据下载分级（uids → 可下载清单，零副作用零网络）
-        "/api/download/start",      # ：真实下载启动（预检 400/507/409 → 建目录 → 起线程）
-        "/api/download/status",     # ：真实下载状态轮询（1s 进度）
-        "/api/download/cancel",     # ：取消下载（保留 .part 可续传）
+        "/api/citations/download",  # cd1：环内 cite.export 引文文件的浏览器下载端点（core.js API 集中声明）
         "fetch(",
     ]
     for token in required_home:
         if token not in bundle:
             fail(f"frontend bundle missing token: {token}")
-    # 单版本化：恒带 benchmark 采集（导出反馈包）。
+    # 版本分叉：benchfb 构建带 benchmark 采集（导出反馈包），主线版没有。
     # 静态清单按 index.html 里有没有 benchfbExportBtn 自动分叉，各自钉各自的反馈入口。
     if 'id="benchfbExportBtn"' in html:
         variant_tokens = [
@@ -140,8 +136,8 @@ def main() -> int:
         ]
     else:
         variant_tokens = [
-            'id="usageReportBtn"',      # 标准构建：生成反馈（可复制）按钮
-            'id="usageModal"',          # 标准构建：聚合文字反馈弹窗（所见即所发）
+            'id="usageReportBtn"',      # 主线版：生成反馈（可复制）按钮
+            'id="usageModal"',          # 主线版：聚合文字反馈弹窗（所见即所发）
             'id="usageText"',
         ]
     for token in variant_tokens:
@@ -149,7 +145,7 @@ def main() -> int:
             fail(f"frontend bundle missing variant token: {token}")
     assert_no_mojibake(html, "html")
 
-    # 1.5) 数据集介绍详情页：「查看介绍」改独立标签页 /dataset。GET 200 + 子标签骨架 + dataset_page.js 可服务。
+    # 1.5) 数据集介绍详情页（ux3b）：「查看介绍」改独立标签页 /dataset。GET 200 + 子标签骨架 + dataset_page.js 可服务。
     ds = client.get("/dataset")
     if ds.status_code != 200:
         fail(f"/dataset returned {ds.status_code}")
@@ -225,7 +221,7 @@ def main() -> int:
         assert_no_mojibake(str(item.get("raw_data_status", "")), f"results[{idx}].raw_data_status")
         assert_no_mojibake(str(item.get("reason", "")), f"results[{idx}].reason")
 
-    # 4.2) 生产者字段集契约：cards.js / results.js 消费的这组「客户关键字段」必须由后端真发出。
+    # 4.2) 生产者字段集契约（N2）：cards.js / results.js 消费的这组「客户关键字段」必须由后端真发出。
     #      web_smoke 只做前端静态字符串在场检查、从不执行 JS；后端删/改一个这些字段名，三门全绿但
     #      卡片会在浏览器里静默崩（渲染空白）。此处断言字段**存在**（值可空/None），改这组即视为
     #      破坏性契约变更，须按 MODULES.md「字段→消费点」表同步前端消费文件。
@@ -352,7 +348,7 @@ def main() -> int:
     if not cxg_only or cxg_only - {"CELLxGENE Discover"}:
         fail("sources=['CELLxGENE Discover'] should return only external results")
 
-    # ENCODE 第六来源（正式提升）：/api/sources 可达 + sources 过滤不串库
+    # ENCODE 第六来源（2026-08-01 正式提升）：/api/sources 可达 + sources 过滤不串库
     enc = [s for s in src.json().get("sources", []) if s.get("value") == "ENCODE"]
     if not enc or enc[0].get("count") != 40:
         fail(f"/api/sources should list ENCODE with count=40, got {enc}")

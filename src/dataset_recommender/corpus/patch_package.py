@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""每账户语料补丁包（网页版「基线版本 + 用户补丁包」）。
+"""每账户语料补丁包（2026-08-26 任务 3：网页版「基线版本 + 用户补丁包」）。
 
 数据模型
 --------
@@ -44,7 +44,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..app.runtime_paths import instance_data_dir_for
+from ..app.runtime_paths import atomic_write_json, instance_data_dir_for, repo_database_dir
 
 SCHEMA_VERSION = 1
 #: 单账户补丁 adds 累计上限（网页版多人共享部署的防洪水闸；本机 external 全库上限
@@ -88,7 +88,7 @@ def bind_patch_scope(account_id: "str | None") -> "Iterator[None]":
 
 @contextmanager
 def unbound_patch_scope() -> "Iterator[None]":
-    """显式清绑定：语料读写强制落共享写层，与「从未绑定」逐位一致。
+    """显式清绑定（2026-08-26 corpus-sync 批）：语料读写强制落共享写层，与「从未绑定」逐位一致。
 
     用途：① 后台线程跑实例级任务（语料同步 job——sync 产物进共享写层 upload_*，用户上传
     都在各自补丁包、不在此层）；② 实例级哨兵计算（health 的 corpus.gen 要不带账户补丁代际，
@@ -100,16 +100,13 @@ def unbound_patch_scope() -> "Iterator[None]":
 
 # ---------------------------------------------------------------- 存储路径与守卫
 
-def _repo_database_dir() -> Path:
-    return Path(__file__).resolve().parents[3] / "database"
-
-
 def _assert_runtime_path(path: Path) -> Path:
-    """运行时补丁库绝不许落进仓库 `database/`（冻结基准与元数据库）。与
-    `accounts._assert_runtime_path` 同口径逐行同源（隔离考虑不跨模块 import 其私有函数）。"""
+    """运行时补丁库绝不许落进仓库 `database/`（冻结基准与元数据库）。目录真源同
+    `runtime_paths.repo_database_dir`（2026-08-10 裁决）；守卫文案保留补丁包语境
+    （PatchError 契约与 accounts/mcp_tokens 不同），故不共用 assert_runtime_path。"""
     resolved = path.expanduser().resolve()
     try:
-        resolved.relative_to(_repo_database_dir())
+        resolved.relative_to(repo_database_dir())
     except ValueError:
         return resolved
     raise PatchError(
@@ -210,17 +207,15 @@ def _lock_for(path: Path) -> threading.RLock:
 
 
 def _save_patch(project_root: Path, patch: dict) -> None:
-    """原子写（tmp + os.replace，与 accounts._save_store 同款）；条数/字节闸在调用方。"""
+    """原子写走 runtime_paths.atomic_write_json；条数/字节闸在调用方。字节闸须先于落盘，
+    故先 dumps 计量再写（atomic_write_json 内部再序列化一次，产出与计量字节逐字节一致）。"""
     path = patch_path_for(Path(project_root), patch["account_id"])
     path.parent.mkdir(parents=True, exist_ok=True)
     patch["updated_at"] = time.time()
     blob = json.dumps(patch, ensure_ascii=False)
     if len(blob.encode("utf-8")) > MAX_PATCH_FILE_BYTES:
         raise PatchError("too_large", "补丁包体积超过上限，未写入；请先清理不再需要的条目。")
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        handle.write(blob)
-    os.replace(tmp, path)
+    atomic_write_json(path, patch, indent=None)
 
 
 def record_uid(record: dict) -> str:

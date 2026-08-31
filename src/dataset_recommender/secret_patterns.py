@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""锚定的 secret 值模式 + 扫描/脱敏助手（单一真源，交付复核、质量门 report 脱敏与
-MCP 调用留痕值级脱敏三方共用）。
+"""锚定的 secret 值模式 + 扫描/脱敏助手（单一真源，交付复核、质量门 report 脱敏、
+MCP 调用留痕值级脱敏与 desktop_launcher 日志脱敏四处共用）。
 
- （验证）：自 `scripts/secret_patterns.py` 提升为 src 公共模块——
+2026-08-10：自 `scripts/secret_patterns.py` 提升为 src 公共模块——
 mcp_server 等 src 侧消费方不该反向依赖 scripts/（分层方向：scripts → src，永不反转）。
 `scripts/secret_patterns.py` 保留兼容壳重导出，既有引用点零改动。
 
-设计约束（三方验证共识）：
+设计约束（三方对抗评审共识）：
 1. **只用强锚定的服务商/云凭据前缀，绝不用裸熵 / 通用 hex 正则。** 本仓库交付集本身就是
    md5 / SHA-256 / 大小 元数据目录（release-manifest 满是 hex 摘要）；任何"高熵串/像密钥的 hex"
    正则会在交付物自己的核心数据上**持续误报**，几次假阳后这道门就没人信了。
@@ -16,9 +16,11 @@ mcp_server 等 src 侧消费方不该反向依赖 scripts/（分层方向：scri
 3. **只报 pattern_id + file:line，绝不回显命中的实际子串**——否则把真 secret 写进 CI/stderr 日志
    就是二次泄漏。redact() 也只把命中值替换成 [REDACTED:<id>]，不保留原值。
 
-这些模式定义字符串本身**不自匹配**：带前缀的模式前缀后紧跟 `[`（不是 alnum/base64）；zhipu 模式的
-字面量里 hex 段被 `]{` 打断、凑不出连续 32 位 hex；PEM 模式的 `[A-Z ]*` 不匹配字面量里的 `[`。
-故本文件被交付扫描时不会自报。
+这些模式定义字符串本身**不自匹配**（前缀后紧跟 `[`，不是 alnum/base64），故本文件被交付扫描时不会自报。
+
+边界：本模块只做**强锚定**值模式。desktop_launcher 的日志脱敏以本表为第一遍，
+其上再叠更宽的日志形态网（key=value / Bearer / Basic / URL userinfo）——那边的
+误报代价只是日志里多一个 `<redacted>`，与交付扫描的「假阳几次门就没人信」不同量级。
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ import re
 SECRET_VALUE_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
     # 现代带连字符前缀的 LLM key（Anthropic sk-ant-…、OpenAI sk-proj-/sk-svcacct-/sk-admin-…）：
     # 前缀 sk-ant-/sk-proj-/… 足够独特（绝不出现在 task-slug 里），故 body 允许连字符/下划线（base64url）。
-    # 本项目以 实现/LLM 为核心，这些恰是最可能被误粘的 key，必须单列——legacy 纯 alnum 模式抓不到它们。
+    # 本项目以 Claude/LLM 为核心，这些恰是最可能被误粘的 key，必须单列——legacy 纯 alnum 模式抓不到它们。
     ("scoped-llm-key", re.compile(r"sk-(?:ant|proj|svcacct|admin)-[A-Za-z0-9_-]{20,}")),
     # legacy 纯 alnum OpenAI key（body 只含 alnum，避免 ta+sk-slug 命名规约误报）
     ("openai-secret-key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
@@ -37,14 +39,15 @@ SECRET_VALUE_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
     ("google-api-key", re.compile(r"AIza[0-9A-Za-z_-]{35}")),
     ("slack-token", re.compile(r"xox[baprs]-[0-9A-Za-z-]{10,}")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}")),
-    # 智谱 GLM key（32 位小写 hex + "." + 16 位 alnum）。无服务商前缀可锚，但「md5 形态 hex 后紧跟
-    # 点+16 位 alnum」的形状在本仓交付集全量零碰撞（已实测；release-manifest 的 hex 摘要后跟引号/逗号，
-    # 不会撞上）。若未来出现误报，fail-closed 会响亮暴露，届时再加行内同现约束。
+    # 智谱 key 是 `<32位小写hex>.<16位alnum>` 两段式：点号+定长分段是锚。裸 md5 没有点号第二段、
+    # `md5.json` 第二段只有 4 位够不到 16、sha256 无点号，都不会误报。
     ("zhipu-api-key", re.compile(r"[0-9a-f]{32}\.[A-Za-z0-9]{16}")),
-    # Hugging Face access token
+    # HuggingFace token：`hf_` 前缀 + 34 位 alnum（定长，与 github-token 同风格）。
+    # `hf_tooshort` 长度不够、`hf_model_download` 的下划线在 alnum-only body 处断开，均不误报。
     ("huggingface-token", re.compile(r"hf_[A-Za-z0-9]{34}")),
-    # PEM 私钥头（覆盖 RSA/EC/OPENSSH/ENCRYPTED 等变体）
-    ("pem-private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    # PEM 私钥头：`PRIVATE KEY` 字面是锚（RSA/EC/OPENSSH 等私钥头都拦）；
+    # PUBLIC KEY / CERTIFICATE 头不含该字面，天然不匹配。
+    ("pem-private-key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
 ]
 
 

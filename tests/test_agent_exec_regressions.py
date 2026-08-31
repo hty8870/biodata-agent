@@ -1,26 +1,27 @@
 # -*- coding: utf-8 -*-
-"""agent 图验证修复的回归门。**全离线**：fake chat_model + 替身 LOOP_TOOLS
+"""agent 图对抗评审修复（2026-08-04）的回归门。**全离线**：fake chat_model + 替身 LOOP_TOOLS
 + tmp 项目根（账本真写真断言，绝不碰真实库、绝不发真 LLM 请求）。
 
-每条测试钉住一个坐实过、已修的病形：
+每条测试钉住一个 `.census/adversarial/` 坐实过、本轮已修的病形（原 strict-xfail 对抗用例
+在此转正）：
 
-- understand「无 tool_call 且 content 不可解析」曾炸 NameError（fallback_reason 未绑定），
+- A3 understand「无 tool_call 且 content 不可解析」曾炸 NameError（fallback_reason 未绑定），
   图内降级重试从未工作 → 现在散文应答降级 JSON-in-prompt 再试一次、正常出 plan；
 - understand 通道如实标注：content 直接给可解析 JSON 时不许再误标「工具调用模式」；
-- narrate 机械后检从穷举词表改为「写动作词 × 完成态语素」模式化判定——同族幻觉措辞
+- A2 narrate 机械后检从穷举词表改为「写动作词 × 完成态语素」模式化判定——同族幻觉措辞
   （已完成下载/下载完成/已为你下载并保存/并完成了下载入库）不再透传，否定形态不误伤；
-- 尾窗闭合：从定长 4 字扩到下一小句隔断、语素表补「好啦/
+- R2-1 P0-1（A2 未闭合残余）转正：尾窗从定长 4 字扩到下一小句隔断、语素表补「好啦/
   搞定」族、动作词补「存」——「下载任务已完成/下载流程已完成/下载好啦/帮你存好了/
   下载搞定」不再透传；豁免窗口扩到整个小句（含语素之后），「下载完成不了」「合并下载
   失败了」等如实汇报不误伤；
-- 机械后检弃用汇报时 trace 措辞保持中性（「措辞可能越界（疑似与实录
+- R2-1 P2-1 转正：机械后检弃用汇报时 trace 措辞保持中性（「措辞可能越界（疑似与实录
   不符）」）——后检分不清真谎称与措辞像谎称的实话，不许用不实话惩罚实话；
-- decide 查重指纹过 _norm_source 归一：大小写变体判重、不再重复执行；
+- B2 decide 查重指纹过 _norm_source 归一：大小写变体判重、不再重复执行；
 - 续步 validate 违规 → fail-safe 收尾 narrate：已执行步骤不被 AgentPlanInvalid 掀翻；
 - decide 婉拒表外动词 → 确定性兜底汇报点名「你要的这件事没做」；
 - 跨组契约（additive）：plan.steps[i].readonly、plan.report_source ∈ {llm, deterministic}；
 - 审计行 records 写实数（写步）或省略（只读步），不再恒 0；
-- 真 LOOP_TOOLS 注册表形状契约（tests.md ：替身副本与真表无同步门的补位）。
+- 真 LOOP_TOOLS 注册表形状契约（tests.md P2-2：替身副本与真表无同步门的补位）。
 """
 import json
 
@@ -84,7 +85,7 @@ def _check_run(sources_out):
 
 
 def _search_run_unregistered(slots, root):
-    """未注册源 fail-fast 替身（零网络）：自 10x 接入联网适配器起，
+    """未注册源 fail-fast 替身（零网络）：2026-08-08 起 10x 已接入联网适配器（W2e），
     真 `_loop_search_online` 对 10x 不再 fail-fast——这里钉的是「写步失败时 LLM 如实汇报
     不被误弃」的否定豁免路径，不再绑定「10x 未注册」这个会漂移的世界事实。"""
     err = RuntimeError("source_not_registered: 暂不支持联网搜索来源 10x")
@@ -96,7 +97,7 @@ def _search_run_unregistered(slots, root):
 def _install_tools(monkeypatch, **runs):
     """按真动词名替换 LOOP_TOOLS 的 run（label/card_kind/只读标记保持真实形状）。"""
     table = {
-        "curate.db_status": {"label_zh": "读取数据库状态", "card_kind": "db_status",
+        "curate.db_status": {"label_zh": "汇报数据库状态", "card_kind": "db_status",
                              "readonly": True, "report": True, "observation": True},
         "curate.check_updates": {"label_zh": "检查来源更新", "card_kind": "check_updates",
                                  "readonly": True},
@@ -118,10 +119,10 @@ SEARCH_OK = {"source_label": "ArrayExpress", "query": "人类肺", "species": "�
              "filename": "upload_20260804_curate_arrayexpress.json", "warnings": []}
 
 
-# ---------------------------------------------------------------- understand 降级重试真工作
+# ---------------------------------------------------------------- A3 understand 降级重试真工作
 
 def test_understand_prose_answer_falls_back_to_json_retry():
-    """provider 有应答但无 tool_call、content 是散文（拒答/闲聊式回应）→
+    """A3 转正：provider 有应答但无 tool_call、content 是散文（拒答/闲聊式回应）→
     图内降级 JSON-in-prompt 再问一次（原来在 f-string 处炸 NameError，降级从未跑到）。"""
     model = _FakeModel(
         AIMessage(content="抱歉，我不太明白这句话的意思。"),  # tools 模式散文
@@ -131,7 +132,7 @@ def test_understand_prose_answer_falls_back_to_json_retry():
     plan, trace = _plan("随便看看有什么数据", model)
     assert plan["verb"] == "none"
     assert len(model.invocations) == 2, "降级重试必须真发起第二次调用"
-    assert "换一种问法" in trace[1]["detail"]  # [0] 是常驻环首 route_consensus
+    assert "换一种问法" in trace[1]["detail"]  # [0] 是常驻环首 route_consensus（nl1）
 
 
 def test_understand_content_json_answer_is_labeled_honestly():
@@ -141,14 +142,14 @@ def test_understand_content_json_answer_is_labeled_honestly():
         {"verb": "none", "confidence": "high", "reason": "闲聊"}, ensure_ascii=False)))
     plan, trace = _plan("今天天气怎么样", model)
     assert plan["verb"] == "none"
-    assert trace[1]["detail"].startswith("内容 JSON 模式")  # [0] 是常驻环首
+    assert trace[1]["detail"].startswith("内容 JSON 模式")  # [0] 是常驻环首（nl1）
     assert "工具调用模式" not in trace[1]["detail"]
 
 
-# ------------------------------------------------------- understand 三级通道根治
+# ------------------------------------------------------- 2026-08-05 understand 三级通道根治
 
 class _ThinkingModel:
-    """思考模式替身（根因钉死后的行为模型，DeepSeek 验证原话建模）：
+    """思考模式替身（2026-08-05 根因钉死后的行为模型，DeepSeek 实测原话建模）：
     `tool_choice="required"` 的请求在 invoke 时抛 400 风异常（报文含 tool_choice 字样），
     auto 档与纯文本调用正常应答。bind_tools 只记 choice；异常按次消费——
     一个请求失败不毒化下一个请求（与真实 HTTP 语义一致）。"""
@@ -174,8 +175,8 @@ class _ThinkingModel:
 
 
 def test_understand_tool_choice_rejected_retries_auto_tier():
-    """ 根治：模型 400 拒 required 档（思考模式）→ 自动档重试、留在结构化通道，
-    不跌 JSON 兜底。集成问题：浏览器 DeepSeek 预设曾预填 v4-flash（思考模型），understand
+    """2026-08-05 根治：模型 400 拒 required 档（思考模式）→ 自动档重试、留在结构化通道，
+    不跌 JSON 兜底。真机病灶：浏览器 DeepSeek 预设曾预填 v4-flash（思考模型），understand
     恒报「直连通道不可用（BadRequestError）」跌 JSON 档，target 槽偶发落空（「未指明删哪份」）。
     修复后同一模型经自动档照常结构化抽取。"""
     model = _ThinkingModel(
@@ -186,7 +187,7 @@ def test_understand_tool_choice_rejected_retries_auto_tier():
     assert plan["verb"] == "curate.remove"
     assert plan["slots"]["target"] == "GSE12345"
     assert model.choices == ["required", "auto"], "必须先试强制档、被拒后才降自动档"
-    assert trace[1]["detail"].startswith("工具调用模式（模型不收强制档，已用自动档）")  # [0] 是常驻环首
+    assert trace[1]["detail"].startswith("工具调用模式（模型不收强制档，已用自动档）")  # [0] 是常驻环首（nl1）
 
 
 def test_understand_auto_tier_also_rejected_falls_back_to_json():
@@ -200,14 +201,14 @@ def test_understand_auto_tier_also_rejected_falls_back_to_json():
     plan, trace = _plan("随便看看有什么数据", model)
     assert plan["verb"] == "none"
     assert model.choices == ["required", "auto"], "两档都被拒才准跌 JSON 兜底"
-    assert "换一种问法" in trace[1]["detail"]  # [0] 是常驻环首
+    assert "换一种问法" in trace[1]["detail"]  # [0] 是常驻环首（nl1）
     assert "auto" in trace[1]["detail"]
 
 
-# ---------------------------------------------------------------- narrate 后检模式化判定
+# ---------------------------------------------------------------- A2 narrate 后检模式化判定
 
-#: 验证坐实透传的同族幻觉措辞（穷举词表盲区）。修好后的应然：一律判矛盾、弃用。
-#: 后 5 条是实测坐实的漏网变体：尾窗定长 4 字把「完成」切在窗外（任务/流程族），
+#: 对抗评审坐实透传的同族幻觉措辞（穷举词表盲区）。修好后的应然：一律判矛盾、弃用。
+#: 后 5 条是 R2-1 P0-1 坐实的漏网变体：尾窗定长 4 字把「完成」切在窗外（任务/流程族），
 #: 外加词表外语素（好啦/存好/搞定族）。
 HALLUCINATED_VARIANTS = [
     "检查到 2 条疑似新增，已完成下载。",
@@ -221,9 +222,9 @@ HALLUCINATED_VARIANTS = [
     "检查到 2 条疑似新增，下载搞定。",
 ]
 
-#: 误伤侧 / 实测坐实的如实汇报变体：否定/未遂语素在完成态语素**之后**
+#: R2-1 P0-1 误伤侧 / P2-1 坐实的如实汇报变体：否定/未遂语素在完成态语素**之后**
 #: （豁免窗口只看语素之前时曾被错判谎称）。应然：原样保留、标 llm、trace 不含越界标注。
-#: 来源接地后检上线后，填充词从「10x」改为 harness 真碰过的
+#: 2026-08-06 批A P2-1 来源接地后检上线后，填充词从「10x」改为 harness 真碰过的
 #: 「ArrayExpress」——汇报点名未触碰来源现属按设计拦下的假性声称（本组变体测的是
 #: 写动作豁免，来源提及只是填充；改用真碰过的来源不影响被测语义）。
 TRUTHFUL_VARIANTS = [
@@ -247,7 +248,7 @@ def _run_with_narrate(narrate_text, monkeypatch, tmp_root, sources=AE_TWO_NEW,
 
 @pytest.mark.parametrize("variant", HALLUCINATED_VARIANTS)
 def test_hallucinated_write_claim_variants_are_blocked(monkeypatch, _tmp_project_root, variant):
-    """转正：steps 无成功写步时，任何「写动作词 × 完成态」既遂声称都判
+    """A2 + R2-1 P0-1 转正：steps 无成功写步时，任何「写动作词 × 完成态」既遂声称都判
     矛盾——原词表外措辞（含尾窗截断族、好啦/搞定族）曾原样透传上屏。"""
     plan, trace = _run_with_narrate(variant, monkeypatch, _tmp_project_root)
     report = plan.get("report_zh") or ""
@@ -255,13 +256,13 @@ def test_hallucinated_write_claim_variants_are_blocked(monkeypatch, _tmp_project
     assert "疑似新增 2 条" in report, "兜底汇报与谎称汇报是同一批事实"
     assert plan.get("report_source") == "deterministic"
     assert any("措辞可能越界" in t["detail"] for t in trace if t["node"] == "narrate"), (
-        "弃用汇报的 trace 必须是中性措辞——机械后检分不清真谎称与"
+        "R2-1 P2-1：弃用汇报的 trace 必须是中性措辞——机械后检分不清真谎称与"
         "措辞像谎称的实话，不许断言「与实录不符」")
 
 
 @pytest.mark.parametrize("truthful", TRUTHFUL_VARIANTS)
 def test_truthful_post_marker_negation_is_kept(monkeypatch, _tmp_project_root, truthful):
-    """误伤侧转正：否定/未遂语素在完成态语素之后的如实汇报（「下载完成不了」
+    """R2-1 P0-1 误伤侧转正：否定/未遂语素在完成态语素之后的如实汇报（「下载完成不了」
     「合并下载失败了」）——豁免窗口必须覆盖语素之后的小句余量，不许错判谎称、
     静默回退确定性兜底。"""
     plan, trace = _run_with_narrate(truthful, monkeypatch, _tmp_project_root)
@@ -307,9 +308,9 @@ def test_honest_failed_write_report_is_kept(monkeypatch, _tmp_project_root):
 
 
 def test_honest_failed_write_negation_window_is_kept(monkeypatch, _tmp_project_root):
-    """否定豁免的承重门（回归转正）：「数据下载没有完成」——动作词「下载」与后缀
+    """否定豁免的承重门（R2 tests P1-1 转正）：「数据下载没有完成」——动作词「下载」与后缀
     完成态语素「完成」之间夹「没有」，判定真正走 _WRITE_NEG_ZH 豁免分支。上面两条诚实用例的
-    措辞走不到豁免（实测删豁免仍绿）；这条若没了豁免，如实失败汇报会被错判谎称、
+    措辞走不到豁免（R2 实测删豁免仍绿）；这条若没了豁免，如实失败汇报会被错判谎称、
     静默回退确定性兜底。"""
     _install_tools(
         monkeypatch,
@@ -333,10 +334,10 @@ def test_honest_failed_write_negation_window_is_kept(monkeypatch, _tmp_project_r
     assert plan.get("report_source") == "llm"
 
 
-# ---------------------------------------------------------------- 查重指纹归一
+# ---------------------------------------------------------------- B2 查重指纹归一
 
 def test_decide_case_variant_duplicate_is_blocked(monkeypatch, _tmp_project_root):
-    """decide 提议同 verb 同语义、仅大小写不同的重复步骤（ArrayExpress →
+    """B2 转正：decide 提议同 verb 同语义、仅大小写不同的重复步骤（ArrayExpress →
     arrayexpress）→ 指纹归一后判重、停环，同一检查只真跑一遍、账本一行。"""
     ran = {"check": 0}
 
@@ -363,7 +364,7 @@ def test_decide_case_variant_duplicate_is_blocked(monkeypatch, _tmp_project_root
 # ---------------------------------------------------------------- 续步违规 fail-safe 收尾
 
 def test_loop_validate_failure_failsafe_narrate_keeps_executed_steps(monkeypatch, _tmp_project_root):
-    """ 转正：续步 validate 违规（用计数桩模拟 decide 预检与 validate 口径将来漂移）
+    """P2-1 转正：续步 validate 违规（用计数桩模拟 decide 预检与 validate 口径将来漂移）
     → fail-safe 收尾 narrate，**不抛 AgentPlanInvalid**——已真跑的工具步（账本已落行）
     必须随 plan 如实交出去，绝不随异常被调用方整体回退丢弃。"""
     ran = {"check": 0, "search": 0}
@@ -406,7 +407,7 @@ def test_loop_validate_failure_failsafe_narrate_keeps_executed_steps(monkeypatch
     assert [t["node"] for t in trace] == [
         "route_consensus", "understand", "validate", "execute", "decide", "validate", "narrate",
     ]
-    assert trace[5]["ok"] is False, "续步违规在 trace 里如实留痕"  # 索引随环首 +1
+    assert trace[5]["ok"] is False, "续步违规在 trace 里如实留痕"  # 索引随环首 +1（nl1）
 
 
 # ---------------------------------------------------------------- decide 婉拒动作的兜底汇报
@@ -478,16 +479,16 @@ def test_deterministic_report_is_marked(monkeypatch, _tmp_project_root):
 # ---------------------------------------------------------------- 真 LOOP_TOOLS 注册表形状契约
 
 def test_loop_tools_registry_shape_is_pinned():
-    """tests.md  转正：替身副本与真表之间没有同步门——钉住真表的形状本身：
+    """tests.md P2-2 转正：替身副本与真表之间没有同步门——钉住真表的形状本身：
     动词集合、每项必备键（run/label_zh/card_kind/readonly）、readonly 恰好是那几个只读工具。
-     刻意更新：注册表新增 search.rerun（只读本地检索，
+    2026-08-16 刻意更新：注册表新增 search.rerun（检索工具化 Phase 1，只读本地检索，
     带 needs_context=True——execute 按此键注入现场上下文）。
-     转正刻意更新：rank/rerank/route.request 常驻入列（三者皆只读，
+    2026-08-17 nl1 转正刻意更新：rank/rerank/route.request 常驻入列（三者皆只读，
     rank/rerank 带 needs_context=True）。
-     回滚动词化刻意更新：curate.rollback 入列——**写**工具（readonly=False），
-    needs_context=True（机械闸从 ctx.steps 现定回退目标）。 钉字：它改走独立
+    2026-08-17 rb1 回滚动词化刻意更新：curate.rollback 入列——**写**工具（readonly=False），
+    needs_context=True（机械闸从 ctx.steps 现定回退目标）。2026-08-18 钉字：它改走独立
     MAX_ROLLBACK 预算，不再计入正向写步预算。
-     刻意更新：compare.datasets / cite.export / compat.find /
+    2026-08-18 四工具批刻意更新：compare.datasets / cite.export / compat.find /
     fair.check 入列——环内结果处理四工具，全带 needs_context=True（默认对象取当前结果）；
     cite.export 是**写**工具（落盘引文产物，readonly=False），其余三个只读。"""
     table = agent_exec.LOOP_TOOLS
@@ -507,4 +508,4 @@ def test_loop_tools_registry_shape_is_pinned():
     assert table["curate.db_status"].get("report") is True
     assert table["curate.db_status"].get("observation") is True
     assert table["search.rerun"].get("needs_context") is True
-    assert table["curate.rollback"].get("needs_context") is True  # ：机械闸吃 ctx.steps
+    assert table["curate.rollback"].get("needs_context") is True  # rb1：机械闸吃 ctx.steps

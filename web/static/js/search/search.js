@@ -6,7 +6,7 @@
    board/task_pack/act 的 renderCondBoard/cbLogPush/cbLogClear/cbPushCurrent/resetTaskPack/
    actAfterSearch 经 import 取（互调成环——绑定都只在函数体内使用，ESM 允许）。
    board/task_pack/act/accounts/memory/results/facets 与 browse/interactions 经 import
-   取本文件导出。 */
+   取本文件导出（绞杀桥已全退役）。 */
 import { API, $, MOTION, cacheGeneration, pushHist, toast } from "#core";
 import { placeFacetBar, renderFacets } from "#facets";
 import { QCACHE_MAX, _queryCache, estimateDuration, finishProgress, resetSubmitButton, startProgress } from "#progress";
@@ -24,7 +24,7 @@ export let LAST_RECOMMEND_DATA = null;
 /* 属主写口（约定 #4：可变跨模块状态他人写必经 setter）：board.js 对齐回当前帧、
    interactions.js 输入即失效，都经它写；消费方经 import 拿这个函数。 */
 export function setLastRecommendData(v) { LAST_RECOMMEND_DATA = v; }
-/* owner 新指①的落地侧：统一路由来的检索句在**结果落地时**才回填进输入框
+/* owner 新指①的落地侧（2026-08-04）：统一路由来的检索句在**结果落地时**才回填进输入框
    （框=「当前检索句」真源：任务包/可行性/词表回显读它），在途窗口保持「发送即空」。
    守卫与 board.js ubFillQuery 同口径：框空、或框里仍是被发送的那句（sentText）才回写；
    用户趁在途打了新草稿 → 保留草稿，绝不冲掉（B）。 */
@@ -58,7 +58,7 @@ function queryCacheSet(key, data) {
     _queryCache.set(key, data);
     while (_queryCache.size > QCACHE_MAX) _queryCache.delete(_queryCache.keys().next().value);   // 逐出最旧
 }
-/* 「初步结果」徽标的唯一写口——任何结果重渲（落地/历史回看/回退）
+/* （设计 §2.5.1）：「初步结果」徽标的唯一写口——任何结果重渲（落地/历史回看/回退）
    都先经 applyRecommendResult 摘徽标；preliminary 帧落地（opts.fromPrelim）再由共享入口重新亮上。 */
 function _prelimBadge(show) {
     const b = $("prelimBadge");
@@ -66,9 +66,9 @@ function _prelimBadge(show) {
 }
 /* board.js 的 final b 档（preliminary_final：先行结果即最终结果）不经过落地也要摘徽标 → 导出写口。 */
 export function setPrelimBadge(show) { _prelimBadge(show); }
-/* 当前检索参数快照：runRecommend 发 /api/recommend 与 board.js
+/* 当前检索参数快照（设计 §2.4）：runRecommend 发 /api/recommend 与 board.js
    ubRouteBody 发 /api/utterance（后端 pre-loop 检索用）**同源构造**——加字段时两处一起变，
-   不许两处口径漂移。polish（pl1b 收尾）：后端 preliminary_final 判定要看
+   不许两处口径漂移。polish（2026-08-16）：后端 preliminary_final 判定要看
    「AI 润色会不会跑」——b 档（先行=最终）只在无采纳 ∧ 无改写 ∧ rerank=off ∧ 不润色时成立。 */
 export function searchParamSnapshot(query) {
     const cfg = getConfig();
@@ -96,7 +96,7 @@ export function applyRecommendResult(data, query, opts) {
     LAST_RECOMMEND_DATA = data || null;
     _prelimBadge(false);   // 任何结果重渲先摘「初步结果」徽标（fromPrelim 落地由共享入口随后亮回）
     renderStatus(data);
-    //  （schema v3 imp）：展示归因上下文随渲染下发——policy 优先用后端响应里的
+    // （schema v3 imp）：展示归因上下文随渲染下发——policy 优先用后端响应里的
     // policy_id（缓存命中时就是缓存响应里那份，与当屏结果严格同源），没给再按请求参数现组合；
     // 历史回看（fromHistory 且非批次内切换 keepTurn）不属于任何一轮检索，tid 如实为 null。
     const _pp = opts.policyParts || {};
@@ -113,7 +113,7 @@ export function applyRecommendResult(data, query, opts) {
     updateTimeSummary();
     if (!opts.noScroll) window.scrollTo({ top: 0, behavior: "smooth" });   // 顶部对齐：hero 上移后搜索框 + 结果同框可见
 }
-/* 检索落地共享入口（检索工具化 sr1）：runRecommend 的两个落地点与
+/* 检索落地共享入口（2026-08-16 检索工具化，设计 §4）：runRecommend 的两个落地点与
    零命中救回的换屏**同走这一个函数**——applyRecommendResult 重渲 + renderCondBoard 条件板 +
    cbPushCurrent 推帧 + _ubLandingFill 回填，不许第二调用方各抄一份。
    推帧/条件板只在本函数做，绝不放进 applyRecommendResult：那里同时是「回到上一步」
@@ -123,7 +123,7 @@ export function applyRecommendResult(data, query, opts) {
    如实回到零命中态，不装成那次检索从没发生过。
    opts.resetFacets：调用方语义是「一次新查询」时先清四个分面态（救回=换新查询词，true；
    runRecommend 自己已在请求开头按 keep 口径清过，false）。
-   初步结果先行：新增三档 opts：
+   2026-08-16 初步结果先行（设计 §2.5.1）新增三档 opts：
    opts.fromPrelim：本帧是 utterance 流 preliminary 事件的 pre-loop 先行结果——亮「初步结果」
    徽标 + 进度泡换句「正在更深一步思考…」（环还在跑，cbPushCurrent 用 keepProgress 按住
    进度泡不蜕变）；
@@ -137,12 +137,15 @@ export function landRecommendResult(data, query, opts) {
     if (opts.resetFacets) resetFacetState();
     applyRecommendResult(data, query, opts);
     renderCondBoard(data);
-    //  planSteps（utterance final 帧的环内工具记录）的 verb 随帧落地——
+    // 2026-08-18：planSteps（utterance final 帧的环内工具记录）的 verb 随帧落地——
     // cbPushCurrent 的完成句据此带工具调用摘要（纯检索环内 rank/rerank 也如实报
     // 「执行了 N 次检索」；无环工具时 null → 摘要空串不渲染）。
     const _tv = (opts.planSteps || []).map(function (s) { return s && s.verb; }).filter(Boolean);
+    // actPending（2026-08-30 混合轮单泡化）：「先检索后派发」档（runRecommend 据
+    // opts.actPlan 透传）——cbPushCurrent 据此**抑制**检索模板回执（进度泡留给 actDispatchPlan
+    // 接管，检索事实并入执行汇报一颗泡）。sentText 透传供检索回执的 LLM 事实包取用户原话。
     cbPushCurrent(data, query, { keepProgress: !!(opts.fromPrelim || opts.keepProgress),
-        toolVerbs: _tv.length ? _tv : null });
+        toolVerbs: _tv.length ? _tv : null, actPending: !!opts.actPending, sentText: opts.sentText });
     _ubLandingFill(query, opts.sentText);   // 落地才回填「当前检索句」（B 守卫），在途窗口保持发送即空
     // 零命中救回不再自动跑——零命中时的放宽/换词选项改由 board.js 的救回选择条
     // 呈现（零命中 pill「点击处理」），用户点了才作为下一句走既有管线，不再自动发
@@ -154,14 +157,14 @@ export function landRecommendResult(data, query, opts) {
     if (opts.fadeIn && MOTION) gsap.from("#resultsWrap", { autoAlpha: 0, y: 10, duration: 0.45, ease: "power2.out", clearProps: "all" });
 }
 
-/* ---- 零命中救回链已退役----
+/* ---- 零命中救回链已退役（2026-08-24）----
    自动救回（发 /api/agent/search-rescue + sys 气泡）退役：零命中时的救回选项改由
    board.js 的救回选择条呈现（零命中 pill「点击处理」），用户点了才作为下一句走既有管线。
    此处不再有 maybeSearchRescue / handleSearchRescue / _rescueSeq 等；诚实回执仍在落地路径上。
    /api/agent/search-rescue 端点保留（后端与 action_plan 豁免清单仍列），前端不再自动调用。 */
 /* 请求代号：分面芯片在请求进行中仍可点（有意保持响应），故可能并发多个 runRecommend。
    每次进入自增、捕获本次 myGen；只有「仍是最新一次」的响应/错误/收尾才落地——
-   丢弃晚到的旧响应，杜绝「结果/计数属于旧筛选、面包屑却是新筛选」的错配（验证）。 */
+   丢弃晚到的旧响应，杜绝「结果/计数属于旧筛选、面包屑却是新筛选」的错配。 */
 let _recSeq = 0;
 /* 请求代号自增的属主写口：browse.js 历史回看、board.js cbReplay 都要作废在途请求（同 `++_recSeq`），
    消费方经 import 拿它（可变状态只许属主写——外部 `_recSeq += 1` 裸写在对 import 绑定的赋值上本就会 TypeError）。 */
@@ -177,7 +180,7 @@ export async function runRecommend(opts) {
     const query = String(opts.queryOverride || ($("queryInput").value || "")).trim();
     if (!query) { toast("请先输入检索需求"); return; }
     const telemetryScope = usageScope();   // 请求全生命周期固定；账户切换不改变晚到回调归属
-    // consent 首次告知：开关开着且没同意过 → 弹窗拦截，不点确认不发送。
+    // consent 首次告知（设计 §3）：开关开着且没同意过 → 弹窗拦截，不点确认不发送。
     // 开关关着（usageEnabled() 为假）不弹；'disable' → 关掉采集开关，本次照常发送。
     if (usageEnabled() && !usageConsentGiven()) {
         const r = await requestUsageConsent();
@@ -189,12 +192,12 @@ export async function runRecommend(opts) {
     const keep = !!(opts.keepFacets || opts.fromBoard);
     // 新查询（非细化重跑）＝一条新时间线：清空既有分面/抑制/命中/宽容，也清空侧栏的对话记录，
     // 并把这句原始查询作为对话记录的开头（后续细化/追问接在它下面）。fromBoard 是条件板刚算好的一步，keep=true 不清。
-    //  keepConv：分面/抑制照旧清空，但**对话记录保留**——
+    // keepConv（2026-08-02 图5）：分面/抑制照旧清空，但**对话记录保留**——
     // 「接着这句往下走」的重跑不是「另起一段对话」，整段对话被清掉正是用户报的异常。
-    //  接线方在 board 路径（原回执 chip「按原话重新检索」已退役，机制保留）。
+    // 接线方在 board 路径（原回执 chip「按原话重新检索」已于 2026-08-16 退役，机制保留）。
     if (!keep) {
         resetFacetState();   // 四个分面状态的属主是 results.js（ESM）：重赋值必经属主 setter
-        //  清对话前先归档「仅对话」——纯工具对话从未走过 pushHist，
+        // 2026-08-04：清对话前先归档「仅对话」——纯工具对话从未走过 pushHist，
         // 这里不清仓补一行就永久丢失（hero 首句自己那句 say 会被 cbArchiveChatOnly 识别跳过）。
         // 排除串必须是**那句 say 本身**（opts.sayText=用户原话）：hero 首句被 LLM 改写时
         // query 已是改写句，比错对象会误产幽灵「仅对话」行（同一句在历史里出现两次）。
@@ -221,7 +224,7 @@ export async function runRecommend(opts) {
     const btn = $("submitBtn");
     const reqBody = Object.assign({ query: queryForRetrieval(query), provider: cfg.provider, use_llm: cfg.use_llm, mock_llm: cfg.mock_llm, api_key: cfg.api_key, base_url: cfg.base_url, model: cfg.model, auto_allow_llm: cfg.auto_allow_llm, rerank_audit: cfg.rerank_audit, action_audit: cfg.action_audit, rerank_top_n: cfg.rerank_top_n, sources: cfg.sources, auto_parse_sources: cfg.auto_parse_sources }, searchParamSnapshot(query));
     const cacheKey = queryCacheKey(reqBody);
-    // final a 档：环内采纳的更优结果随 utterance final 抵达
+    // final a 档（设计 §2.1）：环内采纳的更优结果随 utterance final 抵达
     // （opts.prefetched）——不再发 /api/recommend，把它当本次响应走完落地+收尾链；
     // 缓存查询整段跳过（它是环内择优管线的产物，按本请求 reqBody 建键会错位缓存/错位命中）。
     const prefetched = opts.prefetched || null;
@@ -230,6 +233,7 @@ export async function runRecommend(opts) {
         if (myGen === _recSeq) {
             try {
                 landRecommendResult(cached, query, { noScroll: keep, replaceHist: opts.keepFacets, sentText: opts.sentText, planSteps: opts.planSteps,
+                    actPending: !!opts.actPlan,
                     policyParts: { strategy: reqBody.strategy, rerank: reqBody.rerank, recall: reqBody.recall } });
                 toast("相同查询与设置，直接沿用了上次结果");
                 // 使用反馈打点（默认关；关着时这行等于一次布尔比较）。缓存命中对用户而言同样是
@@ -251,8 +255,8 @@ export async function runRecommend(opts) {
                 // 的取消语义——统一框发重复查询时是同一在途请求的继续，秒出＝这次检索瞬间完成。
                 // 放在 myGen 守卫**内**：只有当前代有权收尾；若本代已被更晚的请求接管，
                 // 那一代可能正在合法加载，收尾会抹掉它的 loading 态。
-                //  补 finally 兜底：上面渲染/打点任何一步抛错（典型：新旧 JS 混合缓存
-                // 的 ReferenceError）时也要复位按钮——否则 submitBtn/chatSendBtn 卡
+                // 2026-08-19 补 finally 兜底：上面渲染/打点任何一步抛错（典型：新旧 JS 混合缓存
+                // 的 ReferenceError，FRONTEND.md §4.3）时也要复位按钮——否则 submitBtn/chatSendBtn 卡
                 // loading、ubSubmit 在途闸（submitBtn.disabled）拦下所有后续输入。finishProgress /
                 // resetSubmitButton 本身幂等，正常路径只执行一次。
                 if (btn.classList.contains("loading")) {
@@ -281,13 +285,14 @@ export async function runRecommend(opts) {
             if (!res.ok || !data.ok) throw new Error(data.detail || "服务未返回推荐结果");
             // 只缓存「对所请求管线完整成功」的结果：若请求了真 LLM（use_llm 且非 mock）却回退成确定性
             // （llm_response_used=false —— 限流/超时/空密钥触发后端 fail-open，仍返回 ok:true），则**不缓存**，
-            //  否则这次退化结果会粘住整会话、稍后重试也被缓存拦截、永远打不到后端（验证确认的 med 级坑）。
+            // 否则这次退化结果会粘住整会话、稍后重试也被缓存拦截、永远打不到后端。
             const llmRequested = reqBody.use_llm && !reqBody.mock_llm;
             if (!llmRequested || data.llm_response_used === true) queryCacheSet(cacheKey, data);   // 缓存与代号无关，恒可写
         }
         if (myGen !== _recSeq) return;   // 已被更晚的请求取代 → 丢弃，避免旧结果覆盖新状态/错配面包屑
         landRecommendResult(data, query, { noScroll: keep, replaceHist: opts.keepFacets, sentText: opts.sentText,
             fadeIn: !!opts.fadeIn, keepProgress: !!opts.keepProgress, planSteps: opts.planSteps,
+            actPending: !!opts.actPlan,
             policyParts: { strategy: reqBody.strategy, rerank: reqBody.rerank, recall: reqBody.recall } });
         usageLogSearch(data, query, Object.assign({}, opts, { telemetryScope: telemetryScope,
             policyParts: { strategy: reqBody.strategy, rerank: reqBody.rerank, recall: reqBody.recall } }));
@@ -318,7 +323,7 @@ export async function runRecommend(opts) {
         // 它们还挂在那里，就是拿旧一次的条件和结果条数给这一屏背书。分面条、条件板、常驻查询条件栏一起收。
         // **顺序要紧**：必须在 placeFacetBar（内部会 swSync）**之前**把 condBoard/#facetActive 判成空，
         // 否则 swSync 读到 condBoard 仍可见 → 保留对话记录卡、把上一次成功检索的 #facetActive 搬进 #swHits，
-        //  「检索失败」屏上就挂着旧一次的查询条件（含可点的 忽略/× 按钮）——正是本分支要防的陈旧背书（验证）。
+        // 「检索失败」屏上就挂着旧一次的查询条件（含可点的 忽略/× 按钮）——正是本分支要防的陈旧背书。
         const _cb = $("condBoard"); if (_cb) _cb.hidden = true;
         const _fa = $("facetActive"); if (_fa) { _fa.hidden = true; _fa.innerHTML = ""; }
         $("facetBar").hidden = true;

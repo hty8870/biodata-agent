@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """桌面窗口壳（pywebview 5.4，可选依赖）——把「开浏览器」升级成「开原生窗口」。
 
-背景：产品要从「弹系统浏览器」进化成「真正的桌面应用」。方案：pywebview + 系统 WebView
+背景（2026-08-21 桌面壳批 zcode/desktop-shell，Codex 只读评审结论已并入）：
+产品要从「弹系统浏览器」进化成「真正的桌面应用」。选型：pywebview + 系统 WebView
 （Windows=WebView2/EdgeChromium、macOS=WKWebView、Linux=WebKitGTK）——前端**零改动**
 （还是同一份 importmap 原生 ESM、同一个 127.0.0.1 回环服务），浏览器开发通道**永久保留**
 （截图/DevTools/Playwright 工作流不变）。本模块是启动器新增的**专用窗口 runner**
 （`desktop_launcher.Launcher.window_runner` 注入点，独立于既有的 `browser` 回调——
 后者仍被二次启动 attach 路径使用，不得被壳语义污染）。
 
-设计约束：
+设计约束（Codex 评审钉死）：
 - **懒导入**：pywebview 是可选依赖（requirements-webview.txt，>=5.4,<6），导入期不碰它；
   缺失/异常 → 回退 `webbrowser.open` 并记日志（logging，noconsole 构建下 print 会被
   `_NullStream` 吞掉，必须走启动器滚动日志），永不阻断启动。
@@ -35,7 +36,7 @@
 - **下载中关窗（边缘修复第 6 项，最近似方案）**：pywebview 5.4 无法从壳侧可靠拦截关窗
   （`events.closing` 仅通知、无取消返回值；`confirm_close` 是建窗期全局布尔、不可按下载
   状态动态切换），因此落地「下载中标记 + closing 事件检查提示」——生产者调用
-  `set_download_active()`，壳在 `closing` 时告警并尽力 MessageBoxW 提示「关闭会中断下载、
+  `set_download_active()`，壳在 `closing` 时告警并尽力弹原生警告框提示「关闭会中断下载、
   半成品不保留」。真正的二次确认需前端/后端提供下载状态并配合 `confirm_close`，属
   web/static 与 webapp 范围，暂不动。
 """
@@ -52,7 +53,7 @@ from pathlib import Path
 if os.name == "nt":
     from ctypes import wintypes
 else:
-    # 跨平台核查修复：wintypes 是 Windows 专有——此前顶层无条件导入，
+    # 2026-08-24 W5 跨平台核查修复：wintypes 是 Windows 专有——此前顶层无条件导入，
     # 导致本模块在 macOS/Linux 导入即崩（pywebview 本身跨平台）。图标/DWM 等 wintypes
     # 使用点全在仅 Windows 才会进入的函数内（WM_SETICON/DwmSetWindowAttribute），
     # 非 Windows 恒不触达，置 None 即可。
@@ -71,7 +72,7 @@ WINDOW_BACKGROUND = "#f5f7fa"
 # background_color 只管客户区，不能改变系统标题栏。
 WINDOW_CAPTION_TEXT = "#16212e"   # app.css --text
 WINDOW_BORDER = "#e6eaf0"        # app.css --border
-# 小屏研判（安装版小屏适配）：1240×760 在 1366×768+任务栏的小屏上仍会超高。
+# 小屏研判（2026-08-21 安装版完善波次A）：1240×760 在 1366×768+任务栏的小屏上仍会超高。
 # pywebview 5.4 的 ``webview.screens`` 只给整屏 Bounds（工作区在 Screen.frame，且是
 # Windows/pythonnet 专属、访问还触发 initialize() 副作用），不是可靠的工作区 clamp 途径；
 # 故保守固定 1180×720，宁可略小也不超出常见小屏工作区。
@@ -99,8 +100,8 @@ _icon_objects: "list[object]" = []
 # 续传，用户下载中途直接关窗会静默丢半成品。pywebview 5.4 从壳侧**无法可靠拦截关窗**
 # ——`events.closing` 仅通知、无取消返回值；`confirm_close` 是建窗期全局布尔、不可按下载
 # 状态动态切换（官方 API 只把它描述为「closing 前的确认对话框」，无按条件的开关）。故落地
-# 「关窗前检查下载中标记 + 提示」的最近似方案：生产者（前端/后端下载状态）
-# 调用 set_download_active()，壳在 closing 事件里检查并告警（尽力 MessageBoxW 提示）。
+# 「关窗前检查下载中标记 + 提示」的最近似方案：生产者（前端/后端下载状态，见遗留交接）
+# 调用 set_download_active()，壳在 closing 事件里检查并告警（尽力弹原生警告框提示）。
 _download_active = False
 _download_lock = threading.Lock()
 
@@ -240,12 +241,13 @@ def icon_path_candidates() -> "list[Path]":
     """窗口图标候选（按优先级）：frozen 打包内 assets/ → 仓库 packaging/assets/。
     都找不到返回空列表（图标是锦上添花，绝不因它失败）。"""
     out: "list[Path]" = []
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        out.append(Path(meipass) / "assets" / "BioDataAgent.ico")
     try:
         from dataset_recommender.app.runtime_paths import get_app_paths
-        out.append(get_app_paths().install_root / "packaging" / "assets" / "BioDataAgent.ico")
+        paths = get_app_paths()
+        # frozen 资源根语义（含 BIODATA_RESOURCE_ROOT 覆盖）以 runtime_paths 单一真源为准
+        if paths.runtime_mode == "frozen":
+            out.append(paths.resource_root / "assets" / "BioDataAgent.ico")
+        out.append(paths.install_root / "packaging" / "assets" / "BioDataAgent.ico")
     except Exception:  # noqa: BLE001（路径解析失败只影响图标）
         pass
     return out
@@ -254,7 +256,7 @@ def icon_path_candidates() -> "list[Path]":
 def _set_window_icon_win32(win: object, ico: Path) -> None:
     """把多尺寸品牌 .ico 挂到窗口标题栏（ctypes WM_SETICON，best-effort）。
 
-    必须在窗口**原生句柄建立之后**调用——经 `events.before_show` 订阅（实现 验证：
+    必须在窗口**原生句柄建立之后**调用——经 `events.before_show` 订阅（Codex 评审：
     start() 前 `win.native` 未建立，直接调用是 no-op）。frozen 下 exe 图标已由 PyInstaller
     内嵌且 WinForms 自动提取，这里是 source/开发模式与标题栏图标的兜底。
 
@@ -321,7 +323,7 @@ def _set_window_icon_win32(win: object, ico: Path) -> None:
 def _set_titlebar_colors_win32(win: object) -> "dict[int, int]":
     """Windows 11 DWM 原生标题栏对齐页面色板；旧系统/不支持属性时安全 no-op。
 
-    返回 ``{attribute: HRESULT}`` 供集成验证与单测观察。标题栏不是 WebView 客户区，
+    返回 ``{attribute: HRESULT}`` 供真机探针与单测观察。标题栏不是 WebView 客户区，
     pywebview 的 ``background_color`` 不会触及它；必须使用 DWM caption attributes。
     """
     if sys.platform != "win32":
@@ -390,7 +392,7 @@ def _attach_window_chrome_on_show(win: object) -> None:
 def _shell_window_kwargs() -> dict:
     """主窗口 / 第二壳窗口共用的开窗参数钉（单一真源，防两处漂移）。
 
-    x/y 留空：pywebview 自带 CenterScreen（实现 验证：自算 GetSystemMetrics 不扣
+    x/y 留空：pywebview 自带 CenterScreen（Codex 评审：自算 GetSystemMetrics 不扣
     任务栏、不处理多显示器与 DPI，反而更差）。
     """
     return dict(
@@ -424,20 +426,18 @@ def _inject_new_window_router(win: object) -> None:
 
 
 def _notify_download_close() -> None:
-    """下载进行中关窗的友好中文提示（Windows MessageBoxW 警告；非 Windows/失败则忽略，绝不抛）。"""
+    """下载进行中关窗的友好中文提示（委托 desktop_launcher_win32.message_box 单一通道；
+    非 Windows/失败则忽略，绝不抛）。"""
     if sys.platform != "win32":
         return
     try:
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        user32.MessageBoxW.argtypes = (
-            wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT)
-        user32.MessageBoxW.restype = ctypes.c_int
-        user32.MessageBoxW(
-            None,
+        # 惰性 import：desktop_launcher_win32 模块级即加载 user32，非 Windows 上导入即失败
+        from dataset_recommender.app import desktop_launcher_win32
+        desktop_launcher_win32.message_box(
+            WINDOW_TITLE,
             "检测到下载仍在进行。\n关闭窗口会中断下载，且不会保留已下载的半成品。\n"
             "请先等待下载完成，或取消下载后再关闭窗口。",
-            WINDOW_TITLE,
-            0x00000030,  # MB_ICONWARNING | MB_OK
+            icon=desktop_launcher_win32.MB_ICONWARNING,
         )
     except Exception:  # noqa: BLE001
         _log.warning("下载中关窗提示弹出失败，忽略。")

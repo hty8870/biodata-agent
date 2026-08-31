@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""依赖占位批量计划 v2 的确定性门。**全离线**（FakeModel + 假注册表
-+ 合成记录）。设计要点：v2 白名单受控链（设计约定）。
+"""依赖占位批量计划 v2（2026-08-20 批）的确定性门。**全离线**（FakeModel + 假注册表
++ 合成记录）。设计：`设计文档（v2 权威，§1-§3、§7）。
 
-覆盖清单（设计约定逐项）：
+覆盖清单（逐项）：
 - 正则/矩阵校验：唯一形状 `$<N>.top[<i>].dataset_uid` 收、内嵌/路径错/缺段/前导零拒；
   流向矩阵（槽位/N 越界/生产者必须 rank-rerank/元槽位禁占位）逐条拦；
 - 越界截断：`_batch_readonly_extras` 对非法占位**整尾截断**回炉（不丢事，decide 带新状态重判）；
@@ -115,7 +115,7 @@ def _install_registry(monkeypatch, *, rank_run=None, rank_top=None, fail_rank=Fa
     table = {
         "curate.db_status": {
             "run": lambda slots, root: _db_result(),
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True},
         "rank": {
             "run": rank_run or _rank, "label_zh": "检索数据集", "card_kind": "rank",
@@ -158,7 +158,7 @@ def _ph_trace(trace, label_prefix):
     return [t for t in trace if str(t.get("label_zh") or "").startswith(label_prefix)]
 
 
-# ---------------------------------------------------------------- 正则 / 矩阵校验（设计约定）
+# ---------------------------------------------------------------- 正则 / 矩阵校验
 
 def test_placeholder_regex_accepts_only_unique_shape():
     ph = agent_exec._placeholder_ref
@@ -219,7 +219,7 @@ def test_static_violations_rejects_self_reference_as_main_step():
     assert "执行序号" in fb
 
 
-# ---------------------------------------------------------------- 越界截断（设计约定）
+# ---------------------------------------------------------------- 越界截断
 
 def test_batch_filter_truncates_illegal_placeholder(monkeypatch):
     """批 = [rank, compare($2…N 越界), fair]：非法占位出现即**截断整尾**（fair 也回炉）——
@@ -251,10 +251,10 @@ def test_batch_filter_truncates_out_of_matrix_flow(monkeypatch):
     assert accepted == [] and dropped == 1
 
 
-# ---------------------------------------------------------------- 端到端：解析执行（设计约定）
+# ---------------------------------------------------------------- 端到端：解析执行
 
 def test_single_call_placeholder_resolves_on_main_step_end_to_end(monkeypatch):
-    """真模型自然形态（验证）：understand 先 rank（第 1 步），decide **单发**
+    """真模型自然形态（实测）：understand 先 rank（第 1 步），decide **单发**
     compare(a=\"$1.top[0]…\")——主步带占位，execute 在节点头部解析后过全闸再执行；
     slots 存**解析后 uid**；trace 留「批内依赖解析」行（批 id/计划位置/依赖位置/原引用 → 真实 uid）。"""
     seen: list = []
@@ -311,7 +311,7 @@ def test_batch_rank_compare_resolves_placeholders_end_to_end(monkeypatch):
 
 
 def test_dependency_unavailable_cascades_skip_with_trace(monkeypatch):
-    """级联跳过（设计约定 dependency_unavailable）：主步 rank 真失败 → compare（$1）引用
+    """级联跳过（dependency_unavailable）：主步 rank 真失败 → compare（$1）引用
     第 1 步无值 → 不执行、不记假 ok=False step、trace 留「批内依赖跳过」（含批 id/位置/
     依赖/原引用/原因）；跳过不吃失败预算（dead_ends 只记 rank 自身）。"""
     _install_registry(monkeypatch, fail_rank=True)
@@ -333,7 +333,7 @@ def test_dependency_unavailable_cascades_skip_with_trace(monkeypatch):
 
 
 def test_resolver_error_index_out_of_range_not_banned(monkeypatch):
-    """resolver_error 不进熔断（设计约定）：top 只有 1 条、引用 $1.top[1] → 解析失败跳过；
+    """resolver_error 不进熔断：top 只有 1 条、引用 $1.top[1] → 解析失败跳过
     不触发 _failed_tool_ban（后续同一 compare 单步仍可执行）、不写假 step。"""
     _install_registry(monkeypatch, rank_top=["UID-A"])
     model = _FakeModel(
@@ -355,7 +355,7 @@ def test_resolver_error_index_out_of_range_not_banned(monkeypatch):
         "resolver_error 不算工具失败，不进 _failed_tool_ban"
 
 
-# ---------------------------------------------------------------- 解析后全闸同口径（设计约定）
+# ---------------------------------------------------------------- 解析后全闸同口径
 
 def test_cancelled_placeholder_extra_rejected_at_decide(monkeypatch):
     """解析前闸（decide 裁决层）先拦：占位续步原始 raw 带 cancelled=true 且原话无否定语素
@@ -377,12 +377,12 @@ def test_cancelled_placeholder_extra_rejected_at_decide(monkeypatch):
     assert steps[2]["slots"] == {}, "取消的占位 compare 不当批执行，下一轮干净重提"
     decides = _nodes(trace, "decide")
     # 取消的 compare 在 `_batch_readonly_extras` 裁决层被剔除（幻觉取消镜像闸），
-    # 零采纳 → 留痕措辞是 的「按顺序先执行第一个」（既有语义）。
+    # 零采纳 → 留痕措辞是的「按顺序先执行第一个」（既有语义）。
     assert any("按顺序先执行第一个" in t["detail"] for t in decides)
 
 
 def test_main_step_placeholder_rejected_when_producer_missing(monkeypatch):
-    """主步占位校验：占位只能引用**已执行**的 rank/rerank 步——decide 单发
+    """主步占位校验（施工修正）：占位只能引用**已执行**的 rank/rerank 步——decide 单发
     compare($1) 但第 1 步是 db_status（非生产者）→ violation → decide 带反馈重问一次 →
     模型改提无占位 compare → 正常执行。"""
     _install_registry(monkeypatch)
@@ -400,7 +400,7 @@ def test_main_step_placeholder_rejected_when_producer_missing(monkeypatch):
     assert any("没通过检查" in t["detail"] for t in decides), "主步占位（生产者缺失）先被拦下一次"
 
 
-# ---------------------------------------------------------------- top digest / cite.export（设计约定）
+# ---------------------------------------------------------------- top digest / cite.export
 
 def test_top_digest_carries_dataset_uid_and_rank():
     rows = [{"dataset_name": "A", "species": "Human", "tissue": "Lung",
@@ -413,7 +413,7 @@ def test_top_digest_carries_dataset_uid_and_rank():
 
 
 def test_cite_export_consumes_explicit_uids(monkeypatch, tmp_path):
-    """cite.export uids 真实消费（设计约定）：提供 uids 清单 → 按清单导出（保序、不叠加
+    """cite.export uids 真实消费：提供 uids 清单 → 按清单导出（保序、不叠加
     limit、去空去重、≤20）；未提供 → 保持现状（当前结果集）。"""
     from dataset_recommender.content import reuse_pack as _rp
 
@@ -441,7 +441,7 @@ def test_cite_export_consumes_explicit_uids(monkeypatch, tmp_path):
 
 
 def test_batch_results_do_not_carry_over_across_batches():
-    """batch_results 局部化（设计约定）：解析源是 execute 局部 dict——同一函数两次调用
+    """batch_results 局部化：解析源是 execute 局部 dict——同一函数两次调用
     （模拟两个批次）零残留：第二次空 resolved 即 dependency_unavailable，不引用上一批的值。"""
     rank_result = _rank_result("UID-A", "UID-B")
     # 第一批：有结果 → 解析成功

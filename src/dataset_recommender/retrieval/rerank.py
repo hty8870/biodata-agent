@@ -1,7 +1,7 @@
 """
 可选 LLM 重排层（默认关，零权重下载，复用现有 LLM 通道）。
 
-设计约束（经对抗评审与内部验证收敛）：
+设计约束（与 Codex + 内部评审收敛一致）：
 - 只对**已过硬过滤的存活集**重排：输入恒为 survivors 的子集，输出是其**排列/截断**，
   绝不引入集合外记录 → 0% 硬违规由 retriever 的终检(passes_hard_filter)结构性保证，
   本层的 ID 交集守卫是额外冗余（defense-in-depth）。
@@ -19,21 +19,22 @@
   规则层仍是唯一守门员。任何解析失败 → 退回原序、无改写（fail-open）。
 
 本模块不下载任何模型，不新增运行时依赖；LLM 调用复用 llm_client 的现成通道。
-本模块**不 import vocabulary/query_parser**（保持检索层解耦）：审核所需的 keywords / vocab_hint
-由上层（workflow）算好后经 audit_ctx 传入。
+审核所需的 keywords / vocab_hint 由上层（workflow）算好后经 audit_ctx 传入（rerank 不直接做解析）；
+改写空转判定的填充词表则直接消费 vocabulary.FILLER_GRAMMAR 锚点（不再另抄一份手抄表）。
 """
 from __future__ import annotations
 
 import contextvars
 import json
 import re
-import sys
 import time
 from dataclasses import asdict
 from typing import Callable, Sequence
 
-from ..llm.llm_client import ZHIPU_PROVIDER_ALIASES, LLMConfig, call_openai_compatible, call_zhipuai, is_auth_error
+from ..llm.llm_client import LLMConfig, call_llm, is_auth_error
 from .retriever import RetrievedCandidate
+from .vector_recall import _WARNED, _warn_once_prefixed
+from . import vocabulary as V
 
 RERANK_BACKENDS = ("off", "llm")
 DEFAULT_RERANK_TOP_N = 12
@@ -152,11 +153,11 @@ def _first_json_object(text: str) -> str | None:
     return text[start : end + 1]
 
 
-# ==================== 解析失败的错误回灌 ====================
+# ==================== 解析失败的错误回灌====================
 # BioChatter ResponderWithRetries 的本落化：LLM 输出机械结构无效时，把失败原因回灌重问
 # **一次**（上限硬顶），仍败照旧走既有 fail-open——「闸住之后给一次自修机会」，
 # 与本仓 repair（violations 回灌）/ decide（非法重问）同一哲学的检索侧落地。
-# 纪律（验证）：
+# 纪律（审核）：
 #   · 共享层只是 transport 外壳；每条路径自带 typed validator 判 valid/partial/invalid，互不共用；
 #   · 只重试「非空输出且机械结构无效」；空输出 / 异常 / 鉴权错误绝不重试（原语义逐位不变）；
 #   · partial（可用但走形：缺号排列、rewrite-only、markers-only）**不重试**——
@@ -164,7 +165,7 @@ def _first_json_object(text: str) -> str | None:
 #   · 「10x」这类字母粘连文本不算数字（standalone 判定）——畸形应答不许被当成候选 10。
 # 可观测：重试结局落 `_LAST_PARSE_RETRY`（channel → "recovered" / "failed"）；
 # `rerank_candidates` 把它拷进 trace 的**附加字段** parse_retry——不覆盖既有 reason。
-# ContextVar 而不是模块级 dict（与下方 _LAST_LLM_ERROR 同型）：
+# ContextVar 而不是模块级 dict（2026-08-15 触发点，与下方 _LAST_LLM_ERROR 同型）：
 # `/api/recommend` 是 sync def 走 anyio 线程池，模块级 dict 让两路并发请求互踩
 # （A 写 "recovered" → B 覆写 "failed" → A pop 到 B 的结局，trace 张冠李戴）；
 # 且 query_audit/action_audit/drop_terms 三渠道写入后无人消费，模块级残留会跨请求存活，
@@ -335,7 +336,7 @@ def _default_llm_call_with_error(prompt: str, config: LLMConfig | None) -> "tupl
     """同 _default_llm_call 的真身，但把 provider 错误串一并带回（成功时错误为 None）。
 
     错误串的用途只有一个：回退归因把「密钥无效（401/403）」与「临时故障（超时/5xx/空回）」
-    分开——前者重试不自愈，用户该去改设置；混成一句「调用失败」时，
+    分开（2026-08-04 C3）——前者重试不自愈，用户该去改设置；混成一句「调用失败」时，
     密钥坏了的人会对着「稍后再试」干等。
     """
     if config is None or not getattr(config, "api_key", None):
@@ -344,18 +345,14 @@ def _default_llm_call_with_error(prompt: str, config: LLMConfig | None) -> "tupl
     cfg.temperature = 0.0          # 求确定性（注意：DeepSeek 服务端仍不完全可复现）
     cfg.enable_llm = True
     cfg.mock_llm = False
-    provider = (config.provider or "").strip().lower()
-    if provider in ZHIPU_PROVIDER_ALIASES:   # 别名集单一真源在 llm_client，勿再抄字面量
-        result = call_zhipuai(prompt, cfg)
-    else:
-        result = call_openai_compatible(prompt, cfg)
+    result = call_llm(prompt, cfg)
     return (result.text if (result.succeeded and result.text) else None), result.error
 
 
 # 最近一次**真实**默认通道调用的 provider 错误串（无 → None）。只服务回退归因分档；
 # 私有、调用前清、随调用写——测试用替身换掉 _default_llm_call 时没有错误面（保持 None），
 # 归因自动落回临时故障档，与既有钉死行为逐位一致。
-# ContextVar 而不是模块级槽：`/api/recommend` 是 sync def
+# ContextVar 而不是模块级槽（2026-08-04 对抗评审 docs-arch）：`/api/recommend` 是 sync def
 # 走 anyio 线程池，两路并发检索共享一个模块全局会互踩——A 清槽 → B 清槽 → A 写 → B 写 → A 读，
 # A 的 401 可能被读成 B 的超时，「密钥无效」误标成「临时故障」（用户被指路去白等）。
 # ContextVar 随 anyio 的上下文快照走，每个请求各拿一份，互不串；同一线程内清→写→读是同步连续
@@ -385,11 +382,27 @@ def _default_llm_call_capture_error(prompt: str, config: LLMConfig | None) -> "t
 
 # 改写"空转"识别用的填充词（都**不是**规则会建模的实义维度词——物种/组织/疾病/平台/技术/模态/时间）。
 # 去掉它们 + 标点空白后若与原句同核，说明 LLM 只是换措辞/加"数据"这类废话、没改变规则能抽到的关键词。
-# 顺序敏感：长词在前（"数据集""我想找"必须先于"数据""想找"replace，否则残留碎片）。
-_REWRITE_FILLER = (
+# 词源：16 词锚自 vocabulary.FILLER_GRAMMAR 交集；EXTRA 11 词只服务本层措辞归一、不是解析层
+# filler（「资料/信息/我想找」等不进全局词表）。replace 链的顺序是行为契约：DECL 即历史全序——
+# 含「数据集」先于「数据资料」的历史异序（先删「数据集」不命中、再删「数据资料」留下的「…集」
+# 残尾会被后续「数据」削成「集」，与长度序结果不同；任何重排都会改变空转判定，排序派生已被
+# 实证推翻，勿再引入）。
+# 2026-08-31：补原子词「一下」——「我想找一下」先被「我想找」削成残尾
+# 「一下」，「找一下」不再命中，纯填充句漏判为有效改写（「我想找一下肺癌」对「肺癌」
+# 空转却被采纳）。「一下」置于「找一下」之后：复合词先整削，残尾再由它兜底。
+_REWRITE_FILLER_VOCAB_PICK = frozenset({"数据集", "数据", "相关", "研究", "图谱", "我想", "帮我",
+                                        "一些", "关于", "有关", "请", "找", "的", "了", "吧", "呢"})
+_REWRITE_FILLER_EXTRA = frozenset({"数据资料", "资料", "信息", "我想找", "想找", "帮我找",
+                                   "请帮", "帮", "找一下", "一下", "找找"})
+_REWRITE_FILLER_DECL = (
     "数据集", "数据资料", "数据", "资料", "信息", "相关", "研究", "图谱",
     "我想找", "我想", "想找", "帮我找", "帮我", "请帮", "一些", "关于", "有关",
-    "请", "帮", "找一下", "找找", "找", "的", "了", "吧", "呢",
+    "请", "帮", "找一下", "一下", "找找", "找", "的", "了", "吧", "呢",
+)
+_REWRITE_FILLER = tuple(
+    m for m in _REWRITE_FILLER_DECL
+    if (m in _REWRITE_FILLER_VOCAB_PICK and m in V.FILLER_GRAMMAR)
+    or m in _REWRITE_FILLER_EXTRA
 )
 
 
@@ -421,15 +434,12 @@ def _validated_rewrite(rewrite: str, query: str) -> str:
 
 
 # 运行期异常留痕（与 vector_recall._warn_once 同款纪律）：宽 except 兜底绝不打断请求，
-# 但异常本体必须至少留一行 stderr——否则「重排静默失效」事后无从归因。
-_WARNED: set[str] = set()
-
-
+# 但异常本体必须至少留一行 stderr——否则「重排静默失效」事后无从归因（2026-08-15 。
+# _WARNED 集合与判定已收编进 vector_recall._warn_once_prefixed（三模块共享同一集合），
+# 此处只留带 [rerank] 前缀的薄 wrapper；模块级名字 _WARNED 经 import 保留（测试靠它复位）。
 def _warn_once(key: str, message: str) -> None:
     """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求。"""
-    if key not in _WARNED:
-        _WARNED.add(key)
-        print(f"[rerank] {message}", file=sys.stderr)
+    _warn_once_prefixed("[rerank]", key, message)
 
 
 def rerank_candidates(
@@ -514,7 +524,7 @@ def rerank_candidates(
         # provider 连着几天返 400，用户看到的摘要却写着「AI 重排本次未启用」——谁都看不出它坏了。
         # 判据是「这一次到底有没有真去调」：注入了 llm_call 就是调用方自带 provider（视为已调用）；
         # 否则看 config 里有没有真 key（load_llm_config 已把 placeholder 脱敏成 None）。
-        # 真故障再分两档：401/403=密钥无效/无权（llm_auth_failed，重试不自愈，
+        # 真故障再分两档（2026-08-04 C3）：401/403=密钥无效/无权（llm_auth_failed，重试不自愈，
         # 指路去改设置）；超时/5xx/空回=临时故障（llm_call_failed，稍后重试即可）。
         attempted = llm_call is not None or bool(config is not None and getattr(config, "api_key", None))
         if not attempted:
@@ -523,7 +533,7 @@ def rerank_candidates(
             _mark("fallback", "llm_auth_failed" if is_auth_error(llm_error) else "llm_call_failed")
         return items[:top_k] if top_k is not None else items
 
-    # 非空但机械结构无效的输出 → 错误回灌重问一次；
+    # B3：非空但机械结构无效的输出 → 错误回灌重问一次；
     # 仍败则拿着首答原文走下方既有宽容解析/回退，行为与历史一致。
     _retry_caller = llm_call if llm_call is not None else (lambda p: _default_llm_call(p, config))
     if audit_on:
@@ -563,8 +573,8 @@ def rerank_candidates(
 
 # ==================== 查询级审核（空池 / 规则弃权档）====================
 # 空池独立审核档（build_query_audit_prompt / parse_query_audit_response / audit_query_only /
-# _grade_query_audit_text） 随「检索工具化」删除——空池救回改由 search.rerun 工具承担
-# （agent 显式调用 + 机械择优闸），
+# _grade_query_audit_text）2026-08-16 随「检索工具化」删除——空池救回改由 search.rerun 工具承担
+# （agent 显式调用 + 机械择优闸，见 设计文档），
 # 审核不再脱离重排静默单发。存活集非空的 ride-along 审核（rerank_candidates）保留不变。
 
 
@@ -574,7 +584,7 @@ def rerank_candidates(
 # 这里在 LLM 开启时对**执行侧关键词的命中**做一次核对：LLM 独立判断这句话是不是在要求下载 / 打包 /
 # 导出，并列出它据以判断的原文说法，供上层与规则命中对照（漏认 → 也能指路到打包入口）。
 #   · 本函数只**核对 + 上报**，不执行任何动作。这是**分层**、不是产品哲学：
-# 「只指路、不代劳」已不再是本项目的底线（该做就做、做了就报），
+#     2026-07-25 起「只指路、不代劳」已不再是本项目的底线（该做就做、做了就报），
 #     真正的「说了就做」在 `action_plan.plan_action` + 前端 `act.js` 那条独立链路上；
 #     检索侧保持「只回意图、不夹带产物」，是为了让自动执行不必改动检索侧任何既有契约与门。
 #   · fail-open：无 key / 异常 / 解析不出 → (None, [], "")，规则命中原样保留、行为不变。
@@ -645,7 +655,7 @@ def audit_action_markers(
         text = None
     if not text:
         return None, [], ""
-    # 非空但解析不出 → 错误回灌重问一次；仍败照旧 (None, [], "") fail-open。
+    # B3：非空但解析不出 → 错误回灌重问一次；仍败照旧 (None, [], "") fail-open。
     text = _maybe_retry_parse(
         text, prompt, caller=caller, validate=_grade_action_audit_text,
         contract_zh=('只输出一个 JSON 对象：{"is_action": true 或 false, '
@@ -727,7 +737,7 @@ def judge_drop_terms(
         text = caller(prompt)
         if not text:
             return None, ""
-        # 非空但解析不出 → 错误回灌重问一次；仍败照旧 (None, "") 保持弃权
+        # B3：非空但解析不出 → 错误回灌重问一次；仍败照旧 (None, "") 保持弃权
         # （fail-closed 语义不变——重试只是给把关人多一次说清的机会，不是放宽闸门）。
         text = _maybe_retry_parse(
             text, prompt, caller=caller, validate=_grade_drop_terms_text,

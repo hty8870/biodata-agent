@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-""" 执行层后端核的确定性门（**零网络**：LLM 一律靠 `llm_call` 注入）。
+"""P2 执行层后端核的确定性门（**零网络**：LLM 一律靠 `llm_call` 注入）。
 
 这一层的全部风险都在「说了什么」与「做了什么」之间的缝隙里，所以这里钉的都是缝隙：
 封闭词表不许被绕开、`quoted` 不许是编的、被否定的动作不许被当成授权、
@@ -29,8 +29,8 @@ def _plan(utterance, payload, *, has_results=True, result_total=42):
 def test_prompt_verb_list_is_generated_from_the_table_not_hand_copied():
     """prompt 里出现的动词集合必须**恰好**等于 `VERB_SPECS`。
 
-    本仓库在 `ACTION_MARKERS↔FILLER_GRAMMAR`、
-    `SOURCE_PREFER_PREFIX_RE↔SOFT_PREFER_PREFIX_CN` 上栽过手抄漂移。
+    本仓库在 `.gitignore↔.deliveryignore`、`ACTION_MARKERS↔FILLER_GRAMMAR`、
+    `SOURCE_PREFER_PREFIX_RE↔SOFT_PREFER_PREFIX_CN` 上栽过三次手抄漂移。
     动词表一旦在 prompt 里手抄一份，LLM 会照着旧表回答，而校验按新表判 —— 全部落进 rejected。
     """
     prompt = AP.build_action_prompt("随便一句", has_results=True, result_total=3)
@@ -107,7 +107,7 @@ def test_exec_without_a_locatable_quote_is_not_executed():
 
 
 def test_exec_downgraded_to_none_marks_downgraded_from():
-    """EXEC 缺 quoted 被机械降成的 none 是**降级 none**，不是真 none——
+    """2026-08-15 EXEC 缺 quoted 被机械降成的 none 是**降级 none**，不是真 none——
     additive 字段 `downgraded_from` 记下被降掉的 verb，路由层据此如实回音，不许谎称「没听懂」。"""
     plan = _plan("帮我打包一下", {"verb": "pack.download", "quoted": "", "confidence": "high"})
     assert plan["verb"] == "none"
@@ -139,7 +139,7 @@ def test_a_real_quote_survives_verbatim():
 def test_a_negated_action_is_never_treated_as_authorization(utterance, quoted):
     """把用户**明确否定**的词当成授权证据引用给他看，是本层最恶劣的一种谎。
 
-     口径升级：否定取消**不再整计划降 none
+    2026-08-01 口径升级（`eval/curate_nlu/FINDINGS.md` §5③）：否定取消**不再整计划降 none
     装没听懂**——动词照判、`cancelled=True` 标记取消态，执行层据此不执行、只回音
     （「好，不打包」）。安全性质不放水：取消态的 plan **不许**被当成可执行授权，
     本条钉的就是「动词保留 + 取消标记 + 不回退 none」这三件事同时成立。
@@ -162,7 +162,7 @@ def test_negation_elsewhere_in_the_sentence_does_not_block_the_action():
 def test_negation_window_is_four_chars_so_a_closed_negation_does_not_spill():
     """否定语素只作用其后 ≤4 字的执行词：「不要了，帮我删掉吧」是否定收尾、删掉照旧。
 
-    v3 prompt 定稿语义。「删掉」距「不要」
+    v3 prompt 定稿语义（`eval/curate_nlu/prompt_v3.md` 铁律 2）。「删掉」距「不要」
     隔了「了，帮我」4 个字——正在窗外，门不许触发。
     """
     plan = _plan("不要了，帮我删掉吧",
@@ -182,7 +182,7 @@ def test_only_one_of_several_anchors_negated_still_executes():
 def test_action_verb_itself_is_not_a_negation_morpheme_cn():
     """「删掉我上传的 10x 数据」是删除指令，不是「否定删除」——动作词不否定自己。
 
-     模拟剧本抓到的真 bug：极性门直接消费检索弃权守卫表
+    2026-08-03 模拟剧本抓到的真 bug：极性门直接消费检索弃权守卫表
     `NEGATION_GUARDS_CN`（里面收「删掉/移除/过滤掉/拒收」是因为「删掉 X」在**检索句**里
     意味着排除 X），quoted 锚在动作词之后时（LLM 通常只引对象片段），紧邻窗里恰好
     只有动作词本身 → 删除指令被误判 cancelled=True，用户看到「删除没有回应」。
@@ -229,7 +229,7 @@ def test_negation_gate_shares_the_vocabulary_table():
 ])
 def test_question_hedges_are_consultation_not_negation(utterance, quoted, verb):
     """「能不能/要不要/要不…吧」是**征询**不是否定——实验当场抓到的盲区
-    「能不能上网检索一下」里的「不」
+    （`eval/curate_nlu/FINDINGS.md` §5①）：「能不能上网检索一下」里的「不」
     落在「检索」前 4 字窗内，不掩掉征询格式词就会被极性门误判成取消。"""
     plan = _plan(utterance, {"verb": verb, "quoted": quoted, "confidence": "high"})
     assert plan["verb"] == verb, (utterance, plan)
@@ -251,7 +251,7 @@ def test_hedge_masking_is_length_preserving_so_anchor_indices_do_not_drift():
 # ---------------------------------------------------------------- 疑问「没」掩码
 
 @pytest.mark.parametrize("utterance,quoted", [
-    # 实证四族——疑问「没」落在续步 quoted 紧邻左窗，曾被误判 cancelled 掐死多步链：
+    # cr4final 坐实四族——疑问「没」落在续步 quoted 紧邻左窗，曾被误判 cancelled 掐死多步链：
     ("顺便检查一下ArrayExpress有没有更新有新增的人类肺数据就搜来入库", "有新增的人类肺数据就搜来入库"),
     ("帮我瞅一眼ArrayExpress更新没，要是有新的人类肺数据就赶紧搜来入库哈", "有新的人类肺数据就赶紧搜来入库"),
     ("查下ArrayExpress更新没，有新的human lung数据就搜来入库", "有新的human lung数据就搜来入库"),
@@ -283,7 +283,7 @@ def test_interrogative_mei_masking_is_length_preserving():
     assert "没" not in masked
 
 
-# ---------------------------------------------------------------- 顺承「没」掩码
+# ---------------------------------------------------------------- 顺承「没」掩码（2026-08-15 
 
 @pytest.mark.parametrize("utterance,quoted,verb", [
     ("没找到就联网搜", "联网搜", "curate.search_online"),
@@ -327,7 +327,7 @@ def test_llm_said_cancelled_is_accepted_fail_safe():
 
 
 def test_mechanical_gate_overrides_an_llm_that_forgot_to_mark_cancelled():
-    """门测到否定而 LLM 没标 cancelled（甚至标了 false）：**以门为准**——安全侧不让 LLM 定夺。"""
+    """门测到否定而 LLM 没标 cancelled（甚至标了 false）：**以门为准**——安全侧不让 LLM 拍板。"""
     for raw in ({}, {"cancelled": False}):
         payload = {"verb": "curate.import", "quoted": "导入", "confidence": "high", **raw}
         plan = _plan("先别导入", payload)
@@ -415,7 +415,7 @@ def test_a_number_the_user_never_said_is_marked_guessed():
     ("十五条够了，打包", 5),                  # 「十五」里的「五」不是用户说的 5
 ])
 def test_year_identifier_or_date_digits_do_not_count_as_said(utterance, limit):
-    """裸子串会把年份/编号/日期里的数字当成「用户说过的条数」，
+    """2026-08-15 裸子串会把年份/编号/日期里的数字当成「用户说过的条数」，
     诚实层据此谎报 said——这是把系统（LLM 幻觉）的错算到用户头上。词边界判据下必须标 guessed。"""
     plan = _plan(utterance, {"verb": "pack.download", "quoted": "打包",
                              "limit": limit, "confidence": "high"})
@@ -443,7 +443,7 @@ def test_unreadable_limit_is_dropped_not_silently_defaulted():
 
 def test_scope_all_is_refused_with_an_explicit_delta():
     """对话入口 v1 仍钉死 primary 并显式播报（入口口径，不是产品能力边界——接口的
-    scope=all 是公开能力； 验证 把旧「产品不支持」假话文案改成如实口径）。"""
+    scope=all 是公开能力；2026-08-09 评审把旧「产品不支持」假话文案改成如实口径）。"""
     plan = _plan("把全部文件都打包", {"verb": "pack.download", "quoted": "打包",
                                       "scope": "all", "confidence": "high"})
     assert plan["slots"]["target"] == AP.TARGET_DEFAULT
@@ -492,7 +492,7 @@ def test_route_verbs_are_never_blocked_by_missing_results():
 # ---------------------------------------------------------------- 不确定标注恒在
 
 def test_every_exec_plan_carries_the_uncertainty_note_regardless_of_confidence():
-    """ 的结论逐字是「填了字段 ≠ 已核验」：槽值不是本工具核对出来的，
+    """2026-07-16 的结论逐字是「填了字段 ≠ 已核验」：槽值不是本工具核对出来的，
     就必须说出来——与 LLM 的自评 confidence 无关。"""
     for conf in ("high", "low"):
         plan = _plan("打包前5条", {"verb": "pack.download", "quoted": "打包前5条",
@@ -502,7 +502,7 @@ def test_every_exec_plan_carries_the_uncertainty_note_regardless_of_confidence()
 
 
 def test_the_rule_path_does_not_credit_a_model_that_was_never_called():
-    """集成测试抓到的自相矛盾：同一张回执上半句说「大模型这次没有接上」，
+    """2026-07-26 真机截图抓到的自相矛盾：同一张回执上半句说「大模型这次没有接上」，
     下半句说「以上这几项是**大模型**从你这句话里读出来的」。
 
     规则档一次网络请求都没发。「没有另外核对」这半句照旧要说，
@@ -520,7 +520,7 @@ def test_the_rule_path_does_not_credit_a_model_that_was_never_called():
 
 
 def test_the_rule_path_admits_it_read_no_parameters_at_all():
-    """同一张回执里的第二处静默：用户说「打包**前5条**」，规则档只认出「打包」，
+    """同一张真机截图里的第二处静默：用户说「打包**前5条**」，规则档只认出「打包」，
     「前5条」一个字没读，面板按自己的默认口径开了 10 条 —— 回执里却没有一行提到这件事。
 
     后端刻意不在这里再抄一份条数解析器（前端 `tpCountFromUtterance` 是单一真源）。
@@ -595,7 +595,7 @@ def test_rule_fallback_quotes_what_the_user_typed_not_the_lowercased_table_entry
 # ---------------------------------------------------- rule_fallback 共用的名词用法反向闸
 
 @pytest.mark.parametrize("utterance", [
-    "下载量大的数据集有哪些",   # 「下载」后随「量」是名词用法，是检索句
+    "下载量大的数据集有哪些",   # C-1 原案：「下载」后随「量」是名词用法，是检索句
     "只保留能下载的",           # 「下载」后随「的」
 ])
 def test_rule_fallback_ignores_noun_usage_action_verbs(utterance):
@@ -630,7 +630,7 @@ def test_mock_llm_is_never_used_for_planning():
 # ---------------------------------------------------- rule_operation_marker 的名词用法反向闸
 
 @pytest.mark.parametrize("utterance", [
-    "下载量大的数据集有哪些",   # 「下载」后随「量」是名词用法，是检索句
+    "下载量大的数据集有哪些",   # C-1 原案：「下载」后随「量」是名词用法，是检索句
     "只保留能下载的",           # query_parser 注释点名的另一句检索句（「下载」后随「的」）
 ])
 def test_rule_operation_marker_ignores_noun_usage_action_verbs(utterance):
@@ -726,7 +726,7 @@ def test_endpoint_does_not_echo_the_submitted_api_key():
 
 
 def test_raw_shape_violations_is_agent_mirror_prefix():
-    """ agent_exec._validate_raw 的公共形状校验
+    """agent_exec._validate_raw 的公共形状校验
     必须是 action_plan.raw_shape_violations 的**前缀**（单一真源，agent 只叠加多步专属闸）。"""
     from dataset_recommender.agent import agent_exec as AE
 
@@ -751,8 +751,8 @@ def test_raw_shape_violations_is_agent_mirror_prefix():
 def test_plan_action_verbs_are_the_table_minus_loop_only_verbs():
     """plan_action 保底通道的允许表 = 闭环动词表
     减去环内专属动词（search.rerun/rank/rerank 环内检索工具 + route.request 换线
-    元动词 + curate.rollback 回滚——补录：回滚目标依赖本轮 steps
-    实录的快照锚，单次分流没有这个现场； compare.datasets /
+    元动词 + curate.rollback 回滚——rb1补录：回滚目标依赖本轮 steps
+    实录的快照锚，单次分流没有这个现场；2026-08-18 四工具批补录 compare.datasets /
     compat.find / fair.check——默认对象依赖环内现场（当前结果集），单次分流没有）——
     单此一份差集，多一个少一个都是泄漏或误伤。cite.export 不在差集里：它双通道
     （环内执行 + 保底通道前端 runner 仍在，仅 .ris 缺口由环内执行补上）。"""
@@ -766,7 +766,7 @@ def test_plan_action_verbs_are_the_table_minus_loop_only_verbs():
 
 
 def test_mcp_doc_verb_list_covers_plan_action_verbs():
-    """复核：MCP 模型可见文档的动词枚举曾两度漂移（这次
+    """2026-08-17 复核（低）：MCP 模型可见文档的动词枚举曾两度漂移（这次
     少列 check_updates/sync_updates/db_status）——词表唯一真源是 PLAN_ACTION_VERBS，
     文档少列一个都会让 MCP 模型把合法返回当意外。钉：允许表每个动词都在文档里。"""
     import pathlib
@@ -778,7 +778,7 @@ def test_mcp_doc_verb_list_covers_plan_action_verbs():
 
 
 def test_plan_action_never_returns_loop_only_verb():
-    """行为钉：模型在保底通道答了环内动词 rank → 机械拒（进 rejected、降 none），
+    """行为钉：模型在保底通道答了环内动词 rank → 机械拒（进 rejected、降 none）
     与未知 verb 同一条「不做，但要说」渠道；提示词里也不出环内动词行。"""
     seen: list[str] = []
     plan = AP.plan_action(
@@ -808,7 +808,7 @@ def test_build_plan_from_raw_allowed_verbs_gate():
     assert gated["verb"] == "none" and gated["rejected"] == ["rank"]
 
 
-# ---------------------------------------------------------------- 高2：铁律按面生成
+# ---------------------------------------------------------------- 铁律按面生成
 
 def test_constraints_zh_default_is_byte_identical_full_table():
     """缺省（None）= 全表铁律，与 `_CONSTRAINTS_ZH` 逐位一致——plan_action 面零漂移。"""
@@ -834,3 +834,16 @@ def test_scoped_face_prompt_has_no_retired_route_verbs():
     no_retrieval = [s for s in AP.VERB_SPECS
                     if s.verb in {"pack.download", "curate.db_status", "none"}]
     assert "检索需求，不是执行诉求，verb 填 none。" in AP._constraints_zh(no_retrieval)
+
+
+# ---------------------------------------------------------------- 前端直派面词表派生
+
+def test_frontend_dispatch_plane_derives_from_verb_specs():
+    """前端直派面（turn._FRONTEND_EXEC_PLANE）的唯一真源是
+    VerbSpec.frontend_dispatch 属性位——turn 不再私藏第二份 frozenset。本钉防名单
+    漂移：加/摘直派动词必须先在词表立/摘属性位（含 pack.preview 刻意不在面的
+    反向钉——预览不自动下载，进面会让预览句绕过 agent 图）。"""
+    plane = {s.verb for s in AP.VERB_SPECS if s.frontend_dispatch}
+    assert plane == {"pack.download", "reuse.pack"}
+    from dataset_recommender.agent import turn as T
+    assert T._FRONTEND_EXEC_PLANE == frozenset(plane)

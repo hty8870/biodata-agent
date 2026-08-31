@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""网页版账号护栏：账号级 LLM 调用日配额。
+"""网页版账号护栏（T3，2026-08-25）：账号级 LLM 调用日配额。
 
 定位：**只在部署护栏形态（``BIODATA_REQUIRE_ACCOUNT=1``）下被调用**；本机单机形态
 完全不经过本模块（闸口在 webapp `_gate_llm_quota`，缺省关 = 逐字节不变）。
@@ -8,7 +8,7 @@
 原子写 tmp+os.replace），按 **UTC 日**重置（北京时间每日 08:00 归零）。账本只服务
 日配额，跨日旧账整段丢弃、不留历史。
 
-纪律：
+纪律（T3 任务书 §2.3）：
 - 计数存储故障 → **放行** + error 日志（可用性优先；provider 侧消费上限是最后防线）。
 - 账本损坏 → 重建空账 + warning（与 sessions 库同为可再生状态，fail-open）。
 - 只计「将真实消耗服务端 LLM」的请求：BYOK（请求自带 key）/ mock / 未启用 / 服务端
@@ -19,13 +19,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import secrets
 import threading
 import time
 from pathlib import Path
 from typing import Any
 
-from .runtime_paths import instance_data_dir_for
+from .runtime_paths import atomic_write_json, instance_data_dir_for
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +69,8 @@ def _load(path: Path) -> dict[str, Any]:
 
 
 def _save(path: Path, data: dict[str, Any]) -> None:
-    """与 accounts._save_store 同款原子写（tmp + os.replace）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, ensure_ascii=False)
-    os.replace(tmp, path)
+    """原子写走 runtime_paths.atomic_write_json（紧凑格式，与历史字节一致）。"""
+    atomic_write_json(path, data, indent=None)
 
 
 def check_and_increment(

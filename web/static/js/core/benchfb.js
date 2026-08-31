@@ -10,7 +10,7 @@
  * 标有用条目、写评语，最后一键导出 **单个 JSON 文件**（微信当文件发回即可）——为
  * benchmark 制作供数。两条通道共用**同一个开关**（usage_log 的使用反馈开关）、同一批红线：
  * 默认本地采集、部署方配置上传通道后脱敏上传（本文件零出网，唯一出口 usage_upload.js；
- * 生产通道为明文 HTTP，属 已知风险裁决，consent 弹窗如实告知）、
+ * 生产通道为明文 HTTP，属已知风险裁决，consent 弹窗如实告知）、
  * api_key 绝不落盘（请求脱敏在 benchfb_core.benchfbStripRequest，契约门另有断言）。
  *
  * ## 采集点（三个调用方，各留一行）
@@ -27,7 +27,7 @@
  * _cbLog 会随 pushHist 持久化进历史、参与帧剪枝/分支/回退——评分卡是**采集层的临时投影**，
  * 不是对话内容，历史格式一个字节不变。**每次收尾（hero 检索 / 对话检索 / 工具执行
  * 都算一轮）生成一张绑定该轮 rec.id 的独立卡**，不再有全局单卡 _promptId；
- * **会话降频**（派发口径「就你最关注的地方出现两次就行」）：
+ * **2026-08-22 起加会话降频**（派发口径「就你最关注的地方出现两次就行」）：
  * 每 tab 会话主动完整卡 ≤2 张、收起/不评分连续 2 次本会话不再主动出卡
  * （sessionStorage 计数，纯函数闸在 benchfb_core.js；刷新页面会话重置是可接受的
  * 会话语义）；被降频的 search/tool 轮与 none/error 轮一样只给折叠「评价」按钮，
@@ -37,7 +37,7 @@
  *   本轮最近一条系统回复 entry 上（bfRecId），cbRenderHistory 在 entry 下方渲染挂载点
  *   [data-bf-mount]，重画后由 benchfbAfterRender（渲染钩）把卡填回——entry 被剪枝/清空
  *   时卡自然消失，记录仍在 localStorage。
- * none/error 轮（纯埋点、不出完整卡）在挂载点渲染一颗
+ *   （2026-08-20）：none/error 轮（纯埋点、不出完整卡）在挂载点渲染一颗
  *   低调「评价」按钮，点击原位展开完整评分卡、再点收起（展开态存 _expandedRates 内存集合，
  *   重画后照读不错乱）；hero 侧 none/error 轮（回音/检索失败同样有系统回复泡）一并绑定。
  * - hero 轮（src="hero"，无对话）：卡挂结果区顶部专用槽位（#resultsGrid 首子，由
@@ -48,7 +48,8 @@
  * ## 埋点绝不许把主功能带崩
  *
  * 同 usage_log 纪律：所有存储写都在 try 里，配额满就安静地少记一条，绝不弹错打断检索。 */
-import { LS, nsKeyFor, readJSON, writeJSON, $, downloadBlobAs, escapeHtml, toast } from "#core";
+import { LS, nsKeyFor, readJSON, writeJSON, $, cacheGeneration, escapeHtml, toast } from "#core";
+import { dlqFireBlob } from "#downloads";
 import { USAGE_KINDS, usageActiveTurnId } from "#usage_core";
 import { usageClearScope, usageClientId, usageEnabled, usageEnabledForScope, usageInstallId,
     usageLog, usageNoteDropsForScope, usageProfileIdForScope, usageScope } from "#usage_log";
@@ -59,7 +60,7 @@ import {
     benchfbRateSession, benchfbProactiveAllowed, benchfbNoteShown, benchfbNoteRated, benchfbNoteDismissed,
     benchfbResolveUseful,
 } from "#benchfb_core";
-/*意见反馈队列（相对 import，不进 importmap/静态图——同 usage_upload 的哲学）；
+/* 意见反馈队列（相对 import，不进 importmap/静态图——同 usage_upload 的哲学）；
    仅导出反馈包时读明文本地账本，其余路径零接触。 */
 import { feedbackPendingForScope } from "./feedback_core.js";
 
@@ -77,7 +78,7 @@ let _markMode = false;      // 标注模式开关
 let _markObs = null;        // 标注期的 MutationObserver（结果区重画后补回标记/越界即收摊）
 let _markFingerprint = "";  // 标注开启时结果区的内容指纹（同数量不同内容的重画也要识别）
 
-/* 结果区内容指纹：逐卡取「数据集详情」链接 href（含 uid/url/名称/来源），
+/* 结果区内容指纹（2026-08-15）：逐卡取「数据集详情」链接 href（含 uid/url/名称/来源），
    非卡片子节点（如放宽横幅 / hero 评分卡槽位）计空串。只比 children.length 挡不住
    「同数量、不同内容」的重画。hero 卡槽位（.bf-mount）也计入空串档——名次计算统一走
    _gridCards（跳过槽位），指纹与名次同一套口径。 */
@@ -237,7 +238,7 @@ if (window.addEventListener) {
 
 /* 用户发出一句话（ubSubmit 第一落点）。env 由调用方从 getConfig() 摘好传入——
    本模块不 import shell（那会成 import 环），只收纯数据。
-   opts.templateOriginated：任务卡/chip 生成文本
+   opts.templateOriginated（2026-08-22，设计 §5.5）：任务卡/chip 生成文本
    提交时由调用方显式带 true（未经编辑）/ false（编辑过）——轮次记录 additive 落
    `template_originated` 键；普通手打不传 → 无此键。接收端/导出按此排除 benchmark 候选。 */
 export function benchfbTurnBegin(text, opts) {
@@ -262,7 +263,7 @@ export function benchfbTurnBegin(text, opts) {
         route: null, route_ms: 0, search: null, action: null, err: "",
     };
     if (opts.templateOriginated === true || opts.templateOriginated === false) {
-        _turn.template_originated = opts.templateOriginated;   // 无此键 = 普通手打
+        _turn.template_originated = opts.templateOriginated;   // 无此键 = 普通手打（设计 §5.5）
     }
 }
 
@@ -304,7 +305,7 @@ export function benchfbTurnSearch(reqBody, data, opts) {
     _closeTurn("search");
 }
 
-/* 并段白名单：只有「检索→接打包」系动作段允许并回上一轮记录——
+/* 并段白名单（2026-08-15）：只有「检索→接打包」系动作段允许并回上一轮记录——
    设计意图就是一句话任务包「检索完接打包」。窗口内其余动作（删文件/恢复等）并回去会污染
    反馈包里「这轮检索后用户做了什么」的因果，一律自立一条。 */
 const MERGE_BACK_VERB_RE = /^(pack\.|打包|打开打包清单)/;
@@ -339,7 +340,7 @@ export function benchfbTurnError(msg) {
     _closeTurn("error");
 }
 
-/* 在途轮次挂错误注记但**不收尾**（补漏）：路由 fail-open 时
+/* 在途轮次挂错误注记但**不收尾**（2026-08-15 补漏）：路由 fail-open 时
    检索段随后仍并入同一条记录，若什么都不写，反馈包里这轮看起来就是一次正常检索——
    看不出路由层失败过。err 字段本就是记录形状的一部分，这里只填不收尾。 */
 export function benchfbTurnNote(msg) {
@@ -353,7 +354,7 @@ function _closeTurn(kind) {
         id: benchfbMakeId(now, Math.random().toString(36).slice(2, 8)),
         kind: kind,
         end: now,
-        ms: Math.max(0, now - _turn.t),   // 轮次耗时（turn begin→close）
+        ms: Math.max(0, now - _turn.t),   // 轮次耗时（turn begin→close，设计 §5）
         rating: null,
     });
     _turn = null;
@@ -426,7 +427,7 @@ function _noteShown(rec) {
     _saveRateSession(benchfbNoteShown(cur, rec.id, !!(prev && _isRated(prev))));
 }
 
-/* ---------- 评分标签事件（schema v3 label）----------
+/* ---------- 评分标签事件（2026-08-22，schema v3 label）----------
    每次评分写入**无论 benchfb 记录还在不在本地**都发一条 usage label 事件：记录可能被
    上传 ACK 精确删除，但「这轮评了什么」必须仍可达接收端（事件带 recId，导出侧按
    (tid, recId) 双源去重、同键大 rev 赢——recId 是 additive 可选字段，schema 版本不再 bump）。
@@ -592,7 +593,7 @@ function _fillCard(mountEl, rec) {
     if (ta && _autoGrow) _autoGrow(ta, { minRows: 2, maxRows: 5 });
 }
 
-/* 折叠「评价」按钮（低视觉权重小字）：none/error 纯埋点轮与曾被会话
+/* 折叠「评价」按钮（低视觉权重小字）：none/error 纯埋点轮与被会话
    降频闸拦下的 search/tool 轮共用。点击原位展开完整评分卡（展开态存 _expandedRates
    内存集合，重画后照读不错乱），再点「收起」回到按钮。 */
 function _fillToggle(mountEl, rec) {
@@ -605,7 +606,7 @@ function _fillToggle(mountEl, rec) {
 }
 
 /* 对话轮挂载点（[data-bf-mount]）：按挂载点上的 rec.id 填卡；已收起/记录被清 → 留空
-   （.bf-mount:empty 不占位）。折叠档（_collapsedRate：none/error 轮，或 降频闸拦下的
+   （.bf-mount:empty 不占位）。折叠档（_collapsedRate：none/error 轮，或降频闸拦下的
    search/tool 轮）默认只渲染「评价」按钮；主动出完整卡前经 _noteShown 计一次会话配额。 */
 function _renderMount(mountEl) {
     if (!mountEl) return;
@@ -646,7 +647,7 @@ function _renderHeroMount() {
     const heroRec = _lastHeroRecId ? _findRecord(_lastHeroRecId) : null;
     if (!heroRec || _dismissed.has(heroRec.id)) { m.remove(); return; }
     if (heroRec.kind === "search" && heroRec.id !== _lastSearchRecId) { m.remove(); return; }
-    // hero 槽位也只接受 search/tool 轮；none/error 轮（_lastHeroRecId 不会更新到它们）
+    // （设计 §4）：hero 槽位也只接受 search/tool 轮；none/error 轮（_lastHeroRecId 不会更新到它们）
     // 与未来可能的其他轮型一律不出卡，防槽位被挂成空卡。
     if (heroRec.kind !== "search" && heroRec.kind !== "tool") { m.remove(); return; }
     // 会话降频闸同样约束 hero 槽位——被拦下的轮次只给折叠「评价」按钮。
@@ -740,7 +741,7 @@ function _enterMarkMode() {
     _applyMarks();
     // 结果区被重画（分面/新检索）时：内容没变就补回标记；变了就如实收摊——
     // 老记录的名次对新一屏结果不成立，硬标上去就是脏数据。
-    //  判据从「只比卡片数量」升级为「数量 + 内容指纹」——
+    // 2026-08-15：判据从「只比卡片数量」升级为「数量 + 内容指纹」——
     // 同数量不同内容的重画（新一轮检索恰好也是 N 条）此前会把旧名次贴到新条目上。
     if (_markObs) _markObs.disconnect();
     _markObs = new MutationObserver(function () {
@@ -787,19 +788,13 @@ function _toggleMark(card) {
 
 /* ---------- 导出 ---------- */
 
-function _cacheGen() {
-    const s = document.querySelector('script[src*="/static/js/"]');
-    const m = s && /[?&]v=([^&"]+)/.exec(s.src);
-    return m ? m[1] : "";
-}
-
 function _buildPackage() {
     const pkg = benchfbBuildPackage(_records(), {
         installId: usageInstallId(),
         clientId: usageClientId(),
         profileId: usageProfileIdForScope(usageScope()),
         exportedAt: new Date().toISOString(),
-        app: { cache_generation: _cacheGen(), ua: navigator.userAgent || "", lang: navigator.language || "" },
+        app: { cache_generation: cacheGeneration(), ua: navigator.userAgent || "", lang: navigator.language || "" },
     });
     // 本地导出反馈包包含本 profile 已发送/待发送的意见记录（明文本地账本，
     // 入队时已遮蔽；不含密文——发送侧用加密载荷）。最小侵入：附加在顶层 feedback 字段，
@@ -879,10 +874,10 @@ export function benchfbDownload() {
     const pkg = _buildPackage();
     const text = JSON.stringify(pkg, null, 1);
     const name = benchfbFileName(new Date());
-    try {
-        downloadBlobAs(new Blob([text], { type: "application/json;charset=utf-8" }), name);
+    // 反馈包也走统一下载队列（dlqFireBlob 内部 try/catch，失败返回 false）。
+    if (dlqFireBlob(name, new Blob([text], { type: "application/json;charset=utf-8" }), { kind: "other" })) {
         toast("已下载 " + name + "，把它当文件发给开发者即可");
-    } catch (_e) {
+    } else {
         toast("下载没成功，可以改用「预览」全选复制");
     }
 }
@@ -919,7 +914,7 @@ export function benchfbClearWithConfirm() {
     toast("本账户尚未上传的使用与评分记录已清空；已上传记录不会被远程删除");
 }
 
-/* 设置区导出按钮态（a5：卡片状态小字随文案收敛移除，这里只剩按钮态）。
+/* 设置区导出按钮态（2026-08-21：卡片状态小字随文案收敛移除，这里只剩按钮态）。
    顺带刷新「本机编号」行——只读既有键，**绝不为了展示而生成**（未产生数据时如实显示）。 */
 export function _syncPanel() {
     const btn = $("benchfbExportBtn");
@@ -956,7 +951,7 @@ export function initBenchfb() {
         if (!card) return;
         const recId = card.dataset.bfRec;
         if (!recId) return;
-        //  折叠档（none/error 轮、或被 会话降频闸拦下的 search/tool 轮）点「评价」→
+        // 折叠档（none/error 轮、或被会话降频闸拦下的 search/tool 轮）点「评价」→
         // 原位展开完整评分卡（用户主动行为，不占配额）；焦点给第一个完成度选项。
         if (t.closest("[data-bf-rate-toggle]")) {
             _expandedRates.add(recId);
@@ -975,7 +970,7 @@ export function initBenchfb() {
             }
             return;
         }
-        //  完成度三选（取代星级）：点选入库；再点同一项 = 取消选择。
+        // 完成度三选（取代星级）：点选入库；再点同一项 = 取消选择。
         const comp = t.closest("[data-bf-comp]");
         if (comp) {
             const v = String(comp.dataset.bfComp || "");
@@ -1012,7 +1007,7 @@ export function initBenchfb() {
         if (t.closest("[data-bf-skip]")) {
             // 折叠档（none/error 轮 / 降频闸拦下的轮次）的「收起」＝收起回「评价」按钮
             // （展开态集合删除，不整张卡消失）；search/tool 主动卡保持既有语义——整卡收起、
-            //  本会话不再挂回，且未评分即收起计入连续忽略（降频）。
+            // 本会话不再挂回，且未评分即收起计入连续忽略（降频）。
             const rec = _findRecord(recId);
             if (rec && _collapsedRate(rec)) {
                 _expandedRates.delete(recId);

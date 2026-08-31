@@ -3,7 +3,7 @@
 /* ============================================================================
  * act_run.js —— 执行行动流（Agent Run Experience）：对话式、分条的执行播报
  * ----------------------------------------------------------------------------
- * 执行类操作不再是结果区里一堵
+ * 用户点名的形态（2026-08-03 图2 指令）：执行类操作不再是结果区里一堵
  * 规则拼接的静态面板，而是**对话流里的行动条目流**——关键节点逐条上屏供监督，
  * 完成后收成一条总结（总结正文由 act.js 决定：LLM 生成、缺席时回退紧凑事实句）。
  *
@@ -14,7 +14,7 @@
  *   · **条目粒度 = 真实步骤边界**（前端 runner 的顺序 await：plan / 联网查询 /
  *     apply 各是一条），绝不伪造流式进度——没有 SSE，后端端点全是单次阻塞，
  *     这里每一行都对应一件真发生了的事。agent 路径的规划步骤（plan.trace）同样
- *     不是前端编的：那是后端 langgraph 各节点实记、随单次响应带回（契约）。
+ *     不是前端编的：那是后端 langgraph 各节点实记、随单次响应带回。
  *   · 渲染收口在 board.js cbRenderHistory 的尾部（arxTailHtml），本文件只持有
  *     状态与 HTML 构造；重画经 _onChange 回调（act.js 注入），不反向 import board。
  *   · 动态值一律 escapeHtml；steps/detail 只允许纯文本。
@@ -30,7 +30,7 @@ let _onChange = null; // 重画回调（act.js 注入 board.js 的 cbRenderHisto
 export function arxOnChange(fn) { _onChange = fn; }
 function _emit() { if (_onChange) _onChange(); }
 
-/* 行动流头部实时秒表——<2s 不亮（防闪烁），
+/* 设计 §2.5.4（claude code ≥2s 规则）：行动流头部实时秒表——<2s 不亮（防闪烁），
    到秒才进位。不走 _emit（整史重画太贵）：一拍只改头部 [data-arx-elapsed] 的文本；
    重画时该 span 由 arxTailHtml 按 _run.elapsedSec 重建，两通道同源。 */
 function _stopElapsed() { if (_elapsedTimer) { clearInterval(_elapsedTimer); _elapsedTimer = null; } }
@@ -88,7 +88,7 @@ export function arxStep(text, opts) {
     _emit();
 }
 
-/* tool_start 先亮的 pending running 行，等它的完成帧按 label **改行**
+/* tool_start 先亮的 pending running 行（设计 §2.5.3），等它的完成帧按 label **改行**
    （落 done/failed + detail），不落新行。返回 false = 没有匹配的 pending 行（旧后端无
    tool_start 事件 / label 漂移）——调用方回落 arxStep 追加，行为与现状逐位一致。 */
 export function arxSettlePending(text, opts) {
@@ -108,7 +108,7 @@ export function arxSettlePending(text, opts) {
     return false;
 }
 
-/* 决策条目：需要用户给东西/做抉择时调用（后只剩浏览器安全边界一种：import 的系统
+/* 决策条目：需要用户给东西/拍板时调用（现只剩浏览器安全边界一种：import 的系统
    文件对话框）；办完 arxDecisionDone(echo) 收格并附回显（如「已选文件 xx.json」）。 */
 export function arxDecision(text) {
     if (!_run) return;
@@ -142,7 +142,7 @@ export function arxFail() {
 export function arxFinish() {
     if (!_run || _run.collapsing) return [];
     _stopElapsed();
-    // 收尾头部弱信息行（对齐实现 code "Done in Ns" 的等价物）——
+    // 收尾头部弱信息行（设计 §2.5.5，claude code "Done in Ns" 的等价物）——
     // 折叠动效那 420ms 里可见；步骤快照本身不带耗时（快照是过程记录，不是计时牌）。
     const _secs = _run.t0 ? Math.max(0, Math.round((Date.now() - _run.t0) / 1000)) : 0;
     _run.finalLine = "· 用时 " + _secs + "s · " + _run.steps.length + " 步";

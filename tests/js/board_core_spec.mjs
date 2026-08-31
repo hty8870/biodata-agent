@@ -144,6 +144,35 @@ ok(cbIsNoop(base, Object.assign({}, base, { query: "小鼠肺" })) === false, "�
 ok(cbIsNoop(base, Object.assign({}, base, { lenient_dims: ["tissue"] })) === false, "放宽了也是改了");
 ok(cbIsNoop(null, base) === false, "缺一边时不敢判「没改」");
 
+/* ---------------- 逐条反馈操作条（msgfb，2026-08-28） ---------------- */
+const { cbMsgFbNext, cbMsgCommentText, cbMsgForkable } = core;
+
+/* 赞/倒赞互斥三态机 */
+eq(cbMsgFbNext("", "up"), "up", "空态点赞 = 赞");
+eq(cbMsgFbNext("up", "up"), "", "再点已选中的赞 = 取消");
+eq(cbMsgFbNext("up", "down"), "down", "赞上点倒赞 = 换边");
+eq(cbMsgFbNext("", "down"), "down", "空态点倒赞 = 倒赞");
+eq(cbMsgFbNext("down", "down"), "", "再点已选中的倒赞 = 取消");
+eq(cbMsgFbNext("down", "up"), "up", "倒赞上点赞 = 换边");
+eq(cbMsgFbNext("bogus", "up"), "up", "脏初态按空态处理");
+eq(cbMsgFbNext("up", "bogus"), "up", "脏动作不改变现状");
+
+/* 评论入队文本：正文 + 引用尾（mid + 摘段） */
+const cmt = cbMsgCommentText("这句很有用", "m7", "检索完成：库中共 36 条匹配");
+ok(cmt.indexOf("这句很有用") === 0, "评论正文在前");
+ok(cmt.indexOf("m7") > 0 && cmt.indexOf("检索完成") > 0, "引用尾带 mid 与摘段");
+const longSnip = "一二三四五六七八九十".repeat(10);
+const cmt2 = cbMsgCommentText("x", "m1", longSnip);
+ok(cmt2.indexOf("…") > 0, "超长摘段截断加省略号");
+ok(cmt2.length < longSnip.length + 40, "截断确实变短");
+ok(cbMsgCommentText("x", "m1", "").indexOf("（原文不在本地）") > 0, "空摘段如实标注");
+ok(cbMsgCommentText("x", "m1", "a\n\nb").indexOf("a b") > 0, "摘段压平换行");
+
+/* 分支点判据 */
+ok(cbMsgForkable(3, true) === true, "挂在存活帧上的回复可分支");
+ok(cbMsgForkable(null, false) === false, "无帧回复不可分支");
+ok(cbMsgForkable(3, false) === false, "帧已不在栈里不可分支");
+
 /* ---------------- 纯度 ---------------- */
 const src = readFileSync(fileURLToPath(new URL("../../web/static/js/panel/board_core.js", import.meta.url)), "utf8");
 ["localStorage", "sessionStorage", "document", "fetch(", "Date.now(", "new Date", "performance.now"]

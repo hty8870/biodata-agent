@@ -1,20 +1,20 @@
 # -*- coding: utf-8 -*-
-"""decide 的 tool-calling 主通道 + 图单例并发（langgraph 迁移）的确定性门。**全离线**：
+"""decide 的 tool-calling 主通道 + 图单例并发（2026-08-07 langgraph）的确定性门。**全离线**：
 
 - decide 通道矩阵：finish / 空回答 / 散文拒答 / content JSON 双通道 / 幻觉工具名 /
   多 tool_call 取第一个（DeepSeek 不遵守 parallel_tool_calls=False）/
   unsupported_next_step 婉拒 / none 干净 done / tools 通道异常跌
-  JSON 兜底（记 fallback 审计）/ parallel_tool_calls=False 契约；
+  JSON 兜底（审计 node="decide"）/ parallel_tool_calls=False 契约；
 - **非法应答重问一次**：主通道拿到非法应答
-  重问一次；重问后的写动词 **放行 + 强制核销复核**（取代
-   只读闸）——放行的写步落 `reask_writes` 台账，finish 报告必须引用其步骤号
+  重问一次；重问后的写动词 **放行 + 强制核销复核**（2026-08-07 设计决定 B 方案，取代
+  2026-08-08 只读闸）——放行的写步落 `reask_writes` 台账，finish 报告必须引用其步骤号
   单独交代结果，否则核销硬闸拒收；重问仍非法 / JSON 兜底档非法 → 照旧停环不多问；
-- **violation 重问对称化**：续步提议没过 `_validate_raw`
+- **violation 重问对称化**（r3 坐实）：续步提议没过 `_validate_raw`
   校验 → 带检查意见重问一次，与非法应答**共享同一份重问预算**（每次 decide 至多一次）；
   重问后改对照常放行、仍违规 fail-safe 停环；去重/覆盖闸/死路/联网暂停等刻意机械停不重问；
 - understand 侧多 tool_call 同样取第一个（不再判空跌兜底）；
 - 图单例：编译计数器跨调用不增长；ThreadPoolExecutor 多请求交错跑同一 compiled graph
-  不串味（验证 的验收钉）；
+  不串味（评审的验收钉）
 - **未决事项机械提示段**（finish 核销被「带步骤引用的假豁免/假已做」
   绕过族）——点名源未触碰 / 库容问句缺 db_status / 检出未入库 三条机械规则命中时注入
   decide 双壳 prompt；提示不是闸，三规则全不命中整段不出现。
@@ -101,7 +101,7 @@ def _fake_tools(monkeypatch):
                 "generated_at": "t", "sources": [], "total_records": 0,
                 "external_files": [], "recycle": [],
                 "ledger": {"entries": 0, "by_endpoint": {}, "recent": []}},
-            "label_zh": "读取数据库状态", "card_kind": "db_status",
+            "label_zh": "汇报数据库状态", "card_kind": "db_status",
             "readonly": True, "report": True, "observation": True},
     })
 
@@ -124,7 +124,7 @@ def test_finish_tool_call_is_a_clean_done():
         _raw_tool_call("finish", {}),
         AIMessage(content="检到 2 条疑似新增。"),
     )
-    # 换纯净 utterance（无入库诉求——pending 硬闸不拦 finish），
+    # 2026-08-08 换纯净 utterance（无入库诉求——pending 硬闸不拦 finish）
     # 本钉钉的是「finish 工具调用=干净 done」的通道语义，不是条件入库场景。
     plan, trace = _plan("检查ArrayExpress是否有更新", model)
     assert [s["verb"] for s in plan.get("steps") or []] == ["curate.check_updates"]
@@ -135,8 +135,8 @@ def test_finish_tool_call_is_a_clean_done():
 
 def test_empty_answer_is_reasked_once_then_done():
     """空回答 = 非法 → **重问一次**（
-    旧规则「拿到但非法绝不多问第二次」（验证）细化为「重问一次」；重问后的写动词
-     放行 + 强制核销，见下方专项测试）；
+    旧钉「拿到但非法绝不多问第二次」细化为「重问一次」；重问后的写动词
+    2026-08-07 设计决定 B 方案——放行 + 强制核销，见下方专项测试）
     重问仍非法 → 照旧停环，不再问第二次。"""
     model = _FakeModel(
         _understand_check(),
@@ -200,8 +200,8 @@ def test_hallucinated_tool_name_is_invalid_done():
 
 def test_multiple_tool_calls_accept_first_in_order():
     """decide 一次回两个 tool_call → **取第一个按序执行**（取代
-    「多调用机械拒绝」：DeepSeek 实测不遵守 parallel_tool_calls=False，decide
-    不可读应答全是多调用、第一个调用是合法续步——循环带新状态会再判断后续，
+    「多调用机械拒绝」：DeepSeek 实测不遵守 parallel_tool_calls=False，实测 decide
+    不可读 17/17 全是多调用、第一个调用 17/17 合法续步——循环带新状态会再判断后续，
     吃第一个不吞事）；trace 如实留痕「一次给了 2 个调用」。"""
     checklist_ans = AIMessage(content=json.dumps([
         {"text": "检查更新", "anchor": "检查ArrayExpress是否有更新",
@@ -241,7 +241,7 @@ def test_unsupported_next_step_goes_through_declined_path():
 
 
 def test_none_means_clean_done_now():
-    """content JSON 里 {"verb":"none"}：现在起 = 干净的 done（旧版误入婉拒路径，
+    """content JSON 里 {"verb":"none"}：2026-08-07 起 = 干净的 done（旧版误入婉拒路径，
     会说出「你要的『没有操作』这一步没有做」的怪话——此钉防复活）。"""
     model = _FakeModel(
         _understand_check(),
@@ -258,7 +258,7 @@ def test_none_means_clean_done_now():
 # ---------------------------------------------------------------- 非法应答重问一次
 
 def test_invalid_answer_reask_allows_readonly_continuation():
-    """问题主治①：decide 散文拒答 → 重问一次 → 重问后提议只读 db_status → 照常放行执行，
+    """问题主治①：decide 散文拒答 → 重问一次 → 重问后提议只读 db_status → 照常放行执行
     trace 如实记「第一次回答没读懂，已重问一次」。"""
     utter = "检查ArrayExpress是否有更新，完了告诉我库里有多少条"
     model = _FakeModel(
@@ -278,12 +278,12 @@ def test_invalid_answer_reask_allows_readonly_continuation():
     assert "第一次回答没读懂，已重问一次" in decides[0]["detail"]
     assert "还需要一步" in decides[0]["detail"]
     reask = model.invocations[2]
-    assert "你刚才的回答没能读懂" in reask[-1].content, "需求钉的反馈文案必须进重问消息"
+    assert "你刚才的回答没能读懂" in reask[-1].content, "任务书钉的反馈文案必须进重问消息"
 
 
 def test_invalid_answer_reask_write_verb_allowed_with_forced_accounting():
-    """**放行 + 强制核销**策略（取代只读闸；旧规则「重问后的写动作绝不
-    执行」的误杀现场：长链「首答散文→重问答对但首选写动词」被稳定截断）：
+    """2026-08-07 设计决定 **B 方案**（取代 2026-08-08 只读闸；旧钉「重问后的写动作绝不
+    执行」的误杀现场：g04/l07 型长链「首答散文→重问答对但首选写动词」被稳定截断）：
     重问后提议 search_online（写）→ **放行真跑**、落强制核销账（trace 如实留痕）；
     finish 报告不引用该步步骤号 → 核销硬闸拒收回灌（形态专句「没有单独交代」）；
     回灌后补上引用 → 接受收尾。"""
@@ -313,7 +313,7 @@ def test_invalid_answer_reask_write_verb_allowed_with_forced_accounting():
 def test_reask_write_unaccounted_third_finish_is_failsafe_accepted():
     """重问写步三次 finish 都不单独交代 → 第三次 fail-safe 接受并如实标注（每请求至多
     回灌 2 次，防原地空转；标注进 trace，人读可复盘）。
-    旧「第二击即放行」过软，升级为三击放行。"""
+    2026-08-09 调研-长程agent批 候选2：旧「第二击即放行」过软，升级为三击放行。"""
     model = _FakeModel(
         _understand_check(),
         AIMessage(content=""),                               # decide#1：空回答 → 非法
@@ -374,7 +374,7 @@ def test_valid_answer_is_never_reasked():
     assert "重问" not in _decide_nodes(trace)[0]["detail"]
 
 
-# ---------------------------------------------------------------- violation 重问对称化
+# ---------------------------------------------------------------- violation 重问对称化（r3 坐实）
 
 def test_violation_proposal_is_reasked_once_then_finish():
     """decide 续步提议没通过机械校验（quoted 非原话逐字）→ **带检查意见重问一次**
@@ -464,7 +464,7 @@ def test_adjudication_violation_feedback_unit():
     assert declined3 and fb3 == "", "范围外是刻意的机械停，不给重问反馈"
 
 
-# ---------------------------------------------------------------- 未决事项机械提示段（核销被「合法措辞」绕过族）
+# ---------------------------------------------------------------- 未决事项机械提示段（2026-08-08 核销被「合法措辞」绕过族）
 
 _CHECK_NEW_STEP = {"verb": "curate.check_updates", "ok": True,
                    "slots": {"source": "ArrayExpress"},
@@ -477,7 +477,7 @@ _SEARCH_OK_STEP = {"verb": "curate.search_online", "ok": True,
 
 def test_pending_hints_rule_matrix():
     """三条规则各自的命中/清除矩阵（**提示不是闸**，拿不准绝不报）：
-    ①点名源未触碰（逐字规范名 ENCODE 也算点名——与点名源闸的豁免同口径）；
+    ①点名源未触碰（逐字规范名 ENCODE 也算点名——与点名源闸的豁免同口径）
     ②库容问句缺 db_status；③检出未入库（原话含「同步」时不报——sync 本身就是入库路径）。"""
     # 规则 1：ENCODE 未触碰 → 一行；被触碰（slots.source）→ 清除
     block = agent_exec._pending_hints_block_zh("检查一下ENCODE有没有更新", [])
@@ -531,7 +531,7 @@ def test_pending_hints_block_reaches_both_decide_channels():
     for prompt in (tools_prompt, json_prompt):
         assert "机械提示：以下事项可能还没做" in prompt
         assert "「检出」不等于「入库」" in prompt
-        # 段末重锚输出契约（集成坐实：无此句时模型被「逐项核对」带进散文）
+        # 段末重锚输出契约（真机坐实：无此句时模型被「逐项核对」带进散文）
         assert "核对完仍按上面的规则回答" in prompt
 
 
@@ -549,7 +549,7 @@ def test_pending_hints_block_absent_when_nothing_pending():
 # ---------------------------------------------------------------- 兜底档与审计
 
 def test_decide_tools_channel_exception_falls_back_to_json_with_audit(_tmp_project_root):
-    """decide 的 tools 通道抛异常 → 散文 JSON 兜底再问一次（`_DECIDE_RULES_ZH` 全文），
+    """decide 的 tools 通道抛异常 → 散文 JSON 兜底再问一次（按当前面装配的 JSON 壳全文），
     拿到 {"done": true} → 正常停环；且往 agent_fallbacks.jsonl 落一行 node="decide" 的账。"""
     model = _FakeModel(
         _understand_check(),
@@ -597,10 +597,10 @@ def test_parallel_tool_calls_disabled_and_tier_choices():
     assert model.binds[0]["tool_choice"] == "required"   # understand
     assert model.binds[1]["tool_choice"] == "auto"       # decide
     decide_tools = {t["function"]["name"] for t in model.binds[1]["tools"]}
-    # 转正：general 套件 decide 面 = 8 loop（rank/rerank/route_request 常驻
+    # general 套件 decide 面 = 8 loop（rank/rerank/route_request 常驻
     # 入列）+ finish + unsupported_next_step。
-    # 刻意更新：curate.rollback 入列（回滚动词化），9 loop + 2 控制。
-    # 刻意更新：compare.datasets / cite.export / compat.find /
+    # 2026-08-17 rb1 刻意更新：curate.rollback 入列（回滚动词化），9 loop + 2 控制。
+    # 2026-08-18 四工具批刻意更新：compare.datasets / cite.export / compat.find /
     # fair.check 入列（环内结果处理四工具），13 loop + 2 控制。
     assert decide_tools == {
         "curate_check_updates", "curate_search_online", "curate_sync_updates",
@@ -608,12 +608,12 @@ def test_parallel_tool_calls_disabled_and_tier_choices():
         "curate_rollback", "compare_datasets", "cite_export", "compat_find",
         "fair_check",
         "finish", "unsupported_next_step",
-    }, "decide 工具面 = 13 loop + 2 控制（不是全动词表，含 compare/cite/compat/fair）"
+    }, "decide 工具面 = 13 loop + 2 控制（不是全动词表，评审；2026-08-18 新增 compare/cite/compat/fair）"
 
 
 def test_understand_accepts_first_of_multiple_tool_calls(_tmp_project_root):
     """understand 侧同策（取代「多调用判空跌兜底」）：实测
-    understand 的「no_tool_calls」跌兜底实为多调用（DeepSeek 不遵守
+    understand 的「no_tool_calls」跌兜底 8/8 实为多调用（DeepSeek 不遵守
     parallel_tool_calls=False）——取第一个合法调用，不跌兜底、不白付一次 JSON 重问；
     第二个调用不偷跑（后续动作由循环带新状态再判断）。"""
     model = _FakeModel(
@@ -642,7 +642,7 @@ def test_understand_accepts_first_of_multiple_tool_calls(_tmp_project_root):
     assert "curate.db_status" not in verbs, "多调用的第二个不许偷跑——后续由循环再判断"
 
 
-# ---------------------------------------------------------------- 图单例与并发（验证）
+# ---------------------------------------------------------------- 图单例与并发
 
 def test_graph_compiled_once_across_calls():
     before = agent_exec._GRAPH_BUILDS

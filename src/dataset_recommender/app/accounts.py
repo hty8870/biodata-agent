@@ -6,7 +6,7 @@
 
 安全要点：
 - 密码用 `hashlib.scrypt` + 每用户随机盐哈希；**绝不**明文存储 / 打印 / 记日志。校验用 `hmac.compare_digest`。
-- 会话 = 不透明随机 token（`secrets.token_urlsafe`）。 起**落盘持久化**
+- 会话 = 不透明随机 token（`secrets.token_urlsafe`）。2026-08-02 acct1 起**落盘持久化**
   （`.userdata/sessions.json`，原子写；此前只存进程内存、服务重启全体掉登录——「每次开前端都要
   重新登录」的根因）。会话是**可再生**的（丢了 = 重新登录，不丢账户数据），故会话库 fail-open
   （缺失/损坏 → 空库全体登出），与账户库的 fail-closed 相反。cookie 由接口层置 `HttpOnly` +
@@ -43,7 +43,7 @@ _SCRYPT_DKLEN = 32
 _SCRYPT_MAXMEM = 64 * 1024 * 1024   # n=2^14,r=8 需 ~16MB；显式给足，否则 scrypt 抛 memory-limit
 _SALT_BYTES = 16
 _SESSION_BYTES = 32
-_SESSION_TTL = 30 * 24 * 3600       # 30 天（由 7 天放宽：本地单机工具，过期需重登）
+_SESSION_TTL = 30 * 24 * 3600       # 30 天（2026-08-08 由 7 天放宽：本地单机工具，过期需重登）
 #: 会话 TTL 的人读口径（cookie max_age 与 UI 文案的单一真源，webapp/前端文案对齐它）。
 SESSION_TTL_DAYS = 30
 _MAX_USERS = 1000
@@ -77,30 +77,29 @@ class PublicUser:
         return {"id": self.id, "username": self.username}
 
 
-from .runtime_paths import instance_data_dir_for
+from .runtime_paths import (
+    assert_runtime_path,
+    atomic_write_json,
+    instance_data_dir_for,
+    repo_database_dir,
+)
 
 
 def _repo_database_dir() -> Path:
-    return Path(__file__).resolve().parents[3] / "database"
+    """仓库 `database/` 目录（真源在 runtime_paths.repo_database_dir；保留本别名供既有测试引用）。"""
+    return repo_database_dir()
 
 
 def _assert_runtime_path(path: Path) -> Path:
     """运行时状态文件（账户/会话库）绝不许落进仓库 `database/`——那里是冻结基准与
-    元数据库，环境变量误配也不许把运行时写引进来。"""
-    resolved = path.expanduser().resolve()
-    try:
-        resolved.relative_to(_repo_database_dir())
-    except ValueError:
-        return resolved
-    raise AccountError(
-        "bad_store_path",
-        f"运行时状态文件不许落在仓库 database/ 目录内（收到 {resolved}）；请改用 .userdata/ 或仓库外路径。")
+    元数据库，环境变量误配也不许把运行时写引进来（实现统一在 runtime_paths.assert_runtime_path）。"""
+    return assert_runtime_path(path, AccountError)
 
 
 def default_store_path(project_root: Path) -> Path:
     """账户库默认路径 = 实例 userdata 层（source/portable = project_root/.userdata，
-    frozen 布局 = data_root/.userdata）；`BIODATA_ACCOUNTS_FILE` 显式覆盖优先（经
-    runtime_paths 单一真源解析，历史项目根语义逐字节不变）。"""
+    frozen 布局 = data_root/.userdata）；`BIODATA_ACCOUNTS_FILE` 显式覆盖优先（W1 起
+    经 runtime_paths 单一真源解析，历史项目根语义逐字节不变）。"""
     override = os.environ.get("BIODATA_ACCOUNTS_FILE", "").strip()
     if override:
         return _assert_runtime_path(Path(override))
@@ -140,7 +139,7 @@ def _load_store(path: Path) -> dict[str, Any]:
 
 
 def _sweep(now: float) -> None:
-    """调用方须持 `_LOCK`。清过期会话 + 空/过期失败桶，防进程内无界增长（验证）。"""
+    """调用方须持 `_LOCK`。清过期会话 + 空/过期失败桶，防进程内无界增长（对抗评审 #2）。"""
     for token in [t for t, s in _SESSIONS.items() if s["expires_at"] < now]:
         _SESSIONS.pop(token, None)
     for uname in [u for u, ts in _FAILS.items() if not any(now - t < _LOCK_WINDOW for t in ts)]:
@@ -148,11 +147,7 @@ def _sweep(now: float) -> None:
 
 
 def _save_store(path: Path, store: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(store, handle, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
+    atomic_write_json(path, store)
 
 
 def _load_sessions(path: Path) -> dict[str, dict[str, Any]]:
@@ -185,17 +180,13 @@ def _load_sessions(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _save_sessions(path: Path) -> None:
-    """调用方须持 `_LOCK`。与 `_save_store` 同款原子写（tmp + os.replace）。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(_SESSIONS, handle, ensure_ascii=False)
-    os.replace(tmp, path)
+    """调用方须持 `_LOCK`。原子写走 runtime_paths.atomic_write_json（紧凑格式，与历史字节一致）。"""
+    atomic_write_json(path, _SESSIONS, indent=None)
 
 
 def _hydrate_sessions(sessions_path: Path | None) -> None:
     """调用方须持 `_LOCK`。内存为空时把盘上活会话读回——进程重启（或测试清场）后首次触碰会话
-    即恢复登录态；服务重启不再全体掉登录（用户「每次开前端都要重新登录」的根因）。
+    即恢复登录态；服务重启不再全体掉登录（acct1，用户「每次开前端都要重新登录」的根因）。
     `_SESSIONS` 非空不重读：内存是运行期真源，盘上只是它的快照。"""
     if sessions_path is None or _SESSIONS:
         return

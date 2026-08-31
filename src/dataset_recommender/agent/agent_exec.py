@@ -1,13 +1,15 @@
 # -*- coding: utf-8 -*-
 """执行侧 Agent 规划与有界多步执行（langgraph 编排）。
 
-图拓扑与全部机械护栏行为不变；基于 langgraph 1.x 的地道用法组织编排：
+设计蓝本：设计文档 + 设计文档
++ 设计文档（本版 = 换装后形态）。图拓扑与全部机械护栏自 2026-08-04
+起逐位未动；2026-08-07 换装把「怎么用 langgraph」迁到 1.x 地道用法：
 
     understand → validate →（repair ≤1 次 → validate）→ execute → decide
                       ↑__________________________________|（还有下一步）
                       （done / 停环）→ narrate
 
-实现要点（相对旧实现的差异面）：
+换装五刀（与旧实现的差异面，全部经差分 harness + 真机探针双闸验收）：
 
 1. **图模块级编译一次**：六节点是模块级函数（不再是每请求重建的闭包），`_get_graph()` 懒加载
    单例 + threading.Lock 护首轮构建；每请求依赖（chat_model / model_name）走
@@ -23,12 +25,13 @@
    （非 loop 动词真枚举）共 7 个工具（**不是** 18 动词全表——不把不可在循环内执行的动作
    伪装成可调用工具），`tool_choice="auto"` + `parallel_tool_calls=False`：回 loop
    工具=续步、finish=done、unsupported=婉拒（declined_zh 语义与旧版
-   逐位一致）、幻觉工具名/散文=非法=停环；**多 tool_call 取第一个**（DeepSeek 不遵守 parallel_tool_calls=False，多调用是常态，取第一个；循环会再判断后续，不吞事）——并**追加同批只读消费**：
+   逐位一致）、幻觉工具名/散文=非法=停环；**多 tool_call 取第一个**（DeepSeek 不遵守 parallel_tool_calls=False，多调用是常态且第一个调用实证
+   17/17 合法，循环会再判断后续，不吞事）——**2026-08-14 起追加同批只读消费**：
    第 2..N 个调用里只读白名单（check_updates/db_status）且互相独立、逐个过全套机械闸的
-   续步随首步同批执行；写动词/未知工具名
+   续步随首步同批执行（探针实测 A 类批量 2..N 合法率 100%，n=371）；写动词/未知工具名
    出现即截断，其余回炉由循环带新状态再判（`_batch_readonly_extras`）。**仅当调用本身
    抛异常**才跌散文 JSON 兜底
-   （`_DECIDE_RULES_ZH` 全文再问一次，记 agent_fallbacks.jsonl node="decide"）；拿到但非法
+   （按当前面装配的 JSON 壳全文再问一次，记 agent_fallbacks.jsonl node="decide"）；拿到但非法
    的回答维持旧版「直接停环不再问」的 fail-safe。
 5. **工具调用三级通道收口为共享助手** `_invoke_tool_channel`：understand 用 required 起、
    decide/repair 用 auto 起，同一份降档/兜底代码（repair 从此也走结构化通道，不再是
@@ -50,8 +53,8 @@
   工具抛异常 → ok=False 记 error，不炸图；每跑一个工具往联网账本追加一行审计；
   终态码失败记死路账。注册表之外动词 → 空过。
 - **decide**（仅 execute 真跑过工具后进入）：LLM 看「原话 + 已完成步骤紧凑投影」决定
-  finish/续步/婉拒。机械校验双保险 + MAX_STEPS=8 硬上界（由 6 放宽，
-  同时落地**到顶结算闸**：跑满上限时 pending 硬闸 + 清单对账双双结清则不谎报
+  finish/续步/婉拒。机械校验双保险 + MAX_STEPS=8 硬上界（2026-08-15 由 6 放宽，
+  同批落地**到顶结算闸**：跑满上限时 pending 硬闸 + 清单对账双双结清则不谎报
   「没做完」；写步 MAX_WRITE_STEPS=2、写条数 MAX_WRITE_RECORDS=40 双独立预算不随
   总步数放宽——search_online 的 network_error 失败可证零副作用、不占写步预算）
   + 连续失败处置二分（联网二连败改联网暂停——
@@ -59,7 +62,7 @@
   当前实录重过这两道闸**——批内熔断，初筛对批前状态不够）。两类可修情形各给
   **一次**重问（共享同一份预算，每次 decide 调用至多一次）：主通道非法应答（散文拒答/
   幻觉工具名）重问一次；续步提议没通过 `_validate_raw` 校验（violation）
-  带检查意见重问一次；**机械闸拒收同样回灌一次**（理由：
+  带检查意见重问一次；**机械闸拒收同样回灌一次**（
   拒绝当前提议 ≠ 整条请求完成，尾随只读事项必须有机会推进）。重问后放行的写动词落
   强制核销账，finish 报告必须引用其步骤号单独交代。仍非法 → 当 done 处理
   （fail-safe 停环，不走 repair）。
@@ -71,10 +74,10 @@
 ## 三条刻意守住的边界
 
 1. **图内执行仅限 `LOOP_TOOLS` 注册表**：db_status（只读）、check_updates（只读在线比对）、
-   search_online（联网搜 + 入库——写操作，依据是全自动化预先授权：
+   search_online（联网搜 + 入库——写操作，依据是产品方 2026-08-03 的全自动化预先授权：
    confirm_token 图内闭环回传 = 机械确认，后端重算指纹 fail-closed；每步记账 + 回收站
-   可撤销）、sync_updates（检查更新→能闭环来源自动入库的复合流，「工作流即工具」）、
-   search.rerun（换词重检，只读本地检索 + 机械择优闸）。
+   可撤销）、sync_updates（检查更新→能闭环来源自动入库的复合流，2026-08-06「工作流即工具」）、
+   search.rerun（换词重检，只读本地检索 + 机械择优闸，2026-08-16 检索工具化 Phase 1）。
    注册表之外的动词**一律不执行**，产物照旧交前端 runner（plan 契约因此对那些动词零变化）。
 2. **plan 契约 additive**：产出经过 `action_plan.build_plan_from_raw` / `_finalize` **同一套**
    机械护栏（复用 import，不复制逻辑），形状与 action_plan 输出逐位同形，仅 `source="agent"`
@@ -179,7 +182,7 @@ class _AgentState(TypedDict, total=False):
     repairs: int              #: 已自我修正次数（≤1，只服务首步）
     plan: dict[str, Any]      #: 过了护栏的 plan（build_plan_from_raw 产出；verb 恒为首步动词）
     loop_plan: dict[str, Any] #: 循环续步的 plan（decide 提议 → validate 产出；execute 消费后即清）
-    raw_batch: list[dict]     #: 多调用的同批只读续步 raw（decide 产出；understand 首步同口径产出 → validate 消费后即清）
+    raw_batch: list[dict]     #: 多调用的同批只读续步 raw（2026-08-14 起 decide 产出；2026-08-22 起 understand 首步同口径产出 → validate 消费后即清）
     loop_batch: list[dict]    #: raw_batch 过护栏后的同批续步 plan（validate 产出；execute 消费后即清）
     loop_next: bool           #: decide 的裁决：还有下一步（→ validate）还是 done（→ narrate）
     last_ran: bool            #: execute 这一遍是否真跑了工具（决定去 decide 还是直接去 narrate）
@@ -199,7 +202,7 @@ class _AgentState(TypedDict, total=False):
     checklist_dropped: int        #: 清单校验剔除 + 超上限截断的条目数（幻觉锚点/非法动词/超 8 截断——trace 可观测）
     entry_mode: str               #: 入口模式：""=常规对话链 / "rescue"=检索救回（工具面收敛到 search.rerun/none）
     search_sources: Any           #: rescue 端点带入的来源范围（search.rerun 的 _prepare_context sources 入参；None=默认语料）
-    # search.rerun 必须复用当前屏真实结构化条件；这些 key 与
+    # 2026-08-18：search.rerun 必须复用当前屏真实结构化条件；这些 key 与
     # webapp.UtteranceRequest/SearchRescueRequest 同名语义，缺省空保持旧调用逐位兼容。
     search_facet_filters: Any
     search_suppressed_constraints: Any
@@ -207,7 +210,7 @@ class _AgentState(TypedDict, total=False):
     search_date_from: str
     search_date_to: str
     route_scope: str              #: scoped 路由：route_consensus 的共识结果 ""/"search"/"action"/"general"；route.request 步放行后由 execute 改写（覆写语义）
-    required_capabilities: list[dict]  #: 混合诉求能力账（覆写语义）：机械闸命中时由 route_consensus 产出（{capability, verbs, label_zh, anchor}），finish 机械核销逐项对账，缺项拒收回灌
+    required_capabilities: list[dict]  #: 混合诉求能力账（2026-08-22 覆写语义）：机械闸命中时由 route_consensus 产出（{capability, verbs, label_zh, anchor}），finish 机械核销逐项对账，缺项拒收回灌
     artifact_context: str        #: 课题上下文卡：独立字段，只进 route_consensus/understand 的 prompt 作结构化上下文块；缺省空串 = 与旧版逐位一致
 
 
@@ -217,7 +220,7 @@ class _AgentContext:
     取代旧的 config["configurable"] 模式）。frozen=True 让「immutable context」不只是注释。
     chat_model 是请求级现建的实例（config 是请求级快照，不缓存 client 是刻意的防串配设计）；
     model_name 供跌 JSON 兜底时的审计行如实标注。
-    decide_model/decide_model_name/decide_lane（复杂度路由）：
+    decide_model/decide_model_name/decide_lane（2026-08-07 复杂度路由）：
     decide 节点专用档——仅当 utterance 评分进 complex 车道且配置了 LLM_MODEL_COMPLEX 时
     非 None；understand/validate/repair/narrate 恒走 chat_model（问题数据在案）。"""
 
@@ -232,16 +235,16 @@ class _AgentContext:
     # 按 anonymous + 空端点分区处理。
     principal: str = ""
     endpoint_fp: str = ""
-    # on_progress（信息流升级）：节点/工具「即将开始」的即时回调——
+    # on_progress（2026-08-16 prelim1 信息流升级）：节点/工具「即将开始」的即时回调——
     # plan_with_agent_events 把 on_event 同一回调双通道接进来（tool_start 事件与 step
     # 完成事件同路，webapp 按 kind 透传给前端）；None = 非流式/rescue 路径，自然静默。
     on_progress: Any = None
-    # （并发分流与确定性 RAG 策略）三个可选注入缝；缺省 = 今天逐位不变
+    # cr1（并发分流与确定性 RAG 策略）三个可选注入缝；缺省 = 今天逐位不变
     # （既有 monkeypatch seam 全保）：
     # - retrieval_provider：Callable[[], dict | None] | None——understand 入口（join/
     #   deferred 补跑/发射后）取局部检索摘要；None = 用 state 传入的 retrieval（旧行为）。
     # - on_route_verdict：Callable[[str], None] | None——route_consensus 算完 route 后
-    #   回调（**只做 abandoned/lazy 标记，不发射**）；rescue 短路不调。
+    # 回调（**只做 abandoned/lazy 标记，不发射**，r3）；rescue 短路不调。
     # - route_extra_zh：有标记分支的机械标记事实行（共识上下文尾部拼接，缺省空串=今天）。
     retrieval_provider: Any = None
     on_route_verdict: Any = None
@@ -295,12 +298,12 @@ def _build_chat_model(config: LLMConfig) -> Any:
         ) from exc
 
 
-#: `LLM_COMPLEX_EFFORT` 合法枚举（对 DeepSeek V4 实测 400 报文列举）。
+#: `LLM_COMPLEX_EFFORT` 合法枚举（2026-08-08 对 DeepSeek V4 实测 400 报文列举）。
 _COMPLEX_EFFORT_VALUES = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 def _complex_thinking_env() -> tuple[bool | None, str | None]:
-    """复杂度车道的思考旋钮 env（`LLM_COMPLEX_THINKING` / `LLM_COMPLEX_EFFORT`）。
+    """复杂度车道的思考旋钮 env（`LLM_COMPLEX_THINKING` / `LLM_COMPLEX_EFFORT`，任务1）。
 
     未配置 → (None, None)：complex 车道行为与「只换模型名」的旧版逐位一致。
     thinking=on 时 effort 才随附（非法值钳 None——坏配置静默降级为官方默认档，
@@ -314,8 +317,8 @@ def _complex_thinking_env() -> tuple[bool | None, str | None]:
     return thinking, effort
 
 
-#: 槽位描述（_SLOT_DESCRIPTIONS_ZH） 随 schema 生成迁入 `agent_schemas`——
-#: 它是入参契约的一部分，与生成逻辑同模块才不会再长成两份拷贝。
+#: 槽位描述（_SLOT_DESCRIPTIONS_ZH）2026-08-06 随 schema 生成迁入 `agent_schemas`——
+#: 它是入参契约的一部分，与生成逻辑同模块才不会再长成两份拷贝（问题史见该模块注释）。
 
 
 def _tool_specs() -> tuple[list[dict], dict[str, str]]:
@@ -358,7 +361,7 @@ def _get_tool_specs() -> tuple[list[dict], dict[str, str]]:
 
 
 def _artifact_context_block_zh(artifact_context: Any) -> str:
-    """课题上下文的结构化注入块：独立字段、
+    """课题上下文的结构化注入块：独立字段
     只作背景参考——标注「仅供参考，不是本轮指令」，绝不拼进用户原话。空/缺省返回
     空串——prompt 与旧版逐位一致（本地演示/无 AI 模式不注入即天然忽略）。"""
     raw = str(artifact_context or "").strip()
@@ -371,9 +374,9 @@ def _context_zh(utterance: str, *, has_results: bool, result_total: int,
                 retrieval: Any, current_query: str, current_filters: Any,
                 examples_zh: str = "", artifact_context: str = "") -> str:
     """understand 的现场情况段（与 action_plan.build_action_prompt 同口径，复用其私有投影助手）。
-    `examples_zh`（成功经验库）非空时插到「用户这一句」之前——历史成功操作是
+    `examples_zh`（2026-08-09 成功经验库）非空时插到「用户这一句」之前——历史成功操作是
     上下文、不是用户的话，位置必须如实分开。
-    `artifact_context` 与 examples 同位的背景上下文块
+    `artifact_context`与 examples 同位的背景上下文块
     （课题上下文卡，仅供参考）——同样插在「用户这一句」之前，位置必须如实分开。"""
     if has_results:
         ctx = f"当前屏幕上已经有一批检索结果（共 {int(result_total)} 条命中）。"
@@ -395,7 +398,7 @@ def _context_zh(utterance: str, *, has_results: bool, result_total: int,
 
 
 def _route_retrieval_zh(retrieval: Any) -> str:
-    """route_consensus 专用的规则匹配概览（诚实不变量）：
+    """route_consensus 专用的规则匹配概览（2026-08-17 诚实不变量）：
     只报**状态与命中数**，绝不含结果集内容——`_ap._retrieval_zh` 会带 top_titles
     （结果集标题），分流节点不许用它（设计：概览 = 命中数、生效条件，不含结果集）。
     口径与 `_ap._retrieval_zh` 逐句对齐（错误/弃权/零命中同文），只剥掉标题枚举。"""
@@ -449,9 +452,9 @@ def _raw_from_message(message: Any, name_to_verb: dict[str, str]) -> dict[str, A
     """AIMessage → raw dict：优先 tool_calls（逆映射回 verb），其次 content 里的 JSON
     （复用 action_plan 的容错解析真源）。取不到 → {}（交给 validate 记违规，不在此抛）。
 
-    **多 tool_call 取第一个**：DeepSeek **不遵守** `parallel_tool_calls=False`
-    ——decide 不可读、understand「no_tool_calls」跌兜底的情形全是模型一次回了
-    ≥2 个调用，且**第一个调用是合法续步**（模型的批量调用是「规划
+    **多 tool_call 取第一个**：DeepSeek 实测**不遵守** `parallel_tool_calls=False`
+    ——decide 不可读 17/17、understand「no_tool_calls」跌兜底 8/8 全是模型一次回了
+    ≥2 个调用，且实测**第一个调用 17/17 是合法续步**（模型的批量调用是「规划
     先行」，后续动作本就不由本次调用决定——循环带着新状态会再判断，吃第一个不吞
     任何事；旧「静默只吃第一个会把后续调用吞掉」的顾虑在循环架构下不成立）。
     请求侧 `parallel_tool_calls=False` 保留恒上（provider 哪天遵守了，多调用自然消失）。"""
@@ -470,7 +473,7 @@ def _raw_from_message(message: Any, name_to_verb: dict[str, str]) -> dict[str, A
 
 
 def _usage_record(answer: Any, node: str) -> dict | None:
-    """从 AIMessage 抠 DeepSeek 磁盘缓存用量（缓存埋点）。
+    """从 AIMessage 抠 DeepSeek 磁盘缓存用量（2026-08-08 埋点）。
 
     langchain_openai 1.4.1 把 `usage.prompt_cache_hit_tokens` 透传到
     `usage_metadata.input_token_details.cache_read`（实测确认）。读不到（FakeModel、
@@ -497,7 +500,7 @@ def _invoke_text_with_continuation(
     usage_node: str = "",
     max_continuations: int = 1,
 ) -> Any:
-    """文本应答调用 + **截断两段式续写**（有界自愈重试器的唯一增量）。
+    """文本应答调用 + **截断两段式续写**（2026-08-08 有界自愈重试器的唯一增量）。
 
     适用面：**content 文本**截断（finish_reason=length）——narrate 汇报、JSON 兜底档。
     续写把已收到的前半段回贴、请模型「接着写」，拼接两段后返回（response_metadata 取
@@ -541,7 +544,7 @@ def _invoke_text_with_continuation(
 
 def _tool_choice_rejected(exc: Exception) -> bool:
     """这个异常是不是「模型不收这个 tool_choice」？思考模式模型（deepseek-v4-flash /
-    deepseek-reasoner）对 `tool_choice="required"` 回 400，报文点名
+    deepseek-reasoner，2026-08-05 实测）对 `tool_choice="required"` 回 400，报文点名
     tool_choice："Thinking mode does not support this tool_choice"。按报文字样判定——
     本请求里只有这一个参数名会被点名，跨 provider 通用，不误伤超时/断网类异常
     （那些报文不含它）。"""
@@ -560,7 +563,7 @@ def _invoke_tool_channel_impl(
     usage_sink: list | None = None,
     usage_node: str = "",
 ) -> tuple[Any | None, str, str, str, str]:
-    """`_invoke_tool_channel` 的本体（从公开壳拆出的实现）：返回五元组
+    """`_invoke_tool_channel` 的本体（2026-08-17 拆壳）：返回五元组
     `(answer, note, fallback_reason, json_error_type, channel)`——channel 是实际产出
     应答的档位（choice 原档 / "auto" 降档 / "json_fallback" / 全灭 ""），供公开壳的
     trace llm_call 留痕；语义与下方公开壳 docstring 逐字一致。"""
@@ -627,7 +630,7 @@ def _invoke_tool_channel(
     usage_sink: list | None = None,
     usage_node: str = "",
 ) -> tuple[Any | None, str, str, str]:
-    """工具调用通道的**统一三级实现**（understand/repair/decide 共用）。
+    """工具调用通道的**统一三级实现**（2026-08-07 understand/repair/decide 共用）。
 
     档位语义：`choice` 档先跑；模型 400 拒收该 tool_choice（`_tool_choice_rejected`）且
     首档不是 auto → 降 auto 档重试（留在结构化通道，槽位抽取质量不滑坡）；仍不行且给了
@@ -707,22 +710,22 @@ _NAMED_SOURCE_OPTIONAL_FILL_VERBS: tuple[str, ...] = ("curate.sync_updates",)
 
 
 # ==========================================================================================
-# LOOP_TOOLS：图内多步执行的工具注册表（长程多步执行；由 READ_TOOLS 泛化而来，
+# LOOP_TOOLS：图内多步执行的工具注册表（2026-08-04 长程多步执行；由 READ_TOOLS 泛化而来，
 # db_status 迁入、行为不变——observation/report 的既有契约原样保留）。
 #
 # 工具 = (slots, project_root) → 结构化结果 dict。run 抛异常不炸图：execute 节点捕获后
 # step ok=False 如实记 error（hint 原样）。「工具设计要可复用」：新图内能力在这里登记一项
 # 即接入多步循环，不必动图结构。登记项字段：
 #   run        工具本体（签名 (slots, root)；needs_context 项加第三参 ctx，见下）；
-#   label_zh   trace/步骤展示名；
+#   label_zh   trace/步骤展示名——取自 `_ap.VERB_BY_NAME[verb].zh`（动作中文名唯一真源）；
 #   card_kind  前端渲染卡种类（db_status / check_updates / search_online / sync_updates /
 #              search_rerun）；
 #   readonly   是否只读（审计与前端 policy 行口径）；
 #   report     单步执行时 narrate 是否走 LLM 简明汇报（db_status 的既有路径）；
 #   observation  产出是否同时挂 plan.observation + state.observations（db_status 的既有契约）；
-#   decide_zh  decide 工具面里该项的一行描述（`_DECIDE_RULES_ZH` 与 decide 工具表都由注册表
-# 程序生成， 消掉「prompt 手抄三动词」的漂移面）。
-# needs_context run 需要现场上下文（search.rerun）：execute 从 state 现取
+#   decide_zh  decide 工具面里该项的一行描述（decide 各面的工具表与规则壳清单行都由注册表
+#              程序生成，2026-08-06 消掉「prompt 手抄三动词」的漂移面）。
+#   needs_context  run 需要现场上下文（2026-08-16 search.rerun）：execute 从 state 现取
 #              {current_query, search_sources, replace_screen} 作第三参注入——择优基准来源
 #              的显式契约，工具不自己回头摸全局。
 #
@@ -731,20 +734,20 @@ _NAMED_SOURCE_OPTIONAL_FILL_VERBS: tuple[str, ...] = ("curate.sync_updates",)
 # 残缺/类型不对 = ValidationError = 与工具抛异常同路（step ok=False 如实记，不炸图），
 # step.ok 语义升级为「没抛异常**且形状合法**」。校验只做门卫：落盘的仍是原始 dict。
 #
-# 写操作只有 search_online / sync_updates 两个，依据是全自动化预先
+# 写操作只有 search_online / sync_updates 两个，依据是产品方 2026-08-03 的全自动化预先
 # 授权：confirm_token 在图内闭环回传（plan → apply 的机械确认），后端重算指纹 fail-closed；
 # 每次执行都记账（.userdata/curate_net_ledger.jsonl）且结果可经回收站撤销。
 # ==========================================================================================
 
 #: 多步循环的机械上界：execute 真跑满这么多次后 decide 不再发起新步骤（强制 done）。
-#: 上界从 3 放宽到 6 的理由：环上工具已增至 4 个可执行项（check/search/sync/db_status），
-#: 「检查→搜→入库→汇报」类真实诉求 3-4 步起，跨来源/跨主题链更长，3 步会把
-#: 长程任务机械截断。上界仍然存在——停环保障是代码，不是提示词；
+#: 2026-08-08 约束放松批 3→6：环上工具已增至 4 个可执行项（check/search/sync/db_status），
+#: 「检查→搜→入库→汇报」类真实诉求 3-4 步起，跨来源/跨主题链更长，探针坐实 3 步把
+#: 长程任务机械截断（j03 只做 2/5 步）。上界仍然存在——停环保障是代码，不是提示词；
 #: 写入上界不随总步数放宽：写步另有独立预算 MAX_WRITE_STEPS。
 #: 随后再放宽到 8：① 多调用整批消费让单轮
 #: decide 产步更多、预算顶得更早；② 5 步链 + 一次网络重试恰好烧穿 6 步余量——但使
 #: 边界**诚实**的修复不是数字本身，是到顶结算闸（见 decide 到顶分支注释：可机械核验
-#: 事项全部结清时不谎报「没做完」）。不按复杂度分 6/8 两档：复杂度
+#: 事项全部结清时不谎报「没做完」）。建议的「按复杂度分档 6/8」未采纳：复杂度
 #: 路由宁窄勿宽，长链误入 simple 档会被 6 重新截断——同一问题换门复现，不如统一 8
 #: + 结算闸。recursion_limit=50 仍有近两倍余量（8 步最深路径 ≈26-30 节点次）。
 MAX_STEPS = 8
@@ -762,7 +765,7 @@ MAX_WRITE_RECORDS = 40
 
 #: **正向写**工具集合（写入预算的计数面）：恢复动作不能被正向写上限挡住——恰好写满
 #: 两步时最需要回滚。curate.rollback 仍是 mutating（readonly=False、照常留 trace 快照），
-#: 但回滚改走独立 MAX_ROLLBACK 小额预算，防 ping-pong 而不牺牲恢复出口。
+#: 但 2026-08-18 起改走独立 MAX_ROLLBACK 小额预算，防 ping-pong 而不牺牲恢复出口。
 _WRITE_LOOP_TOOLS: frozenset[str] = frozenset(
     {"curate.search_online", "curate.sync_updates"})
 
@@ -774,7 +777,7 @@ def _rollback_used(steps: list[dict]) -> int:
     """本轮已执行/尝试的回滚次数；独立预算避免 rollback↔rollback 空转。"""
     return sum(1 for s in steps if str(s.get("verb") or "") == _ROLLBACK_LOOP_TOOL)
 
-#: 换词重检独立预算：search.rerun 只读、不写库，但每跑一次
+#: 换词重检独立预算（2026-08-16 检索工具化 Phase 1）：search.rerun 只读、不写库，但每跑一次
 #: 是两遍本地检索 + 一轮择优——一次请求至多这么多次，超出由 `_adjudicate_decide_obj` 机械
 #: 拒绝并如实点名（与写步预算同哲学：提示不是围栏，代码是）。
 MAX_SEARCH_RERUN = 1
@@ -785,7 +788,7 @@ def _search_rerun_used(steps: list[dict]) -> int:
     提议过即消耗预算，防「失败换个说法再提」绕过上限空转。"""
     return sum(1 for s in steps if str(s.get("verb") or "") == "search.rerun")
 
-#: rank / rerank 独立预算（与 search.rerun 预算同哲学：
+#: rank / rerank 独立预算（2026-08-17 scoped 路由批 M2，与 search.rerun 预算同哲学：
 #: 提示不是围栏，代码是）：rank 只读但每跑一次是一整遍本地检索 + 可能的载荷构造，
 #: 一次请求至多 MAX_RANK 次；rerank 另含一次独立 LLM 改写调用，至多 MAX_RERANK 次。
 #: 超出由 `_adjudicate_decide_obj` 机械拒绝并如实点名。
@@ -803,7 +806,7 @@ def _rerank_used(steps: list[dict]) -> int:
     return sum(1 for s in steps if str(s.get("verb") or "") == "rerank")
 
 
-#: 环内结果处理四工具的独立预算（四工具组，与 rank 预算同哲学：提示不是
+#: 环内结果处理四工具的独立预算（2026-08-18 四工具批，与 rank 预算同哲学：提示不是
 #: 围栏，代码是）：
 #:   · compare.datasets 每跑一次 = 一遍本地检索（取默认对象）+ 一次独立 LLM 措辞调用
 #:     → 至多 MAX_COMPARE 次；
@@ -834,7 +837,7 @@ def _fair_used(steps: list[dict]) -> int:
     """已用 FAIR 自检次数（从 steps 现算）。"""
     return sum(1 for s in steps if str(s.get("verb") or "") == "fair.check")
 
-#: 逃生口预算：每轮请求至多这么多次
+#: 逃生口预算（2026-08-17 钉死点 2）：每轮请求至多这么多次
 #: route.request——超出由 `_adjudicate_decide_obj` 机械拒绝并如实点名；MAX_STEPS
 #: 全局计，不因重路由重置（与写步预算同哲学：预算不随结构变化翻倍）。
 MAX_ROUTE_REQUEST = 1
@@ -844,7 +847,7 @@ def _route_request_used(steps: list[dict]) -> int:
     """已用换路线次数（从 steps 现算，同 `_search_rerun_used` 口径：提议过即消耗）。"""
     return sum(1 for s in steps if str(s.get("verb") or "") == "route.request")
 
-#: 终态错误码（失败语义二分批；蓝本 pydantic-ai 的 ModelRetry/ToolFailed 二分 +
+#: 终态错误码（2026-08-06 失败语义二分批；蓝本 pydantic-ai 的 ModelRetry/ToolFailed 二分 +
 #: 12-factor-agents factor 9「错误进 context + 确定性熔断」）：携带这些码失败的 (verb, 目标源)
 #: 组合是**换参数也没用**的死路（如 source_not_registered——该来源本工具接不了，换什么
 #: 关键词都一样）→ decide 机械拦截同目标重试，不消耗 LLM 往返。可纠正码（bad_param 缺槽位、
@@ -894,7 +897,7 @@ _WRITE_BUDGET_BLOCK_ZH = (
     "没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
 )
 
-#: 换词重检预算耗尽的 prompt 机械注入段（同写步预算哲学）：
+#: 换词重检预算耗尽的 prompt 机械注入段（2026-08-16 检索工具化 Phase 1，同写步预算哲学）：
 #: 提示不是围栏，机械拒绝在 `_adjudicate_decide_obj` 的 search.rerun 预算闸兜底。
 _SEARCH_RERUN_BUDGET_BLOCK_ZH = (
     "\n----- 换词重检预算已用完（机械约束）-----\n"
@@ -902,7 +905,7 @@ _SEARCH_RERUN_BUDGET_BLOCK_ZH = (
     "本回合不许再提议 search.rerun；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
 )
 
-#: rank / rerank 预算耗尽的 prompt 机械注入段（同 search.rerun 预算哲学）：
+#: rank / rerank 预算耗尽的 prompt 机械注入段（2026-08-17 同 search.rerun 预算哲学）：
 _RANK_BUDGET_BLOCK_ZH = (
     "\n----- 新检索预算已用完（机械约束）-----\n"
     f"本次请求已新检索 {MAX_RANK} 次（一次请求最多 {MAX_RANK} 次）："
@@ -914,7 +917,7 @@ _RERANK_BUDGET_BLOCK_ZH = (
     "本回合不许再提议 rerank；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
 )
 
-#: 环内结果处理四工具的预算注入段（四工具组，同预算哲学；未用满恒空段）。
+#: 环内结果处理四工具的预算注入段（2026-08-18 同预算哲学；未用满恒空段）。
 _COMPARE_BUDGET_BLOCK_ZH = (
     "\n----- 数据集对比预算已用完（机械约束）-----\n"
     f"本次请求已对比 {MAX_COMPARE} 次（一次请求最多 {MAX_COMPARE} 次）："
@@ -936,7 +939,7 @@ _FAIR_BUDGET_BLOCK_ZH = (
     "本回合不许再提议 fair.check；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
 )
 
-#: 逃生口机会用完的 prompt 机械注入段（同预算哲学）：decide 面同时把
+#: 逃生口机会用完的 prompt 机械注入段（2026-08-17 同预算哲学）：decide 面同时把
 #: route_request 工具从套件面摘掉（面收窄），本段服务 JSON 兜底壳；机械拒绝在
 #: `_adjudicate_decide_obj` 的逃生口预算闸兜底。
 _ROUTE_REQUEST_BUDGET_BLOCK_ZH = (
@@ -945,13 +948,14 @@ _ROUTE_REQUEST_BUDGET_BLOCK_ZH = (
     "按当前路线的工具继续；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
 )
 
-#: rescue（检索救回）回合的 understand 注入段（
-#: 动态段）：双壳 prompt 尾部注入——面收敛不是纯提示：
+#: rescue（检索救回）回合的 understand 注入段（2026-08-16 检索工具化 Phase 1 初版；
+#: 2026-08-17 rescue2 放宽为动态段）：双壳 prompt 尾部注入——面收敛不是纯提示：
 #: 工具面收窄 + validate 的 rescue 闸机械兜底。
 def _rescue_block_zh(unresolved_terms: Any) -> str:
     """rescue 注入段（动态：原检索投影的未收录词逐字进提示）。
 
-    放宽依据：「语义等价」要求下模型只敢近乎原样改写，而能救活的
+    放宽依据（rescue-ev1 取证，设计决定）：5 次真触发全被择优闸「改空拒」挡下——
+    「语义等价」要求下模型只敢近乎原样改写（4 次逐字相同、1 次加空格），而能救活的
     改写（「小鼠神经胶质瘤」→「小鼠胶质瘤」）都必须丢弃**库中未收录**的用户词。
     放宽只开这一道口：未收录词可丢弃/映射为收录近义词；**已收录条件必须全部保留**、
     不许新增——丢弃了什么由择优闸机械比对（dropped_terms）如实披露，不靠模型自报。"""
@@ -990,7 +994,7 @@ _RESCUE_DECIDE_BLOCK_ZH = (
 def _write_steps_used(steps: list[dict]) -> int:
     """已用**正向写**步数（从 steps 现算，不加新状态）：写工具步不论成败都计——
     每一步都可能已产生副作用（sync 中途失败前可能已写过部分来源的批次文件）。
-     豁免：`search_online` 的 **network_error**
+    2026-08-15 豁免：`search_online` 的 **network_error**
     失败可证零副作用（异常在 plan 取数阶段抛出，apply 入库一行都没跑，见
     `_loop_search_online` 的 plan→apply 顺序）——不计入写步预算，与指纹去重的
     network_error 豁免同一「唯一真·可重试码」哲学。sync 网络失败按契约如实降级
@@ -1002,7 +1006,7 @@ def _write_steps_used(steps: list[dict]) -> int:
 
 
 def _write_records_used(steps: list[dict]) -> int:
-    """已写入条数（**从 steps 真实结果现算**）：search 取 record_count、
+    """已写入条数（**从 steps 真实结果现算**）：search 取 record_count
     sync 取 imported_total；无结果（失败/异常步）计 0——能查到账的才计入，查不到
     如实少报（副作用账在回收站/流水账里另有真源，这里只是预算近似）。"""
     total = 0
@@ -1023,7 +1027,8 @@ def _write_records_used(steps: list[dict]) -> int:
 def _failed_tool_ban(steps: list[dict]) -> frozenset[str]:
     """非网络二连败的禁提面（**从 steps 现算**）：最近两步均失败、且非联网暂停形态
     （不全是 network_error）→ 禁提这两步各自的 verb（指纹到动作）。
-    旧设计「任意二连败硬停环」会把链上剩余独立事项（如 db_status）一起误杀；联网二连败不在此列——网络在抖时整族都该停，走
+    旧设计「任意二连败硬停环」会把链上剩余独立事项（如 db_status）一起误杀
+    联网二连败不在此列——网络在抖时整族都该停，走
     `_network_moratorium` 的整族禁提。"""
     if len(steps) < _CONSECUTIVE_FAILURE_BREAKER:
         return frozenset()
@@ -1059,7 +1064,8 @@ def _is_network_call(verb: str, source: Any) -> bool:
     if verb != "curate.check_updates":
         return True
     from ..corpus import corpus_curation as _cc
-    key = _cc._resolve_check_source_key(source)
+    from ..corpus import corpus_net as _cn
+    key = _cn.resolve_source_key(source, valid_keys=_cc.CHECK_UPDATE_SOURCES)
     if key is None:
         return True
     return bool(_cc.CHECK_UPDATE_SOURCES.get(key, {}).get("online", True))
@@ -1077,7 +1083,7 @@ def _network_moratorium(steps: list[dict]) -> bool:
 
 
 def _agent_project_root() -> Path:
-    """agent 图内工具的项目根：**复用 corpus_status 的默认根真源**（即 runtime_paths
+    """agent 图内工具的项目根：**复用 corpus_status 的默认根真源**（起 = runtime_paths
     实例数据根：source/portable = 项目根；frozen = data_root）——不发明第二份解析逻辑。
     数据写盘侧（账本/引文/管护）以它为基；随包静态资源（prompts/官方快照）另行经
     resource_file_for 走 resource 层。"""
@@ -1156,7 +1162,7 @@ class _SearchRerunParamError(Exception):
 
 
 def _rescue_disclosure_zh(rewrite: str, n_after: int | None, dropped_terms: list) -> str:
-    """rescue 采纳的**确定性披露句**：丢弃词/改写词/命中数全部
+    """rescue 采纳的**确定性披露句**（2026-08-17 rescue2）：丢弃词/改写词/命中数全部
     机械实算（dropped_terms 是「改写句里消失的未收录词」子串比对），不采信 LLM 自报。
     端点把它当 report_zh 下发——前端 `handleSearchRescue` 优先显示 report_zh，零改动上屏。"""
     n = "若干" if n_after is None else str(int(n_after))
@@ -1167,7 +1173,7 @@ def _rescue_disclosure_zh(rewrite: str, n_after: int | None, dropped_terms: list
 
 
 def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """换一组查询词把本地库重新检索一遍（机械择优闸）。
+    """换一组查询词把本地库重新检索一遍（2026-08-16 检索工具化 Phase 1，机械择优闸）。
 
     跑的是与主检索**同一条管线**（`workflow._prepare_context` / `run_with_meta`，规则检索，
     rerank_audit 关——防「审核改写→重搜→再审核」循环）。采纳与否由机械闸裁定，不靠 LLM 自评：
@@ -1184,12 +1190,12 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     无基准 → n_before 如实记 None、同集闸无对象可比而跳过（改写即采纳，含零命中）。
     query 槽空 → `_SearchRerunParamError`（bad_param，与 _loop_search_online 同纪律）。
 
-    动态段：ctx.unresolved_terms（原检索投影的未收录词，rescue 端点链下入；
+    rescue2：ctx.unresolved_terms（原检索投影的未收录词，rescue 端点链下入；
     缺省恒 []——链内调用与旧测试逐位不变）。采纳时机械比对 `dropped_terms` = 改写句里
     **消失**的未收录词（子串比对，双向都逐字来自真实串），附 `disclosure_zh` 确定性
     披露句；未采纳两档 dropped_terms 恒 []。
 
-    口径说明（择优闸与屏口径一致）：n_before/n_after 保持**择优闸口径**
+    nl-A（2026-08-17 挂账，择优闸与屏口径一致）：n_before/n_after 保持**择优闸口径**
     （prep 候选数，top-k 截断——步骤卡注释明示、机械三态的裁决语境）；additive 的
     n_before_total/n_after_total 是**屏口径**（未截断命中总数）——采纳档 n_after_total
     与屏单源（= payload.result_total），n_before_total 为基准查询同管线硬过滤存活数
@@ -1210,7 +1216,7 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     replace_screen = bool(ctx.get("replace_screen"))
     unresolved = [str(t).strip() for t in (ctx.get("unresolved_terms") or []) if str(t).strip()]
 
-    # screen-scope：换词只能换 query，不能借机清掉用户已生效的结构化条件。
+    # 2026-08-18 screen-scope：换词只能换 query，不能借机清掉用户已生效的结构化条件。
     # 净化复用 workflow 公共真源；缺省/旧 ctx → 全空，行为与旧调用逐位一致。
     facet_filters = wf.sanitize_facet_filters(ctx.get("search_facet_filters"))
     suppressed_constraints = wf.sanitize_suppressed(ctx.get("search_suppressed_constraints"))
@@ -1298,14 +1304,14 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     n_after_total = int(payload.get("result_total") or n_after_total)
     # audit 九键由工具自构（与 /api/recommend 的 audit 形状逐位对齐）：mode 用 "rerank"——
     # 枚举只余 "rerank"/None（前端不读 mode；语义 = 与 ride-along 同一条「改写→重搜→择优」哲学）。
-    # audit 的 n_before/n_after 用屏口径（横幅与结果区同屏）；择优闸口径留在步骤结果里。
+    # nl-A：audit 的 n_before/n_after 用屏口径（横幅与结果区同屏）；择优闸口径留在步骤结果里。
     payload["audit"] = {
         "triggered": True, "verdict": False, "rewritten_query": query, "used": True,
         "reason": "rewritten", "mode": "rerank",
         "n_before": n_before_total, "n_after": n_after_total,
         "was_no_result": n_before_total == 0,
     }
-    # 机械比对「丢弃了哪些未收录词」（子串比对，不采信 LLM 自报）+ 确定性披露句。
+    # rescue2：机械比对「丢弃了哪些未收录词」（子串比对，不采信 LLM 自报）+ 确定性披露句。
     # 披露句的条数用 payload.result_total（/api/recommend 终态口径=未截断命中总数，
     # 与前端兜底句「库中共 N 条匹配」同口径）——n_after 是择优闸 top-k 截断口径，
     # 拿去上屏会把 1971 说成 10（低报即不诚实）。
@@ -1380,6 +1386,21 @@ def _prompt_md(name: str, fallback_zh: str) -> str:
     return _PROMPT_MD_CACHE[name]
 
 
+def _md_sections(md: str) -> "dict[str, str]":
+    """把提示词 md 按 `## ` 节头切成有序 dict（导言段键为 "intro"，节内容含节头行）。
+
+    单锚点过滤装配用：rescue 面从同一锚点剔掉面内没有消费工具的整节（依赖占位），
+    其余面整份共享。锚点文件缺失退回内置最小版时没有节头 → 只余 "intro" 一键，
+    过滤退化为原样透传（降级语义一致）。"""
+    sections: dict[str, list[str]] = {}
+    key = "intro"
+    for line in md.splitlines():
+        if line.startswith("## "):
+            key = line[3:].strip()
+        sections.setdefault(key, []).append(line)
+    return {k: "\n".join(v).strip() for k, v in sections.items()}
+
+
 def _route_consensus_prompt() -> str:
     """分流共识的系统提示词（`prompts/route_consensus.md`，文件即真源）。"""
     return _prompt_md("route_consensus.md", _ROUTE_CONSENSUS_FALLBACK_ZH)
@@ -1432,8 +1453,8 @@ def _rewrite_query(model: Any, query: str,
 
 def _top_digest(rows: Any, n: int = 3) -> list[dict[str, Any]]:
     """top 条目紧凑 digest（rank/rerank 返回契约的 top 键）：七字段——
-    dataset_uid（同批依赖占位的解析源，`$<N>.top[<i>].dataset_uid`）/
-    dataset_name / species / tissue / disease / source / rank（1 起序号——
+    dataset_uid（2026-08-20 批补：同批依赖占位的解析源，`$<N>.top[<i>].dataset_uid`）/
+    dataset_name / species / tissue / disease / source / rank（1 起序号，批补——
     decide 据此知道 top[0]/top[1] 指哪条）。原始候选 dict 与卡片行 dict 的键名在这几
     字段上同形，两种输入通吃。"""
     digest: list[dict[str, Any]] = []
@@ -1457,7 +1478,7 @@ def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     /api/recommend 同核心的确定性段——`run_with_meta` 规则检索，rerank_audit 关，
     与 search.rerun 同口径），返回 {total, 生效条件, top digest}。
     与 search.rerun 的界限：不做机械择优、不与基准比对——只如实回报检索事实；
-    display=true 时构造载荷（recommend 同形）并附批次原料（batch 键）推往前端，
+    display=true 时构造载荷（recommend 同形）并附批次原料（batch 键）推往前端
     display=false 时仅 agent 自己可见（不构造载荷，省一遍卡片投影）。
     只读；query 槽空 → `_SearchRerunParamError`（bad_param，与 search.rerun 同纪律）。"""
     from ..app import workflow as wf
@@ -1470,7 +1491,7 @@ def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
         raise _SearchRerunParamError()
     display = slots.get("display") is True
     sources = ctx.get("search_sources")
-    # rank 与 search.rerun 同口径——必须吃同一份
+    # 2026-08-23：rank 与 search.rerun 同口径——必须吃同一份
     # 结构化检索现场（facet/suppressed/lenient/date），否则同词重跑会放宽条件、uid 集合变化，
     # 弱批被提升为屏上结果。缺失即 fail-closed（返回结构化标记而非放宽重跑）。
     structured_kwargs = _loop_structured_kwargs(ctx)
@@ -1514,8 +1535,8 @@ def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
         batch = {
             "kind": "rank",
             "label": query[:20],
-            # query_raw = 本轮用户原话（契约：不是模型产出的
-            # rank query）——execute 经 ctx 下入；缺席（测试/直调）退回 query。
+            # query_raw = 本轮用户原话（契约；曾张冠李戴
+            # 填成模型产出的 rank query）——execute 经 ctx 下入；缺席（测试/直调）退回 query。
             "query_raw": str(ctx.get("utterance") or "").strip() or query,
             "query_effective": query,
             "payload": payload,
@@ -1524,7 +1545,7 @@ def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
         "query": query,
         "total": int(meta.result_total or 0),
         # active_filters 真源是**投影字典的列表**（workflow._active_filters 投影），
-        # 原样透传（曾被误当 mapping dict() 强转——有约束的查询必炸）。
+        # 原样透传（曾被误当 mapping dict() 强转——有约束的查询必炸，2026-08-17 run2 复盘修）。
         "filters": list(meta.active_filters or []),
         "top": _top_digest(rows),
         "displayed": display,
@@ -1550,7 +1571,7 @@ def _loop_rerank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
         raise _SearchRerunParamError()
     display = slots.get("display") is True
     sources = ctx.get("search_sources")
-    # （与 _loop_rank 同纪律）：坏 query 改写只换检索句、
+    # 2026-08-23（与 _loop_rank 同纪律）：坏 query 改写只换检索句
     # 不得借机丢掉用户已生效的结构化条件（facet/suppressed/lenient/date）——同词重跑却放宽条件
     # 是弱批顶掉好结果的根因。吃同一份结构化现场，缺失即 fail-closed。
     structured_kwargs = _loop_structured_kwargs(ctx)
@@ -1596,7 +1617,7 @@ def _loop_rerank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
         batch = {
             "kind": "rerank",
             "label": rewritten_query[:20],
-            # query_raw = 本轮用户原话（契约，同 _loop_rank 口径）；
+            # query_raw = 本轮用户原话（契约，同 _loop_rank 的中6 修复口径）
             # 原始坏 query 本身在结果顶层 original_query 键里，不丢。
             "query_raw": str(ctx.get("utterance") or "").strip() or query,
             "query_effective": rewritten_query,
@@ -1615,7 +1636,7 @@ def _loop_rerank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     }
 
 
-# ---------------------------------------------------------------- 环内结果处理四工具（四工具组）
+# ---------------------------------------------------------------- 环内结果处理四工具
 #
 # compare.datasets / cite.export / compat.find / fair.check：四个「拿现有结果做判断」的
 # 工具，都 needs_context——默认对象（前两条 / 第 N 条）取**最近一批检索结果**：重跑与
@@ -1816,7 +1837,7 @@ def _compare_degraded(reason: str, note: str) -> dict:
 
 
 def _loop_compare_datasets(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """对比两个数据集（四工具组）：确定性字段 diff（`compare.diff_items`，
+    """对比两个数据集：确定性字段 diff（`compare.diff_items`，
     零 LLM，事实层）+ 一次独立 LLM 措辞调用（数字交叉核验）→ 中文对比结论。
     槽位 a/b 可选（编号/名称）；没点名 → 当前结果前两条（结论里说明这个假设）。
     记录本体一律走 `_full_corpus`（DatasetRecord）——管线序列化 dict 只提供默认 uid。
@@ -1913,7 +1934,7 @@ def _compare_ident_note(shown: str, reason: str) -> str:
 
 
 def _sanitize_uids_slot(value: Any, limit: int = 20) -> list[str]:
-    """cite.export 的 uids 槽清洗：列表 / 单字符串 →
+    """cite.export 的 uids 槽清洗（2026-08-20 批）：列表 / 单字符串 →
     去空去重保序的 uid 清单，上限 20。占位引用已由 execute 解析层替换为真实 uid 才到
     这里（本函数不碰占位——解析失败在 execute 已跳过）。"""
     if isinstance(value, (list, tuple)):
@@ -1932,7 +1953,7 @@ def _sanitize_uids_slot(value: Any, limit: int = 20) -> list[str]:
 
 def _loop_cite_export(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     """导出当前结果（或指定条数 / 指定编号清单）的 **RIS + BibTeX 双格式**引文并落盘
-    （四工具组，uids 槽）：产物落
+    （2026-08-18；2026-08-20 批扩 uids 槽）：产物落
     `.userdata/citations/`（本机运行产物目录，gitignored），回执带完整路径与字节数——
     前端 runner 旧路径只下 .ris、把响应里的 bibtex 丢掉的缺口在此补上（两种格式都落盘，
     用户都拿得到）。write 语义（readonly=False）由 trace 快照锚定、可被 curate.rollback
@@ -2000,7 +2021,7 @@ def _loop_cite_export(slots: dict, root: Path, ctx: dict | None = None) -> dict:
 
 
 def _loop_compat_find(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """给一个数据集找**元数据兼容**同伴（四工具组）：包
+    """给一个数据集找**元数据兼容**同伴：包
     `compatibility.find_compatible`（同物种 且 chemistry 或平台相同——可整合的必要非充分
     条件，caveat 恒带）。种子 = uid 槽点名（编号/名称/链接，locate 单一真源）或当前结果
     第一条；找不到/无结果 → 如实降级，不硬找。"""
@@ -2073,7 +2094,7 @@ def _compat_note_zh(seed_name: str, total: int, assumed: bool,
 
 
 def _loop_fair_check(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """对单个数据集做 13 项 FAIR 元数据自检（四工具组）：包
+    """对单个数据集做 13 项 FAIR 元数据自检：包
     `fair.build_fair_report`。**边界纪律**：衡量的是「这份公开元数据够不够引用/写方法学」
     ——复用者视角就绪度，**不是**官方 FAIR 认证，也不是对数据质量的评价；note_zh 与
     工具描述都不越过这个定义。对象 = uid 槽点名或当前结果第一条。"""
@@ -2147,17 +2168,19 @@ def _fair_note_zh(name: str, readiness: str, summary: dict | None,
 
 LOOP_TOOLS: dict[str, dict[str, Any]] = {
     "curate.db_status": {
-        "run": _loop_db_status, "label_zh": "读取数据库状态", "card_kind": "db_status",
+        "run": _loop_db_status, "label_zh": _ap.VERB_BY_NAME["curate.db_status"].zh, "card_kind": "db_status",
         "readonly": True, "report": True, "observation": True,
-        # 描述层锚定独立事项：「看看库里多少条」不许被并入检查步。
+        # B1a：「看看库里多少条」被并入检查步的问题（k03）——描述层锚定独立事项。
         "decide_zh": ("汇报数据库当前状态（各来源条数、外部库与回收站、近期变动）：只读，无槽位。"
                       "「看看库里多少条 / 现在有什么」是一件**独立的事**，要单独一步做——"
                       "不许并入检查或搜索步里顺带回答"),
     },
     "curate.check_updates": {
-        "run": _loop_check_updates, "label_zh": "检查来源更新", "card_kind": "check_updates",
+        "run": _loop_check_updates, "label_zh": _ap.VERB_BY_NAME["curate.check_updates"].zh, "card_kind": "check_updates",
         "readonly": True,
-        # 描述层锚：多来源只检一个与主题问句误选两处问题的反向边界。
+        # B1a：多来源只检一个（k09）与主题问句误选（j05 型）两处问题的描述层锚。
+        # 互指：sync 主题限定边界的反向句（从本工具视角指出去处）；
+        # 判定口径全量在 action_plan.VERB_SPECS["curate.sync_updates"].when_zh，改动须同步评估。
         "decide_zh": ("检查来源更新：只读在线比对某个来源有没有新数据（不搜关键词、不入库）；"
                       "一个调用只查一个来源——原话点名多个来源时，可为每个来源各发一个本工具调用（它们彼此独立）；"
                       "槽位 source，不填查全部。问某个**主题**在网上有没有数据不是本工具——"
@@ -2165,9 +2188,13 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
                       "不是本工具——那是 curate.sync_updates（检查+入库一步做完）"),
     },
     "curate.search_online": {
-        "run": _loop_search_online, "label_zh": "联网搜索入库", "card_kind": "search_online",
+        "run": _loop_search_online, "label_zh": _ap.VERB_BY_NAME["curate.search_online"].zh, "card_kind": "search_online",
         "readonly": False,
-        # 条件成立后该步被放弃——锚定「下一步就是我」。
+        # B1a：条件成立后该步被放弃（j03/l07/b04 型）——锚定「下一步就是我」。
+        # 互指：keywords 出处判定句共两语境变体——此处 decide_zh
+        # （decide 工具描述）与 agent_schemas._SLOT_DESCRIPTIONS_ZH["keywords"]
+        # （槽位填写说明，tests/test_agent_schemas.py 有钉）；loop_action.md 已改指针式
+        # 引用、不持第三份。改出处规则时两处变体须同步评估。
         "decide_zh": ("联网搜官方源并入库；槽位 keywords 必填——从原话提取**主题词**"
                       "（疾病/组织/物种/技术等），**优先英文**（联网源都是英文源，"
                       "「人类肺」→ human lung），source / species 可选；来源名不是主题词，"
@@ -2181,9 +2208,11 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
                       "已经有了」提前替系统放弃"),
     },
     "curate.sync_updates": {
-        "run": _loop_sync_updates, "label_zh": "检查更新并同步入库", "card_kind": "sync_updates",
+        "run": _loop_sync_updates, "label_zh": _ap.VERB_BY_NAME["curate.sync_updates"].zh, "card_kind": "sync_updates",
         "readonly": False,
-        # 抽象边界补一个具体反例：「联网搜 X 入库」不许被磁吸成本步。
+        # B1a：「联网搜 X 入库」被磁吸（k08）——抽象边界补一个具体反例。
+        # 互指：sync 主题限定判定句的 decide 面变体（第一人称）；
+        # 全量口径在 action_plan.VERB_SPECS 本动词的 when_zh（第三人称），改动须同步评估。
         "decide_zh": ("检查更新并把能自动入库的疑似新增直接入库（先比对后入库的复合流，"
                       "一步做完，不要拆成 check_updates + search_online 两步）；"
                       "**原话限定了主题的下载不选我**——选 search_online（我不过滤主题，"
@@ -2192,12 +2221,12 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
                       "槽位 source 可选；本工具做完即闭环——检查更新+入库一步完成，"
                       "不要再叠加 search_online 或 check_updates"),
     },
-    # search.rerun：「换词重检」工具化——本地管线（不触网，
-    # 不进 _NETWORK_LOOP_TOOLS）；采纳与否由工具内机械闸裁定（命中 0 条也采纳
+    # search.rerun（2026-08-16 检索工具化 Phase 1）：「换词重检」工具化——本地管线（不触网，
+    # 不进 _NETWORK_LOOP_TOOLS）；采纳与否由工具内机械闸裁定（2026-08-23：命中 0 条也采纳
     # 上屏，只剩同集/条件丢失两档拒绝）。needs_context=True：
     # execute 按此键把（current_query / search_sources / replace_screen）现取注入第三参。
     "search.rerun": {
-        "run": _loop_search_rerun, "label_zh": "检索新查询", "card_kind": "search_rerun",
+        "run": _loop_search_rerun, "label_zh": _ap.VERB_BY_NAME["search.rerun"].zh, "card_kind": "search_rerun",
         "readonly": True, "needs_context": True,
         "decide_zh": ("换一组查询词把本地库重新检索一遍（只读语义：不改库，跑的是与主检索同一条"
                       "管线；结果集没变会如实拒绝并保留当前结果；命中 0 条也如实采纳上屏——"
@@ -2212,7 +2241,7 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
 # 钉住）。needs_context=True：execute 注入现场（search_sources；rerank 另取 chat_model 做
 # 独立改写调用——ctx 只被 run 消费、不落 steps）。
 LOOP_TOOLS["rank"] = {
-    "run": _loop_rank, "label_zh": "检索数据集", "card_kind": "rank",
+    "run": _loop_rank, "label_zh": _ap.VERB_BY_NAME["rank"].zh, "card_kind": "rank",
     "readonly": True, "needs_context": True,
     "decide_zh": ("用一条检索句在本地库做**新检索**（只读，跑与主检索同一条管线，如实回报"
                   "命中总数/生效条件/top 条目——top 每条含 dataset_uid 与 rank 序号，"
@@ -2223,7 +2252,7 @@ LOOP_TOOLS["rank"] = {
                   "裸新检索才选我。"),
 }
 LOOP_TOOLS["rerank"] = {
-    "run": _loop_rerank, "label_zh": "优化检索词重查", "card_kind": "rerank",
+    "run": _loop_rerank, "label_zh": _ap.VERB_BY_NAME["rerank"].zh, "card_kind": "rerank",
     "readonly": True, "needs_context": True,
     "decide_zh": ("当前检索句**质量差**（太口语化、实体写法不规范、中英错位）时，先由独立"
                   "改写器优化检索句再重查（只读；改写不过机械健全性检查会如实退回原句、"
@@ -2232,13 +2261,13 @@ LOOP_TOOLS["rerank"] = {
                   "top 条目同 rank 含 dataset_uid 与 rank 序号，可被后续结果处理引用。"),
 }
 
-# ---------------------------------------------------------------- 环内结果处理四工具（四工具组）
+# ---------------------------------------------------------------- 环内结果处理四工具
 # compare.datasets / cite.export / compat.find / fair.check 的 LOOP_TOOLS 登记。
 # 共同点：needs_context=True（默认对象取「最近一批检索结果」，execute 经 ctx 注入；
 # compare 另取 chat_model 做独立措辞调用）；全部本地（不触网，不进 _NETWORK_LOOP_TOOLS，
 # 归类由 tests/test_loop_tool_registry.py 的差集钉住）。独立预算闸见 `_adjudicate_decide_obj`。
 LOOP_TOOLS["compare.datasets"] = {
-    "run": _loop_compare_datasets, "label_zh": "对比数据集", "card_kind": "compare",
+    "run": _loop_compare_datasets, "label_zh": _ap.VERB_BY_NAME["compare.datasets"].zh, "card_kind": "compare",
     "readonly": True, "needs_context": True,
     "decide_zh": ("把两个数据集放在一起做**元数据字段**对比（名称/来源/物种/组织/疾病/"
                   "平台/技术/chemistry/模态/样本量/发表时间/文件数）：对比前两条、比较这两个"
@@ -2249,7 +2278,7 @@ LOOP_TOOLS["compare.datasets"] = {
                   "search.rerun / rank。"),
 }
 LOOP_TOOLS["cite.export"] = {
-    "run": _loop_cite_export, "label_zh": "导出引文", "card_kind": "cite_export",
+    "run": _loop_cite_export, "label_zh": _ap.VERB_BY_NAME["cite.export"].zh, "card_kind": "cite_export",
     "readonly": False, "needs_context": True,
     "decide_zh": ("把当前结果（或指定条数 / 指定编号清单）生成 **RIS + BibTeX 两种格式**"
                   "的引文文件落盘，并回执文件路径与字节数（limit 用户说了条数才填；"
@@ -2259,7 +2288,7 @@ LOOP_TOOLS["cite.export"] = {
                   "pack.download，本环不做）。"),
 }
 LOOP_TOOLS["compat.find"] = {
-    "run": _loop_compat_find, "label_zh": "查找兼容数据集", "card_kind": "compat_find",
+    "run": _loop_compat_find, "label_zh": _ap.VERB_BY_NAME["compat.find"].zh, "card_kind": "compat_find",
     "readonly": True, "needs_context": True,
     "decide_zh": ("给一个数据集找**元数据上兼容**的其它数据集（同物种 且 chemistry 或平台"
                   "相同——可整合的**必要非充分**条件，结论恒带诚实边界句，绝不说「可整合」）。"
@@ -2268,7 +2297,7 @@ LOOP_TOOLS["compat.find"] = {
                   "search.rerun / rank；本工具按兼容判据找同伴，不重跑检索。"),
 }
 LOOP_TOOLS["fair.check"] = {
-    "run": _loop_fair_check, "label_zh": "检查 FAIR 就绪度", "card_kind": "fair_check",
+    "run": _loop_fair_check, "label_zh": _ap.VERB_BY_NAME["fair.check"].zh, "card_kind": "fair_check",
     "readonly": True, "needs_context": True,
     "decide_zh": ("对单个数据集做 **13 项 FAIR 元数据自检**（Findable/Accessible/"
                   "Interoperable/Reusable，每项 pass/partial/unknown + 改进建议 + 投稿"
@@ -2311,11 +2340,11 @@ def _loop_route_request(slots: dict, root: Path, ctx: dict | None = None) -> dic
     }
 
 
-# 逃生口注册：所有套件的 decide 面都含它；readonly 但
+# 逃生口注册（转正常驻）：所有套件的 decide 面都含它；readonly 但
 # **不进只读同批消费**（`_readonly_loop_verbs` 显式排除——换线时序必须单独一轮，不可混批）。
 # 本地元动词，不触网（不进 _NETWORK_LOOP_TOOLS，归类由 tests/test_scoped_routing.py 钉住）。
 LOOP_TOOLS["route.request"] = {
-    "run": _loop_route_request, "label_zh": "切换处理路线", "card_kind": "route_request",
+    "run": _loop_route_request, "label_zh": _ap.VERB_BY_NAME["route.request"].zh, "card_kind": "route_request",
     "readonly": True,
     "decide_zh": ("发现当前处理路线不对时，请求换到另一条路线：search=检索向（找数据/改条件/"
                   "贴编号）、action=动作向（下载/联网搜库/检查更新/入库/管护）、"
@@ -2324,7 +2353,7 @@ LOOP_TOOLS["route.request"] = {
 }
 
 
-# ---------------------------------------------------------------- curate.rollback
+# ---------------------------------------------------------------- curate.rollback（2026-08-17 rb1）
 
 def _rollback_refuse(sid: str | None, reason: str, note_zh: str) -> dict:
     """回滚机械闸的拒绝出口（形状与成功档同一契约——拒绝是数据不是故障）。"""
@@ -2334,7 +2363,7 @@ def _rollback_refuse(sid: str | None, reason: str, note_zh: str) -> dict:
 
 
 def _loop_curate_rollback(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """回滚动词：把本轮**最近一步带快照且未回过**的写步骤回退掉。
+    """回滚动词（2026-08-17 rb1）：把本轮**最近一步带快照且未回过**的写步骤回退掉。
 
     机械闸（零槽位——回哪一步由本闸现定，模型发明不了快照 id）：
     - 候选 = ctx.steps 里的**正向写步**且有 snapshot_id（成败都算——失败写步也可能
@@ -2412,14 +2441,14 @@ def _loop_curate_rollback(slots: dict, root: Path, ctx: dict | None = None) -> d
         "本轮还没有可回滚的写操作——需要有已执行、留了快照且尚未回滚的写步骤。")
 
 
-# 回滚注册：readonly=False——回滚本身就是写（移回收站/写回字节），
+# 回滚注册（2026-08-17 rb1）：readonly=False——回滚本身就是写（移回收站/写回字节），
 # 自动获得自己的 capture/finalize trace 锚，但候选闸明确跳过 rollback 步（不支持回滚回滚）；
 # 独立计入 MAX_ROLLBACK，不占正向写预算。本地文件操作，不触网。环内专属：
 # 前端无独立触发路径（FRONTEND_UNWIRED_EXEC_VERBS 豁免）、不进 plan_action 面
 # （PLAN_ACTION_EXCLUDED_VERBS）——两者都没有本轮 steps 现场。card_kind="rollback"
 # 由 act.js 专门按 rolled_back/note_zh/文件计数渲染；拒绝虽 step.ok=True 也不冒充改库。
 LOOP_TOOLS["curate.rollback"] = {
-    "run": _loop_curate_rollback, "label_zh": "回滚写操作", "card_kind": "rollback",
+    "run": _loop_curate_rollback, "label_zh": _ap.VERB_BY_NAME["curate.rollback"].zh, "card_kind": "rollback",
     "readonly": False, "needs_context": True,
     "decide_zh": ("撤销本轮**最近一步写操作**（联网搜入库/同步入库等），把它动过的文件回到"
                   "动手前的样子（新文件移入回收站、被改动/删除的写回原字节；回收站式可逆，"
@@ -2454,9 +2483,9 @@ def _execute_detail_zh(spec: dict, result: dict) -> str:
         return base + (f"，新入库 {imported} 条。" if imported else "，没有需要入库的新增。")
     if kind == "search_rerun":
         if result.get("adopted"):
-            # 用户可见句用屏口径（未截断命中总数，与结果区「库中共 N 条匹配」同源）；
+            # nl-A：用户可见句用屏口径（未截断命中总数，与结果区「库中共 N 条匹配」同源）；
             # 旧形状记录（无 totals 键）回退择优闸口径。
-            # 命中 0 条也是采纳档（空结果集照常上屏），文案去工程黑话。
+            # 2026-08-23：命中 0 条也是采纳档（空结果集照常上屏），文案去工程黑话。
             nb = result.get("n_before_total") if result.get("n_before_total") is not None \
                 else result.get("n_before")
             na = result.get("n_after_total") if result.get("n_after_total") is not None \
@@ -2489,10 +2518,10 @@ def _execute_detail_zh(spec: dict, result: dict) -> str:
         target = str(result.get("requested_route") or "")
         return f"已切换处理路线（→ {target}），按新路线继续。"
     if kind == "rollback":
-        # note_zh 由工具按 apply_rollback 的真实清单写实（含拒绝档的如实句），
+        # rb1：note_zh 由工具按 apply_rollback 的真实清单写实（含拒绝档的如实句），
         # 摘要直接引用——同一批事实，不在这里二次概括。
         return str(result.get("note_zh") or "") or "回滚写操作完成。"
-    # 环内结果处理四工具（四工具组）：note_zh / comparison_zh 由工具按真实
+    # 环内结果处理四工具：note_zh / comparison_zh 由工具按真实
     # 结果写实（含降级句），摘要直接引用——同一批事实，不在这里二次概括。
     if kind == "compare":
         if result.get("degraded"):
@@ -2517,7 +2546,7 @@ def _execute_detail_zh(spec: dict, result: dict) -> str:
     return "工具执行完成。"
 
 
-#: 观测设施自身故障的留痕纪律（与
+#: 观测设施自身故障的留痕纪律（2026-08-15 ，审计 ；与
 #: vector_recall/rerank 的 `_warn_once` 同款）：账本/经验库/降级审计的读写失败绝不
 #: 掀翻主流程（它们是这个纪律的存在理由），但也**绝不静默**——同一原因只向 stderr
 #: 打一行脱敏摘要（异常类型名 + 截断消息；原话/key 等材料绝不进这行）。
@@ -2558,11 +2587,11 @@ def _audit_loop_tool(root: Path, verb: str, slots: dict, ok: bool, note: str,
 
 
 def _audit_fallback(root: Path, node: str, reason: str, utterance: str, model: str) -> None:
-    """跌 JSON-in-prompt 兜底的**抓现场账**（node 参数化——
-    账本如实标注是哪个节点跌的）。
+    """跌 JSON-in-prompt 兜底的**抓现场账**（2026-08-06 B4；2026-08-07 换装起 node 参数化——
+    decide 迁工具通道后也有了兜底档，账本如实标注是哪个节点跌的）。
 
-    生产偶发「直连通道不可用→回退问法」难以离线复现——既然复现不了，
-    就让集成自己留证：每次跌兜底落一行
+    生产偶发「直连通道不可用→回退问法」在离线 A/B 里复现不了（required→auto 档 48/48
+    成功）——既然复现不了，就让真机自己留证：每次跌兜底落一行
     `.userdata/agent_fallbacks.jsonl`（ts/node/reason/model/utterance 截断）。
     与联网账本同目录同纪律：审计自身失败绝不掀翻主流程。"""
     try:
@@ -2576,16 +2605,16 @@ def _audit_fallback(root: Path, node: str, reason: str, utterance: str, model: s
             "utterance": str(utterance or "")[:120],
         })
     except Exception as exc:
-        # 降级审计写失败同样留一行（调用方 turn 侧另有外层兜底）。
+        # 降级审计写失败同样留一行（调用方 turn 侧的外层兜底属别家批次）。
         _warn_once(f"fallback_audit_write::{type(exc).__name__}",
                    f"降级审计账本写盘失败（{type(exc).__name__}），兜底现场可能缺行。")
 
 
-# ==================== 成功经验 few-shot 库（Vanna auto_train 式自学习回路） ====
+# ==================== 成功经验 few-shot 库（2026-08-09 五机制批；Vanna auto_train 式自学习回路） ====
 # 每次 curate 会话**成功收尾且一遍过**后机械追加进**候选池**（不注入）；用户在记忆模块预览勾选后
 # 才迁入正式库，understand 按关键词重叠检索正式库 top-3 注入 prompt，与静态示例并存。
 # 失败/被闸拦下/取消/非管护的一律不录（防毒化）；
-# 收录质量闸：「跑通」不等于「干得漂亮」——被机械闸修好/打回/掐停/降级兜底的执行
+# 2026-08-13 收录质量闸：「跑通」不等于「干得漂亮」——被机械闸修好/打回/掐停/降级兜底的执行
 # 连候选池都不进（详见 `_maybe_record_success`）。读账本失败/为空 → 静默降级回纯静态 few-shot。
 _EXAMPLES_LEDGER_NAME = "curate_examples.jsonl"            # 正式库（用户勾选入库；注入侧只读它）
 _EXAMPLE_CANDIDATES_NAME = "curate_example_candidates.jsonl"  # 候选池（机械收录，等用户挑选）
@@ -2606,7 +2635,7 @@ def _example_candidates_path(root: Path) -> Path:
 
 def _read_example_rows(path: Path) -> list[dict]:
     """jsonl 账本全量读出（坏行跳过）。调用方自行保证只在账本尺度（≤200 行）使用。
-    坏行不再零痕迹：跳过前 `_warn_once` 留一行——否则「账本损坏」
+    坏行不再零痕迹跳过前 `_warn_once` 留一行——否则「账本损坏」
     与「本来就是空的」事后不可区分。"""
     rows: list[dict] = []
     if path.is_file():
@@ -2630,7 +2659,7 @@ def _write_example_rows(path: Path, rows: list[dict]) -> None:
 
 
 def _endpoint_fp_from_config(config: Any) -> str:
-    """端点指纹（成功经验库分区键）：sha256(base_url|model) 前 12 位。
+    """端点指纹（成功经验库分区键）：sha256（base_url|model) 前 12 位。
     api_key 永不参与——换 key 不该换分区，key 材料也绝不进任何账本邻接面。"""
     material = str(getattr(config, "base_url", "") or "") + "|" + str(getattr(config, "model", "") or "")
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:12]
@@ -2652,7 +2681,7 @@ def _maybe_record_success(root: Path, utterance: str, plan: dict, steps: list,
                           mode: str = "tools", repairs: int = 0, finish_vetoes: int = 0,
                           reask_write_count: int = 0, truncated: bool = False,
                           checklist_dropped: int = 0) -> None:
-    """成功收尾机械追加一行进**候选池**（不直接进正式库——用户在记忆模块
+    """成功收尾机械追加一行进**候选池**（2026-08-13 起不直接进正式库——用户在记忆模块
     预览勾选后才由 `approve_example_candidates` 迁入，注入侧只读正式库）。
     **机械判据**（不问 LLM）：有真跑的工具步、每步都 ok、至少一步是 curate.* 管护动词、
     plan 非取消态。账本自身失败绝不掀翻主流程。
@@ -2662,7 +2691,7 @@ def _maybe_record_success(root: Path, utterance: str, plan: dict, steps: list,
     理解通道跌 JSON 兜底（mode != "tools"）、首步被 repair 修过、finish 核销被打回/
     写步被重问（finish_vetoes / reask_write_count）、被步数上限掐停（truncated）、
     清单幻觉条目被剔（checklist_dropped）。被判据修好的执行，其「原话→动作」映射正是
-    会教偏模型的毒样例；宁可少录，不录脏。kw-only 缺省全为「干净」——内部直调与既有断言覆盖的
+    会教偏模型的毒样例；宁可少录，不录脏。kw-only 缺省全为「干净」——内部直调/旧钉
     行为逐位不变。"""
     try:
         if mode != "tools":
@@ -2711,7 +2740,7 @@ def _maybe_record_success(root: Path, utterance: str, plan: dict, steps: list,
 
 
 def _example_partition_of(row: dict) -> tuple[str, str]:
-    """分区标：缺字段的存量行按 ("anonymous","") 计——与 `_load_success_examples` 同口径。"""
+    """分区标：缺字段的存量行按 （"anonymous","") 计——与 `_load_success_examples` 同口径。"""
     return (str(row.get("principal") or "anonymous"), str(row.get("endpoint_fp") or ""))
 
 
@@ -2814,7 +2843,7 @@ def _load_success_examples(root: Path, utterance: str,
                            endpoint_fp: "str | None" = None) -> list[dict]:
     """按关键词重叠（共享二元字组数）从账本检索 top-N 相似成功样例。任何异常 → 空表。
 
-     分区：principal 非 None 时只取**同分区**行
+    分区：principal 非 None 时只取**同分区**行
     （principal 与 endpoint_fp 双键全等；缺字段的存量行按 ("anonymous","") 计——它们产自
     分区前的匿名时代，只回灌给匿名+空端点指纹的调用，宁可少注不泄漏）。
     principal=None = 内部直调/工具层，不过滤（旧行为逐位不变）。"""
@@ -2885,7 +2914,7 @@ def _examples_prompt_zh(root: Path, utterance: str, *,
 def _step_projection(step: dict, *, reasked_write: bool = False) -> dict:
     """单步结果的**紧凑投影**（decide/narrate 的 prompt 素材）：只留「判断下一步 / 写汇报」
     要用的字段——原始 result 整个塞进去会把 prompt 吹爆（db_status 带全量清单）。
-    `reasked_write=True` 时打标（重问后放行的写步——模型据此知道
+    `reasked_write=True` 时打标（2026-08-07 B 方案：重问后放行的写步——模型据此知道
     finish 的 completion_report 必须引用本步步骤号并单独交代结果，否则核销硬闸拒收）。"""
     out: dict[str, Any] = {
         "verb": step.get("verb"),
@@ -2930,7 +2959,7 @@ def _step_projection(step: dict, *, reasked_write: bool = False) -> dict:
         }
     elif kind == "sync_updates":
         # 复合流的投影必须把「哪段没闭环」带给 decide/narrate——只报 ok 不报 note_zh，
-        # LLM 会把「检到了但不能自动入库」写成「完成」（集成冒烟坐实的措辞失真）。
+        # LLM 会把「检到了但不能自动入库」写成「完成」（2026-08-06 真机冒烟坐实的措辞失真）。
         entries2: list[dict[str, Any]] = []
         for s in (r.get("sources") or []):
             entries2.append({
@@ -2969,7 +2998,7 @@ def _step_projection(step: dict, *, reasked_write: bool = False) -> dict:
             if r.get(k) is not None
         }
     elif kind == "compare":
-        # 对比投影（四工具组）：结论句 + 计数 + 降级态给 decide/narrate 当事实
+        # 对比投影：结论句 + 计数 + 降级态给 decide/narrate 当事实
         # （fields 逐字段不进 prompt——comparison_zh 已承载结论，n_same/n_diff 是计数）。
         proj: dict[str, Any] = {
             k: r.get(k)
@@ -3069,7 +3098,7 @@ def _report_with_llm(chat_model: Any, obs: dict, usage_sink: list | None = None)
 
 
 # ==========================================================================================
-# decide：多步循环的「判断下一步」（散文 JSON 版；主通道已迁 tool-calling）
+# decide：多步循环的「判断下一步」（2026-08-04 散文 JSON 版；2026-08-07 迁 tool-calling）
 #
 # LLM 看「原话 + 已完成步骤紧凑投影」决定 done / 续步 / 婉拒表外动作。**主通道是
 # tool-calling**（5 个 loop 工具 + finish + unsupported_next_step，见 `_DECIDE_TOOL_SPECS`）；
@@ -3080,8 +3109,8 @@ def _report_with_llm(chat_model: Any, obs: dict, usage_sink: list | None = None)
 # ==========================================================================================
 
 #: decide 动词清单的**显式顺序**（prompt 文本稳定，不随 dict 序漂移）。
-#: 转正：rank / rerank / route.request 常驻（原两开关分支合并为单表）。
-#: 四工具组：compare.datasets / cite.export / compat.find / fair.check 常驻。
+#: rank / rerank / route.request 常驻（原两开关分支合并为单表）。
+#: 2026-08-18 四工具批：compare.datasets / cite.export / compat.find / fair.check 常驻。
 _DECIDE_VERB_ORDER: tuple[str, ...] = (
     "curate.check_updates", "curate.search_online", "curate.sync_updates", "curate.db_status",
     "curate.rollback", "search.rerun", "rank", "rerank", "route.request",
@@ -3091,12 +3120,12 @@ _DECIDE_VERB_ORDER: tuple[str, ...] = (
 
 def _decide_tool_table_zh(verbs: Any = None) -> str:
     """decide prompt 的动词清单——**由 LOOP_TOOLS 注册表程序生成**（注册表是唯一真源；
-    此前 prompt 里这份三动词清单是手抄的第二份拷贝，为消漂移面收编为程序生成）。
-    各行描述取注册项的 `decide_zh`；模块加载期从真实注册表取一次（`_DECIDE_RULES_ZH`
-    是常量）——测试整体替换 LOOP_TOOLS 不受影响，注册表将来加工具时清单自动跟随。
+    此前 prompt 里这份三动词清单是手抄的第二份拷贝，2026-08-06 消漂移面）。
+    各行描述取注册项的 `decide_zh`；模块加载期从真实注册表取一次（各面规则壳均为
+    加载期装配的常量）——测试整体替换 LOOP_TOOLS 不受影响，注册表将来加工具时清单自动跟随。
     带 source 槽的动词行尾程序拼候选清单（与 schema 枚举
     同出 `agent_schemas.source_candidates_zh`——prompt 名单与 schema 枚举不再有第二份拷贝）。
-    `verbs`（scoped 路由）：显式给顺序子集时按子集出表（套件收窄面）；
+    `verbs`（2026-08-17 scoped 路由）：显式给顺序子集时按子集出表（套件收窄面）；
     缺省 None = `_DECIDE_VERB_ORDER` 全表，与历史输出**逐位一致**。"""
     rows = []
     for verb in (verbs if verbs is not None else _DECIDE_VERB_ORDER):
@@ -3107,18 +3136,12 @@ def _decide_tool_table_zh(verbs: Any = None) -> str:
     return "\n".join(rows)
 
 
-#: decide prompt 的共享段落拆分（规则本体一份真源，两种输出格式壳）。
-#: INTRO = 任务与判读说明；RULES_HEAD/TAIL = 铁律本体——两个壳逐字共享。
-_DECIDE_INTRO_ZH = (
-    "你在帮一个**单细胞公开数据集检索工具**执行用户的一句话指令。这句话可能要求**连续做多件事**"
-    "（例如「检查有没有更新，若有新数据就下载入库」——前一步的结果决定后一步做不做）。\n"
-    "下面是用户原话和**已经真实执行过**的步骤（含成败与结果摘要）。\n"
-    # 多件事的马拉松指令做两件就 finish——判断前先核销。
-    "判断之前，先把用户原话拆成**逐件事项**，对照已完成步骤逐件标注「已做 / 没做 / 条件不成立」，"
-    "确认没有遗漏之后再下结论；「完了 / 最后告诉我…」这类收尾事项同样是必须完成的一件事。\n"
-    "请判断：用户要求的事是否已经全部完成？\n"
-)
-
+#: decide prompt 的**通道输出指令壳**（2026-08-31 单锚点化）：规则本体唯一真源 =
+#: prompts/loop_core.md（scoped/rescue 两个面都从那一份锚点过滤装配，见
+#: `_SCOPED_DECIDE_RULES_BY_SUITE` / `_SCOPED_DECIDE_RULES_RESCUE`）；此处只保留两个
+#: 通道专属的输出格式壳，规则本体不再内嵌第二份。此前内嵌的 INTRO/铁律头尾两份常量
+#: 与按它们拼装的 legacy 双壳（`_DECIDE_RULES_ZH` / `_DECIDE_TOOLS_RULES_ZH`）随 rescue
+#: 面迁入锚点同步退役——钉字门（tests/test_agent_schemas.py 双壳字节钉）同批退役。
 _DECIDE_JSON_BULLETS_ZH = (
     "- 已完成；或剩下的事**做不到 / 条件不成立**（例如检查结果是「没有新增」，那「若有则下载」"
     "就不用做；或用户要的来源本工具接不了）→ 只回 {\"done\": true}\n"
@@ -3128,79 +3151,19 @@ _DECIDE_JSON_BULLETS_ZH = (
     "等它执行完再回下一步（JSON 通道不支持同批依赖占位）\n"
 )
 
-_DECIDE_TOOLS_BULLETS_ZH = (
+#: tools 主通道的输出指令壳：三条通道专属指令（finish / 再做一步 / unsupported_next_step）。
+#: completion_report 的逐件核销要求与依赖占位的唯一合法形状不再在此复述——锚点文件
+#: loop_core.md 的「finish 契约」「依赖占位」节各只有一份，scoped 面此前经本条注入第二份
+#: 的双注入随之消除。
+_DECIDE_TOOLS_CHANNEL_BULLETS_ZH = (
     "- 已完成；或剩下的事**做不到 / 条件不成立**（例如检查结果是「没有新增」，那「若有则下载」"
-    "就不用做；或用户要的来源本工具接不了）→ 调用 finish（**必须附 completion_report**："
-    "把用户原话要求的事逐件列出，每件标注「已做（第几步）/ 条件不成立（原因）/ 做不到（原因）」；"
-    "有一件没交代系统会拒收收尾并重问一次；已完成步骤里标了 reasked_write 的步是重问后"
-    "放行的写操作，报告里必须写明它的步骤号并单独交代结果）\n"
+    "就不用做；或用户要的来源本工具接不了）→ 调用 finish（**必须附 completion_report**，"
+    "逐件核销要求见上方「finish 契约」）\n"
     "- 还需要再做一步 → 调用对应的工具；若接下来要做的几件事**彼此独立且都是"
     "只读**（如逐来源检查更新、读库容），一次把它们各发一个调用；"
     "有先后依赖或会写库的动作仍一次只发一个\n"
-    # 教**唯一占位引用形状** + 两个示例 + 禁令。
-    # N 的编号口径 = **本轮执行序号**（1 起；模型自然形态是「understand 先 rank、
-    # decide 单发 compare($1)」——批内局域编号会把它误杀）。
-    "- **引用前一步的检索结果**：要引用 rank / rerank 步 top 里的条目时，用**唯一占位引用**"
-    " `$<N>.top[<i>].dataset_uid` 填进它的槽位——N 是那一步执行时的序号（本轮执行的第 1 步"
-    "是 $1，往后递增；已执行步按它的步骤号）、i 是 top 下标（从 0 起）。例：「搜 X 对比前"
-    "两条」→ 第 1 步 rank(query=X)，第 2 步 compare.datasets(a=\"$1.top[0].dataset_uid\", "
-    "b=\"$1.top[1].dataset_uid\")；「搜 X 给第一条导出引文」→ 第 1 步 rank(query=X)，第 2 步 "
-    "cite.export(uids=[\"$1.top[0].dataset_uid\"])。**只许**填进 compare.datasets 的 a/b、"
-    "compat.find / fair.check 的 uid、cite.export 的 uids 数组；**禁止**写进 quoted/confidence/"
-    "reason 等元槽位，禁止引用非 rank/rerank 的步骤，禁止写库动词（联网搜库/同步入库这类）"
-    "同批携带，禁止与 finish 同一批；拿不准依赖关系就只发前序一步，等它执行完再发下一步\n"
     "- 用户还要求了本循环做不到的事（例如打包下载、删除文件）→ 调用 unsupported_next_step"
     " 说明是那一件\n"
-)
-
-_DECIDE_RULES_HEAD_ZH = (
-    "铁律（违反任一条都是错误）：\n"
-    "1. verb 只能从这张表里选：\n"
-)
-
-_DECIDE_RULES_TAIL_ZH = (
-    "\n2. **不许**重复已经执行过的同 verb 同参数步骤；\n"
-    "3. quoted 必须是用户原话里**逐字出现**的一段连续文字，不要改写、不要加字、不要翻译；\n"
-    "4. 用户原话点名了来源时，source 必须填用户点名的那个来源（填受控规范名——各动作能接的"
-    "来源不同，候选清单已列在上方表格对应行里；接不了的来源系统会如实说，不会静默乱接）；\n"
-    "5. 只能据「已完成步骤的真实结果」判断，**不许**假设没做过的事、不许编造结果；\n"
-    # rule 6 补「检出疑似新增 ≠ 已经入库」——模型把检查发现的
-    # 疑似新增当成「已含于新增中」跳过搜索入库步（替系统放弃的变体）。
-    "6. 用户要的「下载 / 获取新数据」对应表里的 curate.search_online——条件成立就提议它，"
-    "能不能做成由系统如实回答，**不要**你提前替系统放弃；检查出疑似新增**不等于**已经入库——"
-    "「有新增就搜来入库」在条件成立后必须真的提议搜索入库步，"
-    "不许拿「新增里已经有了」替系统放弃。\n"
-    # rule 7 补反向条件——「看看A有没有新数据，没有的话就检查B和C」
-    # 里 A 无新增（条件成立）后模型直接 finish，把反而必须做的 B/C 一起放弃。
-    "7. 条件只约束以它为前提的那部分诉求：「若 A 则 B」里 A 不成立只免除 B；"
-    "「没有 A 就做 B」是**反向条件**——A 没有时 B 反而必须做，A 有才免除 B；原话里"
-    "**不以它为前提的事**（如「最后告诉我库里有多少条」）照常要做，不许一起放弃；\n"
-    "8. 「出现 / 有 X」是**存在**条件：新条目里只要有任何一条符合 X 就算成立，不要求全部符合；\n"
-    # 旧句「不要搜，回 done」会把原话里**其余独立事项**一起判死刑——
-    # 关键词落不了地只免除「这次搜索」这一件事，不是全部任务（rule 7 同一哲学的补齐）。
-    "9. keywords 的主题词必须有真实出处，两个来源任选：在用户原话里找得到（可以翻译成英文），"
-    "或**逐字**取自已完成步骤的真实结果（例如检查更新发现的疑似新增条目标题——「若有则下载」"
-    "要下载的往往就是它们）；两头都找不到出处时不许发明——**只跳过这次搜索**（finish 报告里"
-    "如实写明它没做、为什么）；原话里其余**独立的事**照常要做，都没有了才回 {\"done\": true}。\n"
-    "10. 原话里彼此**独立**的事要逐件完成（「检查 A，顺便看看 B」「X 和 Y 都要」）：对照已完成"
-    "步骤逐件核销，还有没做的就继续提议，不许做完一件就收工——「检查 A…再检查 B…完了告诉我 C」"
-    "是三件事，做完前两件不许收尾；同一个主题已经搜过，就不许"
-    "只换措辞或加过滤条件再搜一遍。\n"
-)
-
-#: decide 的**散文 JSON 兜底档**完整 prompt = INTRO + JSON 输出指令 + 铁律（程序生成动词清单）；
-#: INTRO / rule 10 修订时 tests/test_agent_schemas.py 的钉字同步更新。
-_DECIDE_RULES_ZH = (
-    _DECIDE_INTRO_ZH + _DECIDE_JSON_BULLETS_ZH + _DECIDE_RULES_HEAD_ZH
-    + _decide_tool_table_zh() + _DECIDE_RULES_TAIL_ZH
-)
-
-#: decide 的**工具调用主通道** prompt：同一份 INTRO + 铁律真源，输出指令换成
-#: 「调用恰好一个工具 / finish / unsupported_next_step」。工具 schema 里有槽位专职描述，
-#: 规则本体一字不动。
-_DECIDE_TOOLS_RULES_ZH = (
-    _DECIDE_INTRO_ZH + _DECIDE_TOOLS_BULLETS_ZH + _DECIDE_RULES_HEAD_ZH
-    + _decide_tool_table_zh() + _DECIDE_RULES_TAIL_ZH
 )
 
 #: decide 工具面的两个控制工具名（不映射任何 verb——它们是循环控制信号，不是动作）。
@@ -3209,13 +3172,13 @@ _DECIDE_UNSUPPORTED_TOOL = "unsupported_next_step"
 
 
 def _build_decide_tool_specs() -> tuple[list[dict], dict[str, str]]:
-    """decide 的 tool-calling 工具面：
+    """decide 的 tool-calling 工具面（2026-08-07 评审改案）：
 
-    **5 个 loop 工具**（检索工具化起含 search.rerun；schema 由
+    **5 个 loop 工具**（2026-08-16 检索工具化起含 search.rerun；schema 由
     `agent_schemas.verb_parameters_schema` 程序生成、单一真源，
     description 取注册表的循环语境专职描述 `decide_zh`）+ **2 个控制工具**：
     - `finish`：结构化 done——「要做的事已全部完成，或剩下的做不到/条件不成立」；
-      **必填** `completion_report` 参数承载逐件核销报告（机械层消费：
+      **必填** `completion_report` 参数承载逐件核销报告（2026-08-08 起机械层消费：
       `_unfinished_business` 扫出报告里自认「没做」的事项 → decide 拒收收尾并回灌重问
       一次，见 decide 节点注释；`_decide_answer_kind` 因此把 finish 的 args 带出来）；
     - `unsupported_next_step`：承载「用户还要一件本图做不了的事」——婉拒能力的正式通道
@@ -3224,7 +3187,7 @@ def _build_decide_tool_specs() -> tuple[list[dict], dict[str, str]]:
     刻意**不**绑 18 动词全表：那把 pack.download 等不可在循环内执行的动作伪装成可调用
     工具，显著提高误选率、还吹大 prompt。
 
-    **模块加载期构建一次**（与 `_DECIDE_RULES_ZH` 同纪律）：读的是真实 LOOP_TOOLS——
+    **模块加载期构建一次**（与各面规则壳同纪律）：读的是真实 LOOP_TOOLS——
     测试整体替换注册表（替身项没有 decide_zh）不影响本常量；构建后只读。"""
     tools: list[dict] = []
     name_to_verb: dict[str, str] = {}
@@ -3245,7 +3208,7 @@ def _build_decide_tool_specs() -> tuple[list[dict], dict[str, str]]:
         "type": "function",
         "function": {
             "name": _DECIDE_FINISH_TOOL,
-            # 负向锚——还有没核销的事项时不许 finish（与核销硬闸互文）。
+            # B1a：负向锚——还有没核销的事项时不许 finish（与核销硬闸互文）。
             "description": ("判断用户要求的事已经全部完成，或剩下的事做不到/条件不成立时，"
                           "调用它收尾（必须附 completion_report 核销报告）。"
                           "还有没核销的事项时不许调用——做完一件就收尾与没做同罪。"),
@@ -3296,7 +3259,7 @@ def _build_decide_tool_specs() -> tuple[list[dict], dict[str, str]]:
 #: 模块加载期构建（理由见 `_build_decide_tool_specs` docstring 末段）。
 _DECIDE_TOOL_SPECS, _DECIDE_TOOL_NAME_TO_VERB = _build_decide_tool_specs()
 
-#: rescue 档 decide 工具面：检索救回回合只给
+#: rescue 档 decide 工具面（2026-08-16 检索工具化 Phase 1）：检索救回回合只给
 #: search.rerun + finish——面收敛到「改写或放弃」；机械闸（`_adjudicate_decide_obj`
 #: 的 rescue 闸）双保险。从真表面**滤**出来，不建第二份拷贝。
 _DECIDE_TOOL_SPECS_RESCUE: list[dict] = [
@@ -3310,13 +3273,13 @@ _DECIDE_TOOL_NAME_TO_VERB_RESCUE: dict[str, str] = {
 
 # ---------------------------------------------------------------- scoped 路由套件面
 #
-# 设计要点：提示词共享核心单源化（prompts/loop_core.md 唯一一份）+ 路线差异段；
+# 设计钉死点 3：提示词共享核心单源化（prompts/loop_core.md 唯一一份）+ 路线差异段；
 # decide 工具表继续由 LOOP_TOOLS 注册表**程序生成**（按套件过滤），禁手抄。
 # 本节为**唯一**装配路径（原 OFF 既有面分支已摘除归档）。
 
-#: 套件 = LOOP_TOOLS 注册表子集（套件只能装注册表项）。
-#: 四工具组：环内结果处理四工具（compare/cite/compat/fair）同时入 search 与
-#: action 套件——集成验证「找和第一条元数据兼容的数据集」「对比前两条结果」这类**检索后
+#: 套件 = LOOP_TOOLS 注册表子集（套件只能装注册表项 + 本波新登记项）。
+#: 2026-08-18 四工具批：环内结果处理四工具（compare/cite/compat/fair）同时入 search 与
+#: action 套件——真机实测「找和第一条元数据兼容的数据集」「对比前两条结果」这类**检索后
 #: 追问**被分流到 search 线（找数据语义），只有 action 面会让它们无工具可选而误跑 rank。
 #: 两线共享四工具 = 结果处理；差异留在各自专属工具（search=rank/rerank/search.rerun，
 #: action=curate.*）。
@@ -3354,8 +3317,8 @@ def _understand_suite_verbs(suite: str) -> tuple[str, ...]:
     """understand 首步投影的套件动词集（ROUTE 投影退役：search.new/refine.conditions/
     lookup.identifier 不再投影——检索由 rank/rerank agentic 覆盖；route.request 刻意
     不进任何首步面：首步没有「发现路错」可言）。none 恒在（诚实的「不是执行诉求」出口）。
-     四工具组：search/action 两线都装结果处理四工具（检索后追问
-    「对比/引文/兼容/FAIR」在两条线都真实发生，集成分流验证见 `_SUITE_LOOP_VERBS` 注释）。"""
+    2026-08-18 四工具批：search/action 两线都装结果处理四工具（检索后追问
+    「对比/引文/兼容/FAIR」在两条线都真实发生，真机分流实测见 `_SUITE_LOOP_VERBS` 注释）。"""
     if suite == "search":
         verbs = [v for v in ("rank", "rerank", "search.rerun", "curate.db_status",
                              "compare.datasets", "cite.export", "compat.find", "fair.check")
@@ -3375,7 +3338,7 @@ _SUITE_UNDERSTAND_VERBS: dict[str, tuple[str, ...]] = {
     s: _understand_suite_verbs(s) for s in _SCOPED_ROUTES}
 
 #: scoped decide 双壳规则 = core（诚实不变量唯一一份）+ 路线差异段 + 程序生成的
-#: 套件工具表 + 既有输出指令壳（bullets 是通道格式说明，两壳逐字共享既有常量）。
+#: 套件工具表 + 通道输出指令壳（规则本体唯一真源是 loop_core.md，壳里不再复述）。
 #: 装配只有这一条代码路径；提示词文件即真源（缺失退回内置最小版 + warn-once）。
 _SCOPED_CORE_ZH: str = _prompt_md("loop_core.md", _LOOP_CORE_FALLBACK_ZH)
 _SCOPED_DECIDE_RULES_BY_SUITE: dict[str, dict[str, str]] = {}
@@ -3389,27 +3352,41 @@ for _suite in _SCOPED_ROUTES:
         + "\n\n## 可用工具（verb 只能从这张表里选）\n" + _table + "\n\n## 输出方式\n"
     )
     _SCOPED_DECIDE_RULES_BY_SUITE[_suite] = {
-        "tools": _base + _DECIDE_TOOLS_BULLETS_ZH,
+        "tools": _base + _DECIDE_TOOLS_CHANNEL_BULLETS_ZH,
         "json": _base + _DECIDE_JSON_BULLETS_ZH,
     }
 
-#: scoped understand 的系统提示（转正后为非 rescue 首步的**唯一**系统提示；rescue
+#: rescue（检索救回）面的 decide 规则基座：与 scoped 同一份锚点（loop_core.md）
+#: **过滤装配**——面内只有 search.rerun + finish，「依赖占位」节教授的形状在面内没有
+#: 消费工具（compare/compat/fair/cite 均不在面），整节剔除；工具表收窄为 search.rerun
+#: 一行（规则与动词表不自相矛盾，与 scoped 收窄面同一哲学）。本回合限制段是动态段，
+#: 仍在 decide 运行时尾部注入（`_RESCUE_DECIDE_BLOCK_ZH`）。
+_CORE_SECTIONS: dict[str, str] = _md_sections(_SCOPED_CORE_ZH)
+_PLACEHOLDER_SECTION_KEYS: tuple[str, ...] = tuple(
+    k for k in _CORE_SECTIONS if k.startswith("依赖占位"))
+_RESCUE_CORE_ZH = "\n\n".join(
+    text for key, text in _CORE_SECTIONS.items()
+    if key not in _PLACEHOLDER_SECTION_KEYS)
+_RESCUE_DECIDE_BASE_ZH = (
+    _RESCUE_CORE_ZH
+    + "\n\n## 可用工具（verb 只能从这张表里选）\n"
+    + _decide_tool_table_zh(("search.rerun",))
+    + "\n\n## 输出方式\n"
+)
+_SCOPED_DECIDE_RULES_RESCUE: dict[str, str] = {
+    "tools": _RESCUE_DECIDE_BASE_ZH + _DECIDE_TOOLS_CHANNEL_BULLETS_ZH,
+    "json": _RESCUE_DECIDE_BASE_ZH + _DECIDE_JSON_BULLETS_ZH,
+}
+
+#: scoped understand 的系统提示（为非 rescue 首步的**唯一**系统提示；rescue
 #: 回合仍用 `_TOOLS_SYSTEM_ZH`）：与 `_TOOLS_SYSTEM_ZH` 同一份 `_ap._RULES_ZH` 真源，
-#: 铁律 5/7 换成退役后口径（search.new/refine.conditions/lookup.identifier 不再投影，
-#: 检索需求在检索路线下选 rank）。
+#: 铁律段由 `_ap._TOOLS_CHANNEL_RULE_BODIES_ZH` 程序装配（工具通道变体，条体真源在
+#: action_plan，此处只组装不手抄）。
 _SCOPED_TOOLS_SYSTEM_ZH = (
     _ap._RULES_ZH
     + "铁律（违反任一条都是错误）：\n"
-    "1. 从工具表里挑工具调用；表里没有对应动作时选 none。原话一口气要求多件"
-    "**彼此独立且只读**的事（如「检查 A、B、C 有没有更新」）时，一次为每件事各发"
-    "一个调用（同一工具可发多次，每个来源一个）；其余情况恰好一个。\n"
-    "2. quoted 必须是用户原话里**逐字出现**的一段连续文字，不要改写、不要加字、不要翻译；"
-    "选了执行类动作却给不出原文依据时，改选 none。\n"
-    "3. 用户**明确说不做**某个动作时 → 动词照选，并填 cancelled=true；「能不能/要不要…吧」是征询，照常执行。\n"
-    "4. limit 只在用户**明确说了条数**时填，否则不填；不要把年份、编号、版本号当条数。\n"
-    "5. 只是在**描述要找什么数据** → 那是检索需求：表里有检索工具（rank）就选它"
-    "（用户等着看结果时 display=true），没有就选 none。\n"
-    "6. 规则匹配零命中或整句弃权 **不等于** 这句话无效——工具调用句往往零命中。\n"
+    + "".join(
+        f"{i}. {body}\n" for i, body in enumerate(_ap._TOOLS_CHANNEL_RULE_BODIES_ZH, 1))
 )
 
 
@@ -3418,7 +3395,7 @@ def _loop_slots_fingerprint(verb: str, raw_or_slots: dict) -> tuple:
 
     槽位值一律过 `_norm_source`（小写 + 去全部空白）：查重的语义是「同一件事不许做两遍」，
     LLM 换个大小写/多空一个空格（ArrayExpress → arrayexpress）并不能让同一步变成新步骤
-    （否则同一检查可换形态真跑两遍、账本两行）。"""
+    （2026-08-04 对抗评审坐实变体穿透：同一检查真跑两遍、账本两行）。"""
     spec = _ap.VERB_BY_NAME.get(str(verb or ""))
     names = spec.slots if spec else ()
     items = []
@@ -3432,10 +3409,10 @@ def _loop_slots_fingerprint(verb: str, raw_or_slots: dict) -> tuple:
 def _is_duplicate_step(verb: str, raw: dict, steps: list[dict]) -> bool:
     """是否与既往步同 verb 同参数（decide 的「不许重复已执行步骤」机械比对用）。
 
-    比对集 = 成功步 + **非 network_error** 失败的步（收窄理由：
-    此前曾一律豁免失败步，把 bad_result_shape 这类确定性失败也放去重试白烧一步）：
+    比对集 = 成功步 + **非 network_error** 失败的步（
+    W2a4 曾一律豁免失败步，把 bad_result_shape 这类确定性失败也放去重试白烧一步）：
     - network_error 是唯一真·可重试码——失败步什么都没做成，同指纹重试放行
-      （check 只有 source 槽，同源重查恒同指纹）；重试上界由连续失败
+      （check 只有 source 槽，同源重查恒同指纹，重试上界由连续失败
       处置二分天然兜底（再败即联网暂停/硬停）；
     - bad_result_shape 是确定性失败（形状不合契约），同指纹重试必败 → 照样拦截；
     - bad_param / no_candidates 的合法重试要换参，指纹天然不同，不受本闸影响；
@@ -3501,7 +3478,7 @@ _UNFINISHED_EXEMPT_ZH: tuple[str, ...] = ("条件不成立", "做不到", "无�
 #: 「前件失败」措辞 → 不是合法豁免——彼此独立的事不受前件失败影响（检查 A 网络失败，
 #: 「看看库里多少条」「再检查 B」照样要做），拿前件当理由 = 变相的没做，同罪否决。
 _DEPENDENCY_EXCUSE_ZH: tuple[str, ...] = ("前置", "前面", "前件", "该步骤", "上一步")
-#: 形态 A 已做声称：报告把没跑过的事标成「已做」（没跑 db_status
+#: 形态 A 已做声称（报告把没跑过的事标成「已做」（没跑 db_status
 #: 却自称告知了库容）——「已做」行必须引用**真实存在**的步骤号（第 N 步、N ≤ 已完成步数），
 #: 无步骤号或号码越界与「自认没做」同罪。只认「已做」二字：报告格式钉的就是它
 #: （「已完成」留给总结句，不误伤「全部完成」式收尾措辞）。
@@ -3538,10 +3515,10 @@ def _completion_report_veto(report: str, n_steps: int) -> tuple[str | None, str]
     """逐行扫描 finish 的 completion_report，返回 (否决行原文, 形态码)；无否决 → (None, "")。
 
     三种形态（逐行判定，返回第一行否决行；行内先查「没做」族、合法豁免行不再查「已做」）：
-    - "unfinished"：命中「没做/未做/还没有做/还没做/待做」且同行无豁免词；
+    - "unfinished"（v3 旧闸）：命中「没做/未做/还没有做/还没做/待做」且同行无豁免词；
     - "dependency_excuse"（形态 B）：豁免词命中行同时夹带依赖借口词
       （前置/前面/前件/该步骤/上一步）——「因前置步骤失败而未做」不是合法豁免；
-    - "exempt_without_step"（提前收工残余）：
+    - "exempt_without_step"（2026-08-08 提前收工残余）：
       豁免行的**举证责任**——「条件不成立/做不到」必须引用合法步骤号（据第几步的真实
       结果得出），空口豁免与没做同罪；
     - "done_without_step"（形态 A）：标注「已做」的行必须引用真实存在的步骤号
@@ -3611,7 +3588,7 @@ def _finish_veto(report: str, n_steps: int,
 
 
 def _searched_topics_block_zh(steps: list[dict]) -> str:
-    """decide prompt 的「已搜主题清单」段（rule 10 后半句禁令的机械事实面）——
+    """decide prompt 的「已搜主题清单」段（2026-08-08 rule 10 后半句禁令的机械事实面）——
     仅收录 ok 的 search_online 步，把「搜过什么主题、搜到几条」摆在明面上，同一主题不许
     换措辞或加过滤条件再搜。没有成功搜索步 → 空串（整段不出现，两个壳同口径）。"""
     lines: list[str] = []
@@ -3641,12 +3618,12 @@ _PENDING_COUNT_RE = re.compile(r"多少条|(?<![这那好十几多数])几条|�
 _PENDING_IMPORT_RE = re.compile(r"下载|入库|拿回|拿回来|搜")
 
 
-#: curate 侧补充点名表（`_named_sources_in` 第三趟）：
+#: curate 侧补充点名表（`_named_sources_in` 第三趟，2026-08-08 评审）：
 #: 检索 SOURCE_ALIASES 此前只收主链路来源，而 check/sync 的可检查集合更宽——用户点名
 #: Zenodo/GEO/HuBMAP 检查更新时，点名闸与清单对账必须认识。只收无歧义形（label 逐字 +
 #: 全大写缩写）；裸「geo」这类普通词根不收（与检索侧不收裸「encode」同旨）。
 #: 键名与 CHECK_UPDATE_SOURCES 的 label 对齐（对账器的步骤覆盖判定吃同一口径）。
-#: Zenodo 首批入库后已登记进检索 SOURCE_ALIASES，此处保留作冗余兜底。
+#: 2026-08-14 Zenodo 首批入库后已登记进检索 SOURCE_ALIASES，此处保留作冗余兜底。
 _CURATE_EXTRA_NAMED_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Zenodo", ("Zenodo",)),
     ("refine.bio", ("refine.bio", "refinebio")),
@@ -3661,7 +3638,7 @@ def _named_sources_in(utterance: str) -> list[str]:
     """原话点名的来源集合（保序去重）：别名匹配 + 受控规范名逐字 + curate 补充表三趟
     （逐字趟与 `_named_source_violation` 的豁免同口径：词表刻意不收裸「encode」
     这类普通英文词，但用户原样写出全大写 ENCODE 就是点名）。
-     从 `_pending_hints_block_zh` 规则 1 抽出的共享真源——
+    从 `_pending_hints_block_zh` 规则 1 抽出的共享真源——
     未决提示与复杂度路由吃同一份「点名」口径，防两份拷贝漂移。"""
     named: list[str] = []
     for span in _sr.source_alias_spans(utterance):
@@ -3719,12 +3696,12 @@ def _pending_hints_block_zh(utterance: str, steps: list[dict]) -> str:
     return ("\n----- 机械提示：以下事项可能还没做（逐项核对，确实做了就忽略）-----\n"
             + "\n".join(lines)
             # 收口重锚输出契约：「逐项核对」的措辞会把模型带进散文核对——段末必须把它
-            # 拉回工具通道（实测：无此句时散文首答率显著升高）。
+            # 拉回工具通道（2026-08-08 真机 A/B：无此句时散文首答率显著升高）。
             + "\n核对完仍按上面的规则回答：调用恰好一个工具，或调用 finish 并填好核销报告。")
 
 
 def _import_hint_request(utterance: str) -> bool:
-    """提示层规则 3 的入库诉求**极性判定**（与已修硬闸
+    """提示层规则 3 的入库诉求**极性判定**（2026-08-15 ，与已修硬闸
     `_import_hard_request` 同思路、复用文件内既有 `_DENIAL_MORPH_RE` 语素表）：
     逐命中回看**同小句**前缀，窗口内有否定语素 → 该命中不计入入库诉求。
     「有新增也不要入库」是**拒绝**入库，此前裸子串词表把它当成诉求、提示模型去入库——
@@ -3741,14 +3718,14 @@ def _import_hint_request(utterance: str) -> bool:
 
 # ---------------------------------------------------------------- 任务清单核销
 #
-# 经两轮验证修订定稿 v2.1：
+# 两轮评审（复审意见）修订定稿 v2.1：
 # **核销判定零信任模型**——模型只产清单（人读 + 回灌文案素材），status 由
 # `_checklist_unsettled` 纯函数从 steps 实录推导（动词∧来源对账；实录模型伪造不了）。
 # 清单 immutable（state 覆写键，无 reducer 状态机），每次 finish 重新核算。
 # 清单产出 = understand 节点内追加的独立轻量调用（不进共享工具面——simple 车道字节级
 # 零变化，test_agent_schemas 的冻结钉即证）；只服务 complex 车道的 EXEC 首步。
 
-_CHECKLIST_MAX_ITEMS = 8      #: 聚合回灌限幅（反馈 ≤2KB，每条只带编号+截断文本）
+_CHECKLIST_MAX_ITEMS = 8      #: 聚合回灌限幅（评审：反馈 ≤2KB，每条只带编号+截断文本）
 _CHECKLIST_VERBS = (          #: expect_verb 受控枚举（清单核销的动词级对账基准）
     "curate.check_updates", "curate.search_online", "curate.sync_updates",
     "curate.db_status", "rank", "unsupported")
@@ -3769,7 +3746,7 @@ _WIDTH_FOLD = str.maketrans(
 
 def _agent_status_block_zh(state: "_AgentState", *, steps: list[dict], moratorium: bool,
                            ban_verbs: frozenset[str] = frozenset()) -> str:
-    """decide 双壳恒注入的**执行状态栏**（epub 第2章状态栏思想）。
+    """decide 双壳恒注入的**执行状态栏**（2026-08-08 epub 第2章状态栏思想）。
 
     三条铁律（书 2.6）：①**代码维护**——全部字段从图状态确定性现算，模型不许统计；
     ②有损投影要谨慎选维度——只放真实机械状态（步数/失败/联网暂停/已搜主题/
@@ -3808,7 +3785,7 @@ def _agent_status_block_zh(state: "_AgentState", *, steps: list[dict], moratoriu
         item_states = _checklist_item_states(checklist, steps, declined_zh)
         missing_n = sum(1 for it in item_states if it["status"] == "missing")
         parts.append(f"清单未决 {missing_n}")
-        # 逐项状态行（核销状态栏逐项化——finish 前一眼看见「missing 还有几件、哪几件」，
+        # 逐项状态行（候选4：核销状态栏逐项化——finish 前一眼看见「missing 还有几件、哪几件」，
         # 比单看计数更难无视；全部代码现算，模型只读不写）。
         for it in item_states:
             if it["status"] == "done":
@@ -3858,7 +3835,7 @@ def _parse_checklist(payload: Any, utterance: str) -> tuple[list[dict], int]:
     校验（逐条，不合规剔除计数——宁缺毋滥，烂条目比对账误判安全）：
     - 形状：dict 且 text/anchor/expect_verb 三键齐备；
     - expect_verb ∈ `_CHECKLIST_VERBS`（受控枚举）；
-    - anchor 全半角归一后必须是 utterance 的**子串**且 ≥4 字（anchor 机械可验，
+    - anchor 全半角归一后必须是 utterance 的**子串**且 ≥4 字（评审：anchor 机械可验
       幻觉锚点直接剔除——这是「专名幻觉查形状」的可机械实现面）；
     - 条目里的来源名经 `_named_sources_in` 受控词表提取（词表外的来源写法不进 sources，
       对账时按无来源条目处理——不剔除整条，锚点已保证条目植根原话）。
@@ -3888,7 +3865,7 @@ def _parse_checklist(payload: Any, utterance: str) -> tuple[list[dict], int]:
             continue
         out.append({"task_id": f"t{len(out) + 1}", "text": text[:60], "anchor": anchor,
                     "expect_verb": expect_verb,
-                    # 来源从 text+anchor **合并**提取（模型 text 可能省略
+                    # 来源从 text+anchor **合并**提取（评审：模型 text 可能省略
                     # 来源；anchor 是已验证的原话子串，两处同挖取并集——漏来源 = 对账
                     # 退化成「任何来源都算数」，比多收来源危险得多）。
                     "sources": _named_sources_in(text + " " + anchor)})
@@ -3913,7 +3890,7 @@ def _step_source(step: dict) -> str:
 def _step_covered_sources(step: dict) -> set[str]:
     """步骤实际覆盖的来源集合（规范名口径）：
     - slots.source 填了 → 单源集合；
-    - 空 source 的 check/sync 步 → 从 result.sources 的条目还原（
+    - 空 source 的 check/sync 步 → 从 result.sources 的条目还原（评审：
       全来源成功步不许被误杀——空槽位不等于「没覆盖」，结果里写着覆盖了谁）。"""
     direct = _step_source(step)
     if direct:
@@ -3931,7 +3908,7 @@ def _step_covered_sources(step: dict) -> set[str]:
 def _task_settled_by(task: dict, steps: list[dict]) -> bool:
     """单条清单的动词级对账（零信任：只认 steps 实录，不认模型文本）。
 
-    **按来源覆盖核销**——条目点了 N 个来源，就要 N 个来源
+    评审修复：**按来源覆盖核销**——条目点了 N 个来源，就要 N 个来源
     各自都有 ok 同动词步骤覆盖（任一来源型「一步核销全任务」的洞已堵；步骤侧来源
     判定走 `_step_covered_sources`，空槽位全量步按结果还原覆盖集）。
     条目没点名来源 → 任一 ok 同动词步即核销（对账只验「做了这件事」）。
@@ -3982,7 +3959,7 @@ def _task_settled_by(task: dict, steps: list[dict]) -> bool:
 
 def _checklist_item_states(checklist: list[dict], steps: list[dict],
                            declined_zh: str = "") -> list[dict]:
-    """清单逐项的**代码现算**状态（核销状态栏逐项化——
+    """清单逐项的**代码现算**状态（2026-08-09 调研-长程agent批 候选4：核销状态栏逐项化——
     Anthropic harness「JSON-over-Markdown + 全 false 初始化」与 Manus 尾部复述的机械化版；
     模型只读不写）。返回 [{task_id, text, status, step_no}]：
     status ∈ done(第N步) / exempt(零新增豁免) / declined(表外已婉拒) / missing(未做)。
@@ -4026,7 +4003,7 @@ def _checklist_unsettled(checklist: list[dict], steps: list[dict],
     reason 码：`step_missing`（没有匹配的 ok 步骤）/ `unsupported_unaddressed`
     （表外事项没有 decide 婉拒记录兜底）。条件豁免在 `_task_settled_by` 内判定。"""
     unsettled: list[dict] = []
-    # 逐项豁免（修订版）：declined_zh 非空只豁免**第一条** unsupported——
+    # 逐项豁免（评审版）：declined_zh 非空只豁免**第一条** unsupported——
     # decide 每轮至多婉拒一件（婉拒即停环），「婉拒一件豁免全部」的洞由此堵死；
     # 文本匹配（anchor ∈ declined_zh）走不通——declined 记的是动作中文名，与用户原话
     # 片段字面不齐（「打包发给我」vs「打包下载」），硬匹配只会把正当婉拒也误杀。
@@ -4141,7 +4118,7 @@ _CHECKLIST_PROMPT_ZH = (
 def _task_checklist_call(chat_model: Any, utterance: str,
                          usage_sink: list | None = None,
                          feedback: str = "") -> tuple[list[dict], int, str]:
-    """清单轻量产出：一次 chat 调用拆事项 → (合法条目, 剔除数, 失败原因)。
+    """清单轻量产出：一次 chat 调用拆事项 → （合法条目, 剔除数, 失败原因)。
 
     失败原因空串 = 成功（条目可为空——空清单由调用方按 unavailable 处置）；
     非空 = 调用异常或应答不可解析（调用方走一次有界 repair 的决策素材，repair 时把
@@ -4162,7 +4139,7 @@ def _task_checklist_call(chat_model: Any, utterance: str,
         if rec is not None:
             usage_sink.append(rec)
     # 清单是 JSON **数组**——不许用 action_plan.parse_action_response（那是动作应答
-    # 解析器，对数组会静默返回首元素）。
+    # 解析器，对数组会静默返回首元素，2026-08-08 spy 坐实）。
     text = _message_text(answer).strip()
     payload: Any = None
     try:
@@ -4179,13 +4156,13 @@ def _task_checklist_call(chat_model: Any, utterance: str,
         return [], 0, "unparseable"
     tasks, dropped = _parse_checklist(payload, utterance)
     if not tasks:
-        # 空清单一律视为失败（全剔除也走这里——「dropped>0 但 err 空」
+        # 空清单一律视为失败（评审：全剔除也走这里——「dropped>0 但 err 空」
         # 会被当成合法空清单，新闸静默关闭）。调用方 repair 一次，仍空 → unavailable。
         return [], dropped, "empty" if not dropped else "all_dropped"
     return tasks, dropped, ""
 
 
-#: 聚合否决的教学后缀：每条缺口按形态码带一句修复指引——聚合是「一次说全」，
+#: 聚合否决的教学后缀：每条缺口按形态码带一句修复指引——聚合是「一次说全」
 #: 教学专句是「告诉模型怎么修」，两者都要（旧单条文案的指导性不能因聚合丢掉）。
 _VETO_TEACHING_SUFFIX = {
     "done_without_step": "——「已做」必须写明是第几步的结果（步骤号不许超过已完成的步数）",
@@ -4197,7 +4174,8 @@ _VETO_TEACHING_SUFFIX = {
     "unfinished": "——你的核销报告里写着还有没做的事",
 }
 
-#: 第二次否决时 pending 缺口码 → 必做动作映射（无清单通道强制来源；与 `_pending_violations` 的码表一一对应，新增缺口码时这里
+#: 第二次否决时 pending 缺口码 → 必做动作映射（2026-08-09 调研-长程agent批 候选1 的
+#: 无清单通道强制来源；与 `_pending_violations` 的码表一一对应，新增缺口码时这里
 #: 必须同步——同步关系由测试钉住）。文本闸形态无机械可指的动作，不强指。
 _PENDING_VETO_FORCED_VERB: dict[str, tuple[str, str]] = {
     "pending_count_query": ("curate.db_status", "原话要求说明库里条数"),
@@ -4217,7 +4195,7 @@ def _finish_veto_all(report: str, n_steps: int, reask_writes: list[dict],
     - `_completion_report_veto` 三形态（报告文本自认的缺口）；
     - `_reask_write_veto`（重问写步未单独交代）；
     - 清单对账 `_checklist_unsettled`（有清单时；形态码 checklist_unsettled）；
-    - 混合诉求能力账 `_capabilities_unsettled`（机械闸产出 capabilities 时；
+    - 混合诉求能力账 `_capabilities_unsettled`（机械闸产出 capabilities 时
       形态码 capability_unsettled）——混合句只做一半不许收尾；
     - pending 硬闸 `_pending_violations`（机械可判的未决事实升闸；码见各规则）。
     `capabilities` 为关键字默认参数（缺省空 = 旧调用零变化）。"""
@@ -4246,7 +4224,7 @@ def _finish_veto_all(report: str, n_steps: int, reask_writes: list[dict],
                 out.append((f"混合诉求里的「{label}」这一半没有对应的成功步骤",
                             "capability_unsettled"))
     out.extend(_pending_violations(utterance, steps))
-    # 去重（保序）+ 限幅（回灌 ≤2KB——按条数与单条长度双控）。
+    # 去重（保序）+ 限幅（评审：回灌 ≤2KB——按条数与单条长度双控）。
     seen: set[str] = set()
     deduped: list[tuple[str, str]] = []
     for text, code in out:
@@ -4275,7 +4253,7 @@ def _pending_violations(utterance: str, steps: list[dict]) -> list[tuple[str, st
     if _PENDING_COUNT_RE.search(utterance or "") and not any(
             _step_ok_verb(s, "curate.db_status") for s in steps):
         out.append(("原话要求说明库里条数，但还没有执行过 db_status", "pending_count_query"))
-    # 规则 3：检出未入库（按**来源差集**：「任一来源搜过
+    # 规则 3：检出未入库（按**来源差集**——评审附带修复：「任一来源搜过
     # 即视为全部已入库」的全局口径会放过多来源场景的漏入库）。
     new_sources: set[str] = set()
     for s in steps:
@@ -4330,11 +4308,11 @@ def _import_hard_request(utterance: str) -> bool:
 
 # ---------------------------------------------------------------- 复杂度路由（decide/repair 专用档）
 
-#: 词表与阈值：45 例定标——
+#: 词表与阈值：45 例探针全量定标（）——
 #: score≥2 命中全部 K/L 断链族且 H/C/E/I 克制类全在 simple（reasoner 的过动回落零暴露）。
 #: 宁窄勿宽：误进 simple 只是没治到病（退化为现状），误进 complex 才付 4-6 倍时延与过动风险。
-#: 验证增补并列/追加语素（另外/同时/一并/以及/并且/分别——真实两步任务的常见说法，
-#: 验证定标零翻转）；英文连接词（and/then/if any）暂不收——中文优先产品的已知豁口。
+#: 增补并列/追加语素（另外/同时/一并/以及/并且/分别——真实两步任务的常见说法
+#: 探针定标零翻转）；英文连接词（and/then/if any）暂不收——中文优先产品的已知豁口，记录在案。
 _COMPLEX_CONN_RE = re.compile(
     r"然后|接着|随后|之后|完了|最后|顺便|还要|再把|再帮|再检查|再搜|再告诉|也来|，再|；"
     r"|也给|也搜|也检查|也顺便|另外|同时|一并|以及|并且|分别")
@@ -4344,11 +4322,11 @@ _COMPLEX_COND_RE = re.compile(
 #: 克制语素一票留 simple：带叫停/否定语义的句子即便词面分高也不进 complex——
 #: 「检查一下X；如果没新增就不用再搜，最后只告诉我没有更新」词面能凑 4 分，但它要的是克制，
 #: 而 reasoner 在克制场景的过动回落是 A/B 实测（H 96→79）。「分别」含「别」但**不是**叫停
-#: （恰恰是多事项标记，已收进连接词表）——用 (?<!分)别 豁免。K/L/b 族验证逐字核查零命中。
+#: （恰恰是多事项标记，已收进连接词表）——用 (?<!分)别 豁免。K/L/b 族探针逐字核查零命中。
 _COMPLEX_RESTRAINT_RE = re.compile(r"不用|别再|不要再|(?<!分)别|算了|取消|先不")
 
 #: 库容问句（与 `_pending_hints_block_zh` 规则 2 同一份正则真源——两处不许各写一份漂移）。
-#: 库容 + 任何另一事项信号 = 多事项链（实证：「检查…顺便看看库里多少条」断链、
+#: 库容 + 任何另一事项信号 = 多事项链（坐实：「检查…顺便看看库里多少条」chat 3/3 断链
 #: reasoner 3/3 治愈）；库容独句（score 0）仍是单事项，不许进 complex。
 _PENDING_COUNT_RE_LANE = _PENDING_COUNT_RE
 
@@ -4393,15 +4371,15 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
     raw 为 None 即 done；第三件在「提议被机械层拦下」（范围外动词 / 完全重复 / 搜索
     覆盖闸 / 死路）时非空，narrate 的确定性兜底汇报要点名这件没做的事（LLM 汇报路径有
     规则 2/3 兜底，不需要它）；**第四件只在 `_validate_raw` 校验违规这一种停法下非空**
-    （人读违规清单，供 decide 节点带反馈重问一次—— violation 重问对称化，
+    （人读违规清单，供 decide 节点带反馈重问一次——2026-08-08 violation 重问对称化，
     与非法应答重问同型；去重/覆盖闸/死路/暂停令是**刻意的机械停**，重问只会再撞同一
     道闸，不给反馈、不重问）。
 
-    `allow_placeholders`：True = 占位接地续步（`_batch_readonly_extras`
+    `allow_placeholders`（2026-08-20 批）：True = 占位接地续步（`_batch_readonly_extras`
     调用）——占位槽值已在静态阶段（正则/序号/矩阵）校验过，本裁决不再重复判定；
     False（默认，主步与单步路径）时，raw 里出现形似/越界占位引用 → 记 violation，走
     repair/回炉——占位只能引用**本轮次已执行**的 rank/rerank 步（主步序号 = 已执行步数
-    +1，序号口径见 `_placeholder_static_violations` 注释）。"""
+    +1，施工修正见 `_placeholder_static_violations` 注释）。"""
     done = obj.get("done")
     if done is True or str(done or "").strip().lower() == "true":
         return None, "大模型判断：要求的事已经完成（或条件不成立，没有要做的下一步）。", "", ""
@@ -4409,7 +4387,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
     if not verb:
         return None, "大模型没说完成了，也没说下一步做什么，按「已完成」收尾。", "", ""
     if verb == "none":
-        # none = 干净的 done。旧散文版会落入下方的婉拒路径，说出
+        # 2026-08-07 换装：none = 干净的 done。旧散文版会落入下方的婉拒路径，说出
         # 「你要的『没有操作』这一步没有做」这类怪话——none 本来就是「没别的事要做」。
         return None, "大模型判断：要求的事已经完成（或条件不成立，没有要做的下一步）。", "", ""
     if verb not in LOOP_TOOLS:
@@ -4418,7 +4396,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
         return None, (f"大模型提议的「{verb}」不在允许自动执行的范围内，按「已完成」收尾"
                       "（范围外的动作绝不会在这里执行）。"), (
                       f"你要的「{shown}」这一步没有做——它不在允许自动执行的范围内。"), ""
-    # rescue 面收敛闸：检索救回回合只允许 search.rerun——
+    # rescue 面收敛闸（2026-08-16 检索工具化 Phase 1）：检索救回回合只允许 search.rerun——
     # 其余提议（含 unsupported_next_step 的转述）机械拒绝，按 done 收尾 + 如实 note。
     if str(state.get("entry_mode") or "") == "rescue" and verb != "search.rerun":
         verb_spec = _ap.VERB_BY_NAME.get(verb)
@@ -4426,7 +4404,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
         return None, (f"本回合是检索救回回合，只允许换词重检——「{shown}」这一步本回合"
                       "不允许，按「已完成」收尾。"), (
                       f"你要的「{shown}」这一步没有做——检索救回回合只允许换词重检。"), ""
-    # scoped 路由套件闸（提示不是围栏——decide 的面收窄是
+    # scoped 路由套件闸（常驻；提示不是围栏——decide 的面收窄是
     # 提示层，本闸是机械兜底）：续步提议必须在当前路线的套件 loop 面内；route.request 是
     # 所有套件的公共逃生口，另过三道机械闸（预算 / 目标非法 / 同线空转）。
     if str(state.get("entry_mode") or "") != "rescue":
@@ -4451,7 +4429,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
                               "你要的「切换处理路线」这一步没有做——目标路线不成立。"), ""
     # 联网暂停：联网二连败（network_error）状态下，联网工具
     # 的提议机械拒绝——按 done 收尾、note 如实写「联网暂停中」；离线工具（db_status）照常放行。
-    # 验证：联网性按 (verb, 解析源) 判定——离线快照源的检查只读本地快照，不连坐。
+    # 联网性按 （verb, 解析源) 判定——离线快照源的检查只读本地快照，不连坐。
     if (verb in _NETWORK_LOOP_TOOLS and _is_network_call(verb, obj.get("source"))
             and _network_moratorium(list(state.get("steps") or []))):
         verb_spec = _ap.VERB_BY_NAME.get(verb)
@@ -4466,7 +4444,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
                       "回滚预算已用完。"), ""
     # 写步预算闸：正向写步已用满 MAX_WRITE_STEPS 次后，写工具提议
     # 机械拒绝——按 done 收尾、note 如实写「写步预算已用完」；只读工具照常放行。
-    # 第二维度：写**条数**用满 MAX_WRITE_RECORDS 同样拒（步数
+    # 2026-08-09 评审增第二维度：写**条数**用满 MAX_WRITE_RECORDS 同样拒（步数
     # 管循环、条数管写入量）。
     if verb in _WRITE_LOOP_TOOLS and (
             _write_steps_used(list(state.get("steps") or [])) >= MAX_WRITE_STEPS
@@ -4481,7 +4459,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
                       "这一步没有做（其余已入库的可在回收站账本里查到），按「已完成」收尾。"), (
                       f"你要的「{shown}」这一步没有做——一次请求最多自动写 {MAX_WRITE_STEPS} 次 "
                       f"/ {MAX_WRITE_RECORDS} 条，预算已用完；还要入库可以再说一次。"), ""
-    # 换词重检预算闸（与写步预算同哲学）：search.rerun 已用满
+    # 换词重检预算闸（2026-08-16 检索工具化 Phase 1，与写步预算同哲学）：search.rerun 已用满
     # MAX_SEARCH_RERUN 次后再提议 → 机械拒绝，按 done 收尾、note 如实点名。
     if verb == "search.rerun" and \
             _search_rerun_used(list(state.get("steps") or [])) >= MAX_SEARCH_RERUN:
@@ -4489,7 +4467,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
                       f"{MAX_SEARCH_RERUN} 次），这一步没有再执行，按「已完成」收尾。"), (
                       f"你要的「检索新查询」这一步没有做——一次请求最多换词重检 "
                       f"{MAX_SEARCH_RERUN} 次，预算已用完。"), ""
-    # rank / rerank 预算闸（同 search.rerun 预算哲学）：已用满后再提议 →
+    # rank / rerank 预算闸（2026-08-17 同 search.rerun 预算哲学）：已用满后再提议 →
     # 机械拒绝，按 done 收尾、note 如实点名。二动词常驻 LOOP_TOOLS，闸恒可达。
     if verb == "rank" and \
             _rank_used(list(state.get("steps") or [])) >= MAX_RANK:
@@ -4503,7 +4481,7 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
                       "这一步没有再执行，按「已完成」收尾。"), (
                       f"你要的「优化检索词重查」这一步没有做——一次请求最多优化重检 "
                       f"{MAX_RERANK} 次，预算已用完。"), ""
-    # 环内结果处理四工具的独立预算闸（四工具组，同 rank 预算哲学）：
+    # 环内结果处理四工具的独立预算闸（2026-08-18 同 rank 预算哲学）：
     # compare 含一次本地检索 + 一次独立 LLM 措辞调用；cite.export 落盘引文产物；
     # compat/fair 只读但缺省对象要重跑本地检索——各自独立计数，超出机械拒绝并如实点名。
     if verb == "compare.datasets" and \
@@ -4538,20 +4516,20 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
         return None, (f"「{shown}」这一步刚失败过（最近两步均失败），本回合不再尝试，"
                       "按「已完成」收尾。"), (
                       f"你要的「{shown}」这一步没有做——它刚失败过，本回合不再重试。"), ""
-    # 点名源缺槽位的确定解补位（与 validate 节点同一助手——decide 续步
+    # 点名源缺槽位的确定解补位（2026-08-08 与 validate 节点同一助手——decide 续步
     # 的 raw 先过本裁决，不到 validate，补位缺了会把可补的槽位落空误判成「没通过检查」早收）。
     autofill_note = ""
     if _autofill_named_source(verb, obj, state["utterance"]):
         autofill_note = f"source 槽位按 quoted 点名补为 {obj['source']}；"
     sync_all_named = _sync_all_online_named(verb, obj, state["utterance"])
     if sync_all_named:
-        # 半闸放行空槽 sync（不填=同步全部）——点名单源场景下写面实为
+        # exec-gates M5：半闸放行空槽 sync（不填=同步全部）——点名单源场景下写面实为
         # 全部在线源，decide trace 如实留痕（语义不动，见 `_sync_all_online_named`）。
         autofill_note += (f"原话点名的是{sync_all_named}，本步 source 未填——"
                           "按全部在线源同步（写面超出点名范围）；")
     violations = _validate_raw(obj, state["utterance"], steps=list(state.get("steps") or []))
     if not allow_placeholders:
-        # 主步占位校验：占位只能引用**本轮次
+        # 主步占位校验（2026-08-20 批， + 施工修正）：占位只能引用**本轮次
         # 已执行**的 rank/rerank 步（执行序号 1 起；主步自身序号 = 已执行步数 + 1）——
         # 没有任何已执行步时（首步/单步），任何占位都越界；形似占位（内嵌/路径错）同样拦下。
         # 占位接地续步（allow_placeholders=True）的静态校验已在 `_batch_readonly_extras`
@@ -4597,22 +4575,22 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
 
 
 def _readonly_loop_verbs() -> frozenset:
-    """只读白名单：LOOP_TOOLS 注册表 `readonly=True` 的动词，**减去**
-    下方显式排除项——代码口径（修正 docstring，与代码逐位对齐）现况
+    """只读白名单（2026-08-14 批）：LOOP_TOOLS 注册表 `readonly=True` 的动词，**减去**
+    下方显式排除项——代码口径（2026-08-22 修正 docstring，与代码逐位对齐）现况
     = curate.check_updates / curate.db_status / search.rerun / rank / rerank（均无写库
     副作用、槽位全部来自原话、不依赖前序结果；rank/rerank/search.rerun 是只读本地检索，
-    入注册表后即自然落进本白名单——本 docstring
+    2026-08-16/17 检索工具化与 scoped 路由批入注册表后即自然落进本白名单——本 docstring
     此前滞后写作「现况=check_updates/db_status」，以代码为准）。写动词
-    （search_online / sync_updates）**永不**进白名单：写调用的参数要等前序
-    真实结果接地、条件要等前步判定，脱离现场链的同批保真没有保证。
-    route.request 虽只读也**永不**进批：它是控制面元动词——同批多调用
+    （search_online / sync_updates）**永不**进白名单： 实测预发写调用逐位保真
+    仅 45%（参数要等前序真实结果接地、条件要等前步判定）。
+    route.request虽只读也**永不**进批：它是控制面元动词——同批多调用
     里混进换线会让面切换时序不可判，换线必须独占一轮。
-    compare.datasets / compat.find / fair.check 同样只读但**永不**
+    compare.datasets / compat.find / fair.check同样只读但**永不**
     进白名单：三个工具的**缺省对象依赖前序结果**（当前结果前两条/第一条——要从环内最近检索
     步的现场现取），同批执行时前序检索步未必已跑，缺省语义不可判；宁让它们独占一轮
     （批内剔出即回炉，下一轮 decide 带新状态重判，不丢事）。cite.export 是写工具
     （readonly=False），天然不进白名单。
-    四工具的**缺省依赖**由「同批**占位引用**」显式接地后
+    2026-08-20：四工具的**缺省依赖**由「同批**占位引用**」显式接地后
     即可进批——白名单之外另开 `_PLACEHOLDER_SLOTS` 通道（`_batch_readonly_extras` v2
     判断），本函数口径不变。"""
     return frozenset(v for v, s in LOOP_TOOLS.items()
@@ -4621,10 +4599,10 @@ def _readonly_loop_verbs() -> frozenset:
                                    "fair.check"))
 
 
-# ----------------------------------------------------------------- 依赖占位批量计划 v2
-# 设计：decide 一轮可输出带依赖占位
+# ----------------------------------------------------------------- 依赖占位批量计划 v2（2026-08-20 批）
+# 设计：`设计文档。decide 一轮可输出带依赖占位
 # 的一串调用，execute 顺序解析执行——砍掉「搜→对比/兼容/FAIR/引文」依赖链的 LLM 往返。
-# 不做通用路径，只做一条白名单受控链；两阶段校验；失败四分；解析源局部化。
+# 不做通用路径（v1 评审），只做一条白名单受控链；两阶段校验；失败四分；解析源局部化。
 
 #: 依赖占位**唯一合法形状**：`"$<N>.top[<i>].dataset_uid"`——N = 前序调用在
 #: **本批内**的序号（1 起，第 1 个调用是 $1；必须 < 当前调用在批内序号）、i = 该调用 top
@@ -4660,7 +4638,7 @@ _PH_BAD: tuple[str, ...] = ("__ph_bad__",)
 
 
 def _placeholder_ref(value: Any) -> tuple[int, int] | tuple[str, ...] | None:
-    """单值占位识别：返回 (N, i) = 合法占位；`_PH_BAD` = 形似占位但不合规
+    """单值占位识别：返回 （N, i) = 合法占位；`_PH_BAD` = 形似占位但不合规
     （以 `$` 开头、或含 `.top[` / `.dataset_uid` 段却拼不成唯一形状——内嵌/路径错/缺段）；
     None = 普通字面量。"""
     s = str(value)
@@ -4707,10 +4685,10 @@ def _slots_has_placeholder(slots: Any) -> bool:
 
 def _placeholder_static_violations(verb: str, raw: dict, position_verbs: list[str],
                                    pos: int) -> list[str]:
-    """**静态阶段**占位校验（`pos` 与 `N` 的编号口径
-    为**本轮次执行步序号**，1 起——集成验证 模型自然形态是「understand 先 rank、decide
+    """**静态阶段**占位校验（2026-08-20 施工修正：`pos` 与 `N` 的编号口径
+    为**本轮次执行步序号**，1 起——真机探针实测模型自然形态是「understand 先 rank、decide
     单发 compare($1)」，批内局域编号会把该形态误杀成死路；零前序时与设计示例的批内编号
-    逐位一致）：只查正则形状 + 序号越界 + 流向矩阵——**不走**
+    逐位一致，见设计文档「施工修正」节）：只查正则形状 + 序号越界 + 流向矩阵——**不走**
     `_validate_raw` / `build_plan_from_raw`（它们会拒掉或毁形占位）。返回人读违规清单，
     空表 = 通过。position_verbs = 按执行序号排列的动词清单（下标 0 = 本轮第 1 步：
     已执行步在前，主步/同批续步按执行顺序接后）；pos = 当前步的执行序号（1 起）。
@@ -4849,7 +4827,7 @@ def _resolve_placeholder_plan(raw0: dict, resolved: dict[int, dict], batch_id: s
         return None, (
             f"（批 {batch_id}，计划位置 {ordinal}）解析后计划被机械层降级/取消"
             "（verb 变了或 cancelled），本步不执行、不记步。"), "downgraded"
-    # （集成验证）：build_plan_from_raw 的字符串槽 80 字符截断会把
+    # （2026-08-20 真机实测）：build_plan_from_raw 的字符串槽 80 字符截断会把
     # 长 dataset_uid（如 aggregate-of-900k-… 113 字符）截断——占位解析出的真实值以
     # `resolved_results`（生产者 top digest 原文）为准，**只覆写占位槽**（解析值是权威；
     # 其余槽保留 build_plan_from_raw 的净化：limit 丢弃、display 归一等）。
@@ -4890,13 +4868,15 @@ def _resolve_one(ref: tuple[int, int], slot: str, resolved: dict[int, dict],
 
 def _batch_readonly_extras(calls: list, first_raw: dict,
                            state: "_AgentState") -> tuple[list[dict], int]:
-    """多调用的**同批消费**过滤（支持
-    **占位接地**批量；设计依据见 `_readonly_loop_verbs` 注释）。
+    """多调用的**同批消费**过滤（2026-08-14 ；2026-08-20 升级为支持
+    **占位接地**批量，§2。实测依据见 `_readonly_loop_verbs` 注释与
+    `research/reports/multicall-legality-probe/summary.md`——A 类独立只读
+    批量第 2..N 个调用 schema/语义合法率 100%（n=371））。
 
     decide 一次回 N 个调用时，第一个照旧走「裁决 → validate → execute」主路径；本函数从
     第 2..N 个里筛出可以**同批安全执行**的续步。返回 (采纳的 raw 列表, 回炉个数)。
     全部机械判定、宁严勿宽——被剔/回炉的调用不会丢：下一轮 decide 带新状态重判（与
-    「取第一个」旧策的唯一差别是**独立续步不再白等一轮模型往返**）。规则：
+    「取第一个」旧策的唯一差别是**独立续步不再白等一轮模型往返**）。规则（v2）：
     - **永不进批清单**（`_NEVER_BATCH_LOOP_VERBS`：route.request / curate.rollback /
       一切写库动词）出现即**截断**：其后的调用可能是「写给后状态」的（如入库后再报数），
       语义依赖顺序，整尾回炉再判；写库动词无占位也截断——v2 不做写入链；
@@ -4928,7 +4908,7 @@ def _batch_readonly_extras(calls: list, first_raw: dict,
     seen_steps = steps + [{"verb": str(first_raw.get("verb") or ""),
                            "slots": {k: v for k, v in first_raw.items() if k != "verb"},
                            "ok": True}]
-    # 占位静态校验的**执行序号**现场（序号 = 本轮次执行步序号，1 起）：
+    # 占位静态校验的**执行序号**现场（施工修正：序号 = 本轮次执行步序号，1 起）：
     # position_verbs 下标 0 = 本轮第 1 步（已执行步在前，主步与已采纳续步按执行顺序接后）；
     # 第 k 个续步的执行序号 = n_exec + 1（主步）+ k。
     n_exec = len(steps)
@@ -5007,9 +4987,9 @@ def _decide_answer_kind(answer: Any, name_to_verb: dict[str, str]) -> tuple[str,
     payload = obj——模型没调工具但回了 JSON，与 understand 同一份双通道解析真源）/
     invalid（幻觉工具名 / 参数不是对象 / 啥也解析不出——fail-safe 停环）。
     **多 tool_call 取第一个**（DeepSeek 不遵守
-    `parallel_tool_calls=False`，不可读应答全是多调用且第一个合法；
+    `parallel_tool_calls=False`，decide 不可读 17/17 全是多调用且第一个 17/17 合法；
     循环带着新状态会再判断后续，吃第一个不吞任何事）——多调用留痕由 decide 节点
-    拼进 trace detail（`_classify`）；第 2..N 个里的只读独立续步
+    拼进 trace detail（`_classify`）；2026-08-14 起第 2..N 个里的只读独立续步
     由 decide 节点的 `_batch_readonly_extras` 同批采纳（本函数的分诊语义不变）。
     """
     tool_calls = getattr(answer, "tool_calls", None) or []
@@ -5034,7 +5014,7 @@ def _decide_answer_kind(answer: Any, name_to_verb: dict[str, str]) -> tuple[str,
 
 
 # ==========================================================================================
-# narrate 的全程汇报（steps 非空时）
+# narrate 的全程汇报（steps 非空时；2026-08-04）
 # ==========================================================================================
 
 _STEPS_REPORT_RULES_ZH = (
@@ -5045,7 +5025,7 @@ _STEPS_REPORT_RULES_ZH = (
     "2. **steps 列表就是全部做过的事**——没出现在列表里的动作（下载、删除等）"
     "**一律没有发生**，汇报里绝不能说做了；「已下载/已入库」这类话只允许按第 3 条的"
     "既遂含义说；\n"
-    # 误伤/谎称双归因：旧版没说清动词的既遂含义，模型把 search_online
+    # 旧版没说清动词的既遂含义，模型把 search_online
     # 当「只搜索不入库」，汇报「未执行入库操作」——steps 里明明入库成功的真谎称（denied_write
     # 拦截簇的绝对主力）。动词语义键一次性说死：
     "3. 步骤动词的既遂含义（ok=true 时必须按此说，不许反着说）：\n"
@@ -5054,10 +5034,10 @@ _STEPS_REPORT_RULES_ZH = (
     "   - curate.sync_updates ＝ 已检查更新并按需入库，imported_total 是实际入库条数"
     "（为 0 就如实报 0——这是正常完成，不是失败）；\n"
     "   - curate.check_updates / curate.db_status ＝ **只读**动作，本身不做任何入库或下载；\n"
-    # 换词重检的既遂含义（只读重跑检索，不写库）。
+    # 2026-08-16 检索工具化 Phase 1：换词重检的既遂含义（只读重跑检索，不写库）。
     # 设计决定：命中 0 条也采纳上屏（空结果集就是诚实答案）——adopted=false
     # 只剩「结果集相同 / 为保住筛选条件没执行」两档，不许把没执行说成「没查」。
-    # 去八股化：旧子弹授逐字句式「按新条件没有匹配到数据集」，模型照模板
+    # 2026-08-24 去八股化：旧子弹授逐字句式「按新条件没有匹配到数据集」，模型照模板
     # 鹦鹉学舌、还能在同一段里接一句自相矛盾的「保持不变」。改授原则——0 命中照实直说、
     # 结果已更新就只描述新结果。
     "   - search.rerun ＝ 换查询词把本地库**重新检索**了一遍（只读重跑检索，不写库）；"
@@ -5070,14 +5050,14 @@ _STEPS_REPORT_RULES_ZH = (
     "4. 说清每一步做了什么、结果如何；失败或没做到的步骤必须**如实写明原因**；\n"
     "5. snapshot_date 为 null 的来源**不许提日期**；\n"
     "6. 「条件没成立所以没做」是正常完成，不是失败（如「没有新增，不需要下载」）；\n"
-    # 回归修复：旧措辞诱导模型把来源名和数字拆进两句话
+    # 旧措辞诱导模型把来源名和数字拆进两句话
     # （「已检查 ArrayExpress 更新。在线近期新增 0 条」），撞上评测的零值同小句纪律。
     "7. 每个来源只在一个地方说结果：**来源名第一次出现的小句里就要带上它的数字（含 0）**——"
     "「ENCODE 检到 3 条疑似新增、实际入库 0 条」；不许先单独说一句「ENCODE 检查完成」、"
     "把数字留到别的小句，更不许只在句尾裸写数字；\n"
     "8. 不要建议、不要评论、不要客套。\n"
     # 设计决定：用户关心的是「用什么查的、查到什么」，不是内部机制。
-    # 去八股化：旧版「必须说清三件事」清单体诱导模型按模板造句，改引导式，
+    # 2026-08-24 去八股化：旧版「必须说清三件事」清单体诱导模型按模板造句，改引导式，
     # 并钉死反自相矛盾（结果已更新与保持不变绝不同段）。
     "9. 检索类步骤（rank / rerank / search.rerun）的汇报要自然交代：用了哪些关键词、"
     "按什么方式在本地库检索（关键词规则检索，必要时先优化了检索词）、命中多少条、"
@@ -5122,12 +5102,13 @@ _WRITE_ACTIONS_ZH: tuple[str, ...] = ("下载", "入库", "写入", "导入", "�
 #: 完成态/既遂语素：前缀式（「已下载」「已完成下载」「并入库」「搞定了下载」）与后缀式
 #: （「下载完成」「下载好了」「下载好啦」「下载搞定」）两族；否定/非既遂语素出现在小句
 #: 窗口内即豁免（「不需要下载」「未能完成下载」「没有完成下载」都不是既遂声称）。
-#: 「好啦/搞定」族是实测坐实的词表外漏网语素（「下载好啦」「下载搞定」「搞定了下载」）。
+#: 「好啦/搞定」族是坐实的词表外漏网语素（「下载好啦」「下载搞定」「搞定了下载」）。
 _WRITE_DONE_PREFIX_ZH: tuple[str, ...] = ("已完成", "已经完成", "已经", "已", "并", "搞定")
 _WRITE_DONE_SUFFIX_ZH: tuple[str, ...] = ("完成", "好了", "好啦", "成功", "完毕", "搞定", "了")
 _WRITE_NEG_ZH: tuple[str, ...] = ("未", "没", "不", "无")
 #: 非既遂语素：否定词（未/没/不/无）盖不住「完成不了」之外的未遂/疑问形态——「失败了」
-#: 「被取消了」「完成了吗」的否定/疑问落在完成态语素**之后**（函数级实测误伤 6/19 的共性）。出现在小句窗口内同样豁免；误豁免的代价只是漏拦一句措辞、误伤的代价是
+#: 「被取消了」「完成了吗」的否定/疑问落在完成态语素**之后**（函数级误伤 6/19
+#: 的共性）。出现在小句窗口内同样豁免；误豁免的代价只是漏拦一句措辞、误伤的代价是
 #: 把实话判成谎称，两害相权取前者。
 _WRITE_UNDONE_ZH: tuple[str, ...] = ("失败", "取消", "吗")
 #: 小句隔断：完成态语素只在动作词所属的小句内归属（跨小句的「没」不该豁免本小句的谎称，
@@ -5142,7 +5123,7 @@ def _clause_head(report: str, end: int, limit: int = 8) -> str:
     return head[cut + 1:] if cut >= 0 else head
 
 
-#: 零数量语素（误伤修复）：「导入0条 / 导入数量为 0 / imported_total=0」
+#: 零数量语素（2026-08-07 误伤修复）：「导入0条 / 导入数量为 0 / imported_total=0」
 #: 是**如实汇报零入库**，不是既遂声称。出现在小句窗口内同样豁免——零数量声称结构性
 #: 盖不住 N>0 的真谎称（「入库 0 条」永远骗不了人），豁免不损拦截力。
 _WRITE_ZERO_ZH: tuple[str, ...] = ("0 条", "0条", "为 0", "为零", "=0", "0 个", "0个")
@@ -5164,11 +5145,11 @@ def _claims_done_write(report: str) -> bool:
                 continue  # 「存在」是存续不是写动作——「已存在本地」是更新汇报的高频诚实措辞
             if action == "入库" and report[max(0, i - 2):i] == "同步":
                 continue  # 「同步入库」是 sync 步骤名的逐字引用（检查更新并同步入库），
-                # 不是既遂声称（误伤修复：claimed_write 拦截簇的主力
+                # 不是既遂声称（claimed_write 拦截簇的主力
                 # 正是模型照抄步骤名；真谎称「已下载并入库 3 条」由数字交叉核验兜底）
             head = _clause_head(report, i)
             # 尾窗取到下一小句隔断为止，不定长截字：动作词与完成态语素之间夹「任务/流程」
-            # 等字时，定长窗会把语素切在窗外（实测：「下载任务已完成」谎称透传上屏）。
+            # 等字时，定长窗会把语素切在窗外（「下载任务已完成」谎称透传上屏）。
             tail = report[i + len(action):]
             cut = min([tail.find(p) for p in _CLAUSE_BREAKS_ZH if tail.find(p) >= 0]
                       or [len(tail)])
@@ -5190,7 +5171,7 @@ def _claims_done_write(report: str) -> bool:
 
 #: 否认侧的判定素材说明：旧实现是穷举整句词表 `_WRITE_DENIALS_ZH`
 #: （「未执行入库/未入库/…」十个字面量）——与 claim 侧的教训同型：「导入」恰在
-#: `_WRITE_ACTIONS_ZH` 里而否认词表没有它，集成汇报「结果已保存。未执行导入操作。」（导入
+#: `_WRITE_ACTIONS_ZH` 里而否认词表没有它，真机汇报「结果已保存。未执行导入操作。」（导入
 #: 其实成功）整句透传上屏。词表与动作词族不自洽是结构性必然——只能按
 #: 「写动作词 × 否认语素」模式化（与 claim 侧同构），逐字词表删除。
 def _denies_done_write(report: str) -> bool:
@@ -5235,7 +5216,7 @@ _READ_TAIL_PARTICLES_ZH: tuple[str, ...] = ("过", "了", "的")
 
 
 def _denies_done_read(report: str, steps: list[dict]) -> bool:
-    """汇报里是否有「读动作否认」声称（第五路机械后检：
+    """汇报里是否有「读动作否认」声称（第五路机械后检
     明明搜过 X，LLM 汇报却说「未搜索 X」——既有四路只管写动作否认与只读假性声称，
     管不到只读动作的否认）。
 
@@ -5289,7 +5270,7 @@ def _denies_done_read(report: str, steps: list[dict]) -> bool:
     return False
 
 
-#: sync 主题闸的维度面：只认「具体主题」四维的值别名——
+#: sync 主题闸的维度面（2026-08-08 问题1）：只认「具体主题」四维的值别名——
 #: species/tissue/disease/assay（物种/组织/疾病/技术）。platform 刻意不收：平台名与来源名
 #: 撞车（10x 既是 platform 又是来源名，「检查10x更新并同步」没有主题）；modality 是数据
 #: 形态不是主题。虚词/动作词/来源名天然不在 CATALOG 值别名里。
@@ -5310,7 +5291,7 @@ def _utterance_topic_alias(utterance: str) -> str | None:
     """原话里命中的第一个主题维度**值**别名（无 → None）——sync 主题闸的机械判定。
     复用同一份词表与匹配真源（`vocabulary.CATALOG` × `query_parser._alias_occurrences`），
     口径与检索侧解析逐位一致：原话能解析出物种/组织/疾病/技术约束 = 限定了主题。
-     验证：先**等长遮蔽来源专名**再扫描——「Human Cell Atlas」自带 human、
+    先**等长遮蔽来源专名**再扫描——「Human Cell Atlas」自带 human
     「检查HCA更新并同步」曾被误判成限定主题而拦死 sync（来源名不是主题）。"""
     low = _sr.mask_source_spans(str(utterance or "")).lower()
     for dim in _TOPIC_GATE_DIMS:
@@ -5344,7 +5325,7 @@ def _clause_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _sync_gate_scope_zh(utterance: str, quoted: str) -> str:
-    """sync 主题闸的**分句作用域**：主题词只有落在 sync 所引
+    """sync 主题闸的**分句作用域**（坐实）：主题词只有落在 sync 所引
     片段的分句里（条件回指句再往前扩一句）才算限定 sync 本身；主题词在**别的分支**时，
     对 sync 的拦截口径另走「别支主题」消息（见 `_validate_raw` 的 sync 闸）。
     quoted 拿不到/对不上原话 → 退回整句（fail-closed，与旧版全域扫描逐位一致）。"""
@@ -5364,12 +5345,12 @@ def _sync_gate_scope_zh(utterance: str, quoted: str) -> str:
 
 
 #: sync 别支豁免的分支意图词——sync 所引分支**本身**得说过要同步/下载/入库，豁免才谈得上；
-#: 「再检查一遍ENCODE」这类纯检查分支被误选 sync 时不在豁免之列。
+#: 「再检查一遍ENCODE」这类纯检查分支被误选 sync 时不在豁免之列（g04 假设例在案）。
 _SYNC_BRANCH_INTENT_RE = re.compile(r"同步|下载|入库|拿回|拿来|拉取|sync|download|pull", re.IGNORECASE)
 
 
 def _sync_topic_elsewhere_exempt(utterance: str, raw: dict[str, Any]) -> bool:
-    """sync 主题闸的**别支豁免**（实证：「检查CELLxGENE更新，有新增就
+    """sync 主题闸的**别支豁免**（2026-08-08 坐实：「检查CELLxGENE更新，有新增就
     同步，然后检查下ArrayExpress，有新的人类肺数据就搜来入库」——主题词「人类」限定的是
     ArrayExpress 分支，拿它拦 CELLxGENE 分支的 sync 是张冠李戴；reasoner 被误导理由反复
     拉扯后整计划崩成 AgentPlanInvalid 0/3）。豁免四条件（缺一照拦，fail-closed）：
@@ -5402,10 +5383,10 @@ def _sync_topic_elsewhere_exempt(utterance: str, raw: dict[str, Any]) -> bool:
 
 def _canonical_source(value: Any) -> str | None:
     """任意写法 → 规范来源名（检索侧 SOURCE_ALIASES 同一份词表真源）；认不出 → None。
-     自对抗复查补第三趟：curate-only 源（当时 Zenodo 等不在检索词表）必须认识——
+    2026-08-09 自对抗复查补第三趟：curate-only 源（当时 Zenodo 等不在检索词表）必须认识——
     否则 Zenodo 检查步 canon=None → 清单核销永远落空（`_step_covered_sources` 连同
     result.sources 条目回退一起失灵），点名闸的别支豁免也跟着 fail-closed 误拦。
-     Zenodo 已登记进检索 SOURCE_ALIASES（首批入库），第三趟对它变为冗余兜底，
+    2026-08-14 Zenodo 已登记进检索 SOURCE_ALIASES（首批入库），第三趟对它变为冗余兜底，
     保留无伤（前两趟先命中）。"""
     v = _norm_source(value)
     if not v:
@@ -5450,7 +5431,7 @@ def _report_names_untouched_source(report: str, steps: list[dict]) -> bool:
 
 
 # ==========================================================================================
-# 数字交叉核验（第三路机械后检）
+# 数字交叉核验（2026-08-06 · 第三路机械后检）
 #
 # 判定逻辑（**只做机械可判定的，拿不准的不拦**——误伤代价只是回退确定性拼接，但别滥拦）：
 #   1. 只抓**紧贴计数语境**的阿拉伯数字，两类：
@@ -5461,7 +5442,7 @@ def _report_names_untouched_source(report: str, steps: list[dict]) -> bool:
 #   2. 比对基准 = steps 实录的**真实关键计数**（`_step_true_counts`）：
 #      search_online 的 record_count（真入库条数）；check_updates 各源的 new_count 与
 #      new_candidates 实列条数（疑似新增数，两口径都收——候选列表有截断上限，两个都可能是实话）
-# **以及 online_recent / local_count**（误伤修复：「在线发现 12 条
+# **以及 online_recent / local_count**（「在线发现 12 条
 #      近期记录」「本地库原有 1784 条」都是投影里的真数字，旧基准没登记 → 如实汇报反被拦，
 #      v8 的 count_mismatch 拦截簇主力正是它）；sync 各源 new_count/imported_count 等；
 #      db_status 的 total_records。
@@ -5496,7 +5477,7 @@ def _step_true_counts(steps: list[dict]) -> set[int]:
                 n = e.get("new_count")
                 if isinstance(n, int) and not isinstance(n, bool):
                     counts.add(n)
-                # online_recent / local_count 同样是可如实汇报的真数字（误伤修复）
+                # online_recent / local_count 同样是可如实汇报的真数字（2026-08-07 误伤修复）
                 for k in ("online_recent", "local_count"):
                     n = e.get(k)
                     if isinstance(n, int) and not isinstance(n, bool):
@@ -5506,7 +5487,7 @@ def _step_true_counts(steps: list[dict]) -> set[int]:
                     counts.add(len(cands))
         elif kind == "sync_updates":
             # 复合流的真实计数：总入库数 + 每源的疑似新增/自动入库/标题样本数
-            # （集成冒烟坐实：漏登记 → 如实汇报「疑似新增 1 条」反被误判谎称）。
+            # （2026-08-06 真机冒烟坐实：漏登记 → 如实汇报「疑似新增 1 条」反被误判谎称）。
             total = r.get("imported_total")
             if isinstance(total, int) and not isinstance(total, bool):
                 counts.add(total)
@@ -5521,12 +5502,12 @@ def _step_true_counts(steps: list[dict]) -> set[int]:
                 if isinstance(titles, list):
                     counts.add(len(titles))
         elif kind == "db_status":
-            # 多步链收尾的 db_status：库容总条数是可如实汇报的真数字（同 误伤修复）。
+            # 多步链收尾的 db_status：库容总条数是可如实汇报的真数字（同 2026-08-07 误伤修复）。
             n = r.get("total_records")
             if isinstance(n, int) and not isinstance(n, bool):
                 counts.add(n)
         elif kind == "search_rerun":
-            # 换词重检的真实计数：择优前后的条数（含屏口径 totals）+ 采纳载荷的命中总数。
+            # 换词重检的真实计数：择优前后的条数（含 nl-A 屏口径 totals）+ 采纳载荷的命中总数。
             for k in ("n_before", "n_after", "n_before_total", "n_after_total"):
                 n = r.get(k)
                 if isinstance(n, int) and not isinstance(n, bool):
@@ -5535,7 +5516,7 @@ def _step_true_counts(steps: list[dict]) -> set[int]:
             if isinstance(n, int) and not isinstance(n, bool):
                 counts.add(n)
         elif kind in ("compare", "compat_find", "cite_export", "fair_check"):
-            # 环内结果处理四工具（四工具组）：如实汇报数字的登记——
+            # 环内结果处理四工具：如实汇报数字的登记——
             # 不登记则 LLM 汇报引用这些计数会被数字交叉核验误判为 count_mismatch 弃用。
             for key in ("n_same", "n_diff", "n_unknown"):
                 n = r.get(key)
@@ -5587,7 +5568,7 @@ def _report_contradiction_reason(report: str, steps: list[dict]) -> str | None:
       （`_report_miscounts_steps` 数字交叉核验）→ 谎称/改写数量；
     - `denied_read`：明明有成功的读步（联网搜索/检查更新），汇报却出现「未搜索 X」式
       读动作否认（`_denies_done_read` 模式化判定；结果动词「没搜到」式诚实措辞刻意豁免）
-      → 谎称没做做了的（只读侧同理）；
+      → 谎称没做做了的（只读侧，2026-08-08）
     - `claimed_write`：steps 里没有成功的入库步，汇报却出现既遂写动作声称
       （`_claims_done_write` 模式化判定，否定/非既遂语素豁免）→ 谎称做了没做的；
     - `denied_write`：入库步明明成功，汇报却出现写动作否认表述 → 谎称没做做了的。
@@ -5599,7 +5580,7 @@ def _report_contradiction_reason(report: str, steps: list[dict]) -> str | None:
         return "count_mismatch"
     if _denies_done_read(report, steps):
         return "denied_read"
-    # wrote 的口径：search_online 必须 record_count>0 才算
+    # wrote 的口径（2026-08-07 修复）：search_online 必须 record_count>0 才算
     # 真入库——0 条命中时「没搜到、没入库」是诚实措辞，否认侧不该参与（否则误拦实话）。
     wrote = any(
         s.get("ok") and (
@@ -5676,8 +5657,8 @@ def _steps_report_fallback_zh(steps: list[dict]) -> str:
         elif kind == "search_rerun":
             rq = str(r.get("query") or "")
             if r.get("adopted"):
-                # 与 execute 摘要句同口径——屏口径优先，旧形状记录回退择优闸口径。
-                # 命中 0 条也是采纳档（空结果集照常上屏），文案去工程黑话。
+                # nl-A：与 execute 摘要句同口径——屏口径优先，旧形状记录回退择优闸口径。
+                # 2026-08-23：命中 0 条也是采纳档（空结果集照常上屏），文案去工程黑话。
                 nb = r.get("n_before_total") if r.get("n_before_total") is not None \
                     else r.get("n_before")
                 na = r.get("n_after_total") if r.get("n_after_total") is not None \
@@ -5697,7 +5678,7 @@ def _steps_report_fallback_zh(steps: list[dict]) -> str:
                        else "这次重新检索没有执行，结果区未改动")
                 parts.append(f"按「{rq}」重新检索——{why}")
         elif kind == "rollback":
-            # note_zh 是工具按真实回退清单写实的句子（含拒绝档），直接引用。
+            # rb1：note_zh 是工具按真实回退清单写实的句子（含拒绝档），直接引用。
             parts.append(str(r.get("note_zh") or f"{zh}完成").rstrip("。"))
         elif kind == "compare":
             # 对比的确定性汇报：结论句（comparison_zh 是事实层产物）原样引用；降级句同理。
@@ -5731,7 +5712,7 @@ def _norm_source(value: Any) -> str:
 def _autofill_named_source(verb: str, raw: dict[str, Any], utterance: str) -> str | None:
     """点名源缺槽位的**确定性补位**：understand 掉 source
     槽位时，旧路只有 violation→repair——chat 会乖乖补，reasoner 却借题重推、把整个动词
-    换成 sync（回归教训：补槽位 violation → repair 改判 sync+source → 撞 sync 主题闸 → repair
+    换成 sync（k11：补槽位 violation → repair 改判 sync+source → 撞 sync 主题闸 → repair
     预算耗尽 → AgentPlanInvalid 0/3）。quoted 里**逐字**点名了恰好一个来源时，补哪一个是
     唯一确定解——直接补上（validate trace 明示，不静默），把「掉槽位→repair 扯皮」整条
     失败链连根拔掉。quoted 没点名/点名多个 → 交回 violation 通道（歧义不由机械裁决）。"""
@@ -5750,10 +5731,10 @@ def _autofill_named_source(verb: str, raw: dict[str, Any], utterance: str) -> st
 
 
 def _sync_all_online_named(verb: str, raw: dict[str, Any], utterance: str) -> str:
-    """点名单源场景下 sync 空槽的**如实留痕**：
+    """点名单源场景下 sync 空槽的**如实留痕**（2026-08-15 审计 exec-gates）：
     半闸（`_NAMED_SOURCE_OPTIONAL_FILL_VERBS`）刻意放行空槽 sync——「不填 = 同步全部」是
     sync 的合法形态；但原话点名了来源时，实际写面是**全部在线源**、超出点名范围。语义
-    不动（补确定解还是拒需先定口径，见审计汇总第三节），但 trace 与最终汇报都必须明说
+    不动（补确定解还是拒需先定口径），但 trace 与最终汇报都必须明说
     「按全部在线源同步」——不让「只同步了点名的那个源」成为可误读的默认。
     返回点名录（空串 = 无需留痕：非 sync / source 已填 / 原话没点名）。"""
     if verb != "curate.sync_updates":
@@ -5769,13 +5750,13 @@ def _named_source_violation(verb: str, raw: dict[str, Any], utterance: str) -> s
 
     点名口径 = `_named_sources_in` 共享真源（别名匹配 + **受控规范名逐字**两趟）：原话点名的
     来源集合（**可能多个**——「先检查10x和ArrayExpress」的多步续步各有合法对象，
-     批B ：只认第一个会把第二个点名源的续步恒误判违规、结构性截断多步链）；
+    2026-08-06 批B P1：只认第一个会把第二个点名源的续步恒误判违规、结构性截断多步链）；
     集合非空时 slots.source 归一后必须落在**任一点名源**的 {规范名 ∪ 全部别名} 归一集合里
     （填别名「10x」与填规范名「10x Genomics」都算对），否则返回人读 violation——
     走既有 violations→repair 通道，不在这里静默改写。单源场景行为与旧版逐位一致。
-    规范名逐字（豁免升格为点名判定）：词表
+    规范名逐字（2026-08-08 探针豁免、2026-08-08 b08 升格为点名判定）：词表
     刻意不收裸「encode」（普通英文动词，见 search_request.SOURCE_ALIASES 注释），但用户
-    **原样写出受控规范名**（全大写 ENCODE）就是点名——实证：understand 槽位落空时
+    **原样写出受控规范名**（全大写 ENCODE）就是点名——坐实：understand 槽位落空时
     此处无闸可拦，白跑一遍全量检查、把 decide 续步顶超 max_steps。"""
     if verb not in _NAMED_SOURCE_VERBS and verb not in _NAMED_SOURCE_OPTIONAL_FILL_VERBS:
         return None
@@ -5796,7 +5777,7 @@ def _named_source_violation(verb: str, raw: dict[str, Any], utterance: str) -> s
         # 半闸动词（sync）：不填 = 同步全部，覆盖点名源，合法放行。
         if verb in _NAMED_SOURCE_OPTIONAL_FILL_VERBS:
             return None
-        # 「动词本身不用换」（实证）：repair 收到「source 没填」后
+        # 「动词本身不用换」（坐实）：repair 收到「source 没填」后
         # 把 check_updates 改判成 sync_updates（带 source 交差），恰好撞进 sync 主题闸、
         # repair 预算耗尽整计划崩——点名源缺槽位时正确动作是**原动词补槽位**。
         return (f"用户点名的是{names}，source 没填——点名来源时必填（填规范名；"
@@ -5812,7 +5793,7 @@ _KW_STOP_TOKENS = ("data", "dataset", "datasets")
 
 
 def _keyword_content_tokens(keywords: Any) -> list[str]:
-    """keywords 的内容 token 化（**共享助手**， 从 `_ungrounded_keyword_tokens` 抽出：
+    """keywords 的内容 token 化（**共享助手**，2026-08-08 从 `_ungrounded_keyword_tokens` 抽出：
     搜索覆盖闸 `_search_coverage_violation` 与汇报后检 `_denies_done_read` 复用同一份切词口径）。
     小写后按「英数段 / 连续中文段」切词，剔弱停用词——行为与原处逐位不变。"""
     return [t for t in re.findall(r"[a-z0-9]+|[一-鿿]+", str(keywords or "").lower())
@@ -5822,7 +5803,7 @@ def _keyword_content_tokens(keywords: Any) -> list[str]:
 def _ungrounded_keyword_tokens(keywords: Any, utterance: str) -> list[str]:
     """keywords 里**无法在接地语料里找到出处**的 token 清单（全接地 → 空表）。
 
-    原话「看看有没有什么新数据，有的话拿回来」零主题词，
+    2026-08-06 批A D5（真机）：原话「看看有没有什么新数据，有的话拿回来」零主题词，
     decide 却提议 search_online(keywords="single cell")——**臆造参数触发真写库**（20 条落盘）。
     quoted 槽有逐字校验、keywords 槽此前只有「从原话提取」的 prompt 自觉——写操作的参数
     必须有机械校验。接地判定（宽进、只拦发明）：
@@ -5832,8 +5813,8 @@ def _ungrounded_keyword_tokens(keywords: Any, utterance: str) -> list[str]:
       3. 中文复合 token 内含接地词条别名（「人类肺数据」含「人类」）。
 
     接地语料 = 用户原话；**decide 续步时**追加已完成步骤的真实结果文本
-    （「若有则下载」要下载的正是检查步骤发现的条目——出处之二，
-    见 `_step_grounding_texts`；首步 steps 恒空，语料退化为纯原话，口径不变）。
+    （2026-08-06 批C：「若有则下载」要下载的正是检查步骤发现的条目——出处之二，
+    见 `_step_grounding_texts`；首步 steps 恒空，语料退化为纯原话，D5 口径不变）。
     """
     low = (utterance or "").lower()
     tokens = _keyword_content_tokens(keywords)
@@ -5866,7 +5847,7 @@ def _ungrounded_keyword_tokens(keywords: Any, utterance: str) -> list[str]:
 
 
 def _step_grounding_texts(steps: list[dict] | None) -> list[str]:
-    """已完成步骤**真实结果**里可供 keywords 接地的文本（decide 续步的出处之二）。
+    """已完成步骤**真实结果**里可供 keywords 接地的文本（decide 续步的出处之二，2026-08-06）。
 
     只收成功步骤的实有字段：check_updates 发现的疑似新增条目（accession + title）、
     search_online 的 query / sample_titles——「若有则下载」要下载的往往就是这些条目。
@@ -5898,12 +5879,13 @@ def _step_grounding_texts(steps: list[dict] | None) -> list[str]:
 def _validate_raw(raw: dict[str, Any], utterance: str,
                   steps: list[dict] | None = None) -> list[str]:
     """机械护栏的镜像校验：公共形状三条走 `action_plan.raw_shape_violations` 单一真源
-    （避免私拷两份漂移）。本函数只叠加多步执行专属闸：点名源 /
+    （2026-08-10 架构评审裁决落地——此前此处私拷一份还自称与 `_finalize`「口径
+    一一对应」，评审坐实两路径已漂移）。本函数只叠加多步执行专属闸：点名源 /
     幻觉取消 / sync 主题 / keywords 接地。
 
-    与 fallback 的 cancelled 语义分流是**刻意的策略**（不是漂移）：单步 fallback
+    与 fallback 的 cancelled 语义分流是**刻意的设计决定**（不是漂移）：单步 fallback
     错收取消的最坏结果是用户再说一次（`action_plan._finalize` 照收 LLM 自报）；多步链
-    里幻觉取消会当场杀链（实测），故本路径把「原话无否定语素的 cancelled=true」
+    里幻觉取消会当场杀链（j03 坐实），故本路径把「原话无否定语素的 cancelled=true」
     当 violation 拦下走 repair。"""
     violations: list[str] = _ap.raw_shape_violations(raw, utterance)
     verb = str(raw.get("verb") or "").strip() if raw else ""
@@ -5914,7 +5896,7 @@ def _validate_raw(raw: dict[str, Any], utterance: str,
             violations.append(named)
         if (spec.kind == _ap.EXEC and raw.get("cancelled") is True
                 and not _DENIAL_MORPH_RE.search(utterance or "")):
-            # 幻觉取消镜像闸：cancelled=true 以原话有否定
+            # 幻觉取消镜像闸（坐实）：cancelled=true 以原话有否定
             # 语素为前提（铁律 3）；与 parse 层「只认 JSON 布尔 true」同一严格口径。
             violations.append(
                 "cancelled 填了 true，但原话里没有任何「不做」的否定语素"
@@ -5922,15 +5904,15 @@ def _validate_raw(raw: dict[str, Any], utterance: str,
                 "「要不要/能不能」是征询，照常执行、cancelled 填 false。")
         if verb == "curate.sync_updates":
             # sync 主题闸（混合句被 understand
-            # 磁吸到 sync——when_zh 文案层收益已尽，A/B 两版文案集成均 6/6 磁吸，上机械
+            # 磁吸到 sync——when_zh 文案层收益已尽，A/B 两版文案真机均 6/6 磁吸，上机械
             # 镜像闸）：sync 不过滤主题，会把所有疑似新增都入库。与点名源校验同属机械护栏；
             # validate→repair 链给模型一次改判机会。
-            # 按**分句作用域**分流（实证：「检查CELLxGENE更新，有新增
+            # 2026-08-08 起按**分句作用域**分流（坐实：「检查CELLxGENE更新，有新增
             # 就同步，然后检查下ArrayExpress，有新的人类肺数据就搜来入库」——主题词「人类」
             # 属于后面 ArrayExpress 分支，旧版全域扫描拿它拦 CELLxGENE 分支的 sync，理由张冠
             # 李戴、repair 被误导后整计划崩）：
             #   · 主题词在 sync **所引片段的分句内**（含条件回指前句）→ 消息 A：限定主题的
-            #     下载就该 check + search_online（旧文案，真阳性逐位保留）；
+            #     下载就该 check + search_online（旧文案，b12 族真阳性逐位保留）；
             #   · 主题词只在**别的分支**且四条件齐备（`_sync_topic_elsewhere_exempt`）→
             #     放行（别支的主题约束管不到本支的带 source sync）；
             #   · 主题词在别支但豁免条件不齐 → 消息 B：sync 不按主题过滤 + 先检查为前提，
@@ -5952,10 +5934,10 @@ def _validate_raw(raw: dict[str, Any], utterance: str,
                         "请先 curate.check_updates（填上它那一支点名的 source），"
                         "确认有新增后再按原话决定下一步。")
         if verb == "curate.search_online":
-            # 出处之二（策略；依据是多模型 A/B 验证：干净链路上
-            # flash/pro 等全部稳定续步，病例句停环是规则字面堵路，不是模型懒）——
+            # 出处之二（2026-08-06 批C，产品方决策；依据是三模型 A/B 实测：干净链路上
+            # flash/pro/k3 全部稳定续步，病例句停环是 rule 9 字面堵路，不是模型懒）——
             # decide 续步时接地语料追加已完成步骤的真实结果文本；首步 steps 恒空 →
-            # 语料退化为纯原话，「臆造 keywords」的拦截口径一字不变。
+            # 语料退化为纯原话，D5「臆造 keywords」的拦截口径一字不变。
             grounding = str(utterance or "")
             step_texts = _step_grounding_texts(steps)
             if step_texts:
@@ -5970,7 +5952,7 @@ def _validate_raw(raw: dict[str, Any], utterance: str,
 
 
 # ==========================================================================================
-# 图节点（模块级函数 + Context 注入 + reducer 增量返回；不再是闭包）
+# 图节点（2026-08-07 模块级函数 + Context 注入 + reducer 增量返回；不再是闭包）
 # ==========================================================================================
 
 
@@ -5985,7 +5967,7 @@ def _trace_entry(node: str, label_zh: str, detail: str, ok: bool, started: float
     }]
 
 
-# ---------------------------------------------------------------- 混合诉求机械意图闸
+# ---------------------------------------------------------------- 混合诉求机械意图闸（2026-08-22 批）
 #
 # 混合 query（「检查数据库是否有更新，然后帮我找乳腺癌单细胞数据集」——动作半 + 检索半同句）
 # 此前只有两道软保证：route_consensus 的 LLM 投票判进 general（prompts/route_consensus.md 写明
@@ -6010,16 +5992,31 @@ _HYBRID_ACTION_VERBS: tuple[str, ...] = tuple(
 #: （下载链接/下载脚本），不是动作指令——与上去掉的两个产物词同根（子串穿透补丁）。
 _HYBRID_ACTION_VERB_TAIL_EXCL: dict[str, tuple[str, ...]] = {"下载": ("链接", "脚本")}
 
-#: 动作信号 · 短语/邻近正则（裸词容易撞检索语境的一律写成带锚点的形状）：
-_HYBRID_ACTION_RES: tuple[re.Pattern, ...] = tuple(re.compile(p) for p in (
-    r"(?:检查|核查|清查|盘点).{0,8}?更新",  # 「检查 10x 更新」型——点名源常插在动宾之间
-    r"更新(?:一下|下)",                     # 「先把 10x 更新一下」型；裸「更新」不收（「最近更新的数据」是检索句）
-    r"同步(?!化)",                          # 「同步一下/同步进来」；「细胞周期同步化」是生物学术语
-    r"入库(?!的)",                          # 「搜来入库」；「已入库的数据」是定语
-    r"安装",                                # 本地模型/依赖安装，检索句不出现
-    r"数据库状态|库的状态|库容",             # db_status 诉求
-    r"库.{0,4}?有?(?:多少|几)条",           # 「库里有多少条 / 库里多少条」库容问句
-))
+#: 动作子句 → 能力族归族表（按序首中即归）：(capability, 判定正则, 核账动词面, 中文标签)。
+#: 核账动词面 = finish 机械核销时承认的 ok 步动词集合；generic 族为空——环面给不出
+#: 对应工具的诉求（如「导出引文」在本环无此动词），只能靠 declined_zh 如实交代核销。
+_HYBRID_ACTION_FAMILIES: tuple[tuple[str, re.Pattern, tuple[str, ...], str], ...] = (
+    ("action.check_updates",
+     re.compile(r"(?:检查|核查|清查|盘点).{0,8}?更新|有没有更新|是否有更新|有更新吗"),
+     ("curate.check_updates", "curate.sync_updates"), "检查库更新"),
+    ("action.import",
+     re.compile(  # 「的」-guards 挡定语用法（「已入库的/已收录的」是检索句，不归动作）
+         r"入库(?!的)|进库(?!的)|纳入(?!的)|收录(?!的)|同步(?!化)|更新一下|更新下"),
+     ("curate.sync_updates", "curate.search_online"), "同步/入库新数据"),
+    ("action.search_online",
+     re.compile(r"联网搜|在线搜|上网搜|网上搜"),
+     ("curate.search_online",), "联网检索外部源"),
+    ("action.db_status",
+     re.compile(r"数据库状态|库的状态|库容|库.{0,4}?有?(?:多少|几)条"),
+     ("curate.db_status",), "清点库容"),
+)
+
+#: 动作信号 · 短语/邻近正则（裸词容易撞检索语境的一律写成带锚点的形状）= 族表并集
+#: **程序派生**（族表是唯一手写清单，闸正则不手抄第二份，消除两份清单的漂移面）。
+#: EXTRA 只收「安装」——本地模型/依赖安装无能力族可归（generic 族设计如此），检索句不出现。
+_HYBRID_ACTION_RES_EXTRA: tuple[re.Pattern, ...] = tuple(re.compile(p) for p in (r"安装",))
+_HYBRID_ACTION_RES: tuple[re.Pattern, ...] = (
+    tuple(pat for _, pat, _, _ in _HYBRID_ACTION_FAMILIES) + _HYBRID_ACTION_RES_EXTRA)
 
 #: 检索信号 · 动词正则：「找/推荐/搜索/检索」+ 裸「搜」——「找回」是回滚动作（动作侧词表
 #: 已收）、「联网搜/在线搜/上网搜/网上搜 + 索/检索」与「搜来/搜回」是动作侧（联网搜库
@@ -6030,8 +6027,8 @@ _HYBRID_SEARCH_VERB_RE: re.Pattern = re.compile(
 
 #: 检索信号 · **入库链否决**：子句内出现入库/进库/纳入/收录时，其中的检索动词属于
 #: 「联网搜库→入库」动作链（curate.search_online/sync_updates 的口语说法），不再算检索
-#: 信号——「检查更新，有新的就搜来入库」是纯动作链，不许被误闸（对抗扫描
-#: 既有 live 用例实证：多族用例全部因此豁免）。
+#: 信号——「检查更新，有新的就搜来入库」是纯动作链，不许被误闸（2026-08-22 对抗扫描
+#: 既有 live 用例坐实：全部因此豁免）。
 #: v2：否决从全句级收窄为**子句级**——调用方逐子句调用，跨子句的独立
 #: 检索诉求不再被误赦（「…就入库，再帮我找乳腺癌数据」的找数半在干净子句里）。
 _HYBRID_IMPORT_CHAIN_RE: re.Pattern = re.compile(r"入库|进库|纳入|收录")
@@ -6042,12 +6039,17 @@ _HYBRID_HAS_DATA_RE: re.Pattern = re.compile(r"有没有(.{0,12}?)数据(?!库)"
 _HYBRID_NEW_ONLY_RE: re.Pattern = re.compile(r"最?新(?:的)?")
 
 #: 混合闸词表版本（改动词表/切分规则时递增并记注释，便于回归定位）：
-#: v1- = 初版，**全句级**判定（入库链否决也是全句级）；
-#: v2- = 子句级判定：动作/检索信号须落在**不同子句**才闸，
+#: v1-2026-08-21 = 初版，**全句级**判定（入库链否决也是全句级）
+#: v2-2026-08-22 = 子句级判定：动作/检索信号须落在**不同子句**才闸
 #: 入库链否决收窄为只对同子句生效（「检查更新，有新的就入库，再帮我找乳腺癌数据」
 #: 这类真混合句在 v1 下被全句级否决漏闸）；同子句双信号不闸（「帮我找可下载数据」
 #: 的裸「下载」与「找」同子句，是检索句的产物形容词，不是动作指令）。
-_HYBRID_LEXICON_VERSION = "v2-2026-08-22"
+#: v3-2026-08-31 = `_HYBRID_ACTION_RES` 改由 `_HYBRID_ACTION_FAMILIES` 程序派生：
+#: 闸正则 = 族表并集 + EXTRA「安装」，族表为唯一手写清单。派生公式下登记拓宽：
+#: 「进库/纳入/收录」新成为闸触发词（此前任何闸词表均未收，族2正则同时补
+#: 「的」-guards 挡「已收录的」类定语）；「有没有更新」系、「联网搜」系无行为增量
+#: （CURATE_OP_MARKERS 早已命中）。
+_HYBRID_LEXICON_VERSION = "v3-2026-08-31"
 
 #: 子句切分（机械闸的最小语义单元）：中文连词「然后/顺便/接着/并且/再」+ 中英文标点。
 #: 「再」作切分点依赖其连接副词用法（「再帮我找…」）；「再问一遍」类动词用法会把一句
@@ -6082,7 +6084,7 @@ def _hybrid_search_hit(text: str) -> bool:
     """检索信号检出（机械闸的检索半）：检索动词，或存在性问句（gap 是实质主题词才算）。
     入库链（入库/进库/纳入/收录）在场时两类信号全部否决——此时**本调用单元**（v2 起为
     单个子句）中的检索动词/存在性问句都属于「联网搜库→入库」动作链的口语说法
-    （实证），不是独立检索诉求。"""
+    （l05 族坐实），不是独立检索诉求。"""
     if _HYBRID_IMPORT_CHAIN_RE.search(text):
         return False
     if _HYBRID_SEARCH_VERB_RE.search(text):
@@ -6099,7 +6101,7 @@ def _hybrid_intent_gate(text: str) -> bool:
     """混合诉求机械闸（确定性预闸，独立可单测）：动作信号与检索信号落在**不同子句**
     → True（route_consensus 据此跳过 LLM 投票直接走 general）。误伤率 0 优先：纯检索句、
     纯动作句、动作链（检查→搜来入库）一律 False——拿不准不闸。
-    v2：全句级 → 子句级。同子句双信号不闸（「帮我找可下载数据」是检索句）；
+    v2：全句级 → 子句级。同子句双信号不闸（「帮我找可下载数据」是检索句）
     入库链否决随 `_hybrid_search_hit` 逐子句生效，不再误赦跨子句真混合句。"""
     clauses = _split_hybrid_clauses(text)
     if not clauses:
@@ -6113,27 +6115,8 @@ def _hybrid_intent_gate(text: str) -> bool:
     return any(i != j for i in action_idx for j in search_idx)
 
 
-#: 动作子句 → 能力族归族表（按序首中即归）：(capability, 判定正则, 核账动词面, 中文标签)。
-#: 核账动词面 = finish 机械核销时承认的 ok 步动词集合；generic 族为空——环面给不出
-#: 对应工具的诉求（如「导出引文」在本环无此动词），只能靠 declined_zh 如实交代核销。
-_HYBRID_ACTION_FAMILIES: tuple[tuple[str, re.Pattern, tuple[str, ...], str], ...] = (
-    ("action.check_updates",
-     re.compile(r"(?:检查|核查|清查|盘点).{0,8}?更新|有没有更新|是否有更新|有更新吗"),
-     ("curate.check_updates", "curate.sync_updates"), "检查库更新"),
-    ("action.import",
-     re.compile(r"入库(?!的)|进库|纳入|收录|同步(?!化)|更新一下|更新下"),
-     ("curate.sync_updates", "curate.search_online"), "同步/入库新数据"),
-    ("action.search_online",
-     re.compile(r"联网搜|在线搜|上网搜|网上搜"),
-     ("curate.search_online",), "联网检索外部源"),
-    ("action.db_status",
-     re.compile(r"数据库状态|库的状态|库容|库.{0,4}?有?(?:多少|几)条"),
-     ("curate.db_status",), "清点库容"),
-)
-
-
 def _hybrid_required_capabilities(text: str) -> list[dict[str, Any]]:
-    """混合句的**能力账**（修复1）：闸命中时产出本句要求的能力清单，
+    """混合句的**能力账**（修复1）：闸命中时产出本句要求的能力清单
     随 route_consensus 写 state/trace，finish 的机械核销据此逐项对账（缺项拒收）。
 
     返回 list[dict]，每项：
@@ -6187,7 +6170,7 @@ def _parse_route_vote(content: str) -> tuple[str, str, bool]:
 
 def _run_route_consensus(model: Any, prompt: str,
                          usage_sink: list | None = None) -> tuple[str, list[dict]]:
-    """分流共识（共识帽 + 机械兜底）：**并行** 2 次独立调用
+    """分流共识（2026-08-17 钉死点 1：共识帽 + 机械兜底）：**并行** 2 次独立调用
     （温度岔开 0.0/0.8 保独立性——bind 不支持温度就退回原模型并在票上如实记 bound=False）；
     两张有效票一致即定；不一致加第 3 次；多数决（唯一最高票且 ≥2 张有效票）；三方平票、
     有效票不足或无有效票 → 机械兜底 general（安全地板，不许临场发挥）。返回 (route, votes)
@@ -6244,12 +6227,12 @@ def _run_route_consensus(model: Any, prompt: str,
     winners = [r for r, c in counts.items() if c == top]
     # 唯一多数（≥2 张有效票投同一路线）才采纳；平票（含三方平票）或「只有 1 张有效票
     # 的唯一最高」都不是共识（[invalid, invalid, action]
-    # 曾被判成 action）——机械兜底 general（不许临场发挥）。
+    # 曾被判成 action）——机械兜底 general（钉死点 1，不许临场发挥）。
     return (winners[0] if len(winners) == 1 and top >= 2 else "general"), votes
 
 
 def _notify_route_verdict(ctx: Any, route: str) -> None:
-    """verdict hook **只做 abandoned/lazy 标记，不发射**（
+    """cr1：verdict hook **只做 abandoned/lazy 标记，不发射**（r3 ：
     节点内发射会产生 tool_start→preliminary→step 乱序；主路径唯一发射点 =
     understand 入口）。机械闸快进与 LLM 共识两条路径同调本助手。"""
     if getattr(ctx, "on_route_verdict", None) is not None:
@@ -6262,13 +6245,13 @@ def _notify_route_verdict(ctx: Any, route: str) -> None:
 
 
 def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
-    """环首分流共识节点：无条件进环后的第一次 LLM
+    """环首分流共识节点（转正后常驻入图）：无条件进环后的第一次 LLM
     调用，只决定「装哪套工具 + 哪套系统提示词」——路由定义与示例在
     `prompts/route_consensus.md`（文件即真源）。输入 = 原话 + 会话短期上下文
     （与 understand 同上下文面）+ 初步检索概览（命中数/生效条件；**不含结果集**——
     诚实不变量：模型永远不直接碰结果集内容）。rescue 回合短路：既有的救回收敛面
-    原样，不做分流（rescue 吸收进搜索环的评估是后续项）。
-    **混合诉求机械预闸**——`_hybrid_intent_gate` 检出同句同时含
+    原样，不做分流（rescue 吸收进搜索环的评估是挂账后续项）。
+    2026-08-22：**混合诉求机械预闸**——`_hybrid_intent_gate` 检出同句同时含
     动作与检索信号时，跳过 LLM 投票直接 general（确定性、零调用成本；单意图句不触发，
     误伤率 0 优先）。"""
     started = time.monotonic()
@@ -6296,7 +6279,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
         return {"route_scope": "general", "trace": [entry], "usage_ledger": [],
                 "required_capabilities": caps}
     model = ctx.decide_model or ctx.chat_model
-    # 现场段用分流专用构造器：与 understand 同上下文面，
+    # 现场段用分流专用构造器：与 understand 同上下文面
     # 但检索概览只报状态与命中数——`_context_zh` 会带结果集标题（top_titles），
     # 违反「模型永远不直接碰结果集内容」的诚实不变量；原话尾段在这里拼一次（专用
     # 构造器不自带，避免重复）。
@@ -6306,7 +6289,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
                                 retrieval=state.get("retrieval"),
                                 current_query=state.get("current_query") or "",
                                 current_filters=state.get("current_filters"))
-    # 有标记分支的机械标记事实行（route_extra_zh，缺省空串=今天
+    # cr1：有标记分支的机械标记事实行（route_extra_zh，缺省空串=今天
     # 逐位不变）拼在上下文尾部——共识盲跑时命中数段缺席，机械行补「规则动作标记」。
     if getattr(ctx, "route_extra_zh", None):
         context = context + "\n" + str(ctx.route_extra_zh).strip()
@@ -6316,7 +6299,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
     if _ctx_card:
         context = context + "\n\n" + _ctx_card
     prompt = context + "\n\n----- 用户原话 -----\n" + state["utterance"]
-    usage_local: list = []   # 缓存埋点同口径：本节点全部投票调用的缓存用量（return 增量带出）
+    usage_local: list = []   # 埋点同口径：本节点全部投票调用的缓存用量（return 增量带出）
     route, votes = _run_route_consensus(model, prompt, usage_sink=usage_local)
     n_valid = sum(1 for v in votes if v.get("ok"))
     agreed = (n_valid == 2 and len(votes) == 2)
@@ -6336,7 +6319,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
                 response=str(_v.get("raw") or ""), ms=int(_v.get("ms") or 0),
                 channel="consensus_vote",
                 fallback_reason=str(_v.get("error") or ""))
-    # verdict hook 经 `_notify_route_verdict` 调用（只做标记不发射；
+    # cr1：verdict hook 经 `_notify_route_verdict` 调用（只做标记不发射
     # rescue 短路不调——上面已早退；机械闸快进路径同助手）。
     _notify_route_verdict(ctx, route)
     return {"route_scope": route, "trace": [entry], "usage_ledger": usage_local}
@@ -6344,7 +6327,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
 
 def _scoped_understand_face(state: "_AgentState"
                             ) -> tuple[list[dict] | None, dict[str, str] | None, list | None]:
-    """非 rescue 回合的 understand/repair 套件收窄面（转正后常驻）：返回
+    """非 rescue 回合的 understand/repair 套件收窄面（常驻）：返回
     (tools, name_to_verb, face_specs)；rescue 返回 (None, None, None)——调用方走 rescue 原面。"""
     if str(state.get("entry_mode") or "") == "rescue":
         return None, None, None
@@ -6369,12 +6352,12 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
 
     started = time.monotonic()
     ctx: _AgentContext = runtime.context
-    # 长 LLM 节点的「即将开始」即时事件——verb="node"，
+    # prelim1：长 LLM 节点的「即将开始」即时事件——verb="node"，
     # label_zh 与本节点 trace 行「理解意图」逐字一致（前端 pending 行按 label 匹配）。
     if getattr(ctx, "on_progress", None) is not None:
         ctx.on_progress("tool_start", {"verb": "node", "label_zh": "理解意图", "detail": ""})
     tools, name_to_verb = _get_tool_specs()
-    # rescue 面收敛：检索救回回合首步只允许
+    # rescue 面收敛（2026-08-16 检索工具化 Phase 1）：检索救回回合首步只允许
     # search.rerun / none——工具面机械收窄（decide 侧同型收窄；validate 的 rescue 闸兜底）。
     rescue = str(state.get("entry_mode") or "") == "rescue"
     if rescue:
@@ -6382,15 +6365,15 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
                  if str((t.get("function") or {}).get("name") or "") in ("search_rerun", "none")]
         name_to_verb = {n: v for n, v in name_to_verb.items()
                         if v in ("search.rerun", "none")}
-    # scoped 路由：非 rescue 时按 state.route_scope 收窄
+    # scoped 路由（转正后常驻）：非 rescue 时按 state.route_scope 收窄
     # 首步面（套件工具 + none；ROUTE 投影退役；route.request 不进首步面）；rescue 走原面。
     scoped_tools, scoped_names, face_specs = _scoped_understand_face(state)
     if scoped_tools is not None:
         tools, name_to_verb = scoped_tools, scoped_names
-    # （并发分流）：局部 resolved = 本节点视图的检索摘要。
+    # cr1（并发分流，r3 关键核查①）：局部 resolved = 本节点视图的检索摘要。
     # retrieval 是默认覆盖字段（非 reducer），provider 在场且非 action 时在**构造
     # call_kwargs 前**取 join/补跑结果——本节点的 _context_zh / rescue 分支全部用局部
-    # 值（return 增量只惠及下游，本次 prompt 必须见 resolved）。
+    # 值（return 增量只惠及下游，本次 prompt 必须见 resolved；二轮评审）。
     resolved = state.get("retrieval")
     if (resolved is None and getattr(ctx, "retrieval_provider", None) is not None
             and str(state.get("route_scope") or "") != "action"):
@@ -6406,7 +6389,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
         retrieval=resolved, current_query=state.get("current_query") or "",
         current_filters=state.get("current_filters"),
     )
-    # 成功经验 few-shot：从 `.userdata/curate_examples.jsonl` 按
+    # 成功经验 few-shot（2026-08-09 五机制批）：从 `.userdata/curate_examples.jsonl` 按
     # 关键词重叠检索 top-3 注入——静态示例讲通用边界，动态示例对齐这位用户的表达习惯。
     # 空账/读账失败 → 空串，双通道 prompt 与历史逐位一致（fail-open）。
     # 只注入同分区（同账户 + 同端点指纹）的成功样例——跨账户/跨端点的原话不进 prompt。
@@ -6429,14 +6412,14 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
         json_prompt = json_prompt + "\n\n" + _ctx_card
     if rescue:
         # 限制段注入双壳尾部（动态信息在末尾，保 prefix 缓存前缀稳定）。
-        # 未收录词清单取自原检索投影（端点注入 state.retrieval
+        # rescue2：未收录词清单取自原检索投影（端点注入 state.retrieval
         # 的 unresolved_terms，逐字来自用户原句）——动态段据此放宽「未收录词可丢弃」。
-        # 改用局部 resolved 值（rescue 分支不许再读 state.get）。
+        # cr1：改用局部 resolved 值（r3 关键核查①——rescue 分支不许再读 state.get）。
         block = _rescue_block_zh((resolved or {}).get("unresolved_terms"))
         context += block
         json_prompt += block
     usage_local: list = []
-    # scoped 路由：套件路径的系统提示为退役后口径
+    # scoped 路由（转正后常驻）：套件路径的系统提示为退役后口径
     # （ROUTE 动词不再投影，检索需求指路 rank）；rescue 用既有常量。
     system_zh = _SCOPED_TOOLS_SYSTEM_ZH if face_specs is not None else _TOOLS_SYSTEM_ZH
     answer, note, fb_reason, json_err = _invoke_tool_channel(
@@ -6468,7 +6451,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
             detail += "再试一次也没拿到能用的回答，转入检查。"
         ok = bool(raw)
         mode = "json"
-    # understand 首步同批只读消费（批，复制 decide 的 raw_batch
+    # understand 首步同批只读消费（复制 decide 的 raw_batch
     # 通道到首步——`_SCOPED_TOOLS_SYSTEM_ZH` 本就鼓励「多件独立只读的事各发一个调用」，
     # 此前首步只吃第一个）：首步一次回 ≥2 个 tool_call 时，第 2..N 个过
     # `_batch_readonly_extras` **同一套**机械过滤（只读白名单/参数键严格/逐个裁决闸/去重/
@@ -6488,7 +6471,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     # 清单产出：complex 车道 + EXEC 首步 → 一次轻量调用拆事项（独立通道，不进共享
     # 工具面——simple/路由类/JSON 兜底路径字节级零变化）。失败 repair 一次（反馈回灌），
     # 仍败 → checklist_unavailable（降级回文本闸，trace 如实标注，不假装同级安全）。
-    # 验证：加「多事项证据」闸——complex 车道里也有单事项漏网（库容加档的
+    # 评审：加「多事项证据」闸——complex 车道里也有单事项漏网（库容加档的
     # 「顺便看看库里多少条」型），白付一次甚至两次（repair）调用；连接词/条件词/多来源
     # 任一命中才产清单（多来源单动词保留——逐来源核销有价值）。
     checklist_update: dict[str, Any] = {}
@@ -6522,7 +6505,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     # understand 原始投票 stash 进 turn 暂存袋——
     # route_turn 收尾发 route_decision 时并入 votes 字段（fail-soft，OFF 零操作）。
     _te.emit_understand_vote(raw, mode)
-    # return 增量带局部 resolved 的 retrieval（默认覆盖字段）——供 repair/execute
+    # cr1：return 增量带局部 resolved 的 retrieval（默认覆盖字段）——供 repair/execute
     # 经 state 读到（下游两处 (state.get("retrieval") or {}) 的 None 安全天然兼容）；
     # 禁止原地改写传入 state（图 reducer 语义）。
     return {
@@ -6546,7 +6529,7 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
     autofilled = _autofill_named_source(str(raw.get("verb") or ""), raw, state["utterance"])
     violations = _validate_raw(
         raw, state["utterance"], steps=list(state.get("steps") or []))
-    # rescue 面收敛的机械闸（提示不是围栏）：检索救回回合
+    # rescue 面收敛的机械闸（2026-08-16 检索工具化 Phase 1；提示不是围栏）：检索救回回合
     # 首步只许 search.rerun / none——违规走既有 repair 一次 → 再败 fail → 调用方
     # （/api/agent/search-rescue 端点）fail-open。续步由 decide 的 rescue 闸拦截，不到这里。
     if (str(state.get("entry_mode") or "") == "rescue"
@@ -6554,7 +6537,7 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
             and str(raw.get("verb") or "") not in ("", "search.rerun", "none")):
         violations = list(violations) + [
             "本回合是检索救回回合，只允许换词重检（search.rerun）或不做（none）"]
-    # scoped 路由的套件首步闸（提示不是围栏——
+    # scoped 路由的套件首步闸（常驻；提示不是围栏——
     # understand/repair 的面收窄是提示层，本闸是机械兜底）：首步 verb 必须在当前路线的
     # 套件面内（ROUTE 投影退役 + route.request 首步不许——它在任何套件的首步面里都不
     # 存在）。续步由 decide 裁决层的套件闸拦截，不到这里。
@@ -6572,7 +6555,7 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
     if violations:
         return {
             "violations": violations,
-            # 首步/续步没过闸时同批续步一并回炉（下一轮 decide 带新状态重判）
+            # 首步/续步没过闸时同批续步一并作回炉（下一轮 decide 带新状态重判）
             "raw_batch": None, "loop_batch": None,
             "trace": _trace_entry("validate", "合规检查",
                                   "；".join(violations), False, started),
@@ -6588,13 +6571,13 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
         detail += f"（source 槽位按 quoted 点名补为 {autofilled}。）"
     sync_all_named = _sync_all_online_named(str(raw.get("verb") or ""), raw, state["utterance"])
     if sync_all_named:
-        # 与 decide 裁决路径同一句留痕——空槽 sync 按全部在线源同步。
+        # exec-gates M5：与 decide 裁决路径同一句留痕——空槽 sync 按全部在线源同步。
         detail += (f"（原话点名了{sync_all_named}，本步 source 未填——"
                    "按全部在线源同步，写面超出点名范围，如实留痕。）")
     # 同批只读续步：decide/understand 已初筛的 raw_batch 逐个过**同一套**
     # 机械校验 + build_plan_from_raw（与首步完全同口径的双检镜像）；违规即剔除回炉（不走 repair
     # ——批量项从严，回炉的下一轮 decide 会带新状态重判），产出挂 loop_batch。
-    # **占位接地**续步走两阶段——静态
+    # （2026-08-20 依赖占位批量计划）：**占位接地**续步走两阶段——静态
     # 阶段（decide 收批时）已过正则/序号/流向矩阵，这里**不**跑 _validate_raw /
     # build_plan_from_raw（会对占位毁形：uids 数组被拍平、槽值被截断清洗），以原始引用
     # 形态原样挂 loop_batch（deferred 标记 + 批内序号 pos），由 execute 每步执行前解析
@@ -6652,8 +6635,8 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
 
 def repair(state: _AgentState, *, runtime: Any) -> dict:
     """自我修正（≤1 次）：把 violations 原样喂回，让 LLM 在知情的前提下重答。
-    同样走结构化工具通道（共享助手 auto 档）——无 bind 的散文
-    调用在首次校验失败后又退回散文，正是槽位落空的问题温床。
+    2026-08-07 换装起同样走结构化工具通道（共享助手 auto 档）——旧版是无 bind 的散文
+    调用，「结构化通道治槽位落空」在首次校验失败后又退回散文，正是槽位落空的问题温床。
     complex 车道的 repair 走
     decide 同档模型——understand 首答仍走 chat（快、克制类零暴露），但首答违规后的
     修正机会给强模型，把「误判→错误执行」拦在 execute 之前。"""
@@ -6664,7 +6647,7 @@ def repair(state: _AgentState, *, runtime: Any) -> dict:
     model = ctx.decide_model or ctx.chat_model
     lane_note = "长链档｜" if ctx.decide_model is not None else ""
     tools, name_to_verb = _get_tool_specs()
-    # scoped 路由：与 understand 同一收窄面——套件闸打回
+    # scoped 路由（转正后常驻）：与 understand 同一收窄面——套件闸打回
     # 的重问若给全表，模型只会再选一个面外动词；rescue 为 None 走原面（rescue 旧口径：
     # repair 不收窄，靠 validate 的 rescue 闸兜底——先例不动）。
     scoped_tools, scoped_names, face_specs = _scoped_understand_face(state)
@@ -6700,7 +6683,7 @@ def repair(state: _AgentState, *, runtime: Any) -> dict:
 
 
 def execute(state: _AgentState, *, runtime: Any) -> dict:
-    """图内工具执行（长程多步执行；取代 的 observe 只读节点）：
+    """图内工具执行（2026-08-04 长程多步执行；取代 2026-08-03 的 observe 只读节点）：
     当前动词（首步 plan，循环续步 loop_plan）命中 LOOP_TOOLS 且未取消 → **真跑工具**
     （slots + 项目根）；run() 出口过 `agent_schemas.LOOP_RESULT_MODELS` 的**形状闸**，
     step 经 Step 模型构造再 model_dump 实录——state.steps 只返**增量**（reducer 合并），
@@ -6711,11 +6694,11 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
     **同批只读续步**：decide 多调用采纳、validate 过检的 `loop_batch`
     紧随本步**逐个同口径执行**（同一道形状闸/审计/实录，一步不少、顺序不变）——只读
     白名单由 `_batch_readonly_extras` 把守，写库动词/回滚/换线永不进批（cite.export 带
-    占位接地可进批）；某一步失败不连坐其余独立只读步（各自如实记
+    占位接地可进批，2026-08-20 ）；某一步失败不连坐其余独立只读步（各自如实记
     ok=False，decide 带全量结果再判）。**占位接地续步**：主步与续步的占位在
     本节点解析（`_resolve_placeholder_plan` 全闸助手），解析失败（resolver_error /
     dependency_unavailable）不执行、不记步、留 trace。"""
-    # tool_start 即时事件回调（非流式/rescue 为 None，自然静默）。
+    # prelim1：tool_start 即时事件回调（非流式/rescue 为 None，自然静默）。
     on_progress = getattr(runtime.context, "on_progress", None)
     plan = dict(state.get("plan") or {})
     active = dict(state.get("loop_plan") or plan)
@@ -6732,7 +6715,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
             "trace": _trace_entry("execute", f"执行工具 · {spec['label_zh']}",
                                   "你说了不做，这一步已取消。", True, started),
         }
-    # 重问写步落账：本步若是 decide 放行的重问写动词，无论成败都
+    # 重问写步落账（2026-08-07 方案）：本步若是 decide 放行的重问写动词，无论成败都
     # 落强制核销账（finish 报告必须引用本步步骤号单独交代结果）。步骤号 = 既有步数 + 1
     # ——execute 是唯一追加 steps 的节点，号码精确；只读步不可能带旗标（decide 只给写步置旗）。
     reask_increment: list[dict] = []
@@ -6750,7 +6733,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
     # 独立改写）经 ctx 里的 usage_sink 回本节点增量——不进 plan.steps（模型对象/用量
     # 都不落实录），只随 state.usage_ledger 进末端 llm_usage 聚合。
     usage_local: list = []
-    # **解析源局部化**——
+    # （2026-08-20 依赖占位批量计划， + 施工修正）：**解析源局部化**——
     # resolved_results 是 execute 节点内的局部 dict（**执行序号** 1 起 → 已成功且过形状闸
     # 的 result），只在本节点消费；不进 state reducer、不跨轮次残留（每轮 execute 重建，
     # 序号从已执行步播种——「占位可引用本轮次已执行/同批前序的 rank/rerank 步」的解析源），
@@ -6766,7 +6749,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         for x in (state.get("loop_batch") or []))
     batch_id = _next_batch_id() if has_ph else ""
     if has_ph and _slots_has_placeholder(active.get("slots")):
-        # 主步占位解析（decide 单发续步（如 compare($1)）是真实模型自然形态
+        # 主步占位解析（施工修正：decide 单发续步（如 compare（$1)）是真实模型自然形态
         # ——主步在 execute 解析后才过全闸，与续步同口径）。解析失败/被闸 → 不执行、不记步、
         # 留 trace（与续步的失败四分同语义：resolver_error/dependency_unavailable 不算工具失败）。
         plan2, ph_note, skip_reason = _resolve_placeholder_plan(
@@ -6832,20 +6815,20 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
     def _run_one(act: dict) -> dict | None:
         """单个 loop 工具的执行全路径（形状闸/审计/实录/trace）——主步与同批续步共用，
         每调用一次，单呼叫路径的产出与旧版逐位一致。返回本步实录（成功/失败都返回，
-        供占位解析源 `resolved_results` 现取 result——不进 state reducer）。"""
+        供批的解析源 `resolved_results` 现取 result——不进 state reducer）。"""
         nonlocal any_failure
         v = str(act.get("verb") or "")
         sp = LOOP_TOOLS[v]
         slots = dict(act.get("slots") or {})
         verb_zh = str(act.get("verb_zh") or sp["label_zh"])
-        # 工具「即将」执行的即时事件——label_zh 与下方 execute trace 行的
+        # prelim1：工具「即将」执行的即时事件——label_zh 与下方 execute trace 行的
         # 「执行工具 · …」逐字一致（前端按 label 匹配 pending 行，完成帧改行不落新行）；
         # 主步与同批续步每调一次 _run_one 各发一条，天然逐个覆盖。
         if on_progress is not None:
             on_progress("tool_start", {
                 "verb": v, "label_zh": f"执行工具 · {sp['label_zh']}", "detail": ""})
         t0 = time.monotonic()
-        # 写动词进 try 前 capture（inventory + preimage 字节；
+        # 写动词进 try 前 capture（inventory + preimage 字节
         # create 类动词传空——新文件回退不需要 preimage）。快照故障 fail-soft（sid=None
         # 即本步无回退锚，如实warn-once），绝不掀翻工具执行。
         sid: str | None = None
@@ -6857,15 +6840,15 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                            "trace 快照 capture 失败（仅记异常类型），本步无回退锚。")
         try:
             if sp.get("needs_context"):
-                # 现场上下文注入（search.rerun）：从 state 现取——择优基准
+                # 现场上下文注入（2026-08-16 search.rerun）：从 state 现取——择优基准
                 # （current_query）、来源范围（search_sources）、是否替换整屏（rescue 入口）。
-                # 原检索投影的未收录词一并下入——择优闸机械比对
+                # rescue2：原检索投影的未收录词一并下入——择优闸机械比对
                 # dropped_terms（改写句里消失的未收录词）供如实披露，不采信 LLM 自报。
-                # chat_model 下入供 rerank 的独立改写调用——ctx 只被
+                # M2：chat_model 下入供 rerank 的独立改写调用——ctx 只被
                 # run 消费、不落 steps（模型对象不可 JSON 序列化），注入安全。
-                # utterance 下入供批次 query_raw
+                # 溯源：utterance 下入供批次 query_raw
                 # （契约 = 本轮用户原话）；usage_sink 下入收改写调用的缓存用量。
-                # steps 实录下入供 curate.rollback 的机械闸现定回退
+                # rb1：steps 实录下入供 curate.rollback 的机械闸现定回退
                 # 目标——同一批 dict 引用（只读消费，工具不回写）；其它工具忽略此键。
                 result = sp["run"](slots, root, {
                     "current_query": str(state.get("current_query") or ""),
@@ -6958,7 +6941,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         resolved_results[main_ordinal] = main_step["result"]
     # 同批只读续步（已过 decide 初筛 + validate 复检双闸；占位接地续步为延迟通道，执行时
     # 解析后再过全闸）：紧随主步逐个执行。
-    # **批内熔断**：初筛对的是**批前**状态，
+    # 2026-08-15 **批内熔断**：初筛对的是**批前**状态
     # 主步/前序 extra 的失败会改变事实（联网二连败触发暂停、非网二连败触发禁提）——
     # 每个 extra 执行前用**当前**实录重过这两道闸；被熔断的 extra 不执行、不记步，
     # 不连坐其余 extra（闸只挡谁就剔谁），剩余缺口由 decide 带新状态下一轮重判，不丢事。
@@ -7003,7 +6986,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
             espec = LOOP_TOOLS.get(ev)
             if espec is None:
                 continue
-        # 熔断剔步**留痕不留步**——不执行、不记步的纪律不变（行为钉在案），
+        # 熔断剔步**留痕不留步**——不执行、不记步的纪律不变（行为钉在案）
         # 但 trace 必须如实交代「这一步为什么没跑」：decide/validate 已宣称「同批采纳
         # 执行/一并过检」，执行侧零留痕会让三层 trace 互相矛盾、事后无从定位。
         # deferred 项已解析（act 是解析后 plan），闸对**最终实参**重过（同口径）。
@@ -7021,7 +7004,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                 "同批续步未执行：联网二连败触发联网暂停，留待下一轮带新状态重判。",
                 False, time.monotonic()))
             continue
-        # rank/rerank 预算批内复查（与批内熔连同哲学）：
+        # rank/rerank 预算批内复查（2026-08-17 对抗评审，批内熔连同哲学）：
         # 初筛对的是批前状态，主步/前序 extra 会真消耗检索预算——执行前用当前实录重过
         # 预算闸；被剔的 extra 不执行、不记步、留痕，缺口由 decide 带新状态下一轮重判。
         if ev == "rank" and _rank_used(live_steps) >= MAX_RANK:
@@ -7036,7 +7019,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                 "同批续步未执行：优化重检预算已用完，留待下一轮带新状态重判。",
                 False, time.monotonic()))
             continue
-        # 环内四工具预算批内复查（仅占位接地续步可达——无占位的四工具进不了批；
+        # 环内四工具预算批内复查（仅占位接地续步可达——无占位的四工具进不了批
         # 「解析后实参过全部政策闸」的预算维度，与 rank/rerank 复查同哲学）。
         if ev in _PLACEHOLDER_SLOTS and (
                 (ev == "compare.datasets" and _compare_used(live_steps) >= MAX_COMPARE)
@@ -7064,9 +7047,9 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         out["dead_ends"] = dead_increments
     if obs_increments:
         out["observations"] = obs_increments
-    # 逃生口换线：本批真跑成的 route.request 步把
+    # 逃生口换线（转正后常驻）：本批真跑成的 route.request 步把
     # state.route_scope 改写为目标路线——下一轮 decide 按新套件装面。以**实录结果**为准
-    # （不采信计划），同批多步换线取最后一个（已把 route.request 挡在同批消费外，
+    # （不采信计划），同批多步换线取最后一个（已把 route.request 挡在同批消费外
     # 正常只会有一个）。
     for s in new_steps:
         if str(s.get("verb") or "") == "route.request" and s.get("ok"):
@@ -7078,13 +7061,14 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
 
 
 def decide(state: _AgentState, *, runtime: Any) -> dict:
-    """判断下一步（仅 execute 真跑过工具后进入）：**主通道 tool-calling**（取代旧版的散文 JSON 主通道）——LLM 看「原话 + 已完成步骤紧凑投影」，绑
+    """判断下一步（仅 execute 真跑过工具后进入）：**主通道 tool-calling**（2026-08-07 换装；
+    取代 2026-08-04 的散文 JSON 主通道）——LLM 看「原话 + 已完成步骤紧凑投影」，绑
     5 个 loop 工具 + finish + unsupported_next_step（`_DECIDE_TOOL_SPECS`）：
     回 loop 工具 = 续步提议；finish = done；unsupported = 婉拒表外动作；
     幻觉工具名 / 散文 / 全通道没拿到 = 非法；**多 tool_call 取第一个**（DeepSeek 不遵守 parallel_tool_calls=False，实测 decide 不可读
-    应答全是多调用、第一个调用是合法续步——批量调用是「规划先行」，后续动作
+    17/17 全是多调用、第一个调用 17/17 合法续步——批量调用是「规划先行」，后续动作
     循环会带新状态再判断，吃第一个不吞事；留痕「一次给了 N 个」拼进 trace）。
-    ** 起同批只读消费**：被采纳应答的第 2..N 个调用里，只读白名单
+    **2026-08-14 起同批只读消费**：被采纳应答的第 2..N 个调用里，只读白名单
     （check_updates/db_status）且互相独立的续步经 `_batch_readonly_extras` 机械过滤
     （参数键严格/逐个裁决闸/去重/步数预算）后随首步**同批执行**（raw_batch → validate
     同口径复检 → execute 逐个真跑留痕）；写动词/幻觉名出现即截断、整尾回炉再判——
@@ -7101,14 +7085,14 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     + 连续失败处置二分（联网二连败改**联网暂停**：prompt 注入禁令 + 联网提议机械拒绝，
     离线事项不误伤；非网络码二连败维持硬停）。
     「若有则…」的条件语义由 LLM 看真实结果自然处理（如 new_count=0 → done）。
-     核销硬闸：finish 必附 completion_report，
+    2026-08-08 核销硬闸（finish 必附 completion_report
     `_unfinished_business` 扫出报告自认「没做」的事项且本请求尚未否决过 → 拒收收尾、
     把缺口回灌重问一次（同一 `_invoke_tool_channel` 通道）；第二次 finish 仍自认未完成
     → fail-safe 接受，trace 如实标注。JSON 兜底档的 {"done": true} 不过本闸（保命档
     不再加门槛，见 `_unfinished_business` docstring）。
-     核销闸（`_completion_report_veto` 三形态，反馈文案按形态区分）：
-    形态 A「已做」无合法步骤号（没跑 db_status 却自称告知库容）与形态 B
-    豁免行夹带依赖借口词（彼此独立的事拿前件失败当理由）与「自认没做」同罪。"""
+    核销闸升级（`_completion_report_veto` 三形态，反馈文案按形态区分）：
+    形态 A「已做」无合法步骤号（b08/k01——没跑 db_status 却自称告知库容）与形态 B
+    豁免行夹带依赖借口词（k03/k08——彼此独立的事拿前件失败当理由）与「自认没做」同罪。"""
     from langchain_core.messages import AIMessage, HumanMessage
 
     started = time.monotonic()
@@ -7121,9 +7105,9 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     usage_local: list = []   # 埋点：本节点全部 LLM 调用的缓存用量（return 增量带出）
     steps = list(state.get("steps") or [])
     if len(steps) >= MAX_STEPS:
-        # **到顶结算闸**：旧实现到顶一律
+        # 2026-08-15 **到顶结算闸**：旧实现到顶一律
         # truncated → narrate 缀「剩下的没有执行」——但「5 步诉求 + 一次重试恰好跑满
-        # 上限」时原话交代的事其实全做完了，那句标注就是谎报（残余抖动的主因）。
+        # 上限」时原话交代的事其实全做完了，那句标注就是谎报（l07 家族残余抖动的主因）。
         # 结算口径复用两道既有零信任对账（绝不另立第三份）：pending 硬闸
         # （点名源/库容/新增未入库）与清单对账（有清单时）均为零 → settled，
         # narrate 改缀「预算刚好用完、事已做完」；任一未决或结算器自身异常 → 维持旧口径。
@@ -7141,9 +7125,9 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                        and all(s.get("ok") for s in steps))
         except Exception:
             settled = False
-        # 清单没建成（checklist_unavailable）时
+        # exec-gates M2：清单没建成（checklist_unavailable）时
         # `_checklist_unsettled([])` 恒空，结算退化为只剩 pending 三道口径——降级口径
-        # 维持现状（结算语义待定，见审计汇总第三节），但降级发生处必须可观测：
+        # 维持现状（结算语义待定），但降级发生处必须可观测：
         # understand 的 checklist_unavailable trace 与本到顶 trace 隔了整个循环，不在这里
         # 缀明，复盘时无法把「结算为什么没过清单对账」关联起来。
         degrade_note = ""
@@ -7153,7 +7137,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         return {
             "loop_next": False,
             "usage_ledger": usage_local,
-            # 强制停环必须留旗标——narrate 据此如实标注「还有事没做完」。
+            # 2026-08-06 B5：强制停环必须留旗标——narrate 据此如实标注「还有事没做完」。
             "truncated": True,
             "truncated_settled": settled,
             "trace": _trace_entry("decide", "判断下一步",
@@ -7162,32 +7146,34 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                                   + degrade_note,
                                   True, started),
         }
-    # 连续失败处置二分：
+    # 连续失败处置二分（2026-08-06；2026-08-08 改）：
     # ① 联网二连败（最近两步均以 network_error 失败）→ **联网暂停**（moratorium，
     #    `_network_moratorium` 从 steps 现算，无新状态）：不一刀切停环——decide 照常调 LLM，
     #    但两个壳的 prompt 尾部机械注入联网禁令（`_NETWORK_MORATORIUM_BLOCK_ZH`），且
     #    `_adjudicate_decide_obj` 在该状态下机械拒绝联网工具提议（按 done 收尾 + note
     #    如实写「联网暂停中」）；链上剩余的离线事项（db_status）本可做，硬停会误伤它们。
-    # ② 其余二连败（形状闸等非网络码）：不再硬停，
+    # ② 其余二连败（形状闸等非网络码）：2026-08-08 约束放松批起不再硬停
     #    改与联网暂停同型的**禁提失败动作**（`_failed_tool_ban`，指纹到 verb）——旧「任意
     #    两步失败即停」会把两个不同动作的独立失败误当成原地空转，连坐链上剩余独立事项。
     #    停环保障不减：被禁提议在裁决层机械拒绝按 done 收尾；MAX_STEPS 硬上界兜底。
     moratorium = _network_moratorium(steps)
     ban_verbs = frozenset() if moratorium else _failed_tool_ban(steps)
     write_budget_out = _write_steps_used(steps) >= MAX_WRITE_STEPS
-    # rescue 面收敛：检索救回回合的 decide 工具面收窄为
+    # rescue 面收敛（2026-08-16 检索工具化 Phase 1）：检索救回回合的 decide 工具面收窄为
     # search.rerun + finish，prompt 尾部注入限制段；机械闸在 `_adjudicate_decide_obj`。
     rescue = str(state.get("entry_mode") or "") == "rescue"
     rerun_budget_out = _search_rerun_used(steps) >= MAX_SEARCH_RERUN
-    # scoped 路由（非 rescue 恒走套件面）：按 state.route_scope
+    # scoped 路由（转正后非 rescue 恒走套件面）：按 state.route_scope
     # 装套件面（工具面 + 双壳规则基座）；逃生口机会用完后 route_request 从面上摘掉
-    # （提示层收窄，机械兜底在 `_adjudicate_decide_obj` 的预算闸）。rescue 走既有收窄面。
+    # （提示层收窄，机械兜底在 `_adjudicate_decide_obj` 的预算闸）。rescue 走同一锚点的
+    # 过滤装配面（`_SCOPED_DECIDE_RULES_RESCUE`，2026-08-31 单锚点化——legacy 双壳退役）。
     scope = str(state.get("route_scope") or "")
     scoped = not rescue
     route_req_out = _route_request_used(steps) >= MAX_ROUTE_REQUEST
     if rescue:
         decide_specs, decide_names = _DECIDE_TOOL_SPECS_RESCUE, _DECIDE_TOOL_NAME_TO_VERB_RESCUE
-        tools_rules, json_rules = _DECIDE_TOOLS_RULES_ZH, _DECIDE_RULES_ZH
+        tools_rules = _SCOPED_DECIDE_RULES_RESCUE["tools"]
+        json_rules = _SCOPED_DECIDE_RULES_RESCUE["json"]
     else:
         decide_specs = list(_DECIDE_TOOL_SPECS_BY_SUITE.get(scope)
                             or _DECIDE_TOOL_SPECS_BY_SUITE["general"])
@@ -7201,7 +7187,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         rules_pair = (_SCOPED_DECIDE_RULES_BY_SUITE.get(scope)
                       or _SCOPED_DECIDE_RULES_BY_SUITE["general"])
         tools_rules, json_rules = rules_pair["tools"], rules_pair["json"]
-    # 重问写步台账 → 投影打标（模型据此知道 finish 报告必须单独交代这些步）。
+    # 重问写步台账 → 投影打标（B 方案：模型据此知道 finish 报告必须单独交代这些步）。
     reask_nos = {int(m.get("step_no")) for m in (state.get("reask_writes") or [])
                  if isinstance(m.get("step_no"), int) and not isinstance(m.get("step_no"), bool)}
     projections = json.dumps([_step_projection(s, reasked_write=((i + 1) in reask_nos))
@@ -7215,26 +7201,26 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     ban_block = _failed_tool_ban_block_zh(ban_verbs) if ban_verbs else ""
     # 写步预算耗尽注入段（仅写步用满时成段，两个壳同口径）。
     write_block = _WRITE_BUDGET_BLOCK_ZH if write_budget_out else ""
-    # 换词重检预算耗尽注入段（仅重检用满时成段，两个壳同口径）。
+    # 换词重检预算耗尽注入段（仅重检用满时成段，两个壳同口径；2026-08-16）。
     rerun_block = _SEARCH_RERUN_BUDGET_BLOCK_ZH if rerun_budget_out else ""
-    # rank / rerank 预算耗尽注入段（同口径；未用满恒空段）。
+    # rank / rerank 预算耗尽注入段（2026-08-17 同口径；未用满恒空段）。
     rank_block = _RANK_BUDGET_BLOCK_ZH if _rank_used(steps) >= MAX_RANK else ""
     rerank_block = _RERANK_BUDGET_BLOCK_ZH if _rerank_used(steps) >= MAX_RERANK else ""
-    # 环内结果处理四工具预算耗尽注入段（四工具组，同口径；未用满恒空段）。
+    # 环内结果处理四工具预算耗尽注入段（2026-08-18 同口径；未用满恒空段）。
     compare_block = _COMPARE_BUDGET_BLOCK_ZH if _compare_used(steps) >= MAX_COMPARE else ""
     cite_block = _CITE_EXPORT_BUDGET_BLOCK_ZH if _cite_export_used(steps) >= MAX_CITE_EXPORT else ""
     compat_block = _COMPAT_BUDGET_BLOCK_ZH if _compat_used(steps) >= MAX_COMPAT else ""
     fair_block = _FAIR_BUDGET_BLOCK_ZH if _fair_used(steps) >= MAX_FAIR else ""
-    # 逃生口机会用完注入段（同口径；rescue/未用完恒空段）。
+    # 逃生口机会用完注入段（2026-08-17 同口径；rescue/未用完恒空段）。
     route_req_block = (_ROUTE_REQUEST_BUDGET_BLOCK_ZH
                        if scoped and route_req_out else "")
-    # rescue 面收敛注入段（仅检索救回回合成段，两个壳同口径）。
+    # rescue 面收敛注入段（仅检索救回回合成段，两个壳同口径；2026-08-16）。
     rescue_block = _RESCUE_DECIDE_BLOCK_ZH if rescue else ""
     # 「先新后旧」注入段（仅存在失败步时成段，纯劝导；两个壳同口径）。
     failed_block = _FAILED_STEP_BLOCK_ZH if any(not s.get("ok") for s in steps) else ""
     # 未决事项机械提示段（提示不是闸，三条规则都无命中时整段不出现）。
     pending_block = _pending_hints_block_zh(state["utterance"], steps)
-    # 执行状态栏：代码维护的机械账本，decide 双壳恒注入尾部（动态信息在末尾，保 prefix）。
+    # 执行状态栏（B2）：代码维护的机械账本，decide 双壳恒注入尾部（动态信息在末尾，保 prefix）。
     status_block = _agent_status_block_zh(state, steps=steps, moratorium=moratorium,
                                           ban_verbs=ban_verbs)
     tools_prompt = (
@@ -7285,7 +7271,8 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         choice="auto", json_prompt=json_prompt, refallback_on_empty=False,
         usage_sink=usage_local, usage_node="decide")
     if fb_reason:
-        # decide 也跌兜底了——抓现场账（node 如实标 decide，属有意的可观测面）。
+        # decide 也跌兜底了——抓现场账（node 如实标 decide；2026-08-07 前 decide 没有兜底档，
+        # 这是换装新增的可观测面，属登记在案的有意差异）。
         _audit_fallback(_agent_project_root(), "decide", fb_reason,
                         state["utterance"], model_name)
     multi_holder: list[str] = []   # 多调用留痕（至多 1 元素；只记最终被采纳的那次应答）
@@ -7319,8 +7306,8 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         # 非法应答重问一次（散文拒答/幻觉
         # 工具名一刀切停环，是 K/L 长链断裂的最大单因）。answer=None（全通道异常）或
         # fb_reason 非空（已跌 JSON 兜底）不再问——兜底档是通道异常时的保命档，不多问。
-        # 重问后的写动词：放行 + 强制核销（下方落账），
-        # 取代 的只读闸（该闸的稳定误杀现场见 decide docstring）。
+        # 重问后的写动词：2026-08-07 设计决定 B 方案——放行 + 强制核销（下方落账）
+        # 取代 2026-08-08 的只读闸（该闸的稳定误杀现场见 decide docstring）。
         reask_note = "第一次回答没读懂，已重问一次；"
         prev = _message_text(answer).strip()
         prev_calls = getattr(answer, "tool_calls", None) or []
@@ -7341,8 +7328,8 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                             state["utterance"], model_name)
         kind, payload = _classify(answer2)
         reasked = True
-    # violation 重问一次（参照 decide 站「提议非法」与「应答不可解析」的
-    # 处置对称化——实证：可修的校验违规（quoted 非逐字、keywords 无出处、sync 主题
+    # violation 重问一次（2026-08-08 借鉴批：decide 站「提议非法」与「应答不可解析」的
+    # 处置对称化——坐实：可修的校验违规（quoted 非逐字、keywords 无出处、sync 主题
     # 闸等）一刀切不可修停环，而同等可修的非法应答却有一次重问。与 understand 的
     # validate→repair「给模型一次改判机会」同一哲学，预算同型：每次 decide 调用至多
     # 一次重问（invalid 与 violation 共享这一份——`not reasked`），跌过 JSON 兜底档不再问）。
@@ -7376,7 +7363,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
             reasked = True
             adjudicated = (_adjudicate_decide_obj(payload, state)
                            if kind in ("loop", "json") else None)
-    # 「拒绝当前提议」绝不等于「整条请求完成」。
+    # （2026-08-09 对抗评审头条）：「拒绝当前提议」绝不等于「整条请求完成」。
     # loop 提议被机械闸（写步预算/失败禁提/联网暂停/去重/覆盖/死路/范围外）拦下时，
     # 链上剩余的**其他**事项（如尾随的只读 db_status）可能仍可推进——把拒绝原因回灌
     # 重问一次（与违规重问共享「每次 decide 至多一次」的预算），让模型改提别的或如实
@@ -7436,10 +7423,10 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                 break
             # 核销硬闸：报告自认还有没做的事（含形态 A「已做无合法步骤号」、形态 B
             # 「拿前件失败当独立事的借口」、重问写步缺单独交代、清单未决、机械未决）→
-            # 不收尾，把缺口回灌重问（每请求至多 2 次——
+            # 不收尾，把缺口回灌重问（每请求至多 2 次——2026-08-09 调研-长程agent批 候选2：
             # smolagents final_answer_checks「拒收后继续跑直到通过或 max_steps」语义；
             # 旧「重问一次即 fail-safe 放行」过软，业界默认反复拦）。
-            # 第二次否决时反馈点名**下一步必须做的动作**（借鉴 LangGraph replanner
+            # 第二次否决时反馈点名**下一步必须做的动作**（候选1：LangGraph replanner
             # 「剩余步非空→拒收 Response」的约束版——unsettled 条目的 expect_verb 是受控
             # 枚举，可直接钉成必做动作；槽位仍由模型填、机械闸照常兜底）。
             vetoes += 1
@@ -7537,7 +7524,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         # 婉拒表外动作的正式通道：与旧散文版「verb 不在 LOOP_TOOLS」同一条机械路径。
         nxt, note, declined, _vfb = _adjudicate_decide_obj({"verb": payload}, state)
     elif kind in ("loop", "json"):
-        # 重问写动词**放行 + 强制核销**（取代只读闸）：
+        # 重问写动词**放行 + 强制核销**（2026-08-07 设计决定方案，取代只读闸）：
         # 白名单/去重/覆盖闸/死路/暂停令照常适用（下方 adjudicate）；放行的是写动词时
         # 置 pending_reask_write 旗标——execute 落账 reask_writes，finish 核销硬闸
         # 强制报告单独交代该步结果（放行风险的防线：参数校验 + faithful 后检 + 核销复核）。
@@ -7553,7 +7540,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                 write_note = "重问后放行的写动作已记入强制核销账，收尾报告须单独交代本步；"
     else:  # invalid：幻觉工具名 / 参数不是对象 / 啥也解析不出 / 全通道没拿到 / 重问后仍非法
         nxt, note, declined = None, "大模型没给出能读懂的答复，按「已完成」收尾。", ""
-    # 多调用同批只读消费：被采纳应答若一次给了 ≥2 个调用，
+    # 多调用同批只读消费（2026-08-14 批）：被采纳应答若一次给了 ≥2 个调用，
     # 第一个照旧走主路径，第 2..N 个过 `_batch_readonly_extras` 的机械过滤（只读白名单/
     # 参数键严格/逐个裁决闸/去重/步数预算）后同批采纳；写动词出现即截断回炉。
     batch_extras: list[dict] = []
@@ -7574,7 +7561,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                           "互相独立，同批采纳执行"
                           + (f"，其余 {rest} 个回炉再判" if rest > 0 else "") + "；")
     # 多调用同批消费留痕——模型一次给了几个/同批采纳几个/回炉几个
-    # （非 loop 的多调用：第 2..N 个不消费，如实记 dropped）。 批 additive：
+    # （非 loop 的多调用：第 2..N 个不消费，如实记 dropped）。批 additive：
     # n_placeholder = 采纳的占位接地续步数（依赖占位批量的机械信号）。fail-soft，OFF 零操作。
     if ncalls_holder:
         _n_calls = ncalls_holder[0]
@@ -7620,13 +7607,13 @@ def narrate(state: _AgentState, *, runtime: Any) -> dict:
     observation 汇报路径逐位保留**；其余（多步 / 其它工具 / 含失败步）由 LLM 据 steps
     紧凑投影组织（LLM 缺席/失败回退确定性拼接，同一批事实两条措辞路径）。"""
     started = time.monotonic()
-    # 长 LLM 节点的「即将开始」即时事件——verb="node"，
+    # prelim1：长 LLM 节点的「即将开始」即时事件——verb="node"，
     # label_zh 与本节点 trace 行「生成说明」逐字一致（前端 pending 行按 label 匹配）。
     _on_progress = getattr(runtime.context, "on_progress", None)
     if _on_progress is not None:
         _on_progress("tool_start", {"verb": "node", "label_zh": "生成说明", "detail": ""})
     chat_model = runtime.context.chat_model
-    usage_local: list = []   # 缓存埋点：narrate 的 LLM 汇报调用缓存用量
+    usage_local: list = []   # 埋点：narrate 的 LLM 汇报调用缓存用量
     plan = dict(state["plan"])
     plan["source"] = "agent"
     plan["llm_status"] = "ok"
@@ -7683,24 +7670,24 @@ def narrate(state: _AgentState, *, runtime: Any) -> dict:
                 detail += "；大模型没接上，全程汇报按确定事实如实写出。"
     elif plan.get("cancelled"):
         # 取消态零步骤（execute 空过）：也必须有一句如实汇报——否则 report_zh 缺席，
-        # 用户面对空白，连「没做」都不知道（批B）。
+        # 用户面对空白，连「没做」都不知道。
         plan["report_zh"] = f"{str(plan['verb_zh']).rstrip('。')}：已按你的要求取消，没有执行任何操作。"
         plan["report_source"] = "deterministic"
     if state.get("truncated") and plan.get("report_zh"):
         if state.get("truncated_settled"):
-            # 到顶结算闸：可机械核验事项全结清时不缀「没做完」——
+            # 2026-08-15 到顶结算闸：可机械核验事项全结清时不缀「没做完」——
             # 改缀预算事实（透明但不谎报；LLM 不知道有上限，标注仍由代码写）。
             plan["report_zh"] = str(plan["report_zh"]).rstrip("。") + (
                 f"。（一句话能连续做的事较多，一次最多 {MAX_STEPS} 步的预算刚好用完，"
                 "你交代的事已全部完成。）")
             detail += "；到顶结算：原话交代的事已全部执行，汇报已如实标注预算刚好用完。"
         else:
-            # MAX_STEPS 强制停环的如实标注——LLM 汇报与确定性兜底两条路径
+            # 2026-08-06 B5：MAX_STEPS 强制停环的如实标注——LLM 汇报与确定性兜底两条路径
             # 都缀同一句机械事实（LLM 不知道有上限，它的「都做完了」必须由代码纠回实情）。
             plan["report_zh"] = str(plan["report_zh"]).rstrip("。") + (
                 f"；要连续做的事超过一次最多能做的 {MAX_STEPS} 步，剩下的没有执行。")
             detail += "；汇报已标注：还有事被步数上限截断，没做完。"
-    # 点名单源场景下 sync 空槽 = 按全部在线源同步
+    # exec-gates M5：点名单源场景下 sync 空槽 = 按全部在线源同步
     # （半闸刻意放行，语义不动）——最终汇报必须明说全量口径，否则「只同步了点名的那个源」
     # 成为可误读的默认。LLM/兜底两条汇报路径都缀同一句机械事实（与 truncated 标注同纪律）。
     if plan.get("report_zh"):
@@ -7723,17 +7710,17 @@ def narrate(state: _AgentState, *, runtime: Any) -> dict:
         if unsettled:
             tails = "、".join(f"「{str(t.get('text') or '')[:30]}」" for t in unsettled[:3])
             # 不写具体件数：计数 N 在 steps 工具返回里无出处，会撞 number_grounded
-            # 不变量——列举条目名本身信息量已够。
+            # 不变量（任务5新维）——列举条目名本身信息量已够。
             plan["report_zh"] = str(plan["report_zh"]).rstrip("。") + (
                 f"；按开头拆出的事项清单核对，这些事还没做：{tails}"
                 + ("等。" if len(unsettled) > 3 else "。"))
             detail += f"；清单核对：还有 {len(unsettled)} 件没做，已如实标注。"
     entry = _trace_entry("narrate", "生成说明", detail, True, started)[0]
     if discarded_report is not None:
-        # 批B ：被机械后检弃用的 LLM 汇报原文留痕（trace 附加字段，前端不渲染），
+        # 批B ：被机械后检弃用的 LLM 汇报原文留痕（trace 附加字段，前端不渲染）
         # 否则无法复盘那一次是「真谎称」还是「误伤」。
         entry["discarded_report_zh"] = discarded_report
-        # 矛盾原因码一并留痕（untouched_source / count_mismatch /
+        # 2026-08-06 schema 加固：矛盾原因码一并留痕（untouched_source / count_mismatch /
         # claimed_write / denied_write）——数字交叉核验上线后，没有它就分不清是哪一路拦的。
         entry["discard_reason"] = discard_reason
     return {
@@ -7780,7 +7767,7 @@ _GRAPH_BUILDS = 0  # 编译计数器：测试断言「只编译一次」的钉�
 def _get_graph() -> Any:
     """模块级编译单例：首次调用构建 + compile 一次，之后复用；
     双检锁护首轮并发。compile 产物跨请求共享是 langgraph 的设计意图——每次
-    stream/invoke 新建 loop/channels/Runtime，每请求依赖
+    stream/invoke 新建 loop/channels/Runtime（源码实证见换装调研底稿），每请求依赖
     走 context 注入、不进闭包。"""
     global _COMPILED_GRAPH, _GRAPH_BUILDS
     if _COMPILED_GRAPH is None:
@@ -7795,7 +7782,7 @@ def _get_graph() -> Any:
                 graph.add_node("execute", execute)
                 graph.add_node("decide", decide)
                 graph.add_node("narrate", narrate)
-                # scoped 路由：环首分流共识节点——
+                # scoped 路由（转正后常驻）：环首分流共识节点——
                 # 无条件进环后的第一次 LLM 调用只决定装哪套工具/提示词。
                 graph.add_node("route_consensus", route_consensus)
                 graph.add_edge(START, "route_consensus")
@@ -7840,12 +7827,12 @@ def plan_with_agent_events(
     search_lenient_dims: Any = None,
     search_date_from: str = "",
     search_date_to: str = "",
-    # （并发分流与确定性 RAG 策略）三缝透传——缺省 None/"" = 今天逐位
+    # cr1（并发分流与确定性 RAG 策略）三缝透传——缺省 None/"" = 今天逐位
     # 不变（既有测试的 monkeypatch seam 全保）。
     retrieval_provider: Any = None,
     on_route_verdict: Any = None,
     route_extra_zh: str = "",
-    # 课题上下文卡——独立字段透传进图状态，
+    # 课题上下文卡——独立字段透传进图状态
     # 只被 route_consensus/understand 的 prompt 结构化注入消费；缺省空串 = 旧版逐位不变。
     artifact_context: str = "",
 ) -> tuple[dict, list[dict]]:
@@ -7861,21 +7848,21 @@ def plan_with_agent_events(
     失败抛 `AgentUnavailable` / `AgentPlanInvalid`——调用方（turn.route_turn）捕获后回退
     `action_plan.plan_action` 保底。`chat_model` 可注入（测试替身，需有 `bind_tools`/`invoke`），
     注入时跳过 `should_use_llm` 闸（与 action_plan 的 `llm_call` 注入同纪律：测试隔离）。
-    `decide_model`（复杂度路由）是 decide/repair 档的**显式注入缝**：
+    `decide_model`（2026-08-07 复杂度路由）是 decide/repair 档的**显式注入缝**：
     给了就用它（不再按 env 自建），不给且车道为 complex 且配置了 LLM_MODEL_COMPLEX 才自建。
     `principal`：成功经验库分区主体（会话账户 id；空 → anonymous）。
     与 config 派生的 endpoint_fp 一起，既打进 understand 注入过滤，也打进成功收尾的账本行标。
-    `entry_mode`："rescue" = 检索救回回合——understand/
+    `entry_mode`（2026-08-16 检索工具化 Phase 1）："rescue" = 检索救回回合——understand/
     decide 工具面收敛到 search.rerun（+none/finish），validate/裁决层各有一道机械闸兜底；
     `search_sources` 与五个 `search_*` 结构化条件是 search.rerun 的完整当前屏范围；
     rescue 与常规 /api/utterance 都从同一份检索参数透传，缺省全空保持旧调用兼容。
-     三缝：`retrieval_provider` 在场时图 initial state 的 retrieval 取 None（并发
+    cr1 三缝：`retrieval_provider` 在场时图 initial state 的 retrieval 取 None（并发
     pre-loop 的摘要由 understand 入口经 provider 局部汇合）；`on_route_verdict` 在
     route_consensus 算完 route 后回调（只标记不发射）；`route_extra_zh` 拼进共识上下文
     尾部。三者缺省 = 旧行为逐位不变。
     """
     if not agent_available():
-        # 收尾留痕——agent 不可用（fail-soft，OFF 零操作）。
+        # 收尾留痕：收尾留痕——agent 不可用（fail-soft，OFF 零操作）。
         _te.emit_finish_reason(kind="unavailable")
         raise AgentUnavailable("langchain 扩展未安装，或已被 BIODATA_AGENT_EXEC=off 强制关停。")
     text = _ap.normalize_utterance(utterance)
@@ -7885,7 +7872,7 @@ def plan_with_agent_events(
     if chat_model is None:
         ok, reason = _ap.should_use_llm(config)
         if not ok:
-            # 收尾留痕——大模型不可用。
+            # 收尾留痕：收尾留痕——大模型不可用。
             _te.emit_finish_reason(kind="unavailable")
             raise AgentUnavailable(f"大模型不可用（{reason}）——agent 路径与单次分类同闸。")
         chat_model = _build_chat_model(config)
@@ -7896,14 +7883,14 @@ def plan_with_agent_events(
     # provider/key/端点/超时复用主 config，仅 model 换名；模型名写错会在调用期落入既有兜底链。
     # 新增 `LLM_COMPLEX_THINKING`/`LLM_COMPLEX_EFFORT` 旋钮——
     # 不配模型名、只开 thinking 也建第二 client（同模型名 + 思考参数），官方旋钮替代
-    # 「deepseek-reasoner 别名」的双模型路由（别名=V4-flash+thinking 开）。
+    # 「deepseek-reasoner 别名」的双模型路由（别名=V4-flash+thinking 开，2026-08-08 实测）。
     # decide_model_name 的展示口径：纯 thinking 车道标 "主模型名+thinking"（trace 如实）。
     lane = decide_lane(text)
     decide_model_name = ""
     if decide_model is None and not injected and lane == "complex":
         thinking, effort = _complex_thinking_env()
         decide_model_name = _complex_model_name()
-        # 建第二 client 的判定：配了模型名（旧路），或 thinking=on（V4 旋钮新路）。
+        # 建第二 client 的判定：配了模型名（旧路），或 thinking=on（旋钮新路）。
         # thinking=off 无模型名时不建——off 的语义「别思考」chat_model 天然满足，
         # 再建只是多发一个 disabled 参数、白换一个缓存键。
         if decide_model_name or thinking:
@@ -7924,9 +7911,9 @@ def plan_with_agent_events(
         chat_model=chat_model, model_name=str(getattr(config, "model", "") or ""),
         decide_model=decide_model, decide_model_name=decide_model_name, decide_lane=lane,
         principal=principal_norm, endpoint_fp=endpoint_fp,
-        # tool_start/node_start 即时事件与 step 完成事件同一条回调通道。
+        # prelim1：tool_start/node_start 即时事件与 step 完成事件同一条回调通道。
         on_progress=on_event,
-        # 三缝透传。
+        # cr1 三缝。
         retrieval_provider=retrieval_provider,
         on_route_verdict=on_route_verdict,
         route_extra_zh=route_extra_zh,
@@ -7935,7 +7922,7 @@ def plan_with_agent_events(
     initial: _AgentState = {
         "utterance": text,
         "artifact_context": str(artifact_context or ""),
-        # provider 在场时 initial state 的 retrieval=None——并发 pre-loop 的摘要由
+        # cr1：provider 在场时 initial state 的 retrieval=None——并发 pre-loop 的摘要由
         # understand 入口经 provider 局部汇合（provider 缺省时原样透传）。
         "retrieval": (None if retrieval_provider is not None else retrieval),
         "current_query": str(current_query or ""),
@@ -7974,7 +7961,7 @@ def plan_with_agent_events(
         emitted = max(emitted, len(trace_so_far))
 
     if final.get("violations"):
-        # 收尾留痕——护栏修复预算耗尽，plan 未产出。
+        # 收尾留痕：收尾留痕——护栏修复预算耗尽，plan 未产出。
         _te.emit_finish_reason(kind="plan_invalid",
                                repairs=int(final.get("repairs") or 0))
         raise AgentPlanInvalid(list(final["violations"]))
@@ -7986,10 +7973,10 @@ def plan_with_agent_events(
         raise AgentUnavailable("agent 图没能产出 plan（编排异常）。")
     trace = list(final.get("trace") or [])
     plan["trace"] = trace
-    # 成功经验库：成功收尾的 curate 会话机械追加进**候选池**
+    # 成功经验库（2026-08-09 五机制批）：成功收尾的 curate 会话机械追加进**候选池**
     # `.userdata/curate_example_candidates.jsonl`（失败/被闸/取消不录，防毒化；账本失败静默）——
-    # 用户在记忆模块预览勾选后才迁入正式库 `curate_examples.jsonl`，注入侧只读正式库。
-    # 收录质量闸：「跑通」不等于「干得漂亮」——把图状态里的质量信号一并交
+    # 2026-08-13 起用户在记忆模块预览勾选后才迁入正式库 `curate_examples.jsonl`，注入侧只读正式库。
+    # 2026-08-13 收录质量闸：「跑通」不等于「干得漂亮」——把图状态里的质量信号一并交
     # 给收录判据（跌 JSON 兜底/被 repair 修过/finish 被打回/截断/清单剔除任一即不录）。
     # 只覆盖图内已执行通道；前端 runner 通道（未装扩展的保底路径）不记录——那一条
     # 的执行结果在浏览器侧，后端拿不到「真的成功了」的真信号，宁可少录不伪造。
@@ -8013,7 +8000,7 @@ def plan_with_agent_events(
             "cache_read_total": cache_total,
             "cache_hit_rate": round(cache_total / input_total, 4) if input_total else 0.0,
         }
-    # 正常收尾留痕——completed / truncated / truncated_settled
+    # 收尾留痕：正常收尾留痕——completed / truncated / truncated_settled
     # （截断与结算口径读 final 终态，与 narrate 的标注同一真源）。fail-soft，OFF 零操作。
     _truncated = bool(final.get("truncated"))
     _te.emit_finish_reason(
@@ -8047,7 +8034,7 @@ def plan_with_agent(
     search_lenient_dims: Any = None,
     search_date_from: str = "",
     search_date_to: str = "",
-    # 三缝透传（与 plan_with_agent_events 同名同义；缺省 = 今天逐位不变）。
+    # cr1 三缝透传（与 plan_with_agent_events 同名同义；缺省 = 今天逐位不变）。
     retrieval_provider: Any = None,
     on_route_verdict: Any = None,
     route_extra_zh: str = "",

@@ -1,6 +1,6 @@
 "use strict";
 
-/* 本文件是 ES Module：经 import 取绑定；
+/* 本文件是 ES Module：core / usage_log / memory 经 import 取绑定；
    CURRENT_USER 的写操作一律经 setCurrentUser（可变共享状态只许属主模块 core.js 写），
    读操作保留 CURRENT_USER 裸引用（ESM live binding）。 */
 import { API, $, CURRENT_USER, activeView, setCurrentUser, toast, escapeHtml } from "#core";
@@ -28,9 +28,9 @@ export function setAccountChangedHook(fn) {
    账户只让共用一台电脑的多人各自拥有私有的用户记忆 / 收藏 / 历史命名空间（见 core.js 的 nsKey）；
    记忆本身仍只存本机浏览器 localStorage、不上传（沿用记忆功能的隐私不变量，本模块不触碰记忆存储介质）。
 
-   （保持登录 + 快捷切换）：
+   2026-08-02（保持登录 + 快捷切换）：
    - 服务端会话已落盘持久化（accounts.py，重启不再全体掉登录）；登录模态加「记住我」（默认勾）。
-   - 账号 chip 常驻「设置 → 账户」（此前在导航卡底部，用户判定不必占导航位）。
+   - 账号 chip 常驻「设置 → 账户」（2026-08-03 起；此前在导航卡底部，用户判定不必占导航位）。
      点击弹账号菜单：最近账号**一键切换**（/api/account/switch）、登录其他账号、退出登录。
    - 一键切换的凭据：登录/注册成功时把 `session_token` 按用户名记进**机器级**（非 nsKey）
      localStorage 键 `biodata_known_accounts`。威胁模型（写死在这，别装看不见）：
@@ -149,7 +149,7 @@ async function accountWhoami() {
 async function accountAuth(kind, username, password, remember, inviteCode) {
     const url = kind === "register" ? API.accountRegister : API.accountLogin;
     const body = { username, password, remember: remember !== false };
-    // 邀请码只在注册且服务端要求时随带（闸关时后端忽略该字段，契约 additive）。
+    // T3：邀请码只在注册且服务端要求时随带（闸关时后端忽略该字段，契约 additive）。
     if (kind === "register" && inviteCode) body.invite_code = inviteCode;
     const res = await fetch(url, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -158,7 +158,7 @@ async function accountAuth(kind, username, password, remember, inviteCode) {
     const data = await res.json();
     if (!res.ok || !data.ok || !data.user) throw new Error((data && data.detail) || "登录或注册失败，请稍后重试");
     setCurrentUser(data.user);
-    //  公网护栏硬化：护栏模式服务端本就不下发 session_token（data.session_token
+    // 公网护栏硬化：护栏模式服务端本就不下发 session_token（data.session_token
     // 为空属正常）；即使下到也不往 localStorage 记——公网共用浏览器不做「记住一键切换凭据」。
     if (data.session_token && !_gate.required) knownAccountRemember(data.user.username, data.session_token);
     return data.user;
@@ -167,7 +167,7 @@ async function accountAuth(kind, username, password, remember, inviteCode) {
 async function accountLogout() {
     // 只有服务端**确实**销毁了会话（响应 ok）才清本地登录态。否则会话仍在服务端存活、
     // cookie 仍有效，若此时静默清 CURRENT_USER + 报「已退出」，用户以为已登出而离开，
-    //  下次加载 whoami 又把该账户解析回来、暴露其命名空间给共用机器的下一个人（安全验证）。
+    // 下次加载 whoami 又把该账户解析回来、暴露其命名空间给共用机器的下一个人。
     const res = await fetch(API.accountLogout, { method: "POST" });
     if (!res.ok) throw new Error("退出失败，请重试");
     if (CURRENT_USER) knownAccountForget(CURRENT_USER.username);   // 显式登出 = 该账号的一键切换凭据一并销毁
@@ -208,10 +208,10 @@ export function onAccountChanged() {
     renderAccountState();
     renderAccountChip();
     // 使用反馈也是 per-account 命名空间：不作废缓存，会把上一个账户攒的记录算进下一个人的反馈包。
-    // usageOnAccountChanged 由 #usage_log import（usage_log 已转 ESM）——拼错名字模块加载期就炸。
+    // usageOnAccountChanged 由 #usage_log import（起 usage_log 已转 ESM）——拼错名字模块加载期就炸。
     usageOnAccountChanged();
     benchfbOnAccountChanged();   // benchmark 采集记录同样 per-account 命名空间（同 usage 纪律）
-    //  追踪：数据本体按 scope 隔离在 IndexedDB——切换只断引用不删数据。
+    // 追踪：数据本体按 scope 隔离在 IndexedDB——切换只断引用不删数据。
     // artifactsOnProfileSwitched 清内存缓存与活动课题句柄；课题 UI 态（上下文卡/活动
     // 详情/首页「继续课题」条）由 projects.js 经 setAccountChangedHook 注册的回调清。
     if (typeof artifactsOnProfileSwitched === "function") artifactsOnProfileSwitched();
@@ -235,14 +235,14 @@ export function onAccountChanged() {
         applyRecommendResult(LAST_RECOMMEND_DATA, "", { noScroll: true, fromHistory: true });
     }
     // 条件板的撤销栈是「这个人这一串操作」，换人就清空。它只在内存里，清内存即可。
-    // archive:false：命名空间已是新账户——丢弃前归档会把上一个人的对话写进新账户历史。
+    // archive:false（A2）：命名空间已是新账户——丢弃前归档会把上一个人的对话写进新账户历史。
     cbClear({ archive: false });
 }
 
 function renderAccountState() {
     const sub = $("accountStateSub");
     if (!sub) return;
-    //  网页版设置卡精简（产品裁决）：文字只保留用户名（chip 上）+
+    // 2026-08-26 网页版设置卡精简（产品方裁决）：文字只保留用户名（chip 上）+
     // 一句「数据按账号隔离」，不再罗列记忆/收藏/历史细目。
     if (CURRENT_USER) {
         sub.textContent = "数据按账号隔离";
@@ -251,7 +251,7 @@ function renderAccountState() {
     }
 }
 
-/* ---------------- 侧栏账号 chip + 菜单 ---------------- */
+/* ---------------- 侧栏账号 chip + 菜单（acct1） ---------------- */
 
 export function renderAccountChip() {
     const name = $("accountChipName"), avatar = $("accountAvatar");
@@ -272,7 +272,7 @@ function toggleAccountMenu() {
     const menu = $("accountMenu"), chip = $("accountChip");
     if (!menu || !chip) return;
     if (_accountMenuOpen) { closeAccountMenu(); return; }
-    //  公网护栏硬化：护栏模式隐藏一键切换账号项（后端 /api/account/switch 已 403，
+    // 公网护栏硬化：护栏模式隐藏一键切换账号项（后端 /api/account/switch 已 403，
     // 本地也不再持有任何账号 token）。
     const known = _gate.required ? {} : knownAccountsRead();
     const names = Object.keys(known).sort(function (a, b) { return (known[b].at || 0) - (known[a].at || 0); });
@@ -325,13 +325,13 @@ function openAccountModal(trigger, prefillUsername) {
     _accountReturnFocus = trigger || document.activeElement;
     const modal = $("accountModal"); if (!modal) return;
     setAccountError("");
-    syncAccountGateUI();   // 邀请码行/锁定态在每次打开时按最新 gate 快照同步
+    syncAccountGateUI();   // T3：邀请码行/锁定态在每次打开时按最新 gate 快照同步
     $("accountUsername").value = prefillUsername || ""; $("accountPassword").value = "";
     modal.hidden = false; document.body.classList.add("modal-lock");
     if (prefillUsername) $("accountPassword").focus(); else $("accountUsername").focus();
 }
 function closeAccountModal() {
-    if (_authLocked) return;   // 登录锁定：Esc/背板/✕ 都关不掉——登录成功才解锁
+    if (_authLocked) return;   // T3 登录锁定：Esc/背板/✕ 都关不掉——登录成功才解锁
     const modal = $("accountModal"); if (!modal || modal.hidden) return;
     modal.hidden = true; document.body.classList.remove("modal-lock");
     if (_accountReturnFocus && document.body.contains(_accountReturnFocus)) _accountReturnFocus.focus();
@@ -341,7 +341,7 @@ async function submitAccount(kind) {
     const username = ($("accountUsername").value || "").trim();
     const password = $("accountPassword").value || "";
     const remember = !!($("accountRemember") && $("accountRemember").checked);
-    // 服务端要求邀请码时注册必须先填（后端还会再校一遍，这里先拦空值省一次往返）。
+    // T3：服务端要求邀请码时注册必须先填（后端还会再校一遍，这里先拦空值省一次往返）。
     const invite = (_gate.invite && $("accountInvite")) ? ($("accountInvite").value || "").trim() : "";
     if (!username || !password) { setAccountError("请填写用户名和密码。"); return; }
     if (kind === "register" && _gate.invite && !invite) { setAccountError("请填写邀请码（向管理员索取）。"); return; }
@@ -363,8 +363,8 @@ async function submitAccount(kind) {
 export function initAccounts() {
     renderAccountState();
     renderAccountChip();
-    installAuthFetchGuard();   // 401 auth_required → 自动回登录锁定（护栏模式外 no-op）
-    //  账号 chip / 菜单（在设置·账户块内，登录/注册/登出/切换全走这颗 chip 的菜单）
+    installAuthFetchGuard();   // T3：401 auth_required → 自动回登录锁定（护栏模式外 no-op）
+    // 账号 chip / 菜单（acct1；2026-08-03 起在设置·账户块内，登录/注册/登出/切换全走这颗 chip 的菜单）
     const chip = $("accountChip");
     if (chip) chip.addEventListener("click", toggleAccountMenu);
     const menu = $("accountMenu");
@@ -387,13 +387,13 @@ export function initAccounts() {
         if ($("accountModal") && !$("accountModal").hidden) closeAccountModal();
         else if (_accountMenuOpen) closeAccountMenu();
     });
-    // 先取护栏快照（/api/health 的 account.{required,invite}，失败按闸关处理 = 本机形态不受影响），
+    // T3：先取护栏快照（/api/health 的 account.{required,invite}，失败按闸关处理 = 本机形态不受影响），
     // 再 whoami；护栏模式且无有效会话 → 启动即进登录锁定（只见登录/注册视图）。
     ACCOUNTS_READY = fetch(API.health)
         .then(function (res) { return res.json(); })
         .then(function (h) {
             if (h && h.account) _gate = { required: !!h.account.required, invite: !!h.account.invite };
-            //  公网护栏硬化：护栏模式下若发现历史遗留的一键切换 token 记录
+            // 公网护栏硬化：护栏模式下若发现历史遗留的一键切换 token 记录
             // （升级前写入的），立即清除——网页版不持有任何「免密码换号」凭据。
             if (_gate.required) {
                 try { localStorage.removeItem(KNOWN_ACCOUNTS_KEY); } catch (_e) {}

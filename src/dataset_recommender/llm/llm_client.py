@@ -11,12 +11,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import load_env_candidates
+from . import prompts
+from .config import load_env_candidates, _parse_bool
 from ..retrieval.units import format_sample_size
 
 
-TABLE_HEADER = "| 数据集名称 | 物种 | 组织 | 疾病 | 技术方案 | 样本量 | 原始数据状态 | 下载链接 |"
-TABLE_SEPARATOR = "|---|---|---|---|---|---|---|---|"
+TABLE_HEADER = prompts.CURATOR_TABLE_HEADER
+TABLE_SEPARATOR = prompts.CURATOR_TABLE_SEPARATOR
 
 ZHIPU_PROVIDER_ALIASES = {"zhipuai", "zhipu", "bigmodel", "glm"}
 OPENAI_PROVIDER_ALIASES = {"openai-compatible", "openai"}
@@ -25,13 +26,13 @@ OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 ZHIPU_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 ZHIPU_DEFAULT_MODEL = "glm-5.1"
-#: 限量试用通道（网页版护栏，模型由服务端锁定）：部署方在
+#: 限量试用通道（网页版护栏，2026-08-25；2026-08-27 换型 GLM-5.3-Flash）：部署方在
 #: 服务端环境变量托管 key（`BIODATA_TRIAL_API_KEY`，未设时回落 `BIODATA_EMBED_API_KEY`——
 #: 试用与 embedding 召回共用同一把智谱 key，免双份维护；两者都只在进程环境，请求级
 #: 覆盖链从不注入），前端「限量试用」预设不带 key/地址/模型（锁定不可改），每日轮数由
 #: webapp 配额闸限制。base/model 另有 `BIODATA_TRIAL_BASE_URL` / `BIODATA_TRIAL_MODEL`
-#: 可覆盖；默认锁定 bigmodel 端点 + 模型（与 embedding 通道同源）。
-#: 思考档（验证，scripts/probe_glm53flash_trial.py）：模型 始终思考，
+#: 可覆盖；默认锁定 bigmodel 端点 + glm-5.3-flash（与 embedding 通道同源）。
+#: 思考档（2026-08-27 实测，scripts/probe_glm53flash_trial.py）：glm-5.3-flash 始终思考，
 #: thinking={"type":"disabled"} 直接 400；且思考开启下 tool_choice="required"/"auto"
 #: 均正常返回 tool_calls——故 trial 默认**不发** thinking 参数（None），
 #: `BIODATA_TRIAL_THINKING=enabled|disabled` 留逃逸口（换回可关思考的模型时用）。
@@ -60,7 +61,7 @@ class LLMConfig:
     # DeepSeek V4 思考模式旋钮：
     # None = 不发该参数（默认，行为与旧版逐位一致）；thinking=True → extra_body 注
     # {"thinking": {"type": "enabled"}}；reasoning_effort 仅在 thinking=True 时附加，
-    # 合法枚举 none/minimal/low/medium/high/xhigh/max（实测 400 报文列举）。
+    # 合法枚举 none/minimal/low/medium/high/xhigh/max（2026-08-08 实测 400 报文列举）。
     # 注意：思考模式拒收 tool_choice="required"（服务端 400）——auto 档无此限制，
     # 本项目的 decide/repair 本来就恒 auto，understand 的 required 档只在非思考车道。
     thinking: bool | None = None
@@ -78,12 +79,6 @@ class LLMResult:
     error: str | None = None
     finish_reason: str | None = None
     raw_response: Any | None = None
-
-
-def _parse_bool(value: str | None, default: bool = False) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _env_first(*keys: str) -> str | None:
@@ -134,27 +129,40 @@ def _sanitize_provider_error(detail: object, api_key: str | None = None) -> str:
     return text or "provider returned no error detail"
 
 
-def _normalize_provider(provider: str | None) -> str:
-    normalized = (provider or "openai-compatible").strip().lower()
+def _normalize_provider(provider: str | None, *, default: str = "openai-compatible",
+                        extra_aliases: "frozenset[str] | set[str]" = frozenset()) -> str:
+    """provider 名归一化。两种口径，由 extra_aliases 决定：
+
+    - extra_aliases 为空（默认）：历史透传口径——内建别名集（智谱/mock/openai-compatible）
+      之外的任何名字原样透传，由 call_llm 的 "unsupported provider" 分支如实拒绝。
+      llm 包内全部调用点走此口径。
+    - extra_aliases 非空：封闭集口径——不在内建别名也不在 extra_aliases 里的名字
+      一律回落 default。webapp 设置页用此口径把用户输入收敛到已知通道集合
+      （例如 `_normalize_provider(v, default="zhipuai", extra_aliases={"trial"})`），
+      非法值静默回落是产品意图，不报错。
+    """
+    normalized = (provider or default).strip().lower()
     if normalized in ZHIPU_PROVIDER_ALIASES:
         return "zhipuai"
     if normalized == "mock":
         return "mock"
     if normalized in OPENAI_PROVIDER_ALIASES:
         return "openai-compatible"
+    if extra_aliases:
+        return normalized if normalized in extra_aliases else default
     return normalized
 
 
 #: 用户可见归因（rerank/润色回退措辞）把 LLM 失败分两类的判据：
 #: 「密钥无效/无权」（HTTP 401/403）——用户该去改设置；其余（超时/5xx/空回）是临时故障。
 #: 错误串的产地就是本模块（f"LLM HTTPError {code}: …"），判据与产地同文件，不另抄第二份。
-#: 只匹配串首 code 位：服务商/网关正文回显 "HTTPError 401" 字样不得把 502/429
+#: 只匹配串首 code 位（E-05）：服务商/网关正文回显 "HTTPError 401" 字样不得把 502/429
 #: 误判成密钥无效。
 def is_auth_error(error: object) -> bool:
     """LLM 调用错误是否是「密钥无效/没有权限」（HTTP 401/403）。
 
     401=未认证、403=无权限——重试不会自愈，唯一出路是用户去「设置」换密钥；
-    超时/5xx/返回空是临时故障，稍后重试即可。两句话必须分开。
+    超时/5xx/返回空是临时故障，稍后重试即可。两句话必须分开（2026-08-04 C3）。
     """
     return re.match(r"LLM HTTPError 40[13]\b", str(error or "")) is not None
 
@@ -212,7 +220,7 @@ def _provider_api_key(provider: str) -> str | None:
     if provider == TRIAL_PROVIDER:
         # 试用通道只认部署方专用变量，绝不回落 LLM_API_KEY/OPENAI_API_KEY——
         # 否则请求级 _temporary_env 注入的 key 会静默变成试用通道的凭据。
-        # 回落 BIODATA_EMBED_API_KEY（换型 模型）不违此原则：该变量只在
+        # 回落 BIODATA_EMBED_API_KEY（2026-08-27 换型 GLM）不违此原则：该变量只在
         # 进程环境，webapp 请求级覆盖链（_build_request_overrides）从不注入它——
         # 试用与 embedding 召回共用一把智谱 key，部署侧免双份维护。
         return _sanitized_api_key("BIODATA_TRIAL_API_KEY", "BIODATA_EMBED_API_KEY")
@@ -222,7 +230,7 @@ def _provider_api_key(provider: str) -> str | None:
 
 
 def resolve_enable_llm(provider: str | None = None) -> bool:
-    """ENABLE_LLM 的有效开关（**产品决策**：「如果填了apikey就默认开启，否则默认关闭」）。
+    """ENABLE_LLM 的有效开关（** · 产品方 2026-07-19 决策**：「如果填了apikey就默认开启，否则默认关闭」）。
 
     - 显式设为 true/false → 逐字服从（显式优先，行为与旧版一致）。
     - 未设置 → 默认 = 当前（或指定）provider 下存在真实（非 placeholder）API key：
@@ -272,20 +280,20 @@ def load_llm_config(
         timeout=float(_env_first("LLM_TIMEOUT", "LLM_TIMEOUT_SECONDS") or "60"),
         temperature=float(_env_first("LLM_TEMPERATURE") or "0.2"),
         max_tokens=int(_env_first("LLM_MAX_TOKENS") or "8000"),   # 与 LLMConfig 字段默认同值（8000 的出处见字段注释）
-        # trial 默认不发 thinking 参数（None）：模型 始终思考、拒收
-        # thinking={"type":"disabled"}（实测 400），且思考开启下
-        # tool_choice 强制/自动档均正常——见 TRIAL_PROVIDER 头注释与验证脚本。
+        # trial 默认不发 thinking 参数（None）：glm-5.3-flash 始终思考、拒收
+        # thinking={"type":"disabled"}（2026-08-27 实测 400），且思考开启下
+        # tool_choice 强制/自动档均正常——见 TRIAL_PROVIDER 头注释与探针脚本。
         # `BIODATA_TRIAL_THINKING=enabled|disabled` 是换回可关思考模型时的逃逸口。
         thinking=_trial_thinking_env() if provider == TRIAL_PROVIDER else None,
     )
 
 
 def _trial_thinking_env() -> bool | None:
-    """试用通道思考旋钮（`BIODATA_TRIAL_THINKING`）。
+    """试用通道思考旋钮（`BIODATA_TRIAL_THINKING`，2026-08-27）。
 
     enabled/on/1/true/yes → True（发 {"type":"enabled"}）；disabled/off/0/false/no →
     False（发 {"type":"disabled"}）；未设/其他 → None（**不发** thinking 参数——
-    模型 始终思考、拒收 disabled，这是它的唯一合法形态）。"""
+    glm-5.3-flash 始终思考、拒收 disabled，这是它的唯一合法形态）。"""
     raw = (_env_first("BIODATA_TRIAL_THINKING") or "").strip().lower()
     if raw in ("1", "on", "true", "yes", "enabled"):
         return True
@@ -295,7 +303,7 @@ def _trial_thinking_env() -> bool | None:
 
 
 def complex_model_name() -> str:
-    """复杂度路由的 decide 档模型名（`LLM_MODEL_COMPLEX` 环境变量）。
+    """复杂度路由的 decide 档模型名（`LLM_MODEL_COMPLEX` 环境变量，2026-08-07）。
 
     未配置 → 空串（路由关闭，agent 行为与单模型逐位一致）。本函数只在
     `load_llm_config` 跑过之后被调（`load_env_candidates` 的 setdefault 已把 .env
@@ -323,11 +331,11 @@ def _raw_status(value: bool | None) -> str:
 def _unit_explanation(units: set[str]) -> str:
     lines: list[str] = []
     if "cells" in units:
-        lines.append("“Cells” 指单细胞测序中捕获并测序的细胞数量。")
+        lines.append(prompts.UNIT_EXPLANATION_CELLS_ZH)
     if "spots" in units:
-        lines.append("“Spots” 多用于空间转录组技术，表示组织切片上的空间检测位点，每个位点可能包含多个细胞。")
+        lines.append(prompts.UNIT_EXPLANATION_SPOTS_ZH)
     if "nuclei" in units:
-        lines.append("“Nuclei” 指单核测序或细胞核层面的计数单位，通常表示被捕获并测序的细胞核数量。")
+        lines.append(prompts.UNIT_EXPLANATION_NUCLEI_ZH)
     return "\n".join(lines)
 
 
@@ -389,9 +397,7 @@ def call_mock_llm(prompt: str, retrieved_records: list[dict[str, Any]]) -> LLMRe
 
         blocks = ["\n".join([TABLE_HEADER, TABLE_SEPARATOR, *rows])]
         if has_false_fastq:
-            blocks.append(
-                "**提示：标有 ❌ 无 FASTQ 的数据集仅包含分析结果或处理后文件，不支持重新从 FASTQ 跑完整流程。**"
-            )
+            blocks.append(f"**{prompts.NO_FASTQ_NOTICE_ZH}**")
         unit_text = _unit_explanation(units)
         if unit_text:
             blocks.append(unit_text)
@@ -428,15 +434,18 @@ def _call_chat_completions(
     payload = {
         "model": config.model,
         "messages": [
-            {"role": "system", "content": "你是一位资深的生物信息学数据策展专家 The 10x Curator。"},
+            # 铁律**写进 user prompt**（不是 system slot）：这里的 system 消息是写死的通用策展人设、
+            # 会覆盖任何自定义 system——把护栏放 system 就成了不会发出去的死代码。放进确定发送的
+            # user prompt 才真正接地（act_summary_llm / intro_llm / search_reply_llm 同径、同一个教训）。
+            {"role": "system", "content": prompts.CURATOR_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ],
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
     }
-    # 思考旋钮（与 agent_exec langchain 路径同语义，此处补齐 plain 路径）：
+    # 思考旋钮（与 agent_exec langchain 路径同语义，2026-08-25 补齐 plain 路径）：
     # None = 不发该参数（全部既有 provider 行为逐位不变）；trial 默认 None——
-    # 模型 始终思考、拒收 disabled（验证），详见 TRIAL_PROVIDER 头注释。
+    # glm-5.3-flash 始终思考、拒收 disabled（2026-08-27 实测），详见 TRIAL_PROVIDER 头注释。
     if config.thinking is not None:
         payload["thinking"] = {"type": "enabled" if config.thinking else "disabled"}
         if config.thinking and config.reasoning_effort:
@@ -574,6 +583,32 @@ def call_zhipuai(prompt: str, config: LLMConfig) -> LLMResult:
     )
 
 
+def should_use_llm(config: LLMConfig, *, pre=None, post=None, require_enabled=True) -> "tuple[bool, str]":
+    """是否调用**真** LLM 的公共闸（act/intro/action_plan/dream 四处共用）。返回 (是否, 原因短标签)。
+
+    判定序：pre(config)（返回非 None 即作为裁决，用于 action_plan 的在线成本闸这类前置条件）→
+    mock（mock_llm 或 provider=="mock" 一律判否——call_mock_llm 忽略 prompt、直吐 curator
+    markdown 表，让执行/总结/介绍层走它会「荒谬通过」：产出根本不是预期文本）→
+    disabled（require_enabled=False 的消费方跳过本档——dream 只认 key 不认 enable 开关）→
+    no_key → post(config)（返回非 None 即作为裁决，用于 intro 的体裁可译性这类附加条件）→ ready。
+    """
+    if pre is not None:
+        verdict = pre(config)
+        if verdict is not None:
+            return verdict
+    if config.mock_llm or _normalize_provider(config.provider) == "mock":
+        return False, "mock_not_used"
+    if require_enabled and not config.enable_llm:
+        return False, "disabled"
+    if not config.api_key:
+        return False, "no_key"
+    if post is not None:
+        verdict = post(config)
+        if verdict is not None:
+            return verdict
+    return True, "ready"
+
+
 def call_llm(prompt: str, config: LLMConfig, retrieved_records: list[dict[str, Any]] | None = None) -> LLMResult:
     provider = _normalize_provider(config.provider)
 
@@ -609,10 +644,10 @@ def call_llm(prompt: str, config: LLMConfig, retrieved_records: list[dict[str, A
         )
 
     if provider == "zhipuai":
-        return call_zhipuai(prompt=prompt, config=config)
+        return call_zhipuai(prompt, config)
 
     if provider == TRIAL_PROVIDER:
-        # 试用通道走 OpenAI 兼容协议（bigmodel 官方端点），但归因如实标
+        # 试用通道走 OpenAI 兼容协议（bigmodel 官方端点，2026-08-27 起），但归因如实标
         # trial——trace/遥测里试用与 BYOK 的 openai-compatible 必须可分。
         return _call_chat_completions(
             prompt=prompt,
@@ -622,7 +657,7 @@ def call_llm(prompt: str, config: LLMConfig, retrieved_records: list[dict[str, A
         )
 
     if provider == "openai-compatible":
-        return call_openai_compatible(prompt=prompt, config=config)
+        return call_openai_compatible(prompt, config)
 
     return LLMResult(
         text=None,

@@ -1,7 +1,7 @@
 """
 查询理解：中文/英文自然语言 -> 结构化约束 + fail-closed。
 
-设计（经对抗评审收敛）：
+设计（与 Codex 两轮对抗辩论收敛）：
 - hard_filter 的 0% 违规保证 = 约束抽取必须"要么正确抽到、要么明确弃权/澄清"，绝不静默丢弃或**反向**用户约束。
 - **正负极性**：正向 constraints（须含）+ 负向 excluded_constraints（须不含）+ raw 三态。
 - **否定语法 = 小白名单执行 + 大兜底弃权**：只有整条负向 clause 完全落在白名单里才提交 exclusion；
@@ -71,7 +71,7 @@ class QueryIntent:
     # 「优先 10x」这类偏好某个数据来源。来源在 parse_query 之前就被 resolve_search_request 处理掉了，
     # 故这里由上层回填（parse_query 自己看不到来源专名）。存来源规范名，如 "10x Genomics"。
     preferred_sources: list[str] = field(default_factory=list)
-    # 静默丢词诚实层（只读、additive）：用户输入了**结构上无对应筛选维度**的实义描述词
+    # N1 静默丢词诚实层（只读、additive）：用户输入了**结构上无对应筛选维度**的实义描述词
     # （性别/年龄/受试者/功能类，见 V.FILLER_DOMAIN），系统既不落维、又不入 free_text_terms、也不弃权
     # → 静默丢弃零信号。这里记下这些词供回显「未作为筛选维度」。不参与解析/检索/弃权；非 executable 恒空。
     unused_query_terms: list[str] = field(default_factory=list)
@@ -81,7 +81,7 @@ class QueryIntent:
     # 只在 abstain_reason == "unresolved_term" 时非空；其它状态恒空。
     unresolved_terms: list[str] = field(default_factory=list)
     # 「A 或 B」的**实际处理方式**（只读、additive；查询里没有「或」时恒为空 dict）。
-    # 之前这里是整句弃权，现在照做——但引擎能表达的「或」只有一种：**同一维度内多值**。
+    # 2026-07-25 之前这里是整句弃权，现在照做——但引擎能表达的「或」只有一种：**同一维度内多值**。
     # 于是必须如实说清这次落到了哪一档，否则就是静默偏离：
     #   {"marker": "或", "or_dims": ["species"], "and_dims": ["tissue"], "exact": True, "note_zh": "…"}
     # exact=True  → OR 的各项都落在同一维度（含只落在软偏好段的情形，见 _describe_or_handling），
@@ -223,7 +223,7 @@ def detect_action_verbs(query: str) -> list[str]:
 
 
 def detect_operation_markers(query: str) -> list[str]:
-    """「AI 执行」关闭时降级检测用的**操作意图**标记全集（确定性、只读）。
+    """「AI 执行」关闭时降级检测用的**操作意图**标记全集（2026-08-03 确定性、只读）。
 
     = 执行动作词（ACTION_VERBS）∪ 管护操作短语（CURATE_OP_MARKERS），同一套扫描口径
     （小写、长词优先消费、按出现位置保序去重）。与 `detect_action_verbs` 的分工是刻意的：
@@ -359,7 +359,8 @@ def _extract_free_text_terms(query: str) -> list[str]:
     return _unique([t for t in terms if len(t) > 1])
 
 
-_DIM_LABEL_CN = {"species": "物种", "tissue": "组织", "disease": "疾病", "platform": "平台", "assay": "技术", "modality": "模态"}
+#: 兼容别名：维度中文名锚点在 vocabulary.DIM_LABELS_CN；board.py 从本模块取这个名（历史入口），保留不删。
+_DIM_LABEL_CN = V.DIM_LABELS_CN
 
 
 def active_filters(intent: "QueryIntent") -> list[dict]:
@@ -416,7 +417,7 @@ def active_filters(intent: "QueryIntent") -> list[dict]:
 def _residual_salient(working: str) -> str:
     """在已消费 alias 的工作串上判断是否还有"未识别的实义词"。返回可疑片段（空=无残差）。
 
-    **filler 必须换成分隔符，不能直接删掉**（批量回归测试）：删掉会让被删词左右的残字
+    **filler 必须换成分隔符，不能直接删掉**（2026-07-22 夜批量测试）：删掉会让被删词左右的残字
     紧挨在一起，拼出一个**用户从没打过**的幻影词，而这个词随后会被 `unresolved_terms` /
     弃权文案原样引述回去——「查询里有系统未收录的词：「白介素」」，可用户打的是「白细胞介素」。
     实测三例（全库 5665）：
@@ -451,7 +452,7 @@ def _residual_salient(working: str) -> str:
 
 
 def _unused_domain_terms(working: str) -> list[str]:
-    """静默丢词诚实层（只读）：在**已消费 alias** 的工作串上，找出被当作 `V.FILLER_DOMAIN`
+    """N1 静默丢词诚实层（只读）：在**已消费 alias** 的工作串上，找出被当作 `V.FILLER_DOMAIN`
     （结构上无筛选维度的实义描述词：性别/年龄/受试者/功能类）而**静默丢弃**的词——它们不落维、不入
     free_text_terms（ASCII-only 抓不到中文）、也不触发 unresolved_term 弃权，用户毫无信号。
 
@@ -488,7 +489,7 @@ _DECADE_RE = re.compile(_YEAR + r"\s*年代")
 # 年数不明确 → 弃权（parse_query 用）。负向 lookahead 保证不误吞含明确 N 的『近3年 / 近三年』。
 _AMBIGUOUS_REL_RE = re.compile(r"近几年|最近几年|近年来|近些年|这些年|前些年|近来|近年(?![\d一二两三四五六七八九十])")
 
-# ---- 非法/歧义时间表达（验证反馈）：弃权而非静默放宽/丢弃 ----
+# ---- 非法/歧义时间表达（反馈）：弃权而非静默放宽/丢弃 ----
 # 近0年 / 近-1年：无意义的相对年数（此前 _parse_dates 因 N≤0 跳过相对分支 → 时间约束静默消失）。
 _ZERO_NEG_REL_RE = re.compile(r"(?:最近|近|过去|过往)\s*(?:0+|-\s*\d+)\s*年")
 # YYYY年MM月[DD日]：抓出月/日以校验是否合法日历日（如 13月、2月30日）；合法则照旧只用年份粒度。
@@ -742,8 +743,11 @@ def _startswith_any(q: str, i: int, tokens) -> str:
 
 # ---- 弃权 / 澄清消息 ----
 _NEG_EXISTENTIAL = V.NEG_EXISTENTIAL_PHRASES
-_NESTED_MARKERS = ("不排除", "未排除", "不能排除", "不是", "并非", "并不是",
-                   "不要不", "没有不", "无不", "not without", "没不")
+# 双重/嵌套否定检测词：能锚到 NEGATION_GUARDS_CN 的从锚点取（交集；消费方是 any() 命中判定，
+# 顺序无关）；「不要不/没有不/无不/没不/not without」是双重否定连写复合形，锚点不收，列在下面。
+_NESTED_FROM_GUARDS = frozenset({"不排除", "未排除", "不能排除", "不是", "并非", "并不是"})
+_NESTED_EXTRA = ("不要不", "没有不", "无不", "not without", "没不")
+_NESTED_MARKERS = tuple(m for m in V.NEGATION_GUARDS_CN if m in _NESTED_FROM_GUARDS) + _NESTED_EXTRA
 
 _RAW_CLARIFY_DETAIL = ("『不需要 FASTQ』语义有歧义：可能是"
                        "『不把 FASTQ 作为筛选条件』，也可能是『排除含 FASTQ 的数据集』。请选择其一。")
@@ -757,7 +761,7 @@ def _mk_abstain(query: str, reason: str, detail: str,
                 unresolved: "list[str] | None" = None) -> QueryIntent:
     """弃权态也要如实回显被 `ALIAS_PROTECTED_COMPOUNDS` 整体屏蔽掉的词。
 
-     批量回归测试抓到：「胰岛素抵抗的单细胞数据」弃权时 `unused_query_terms` 是空的——
+    2026-07-22 夜批量测试抓到：「胰岛素抵抗的单细胞数据」弃权时 `unused_query_terms` 是空的——
     可执行分支（1137/1260 行）都补了 `_protected_terms`，弃权分支没补。于是屏幕上只说
     「未收录的词：『抵抗』」，一个字都没提「胰岛素」也被整体屏蔽、没参与筛选；
     降级建议里的 `ignored_terms` 同样只有「抵抗」，用户会以为胰岛素还在生效。
@@ -848,7 +852,7 @@ def _has_or(q: str) -> str:
 def _unresolved_detail(shown: str) -> str:
     """`unresolved_term` 的用户可见文案。**单一真源**——此前正负两条路径各手抄一份。
 
-     2026-07-25 基线变更后重写了措辞。旧文案是「为避免返回违反你意图的结果，已弃权」，
+    2026-07-25 产品哲学修正后重写了措辞。旧文案是「为避免返回违反你意图的结果，已弃权」，
     那是在把「弃权」当成一种美德讲。新措辞只说两件事实：哪个词没收录，以及**已经算好了**
     忽略它之后能搜到什么（`workflow.build_degraded_search` 一直在算，一键就能看）。
     这一档之所以还保留「先不直接返回」，不是「宁可弃权」，而是因为**它本来就没让用户空手**：
@@ -858,16 +862,15 @@ def _unresolved_detail(shown: str) -> str:
     # 注意：本文案里的「」**只许**用来引用用户原句里真实出现过的词。
     # `tests/test_unresolved_terms_are_real.py` 会把每一对角括号里的内容拿去和原句做子串核对——
     # 拿角括号当强调号用会被判成「引述了原句里没有的词」，那道门是对的：编造引文比措辞难看严重得多。
-    # 顺手项（用户：解释太啰嗦）——收敛成一句话：哪个词没收录、去掉它可能有结果。
+    # 2026-08-03 顺手项（用户：解释太啰嗦）——收敛成一句话：哪个词没收录、去掉它可能有结果。
     # 降级选项 chips（忽略它再搜）就排在下方，不需要文案再指路。
     return f"查询里有系统未收录的词：{shown}。把这些词去掉再搜，可能有结果。"
 
 
-#: 维度的中文名，仅用于 `or_handling.note_zh` 这句给人看的话。
-_DIM_ZH = {"species": "物种", "tissue": "组织", "disease": "疾病",
-           "platform": "平台", "technology": "技术", "modality": "数据类型"}
-
-
+#: 维度中文名锚点在 vocabulary.DIM_LABELS_CN（assay→「技术」、modality→「模态」）；本模块不再另抄一份。
+#: 裁决留痕：旧 `_DIM_ZH` 的键误写 "technology"（维度键实为
+#: "assay"），OR 回执把英文维度键直出（「assay＝…」）；锚点化后输出中文标签属**修复**而非
+#: 漂移，明确接受。逐字契约钉：tests/test_negation_contract.py::test_or_note_uses_chinese_dim_labels。
 def _describe_or_handling(query: str, constraints: dict, display_map: dict,
                           excluded: dict | None = None,
                           excluded_display: dict | None = None,
@@ -881,7 +884,7 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
       · 负向 `excluded_constraints[dim] = [A, B]`：「命中任一 forbidden 即淘汰」
         → ¬A ∧ ¬B，正是 ¬(A∨B)。所以「不要小鼠或大鼠」也**精确**成立；
       · 软偏好 `preferred[dim] = [A, B]`：命中任一都加权——「优先 A 或 B」正是用户说的
-        「或」，只是机制是加权而非筛选（此前不数这一份，
+        「或」，只是机制是加权而非筛选（2026-08-15 此前不数这一份，
         「优先人或小鼠的脑数据」被谎报成「按同时满足执行、请分两次查」）。
 
     三档，全部机械可核实（只看「哪个维度收到了几个值」，不去猜「或」两边是哪两个词——
@@ -898,7 +901,7 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
     preferred = preferred or {}
     preferred_display = preferred_display or {}
 
-    # **数用户说了几个东西，不数展开出几个 target。**这一处集成验证栽过：
+    # **数用户说了几个东西，不数展开出几个 target。**这一处真机实测栽过：
     # 「肺癌或 10x 的数据」里「肺癌」一个词就展开成 `['lung cancer', 'non-small cell lung']`
     # 两个 target，按 target 数判定会把它误判成「同维度多值＝精确的或」，
     # 而实际上「或」的另一半（10x）是**来源专名**、早在 parse_query 之前就被摘走了。
@@ -921,7 +924,7 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
     def _one(dim: str, neg: bool) -> str:
         src, disp = (excluded, excluded_display) if neg else (constraints, display_map)
         vals = " / ".join(disp.get(dim) or src.get(dim) or [])
-        return f"{'不要' if neg else ''}{_DIM_ZH.get(dim, dim)}＝{vals}"
+        return f"{'不要' if neg else ''}{V.DIM_LABELS_CN.get(dim, dim)}＝{vals}"
 
     def _join(dims: list[str], neg: bool | None = None, sep: str = "、") -> str:
         # neg=None → 自动：这个维度只有排除侧有值就按排除说，避免把「不要小鼠」说成「物种＝Mouse」。
@@ -949,10 +952,10 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
             # 「或」的多值只落在软偏好里：两个值都已按「命中任一都加权」执行，
             # 这正是用户说的「或」（机制是加权不是筛选）。此前这里落 narrower 档，
             # 谎称「按同时满足执行、请分两次查」，与同屏的「优先·物种：Human / Mouse」
-            # chip 自相矛盾。
+            # chip 自相矛盾（2026-08-15 触发点。
             fit = "exact"
             pref_text = "；".join(
-                f"优先{_DIM_ZH.get(d, d)}：{' / '.join(preferred_display.get(d) or preferred.get(d) or [])}"
+                f"优先{V.DIM_LABELS_CN.get(d, d)}：{' / '.join(preferred_display.get(d) or preferred.get(d) or [])}"
                 for d in pref_or_dims)
             note = (f"你写了「{mk}」。优先条件收到了多个值（{pref_text}），"
                     "已按\"命中任一都加权\"执行——这就是\"或\"的效果，不需要分两次查。")
@@ -988,7 +991,7 @@ def _has_conditional(q: str) -> str:
 
 #: 英文否定语素检测正则：**程序生成自 `V.NEG_MORPHEMES_EN`，不手抄**——本表曾是手抄副本且已漂移
 #: （漏 never / don't / do not / free of / other than 等 guard 里早就有的词，检测层与词表两张皮）。
-#: 起与词表同一份真源（`NEG_MORPHEMES_EN` 本身就是 EXEC ∪ GUARDS 的程序并）。
+#: 2026-08-17 起与词表同一份真源（`NEG_MORPHEMES_EN` 本身就是 EXEC ∪ GUARDS 的程序并）。
 _EN_NEG_RE = re.compile(
     r"(?<![a-z0-9_])(" + "|".join(re.escape(w) for w in V.NEG_MORPHEMES_EN) + r")(?![a-z])")
 
@@ -1021,7 +1024,7 @@ def _leftover_negation(working: str) -> str:
         fl = f.lower()
         # 纯 ASCII 字母 filler 必须按词边界删：朴素子串删除会把否定形素咬碎——"with" 把
         # "without" 咬成 "out"、"the" 咬碎 "neither"、"a" 咬碎 "avoid/lacking"，
-        # 否定信号在入口检测阶段就丢了（英文否定盲区②）。中文 filler 无此问题，
+        # 否定信号在入口检测阶段就丢了（英文否定盲区②）。中文 filler 无此问题
         # 保持原有子串语义不变。
         if fl.isascii() and fl.isalpha():
             text = re.sub(r"(?<![a-z])" + re.escape(fl) + r"(?![a-z])", " ", text)
@@ -1217,7 +1220,7 @@ def _positive_core(q: str, catalog: dict, today: date | None = None):
     # 也一并隐身了。对「单核细胞」这种**细胞类型**没问题（它同时在 FILLER_DOMAIN 里，本来就走
     # 「不筛但回显」那条诚实通道）；但对「胰岛素 / 胸腺嘧啶 / 血管紧张素」这种系统**压根不认识**
     # 的分子名，隐身的后果是从「诚实弃权」变成「返回全库 5665 条、零个筛选芯片」——
-    # 实测：
+    # 对抗评审实测：
     #     胰岛素   → results / 5665 条 / active_filters=[] / 首屏全是 CRISPRi K562、PBMC
     #     皮质醇   → abstained（它不在保护表里）           ← 同一词类，两套互斥口径
     # 屏蔽的职责只有一个：别让短别名劫持长词。它不该顺手把「我不认识这个词」也一起抹掉。
@@ -1296,10 +1299,10 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
     if _contains_any(q, _NESTED_MARKERS):
         return _mk_abstain(query, "nested_negation", "检测到双重/嵌套否定（如『不排除』『不是不要』），无法可靠换算，请改写为明确的排除或需要。")
     # 「why not X」是英文建议反问（含义≈「要不要试试 X」），不是排除；「not」进可执行表后
-    # 不设这道守卫会把反问静默反向成排除 X（配套红线）。
+    # 不设这道守卫会把反问静默反向成排除 X（2026-08-17 h41 修复的配套红线）。
     if _WHY_NOT_RE.search(q):
         return _mk_abstain(query, "interrogative_negation", "检测到疑问/建议句式（why not…），未把其中内容当作排除约束，请改成明确要求。")
-    # 2026-07-25 基线变更：这里曾对『或』与 hedge 整句弃权。
+    # 2026-07-25 产品哲学修正：这里曾对『或』与 hedge 整句弃权。
     #   · 『不要小鼠或大鼠』= ¬(A∨B) = ¬A∧¬B —— 排除侧「命中任一 forbidden 即淘汰」**精确**是这个语义，
     #     反而比一直照做的『不要小鼠和大鼠』（¬(A∧B)）更无歧义。连词本体已进 FILLER_GRAMMAR。
     #   · hedge 交给软偏好语法（`_extract_preferences` 在本函数之前就跑过了），到不了这里。
@@ -1381,7 +1384,7 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
             reason, detail, sole = _neg_items_kind_dim(items)
             if reason:
                 return _mk_abstain(query, reason, detail)
-            # 负向列表后紧跟『的 + 同维异 target 实体』才允许开边界，否则弃权
+            # D2：负向列表后紧跟『的 + 同维异 target 实体』才允许开边界，否则弃权
             j = _skip_ws(q, end)
             clause_end = end
             if j < len(q) and q[j] == "的":
@@ -1390,7 +1393,7 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
                 # 『的』后是 filler/未知（如「的数据」）→ 只是所有格，非边界问题，正常 excise 负向部分。
                 if p0 is not None:
                     if p0.kind != "entity" or p0.dim != sole:
-                        # 产品决策：**维持弃权**——NOT(A∧B) 在
+                        # 2026-08-07 产品评审裁决（遗留项 D2）：**维持弃权**——NOT（A∧B) 在
                         # 「跨维 AND + 维内 OR」的过滤模型里本就不可表达，放开任何一种解读
                         # 都是静默误读（把「不要小鼠的肺癌」读成排除全部小鼠 = 误伤小鼠非肺癌
                         # 数据）。提示语补手动筛选出口，不给假通路。
@@ -1508,9 +1511,9 @@ def _is_bare_identifier(query: str) -> bool:
     再剥 DOI 解析器前缀（https://doi.org/…、doi:…——复制 DOI 时最常一起带上的头，
     见 identifier_patterns.strip_doi_prefix）——真实世界最高频的粘贴形态是
     「从句尾复制 DOI 带着句点」，逐字判等会把这些放进词面解析，
-    重演「数字残片静默丢弃 → executable 空约束 → 全库冒充」（验证）；
+    重演「数字残片静默丢弃 → executable 空约束 → 全库冒充」
     带前缀裸贴则会掉进 unresolved_term，指路文案教用户「把这些词去掉」——
-    去掉后只剩纯数字残片，正好走回全库冒充通道。
+    去掉后只剩纯数字残片，正好走回全库冒充通道（第二轮）。
     只做这层剥壳，不改动正常检索语义。
     """
     q = _strip_doi_prefix(_strip_bare_wrapper(query))
@@ -1523,7 +1526,7 @@ def _is_bare_identifier(query: str) -> bool:
 _BARE_WRAPPER_CHARS = (
     " \t\r\n"
     ".,;:!?/·~"
-    "。，、；！？"
+    "。，、；：！？"
     "\"'“”‘’「」『』"
     "()（）【】《》〈〉〔〕"
 )
@@ -1562,7 +1565,7 @@ def _bare_doi_fragment(query: str) -> bool:
 def _doi_fragment_in_text(query: str) -> str | None:
     """句中找「形似 DOI 但没写全」的残片（兜底闸用）。返回残片文本（None=无）。
 
-    版本号语境不算残片，两类排除（对照组）：
+    版本号语境不算残片，两类排除（2026-08-04 第二轮的对照组）：
     - 残片是更长点分版本串的一段（前一字符是数字或点，如 cellranger 3.10.10380）——
       DOI 注册前缀永远是一个 token 的开头，不会接在「3.」后面；
     - 残片紧邻「版本」标记（10.10380 版本 / 版本 10.1234）——这个数字被用户明说为
@@ -1588,7 +1591,7 @@ def _residue_has_substance(residue: str) -> bool:
     - 纯 FILLER_GRAMMAR（帮我查/这个/数据集/用…语法客套元词）→ 无实义——
       stopword 包裹的残片视同零残留，进 identifier_fragment 诚实通道。
     filler 一律换成分隔符而不是删除——删除会把左右残字拼成用户没打过的幻影词
-    （同 _residual_salient 的教训）。
+    （同 _residual_salient 2026-07-22 的教训）。
     """
     text = (residue or "").lower()
     for tok in sorted({f.lower() for f in V.FILLER_DOMAIN}, key=len, reverse=True):
@@ -1612,7 +1615,7 @@ _IDENTIFIER_FRAGMENT_DETAIL = (
 
 
 #: 裸标识符弃权文案（fail-closed）。**绝不退化成全库检索**：DOI 这类编号会被词面解析拆成
-#: 纯数字残片静默丢弃 → executable 空约束 → 全库 5712 条冒充「满足基本检索条件」（普查）。
+#: 纯数字残片静默丢弃 → executable 空约束 → 全库 5712 条冒充「满足基本检索条件」。
 #: 与 GSE 编号的弃权同一条诚实通道：不检索、由 identifiers.lookup 的反查条如实应答。
 _IDENTIFIER_DIRECT_DETAIL = (
     "这是一个数据集标识符（编号 / DOI），不是检索句——检索按条件匹配，拿它当查询没有可筛的条件。"
@@ -1728,7 +1731,7 @@ def parse_query(query: str, keyword_mapping: dict[str, list[dict[str, Any]]] | N
             date_from=_df,
             date_to=_dt,
         )
-        # 2026-07-25 基线变更：此处曾对「或」与 hedge 整句弃权（`unsupported_boolean_or` /
+        # 2026-07-25 产品哲学修正：此处曾对「或」与 hedge 整句弃权（`unsupported_boolean_or` /
         # `unsupported_hedge`）。实测那两档给用户的是 **0 条结果 + 0 个放宽选项 + 0 个降级**，
         # 而能力其实一直都在：
         #     「优先 Xenium 的黑色素瘤数据」→ 55 条      「最好是 Xenium 的黑色素瘤数据」→ 0 条
@@ -1748,7 +1751,7 @@ def parse_query(query: str, keyword_mapping: dict[str, list[dict[str, Any]]] | N
         # 兜底闸（根因门）：executable 空约束 + 句中含标识符 + 剔除标识符后仍有实义残留
         # → 弃权 fail-closed。「帮我查 <DOI> 这个数据集」这类中文包裹不是裸贴，
         # _is_bare_identifier 的剥壳判等拦不住；词面解析把编号拆成数字残片静默丢弃后，
-        # 空约束会拿全库 top-N 冒充结果（验证）。宁可如实走标识符
+        # 空约束会拿全库 top-N 冒充结果。宁可如实走标识符
         # 诚实通道（由 identifiers.lookup 反查条应答），也绝不退化成全库检索。
         if (not any(_c0.get(d) for d in DIMENSIONS)
                 and not _r0 and not _df and not _dt):
@@ -1756,7 +1759,7 @@ def parse_query(query: str, keyword_mapping: dict[str, list[dict[str, Any]]] | N
             if hit and _identifier_residue(query, hit["value"]):
                 return _mk_abstain(query, "identifier_direct", _IDENTIFIER_DIRECT_DETAIL)
             # 残片同款根因：句中 DOI 残片 + 剔除后无实义残留（如「10.1038，10.1038」）→ 同通道弃权。
-            # 残留判定看「实义」不看「非空」：纯 stopword 包裹
+            # 残留判定看「实义」不看「非空」（2026-08-04 第二轮）：纯 stopword 包裹
             # （帮我查 10.1038 这个数据集 / 我用 10.1234 这个）视同零残留照样拦——否则词面解析
             # 把残片静默丢弃后，空约束拿全库 top-N 冒充结果；含实义描述词的不拦
             # （保守：实义词出现在句子里不该被没收检索），版本号语境由 _doi_fragment_in_text 豁免。

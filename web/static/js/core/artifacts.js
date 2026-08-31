@@ -4,10 +4,11 @@ import { usagePolicyRef } from "#usage_core";
  *
  * ## 本文件是什么 / 不是什么
  *
- * - 是：追踪（project）的**纯数据层**。后续的更新检查 diff 闭环与导出中心
- *   将直接建在本文件的 schema 之上，字段语义注释按「上游功能直接消费」的标准写。
+ * - 是：追踪（project）的**纯数据层**。设计见 `设计文档
+ *   §2（概念模型）/ §3.1（数据模型）/ §3.2（存储裁决）。更新检查 diff 闭环与导出中心
+ *   将直接建在本文件的 schema 之上，字段语义注释按「更新检查/导出中心直接消费」的标准写。
  * - 不是：UI。零 DOM、零窗口、零 localStorage、零网络——界面、上下文卡、活动 tab 持久化全在
- *   后续 UI 批，本文件不碰。约定：「localStorage 只存活动 tab/活动追踪 id
+ * UI 层，本文件不碰。明确「localStorage 只存活动 tab/活动追踪 id
  *   等轻量 UI 态」，那是 UI 层的职责，数据层不许越界。
  * - 唯一依赖 `#usage_core` 的纯函数 `usagePolicyRef`，保证追踪 provenance 与遥测使用同一策略串；
  *   两者均无 DOM/存储/网络副作用，node 规格仍可直跑。
@@ -18,16 +19,16 @@ import { usagePolicyRef } from "#usage_core";
  * - **复合主键带 profile scope**：记录键 `pk = scope + "\u0000p:" + project_id` 的确定性编码
  *   （scope 为空串 = 匿名命名空间，与 core.js `currentAccountScope()`/`nsKeyFor` 的账户语义逐字对齐；
  *   登录用户 = 服务端随机 id）。之所以不直接用 IDB 数组 keyPath `["scope","project_id"]`：
- * 数组键在验证与测试替身之间行为差异多（对象按引用比较等），字符串编码确定、可逆、可断言，
+ *   数组键在真机与测试替身之间行为差异多（对象按引用比较等），字符串编码确定、可逆、可断言，
  *   仓库里 `nsKeyFor(base, scope)` 的 `base::u:<scope>` 前缀式编码已有先例。另建 `by_scope` 索引
- *   支持按 profile 列追踪。**绝不上传**（遥测只记计数，追踪内容不进遥测—— 隐私红线）。
+ * 支持按 profile 列追踪。**绝不上传**（遥测只记计数，追踪内容不进遥测—— 隐私红线）。
  * - 写路径统一捕获 `QuotaExceededError` 并如实报错（reject 的 Error.name 即错误名）；
  *   `navigator.storage.estimate()` 仅作预警（artifactsStorageEstimate），**不自动淘汰**用户内容——
- *   清理只允许用户明示（可重建的 diff 临时快照除外，由 diff 快照流程负责）。
+ *   设计 §3.2：清理只允许用户明示（可重建的 diff 临时快照除外，那是更新检查的事）。
  *
- * ## profile 生命周期（供 accounts.js 日后接线，本包不改 accounts.js）
+ * ## profile 生命周期（accounts.js 接线点）
  *
- * accounts.js 既有重置点（登录/登出/切换账户）日后调用 `artifactsOnProfileSwitched()`：
+ * accounts.js 的重置点（登录/登出/切换账户）调用 `artifactsOnProfileSwitched()`：
  * 清空内存缓存与活动追踪句柄。追踪数据本体按 scope 隔离在 IndexedDB 里，切换只断引用不删数据。
  * 活动追踪句柄（artifactsActiveProjectId/SetActiveProjectId）是纯内存 UI 态；
  * 活动 tab 的**持久化**是 localStorage 的事，归 UI 层。
@@ -37,18 +38,18 @@ import { usagePolicyRef } from "#usage_core";
  * 上层函数（normalize/validate/备份序列化/候选与检查条件变换）全是**纯函数**：不碰 IDB、
  * 时间一律经 `artifactsSetClock` 注入点（默认 Date.now）——node 规格可逐字段断言。
  * adapter 层（artifactsOpen 起的 CRUD）经 `artifactsSetIdbFactory` 注入 IndexedDB 工厂：
- * node 规格自带进程内 fake IndexedDB 端到端断言真行为；验证走全局 `indexedDB`。
+ * node 规格自带进程内 fake IndexedDB 端到端断言真行为；真机走全局 `indexedDB`。
  */
 
 /* ============================================================================
  * 常量与 schema 版本
  * ----------------------------------------------------------------------------
  * ARTIFACTS_SCHEMA 是**数据 schema 版本**（每条追踪记录必备 schema_version 字段）。
- * 扩展落新字段时 +1 并在 artifactsParseBackup 的迁移段补逐版本迁移（见该函数注释），
+ * 更新检查/导出中心落新字段时 +1 并在 artifactsParseBackup 的迁移段补逐版本迁移（见该函数注释），
  * 不许原地改字段后让老数据悄悄缺字段——老库里的追踪是用户的真内容。
  * ========================================================================== */
 export const ARTIFACTS_SCHEMA = 1;                        // 追踪记录 schema 版本（当前 v1）
-export const ARTIFACTS_DB_NAME = "biodata-artifacts";     // IndexedDB 库名
+export const ARTIFACTS_DB_NAME = "biodata-artifacts";     // IndexedDB 库名（设计 §3.2）
 export const ARTIFACTS_DB_VERSION = 1;                    // 库结构版本（加 store/索引时 +1）
 export const ARTIFACTS_STORE = "projects";                // object store 名
 export const ARTIFACTS_SCOPE_INDEX = "by_scope";          // profile scope 索引
@@ -56,7 +57,7 @@ export const ARTIFACTS_BACKUP_SCHEMA = "biodata-artifacts-backup/1";  // 备份 
 
 /* 候选状态枚举（原文：候选|待核验|已核验|已排除）。
    语义不是强状态机（数据层不裁决业务流），只钉枚举值与默认值：
-   - 待核验 = 新发现未审（watch 新增一律落这里——「新候选默认待核验；没有自动纳入」）；
+   - 待核验 = 新发现未审（watch 新增一律落这里——「新候选默认待核验；没有自动纳入」）
    - 候选 = 已进入候选视野、尚未终裁；
    - 已核验 = 用户确认纳入；已排除 = 用户决定排除（二者是用户终态，verified_at 落戳见
      artifactsSetCandidateStatus）。 */
@@ -67,7 +68,7 @@ export const PROJECT_STATUS = Object.freeze({
     EXCLUDED: "已排除",
 });
 export const PROJECT_STATUS_VALUES = Object.freeze(Object.values(PROJECT_STATUS));
-/* 新候选默认状态——硬性规则：**任何自动流程不得直接改纳入表**，只能默认「待核验」，
+/* 新候选默认状态—— 硬性：**任何自动流程不得直接改纳入表**，只能默认「待核验」
    等用户逐条比较后经 artifactsSetCandidateStatus 决定去留。 */
 export const DEFAULT_CANDIDATE_STATUS = PROJECT_STATUS.PENDING;
 
@@ -85,7 +86,7 @@ export const ARTIFACTS_LIMITS = Object.freeze({
  *             经 artifactsSetIdbFactory 注入替身。换工厂后需 artifactsClose() 重开。
  * _now：时钟注入点（null = Date.now）。规格注入固定时钟保证时间戳确定性。
  * _cacheScope/_cache：**当前 profile 的内存镜像**（写穿 + get 命中；list 永远以 DB 为准并回灌）。
- *                     切换 profile 时经 artifactsOnProfileSwitched 清空（「清内存缓存」钩子）。
+ * 切换 profile 时经 artifactsOnProfileSwitched 清空—— 的「清内存缓存」。
  * _activeProjectId：活动追踪句柄（纯内存 UI 态，UI 层经 Set/Active 存取）。
  * ========================================================================== */
 let _db = null;
@@ -107,7 +108,7 @@ export function artifactsIsoNow(ts) {
         d = t;
     } else if (typeof t === "string" && t.trim() !== "" && !Number.isFinite(Number(t))) {
         /* ISO 字符串（如服务端响应的 checked_at）：Number()=NaN，走数值路径会被 `|| 0`
-           错成 epoch 0（修复：追踪「上次检查于 20687 天前」事故）。 */
+           错成 epoch 0（2026-08-22 修复：追踪「上次检查于 20687 天前」事故）。 */
         d = new Date(t);
     } else {
         d = new Date(Number(t) || 0);
@@ -161,7 +162,7 @@ function _normCandidate(c, nowIso) {
 }
 
 /* 确定性检索规格（check_condition.spec）。字段名与 `/api/watch/check`
-   入参**逐一对齐**（= /api/recommend 入参子集，两侧口径已统一）：query（解析后的
+   入参**逐一对齐**（= /api/recommend 入参子集）：query（解析后的
    检索词字符串）/sources/facet_filters[{dim,value}（单值，同 workflow.sanitize_facet_filters
    口径）]/suppressed_constraints/lenient_dims/date_from/date_to/spec_version（字符串，
    当前 "v1"，与 record_fingerprint_schema 同版）。spec_version 是规格自身的版本，
@@ -183,8 +184,8 @@ function _normSpec(s) {
     };
 }
 
-/* 基线快照（check_condition.baseline）：uids 是**无序集合**——展平成数组保存，
-   比较按集合语义（diff 不得按数组顺序比对）；fingerprints = uid → 语义指纹；
+/* 基线快照（check_condition.baseline）：uids 是**无序集合**——展平成数组保存
+   比较按集合语义（diff 不得按数组顺序比对）；fingerprints = uid → 语义指纹
    result_total/truncated 如实记录「命中 ≤200 存全量、>200 truncated=true 且不得声称
    某条已从全部结果消失」。 */
 function _normBaseline(b, nowIso) {
@@ -199,7 +200,7 @@ function _normBaseline(b, nowIso) {
 }
 
 /* 读时修复：旧版 artifactsIsoNow 不接受 ISO 字符串，曾把
-   last_checked_at 落成 epoch 0；本功能 2026-08 才存在，早于 的读数一律视为
+   last_checked_at 落成 epoch 0；本功能 2026-08 才存在，早于 2026-08-01 的读数一律视为
    「从未检查」（不展示、不伪造），下次成功检查会覆写正确值。 */
 function _normCheckedAt(v) {
     const s = v ? String(v) : "";
@@ -212,7 +213,7 @@ function _normCheckedAt(v) {
 function _normCheckCondition(cc, nowIso) {
     if (!cc || typeof cc !== "object") return null;
     return {
-        display_query: String(cc.display_query || "").trim(),   // 原始文本，仅展示
+        display_query: String(cc.display_query || "").trim(),   // 原始文本，仅展示（设计 §3.1）
         spec: _normSpec(cc.spec),
         baseline: _normBaseline(cc.baseline, nowIso),
         last_checked_at: _normCheckedAt(cc.last_checked_at),
@@ -220,7 +221,7 @@ function _normCheckCondition(cc, nowIso) {
 }
 
 /* provenance 全字段（为导出与方法草稿服务；范式同 content/task_pack.py 的
-   provenance.json：query / retrieval_params / 检索日期 / scope 语义字段）。导出中心
+   provenance.json：query / retrieval_params / 检索日期 / scope 语义字段）。P5 导出中心
    直接消费本对象，字段语义如下： */
 function _normProvenance(p) {
     if (!p || typeof p !== "object") return null;
@@ -246,7 +247,7 @@ function _normProvenance(p) {
 }
 
 /* 导出记录台账（时间、目录版本、相对上次导出的变化、可命名关键节点）。
-   导出中心在此之上建 UI 与「默认只展示最新、历史折叠」——这里只保证台账条目形状稳定。 */
+   P5 导出中心在此之上建 UI 与「默认只展示最新、历史折叠」——这里只保证台账条目形状稳定。 */
 function _normExport(r, nowIso) {
     if (!r || typeof r !== "object") r = {};
     _expSeq += 1;
@@ -262,7 +263,7 @@ function _normExport(r, nowIso) {
     };
 }
 
-/* activity[]：关联对话/运行的轻量引用（可选）。type 宽松收（conv/run），
+/* activity[]：关联对话/运行的轻量引用（可选）。type 宽松收（conv/run）
    只保证是字符串；ref 是引用（如 convId）；at 是发生时间。 */
 function _normActivity(a, nowIso) {
     if (!a || typeof a !== "object") return null;
@@ -276,7 +277,7 @@ function _normActivity(a, nowIso) {
 
 /* ---------- 无序集合工具（baseline.uids / provenance.result.uids 共用） ---------- */
 export function artifactsUidSet(uids) {
-    /* 去重、保插入序。语义是**集合**：diff 按 uid 集合比较「真实新增/消失」，
+    /* 去重、保插入序。语义是**集合**：P4 diff 按 uid 集合比较「真实新增/消失」，
        绝不按数组下标比对名次（不比较名次）。 */
     const seen = new Set();
     const out = [];
@@ -288,7 +289,7 @@ export function artifactsUidSet(uids) {
 }
 
 /* ---------- 追踪记录规整（写库/读库统一入口） ----------
-   白名单化：只认下表字段，未知键一律不进库（防异物键漂移——扩展走 schema_version
+   白名单化：只认下表字段，未知键一律不进库（防异物键漂移——P4/P5 扩展走 schema_version
    迁移而不是「容忍任意键」）。数组字段强制数组、字符串强制字符串、时间戳落 ISO。
    **不静默截断**：纳入/排除超 8 条时保留全量、由 artifactsValidateProject 如实报错
    （如实第一：数据层不许悄悄丢用户内容；数量约束是校验不是裁剪）。 */
@@ -414,7 +415,7 @@ export function artifactsSetCheckCondition(project, cc, opts) {
 }
 
 export function artifactsSetBaseline(project, baseline, opts) {
-    /* 仅回填 check_condition.baseline（watch-check 保存/更新基线，基线用确定性管线
+    /* 仅回填 check_condition.baseline（watch-check 保存/更新基线，：基线用确定性管线
        独立生成，不拿显示结果冒充）。无 check_condition 时不动。 */
     opts = opts || {};
     const p = artifactsNormalizeProject(project, opts);
@@ -474,7 +475,7 @@ export function artifactsExportText(projects, meta) {
 export function artifactsParseBackup(text) {
     /* 备份 JSON 文本 → 校验结果（不写库；写库走 artifactsImportBackup）。
        不信任任何字段：schema 标记不符 / 版本超前 → 拒绝并说清原因，绝不猜测解析。
-       版本落后（未来 schema_version bump）→ 在这里逐版本迁移后继续：`if (v < 2) { ... }`——迁移
+       版本落后（未来 P4/P5 bump）→ 在这里逐版本迁移后继续：`if (v < 2) { ... }`——迁移
        必须产生**完整**的新版本记录，不许半迁移后让老字段静默消失。 */
     let doc = null;
     try { doc = JSON.parse(String(text || "")); } catch (_e) {
@@ -789,9 +790,9 @@ export async function artifactsStorageEstimate() {
 /* ---------- profile 生命周期钩子（accounts.js 日后接线点） ---------- */
 export function artifactsOnProfileSwitched() {
     /* 登录/登出/切换账户时调用：清空内存缓存与活动追踪句柄。
-       追踪数据本体按 scope 隔离在 IndexedDB 里——**只断引用、不删数据**（
+       追踪数据本体按 scope 隔离在 IndexedDB 里——**只断引用、不删数据**（的
        「切换 profile 时清空活动追踪、上下文卡与内存缓存」；上下文卡的关闭是 UI 层职责，
-       UI 层在各自 UI 态里处理）。 */
+       由各自 UI 态处理）。 */
     _cacheScope = null;
     _cache = null;
     _activeProjectId = null;

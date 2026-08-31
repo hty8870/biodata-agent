@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
-"""使用反馈（L2 埋点）的隐私与诚实性契约门。
+"""使用反馈（埋点）的隐私与诚实性契约门 —— 2026-08-20 tl1 反转版。
 
 ## 这个功能为什么需要一道**结构性**的门
 
-「使用数据采集」的形态是**默认本地采集 + 受控上传**：
-代码为「最小出网」付出过真实成本：`/api/reuse-pack` 走 POST 而非 GET（免得 dataset_uid 进
+产品决定做「使用数据采集」，最初的形态是**本机记录 + 手动回传**，
+代码为「零出网」付过真实成本：`/api/reuse-pack` 走 POST 而非 GET（免得 dataset_uid 进
 uvicorn 的 access log）、服务端不存会话、导出走前端 Blob 不写盘。
 
-现行契约：
+2026-08-20 tl1 起（设计裁决见 `设计文档）：
 **默认开启本地采集**；每账户独立 consent；部署配置安全 HTTPS 通道后才自动上传，
-否则仅本地保存/手动导出。除唯一上传通道外，安全默认仍零远程出网。
+否则仅本地保存/手动导出。旧契约「全站离线、永不上传」正式作废，但安全默认仍零远程出网。
 
 新契约在这里被钉成机械可验证的不变量，而不是靠注释和记性：
 
@@ -79,7 +79,7 @@ def _strip_js_comments(text: str) -> str:
 # ---------------------------------------------------------------- 唯一出网通道
 
 def test_only_usage_upload_may_talk_to_the_network() -> None:
-    """遥测层唯一出网通道：网络原语**只允许**出现在 usage_upload.js。
+    """遥测层唯一出网通道反转（2026-08-20 tl1）：网络原语**只允许**出现在 usage_upload.js。
 
     usage_log / usage_core / benchfb / benchfb_core 仍零网络原语——回传方式的旧承诺
     一字节没放宽；新增的自动上传只有 usage_upload.js 一条口子，别处加任何出网原语即红。
@@ -135,15 +135,15 @@ def test_the_frozen_evaluation_path_never_imports_the_usage_layer() -> None:
 # ---------------------------------------------------------------- 默认态（单版本化：恒开）
 
 def test_the_default_is_on_and_choice_wins() -> None:
-    """显式选择永远优先；没表过态时**默认开**（单版本化：构建分叉已废弃）。
+    """显式选择永远优先；没表过态时**默认开**（2026-08-20 tl1 单版本化：主线版分叉废弃）。
 
-    关 = "0" 为假；null/未表态 = 真（默认开）；"1" = 真。旧的默认关分支已删除。
+    关 = "0" 为假；null/未表态 = 真（默认开）；"1" = 真。旧的主线版默认关分支已删除。
     """
     code = _strip_js_comments(LOG.read_text(encoding="utf-8"))
     assert 'if (chosen !== null) return chosen === "1";' in code, "显式选择必须永远优先于默认"
     body = re.search(r"function usageEnabledForScope\([^)]*\)\s*\{(.*?)\n\}", code, flags=re.S)
     assert body, "未找到 usageEnabledForScope"
-    assert "return true;" in body.group(1), "未表态时的默认必须是开（单版本化）"
+    assert "return true;" in body.group(1), "未表态时的默认必须是开（单版本化恒取强化版分支）"
     assert "isBenchfbBuild" not in body.group(1), "usageEnabled 不得再走构建分叉——分叉逻辑已删除"
     # 打点入口第一行就短路，关闭状态下不留任何副作用
     m = re.search(r"function usageLog\([^)]*\)\s*\{(?P<body>.*?)\n\}", code, flags=re.S)
@@ -160,21 +160,21 @@ def test_the_default_is_on_and_choice_wins() -> None:
 def test_single_versioning_keeps_is_benchfb_build_true_forever() -> None:
     """isBenchfbBuild 导出保留（onboarding.js 顶层调用它定默认分支）但恒 true：
 
-    不探测 <meta>/按钮 DOM，也没有任何版本分叉判断；meta 保留只是指纹契约用。
+    不再探测 <meta>/按钮 DOM，也不再有任何版本分叉判断；meta 保留只是指纹契约用。
     """
     code = _strip_js_comments(LOG.read_text(encoding="utf-8"))
     assert "export function isBenchfbBuild()" in code, "isBenchfbBuild 导出必须保留（onboarding.js 还在用）"
     body = re.search(r"function isBenchfbBuild\(\)\s*\{(.*?)\n\}", code, flags=re.S)
     assert body, "未找到 isBenchfbBuild"
-    assert "return true;" in body.group(1), "isBenchfbBuild 必须恒 true（单版本化）"
+    assert "return true;" in body.group(1), "isBenchfbBuild 必须恒 true（原反馈强化版）"
     assert "biodata-build" not in code, "运行时不得再探测构建标记 meta"
     assert "benchfbExportBtn" not in code, "运行时不得再探测按钮 DOM 存废"
 
 
 def test_the_onboarding_points_at_the_management_row() -> None:
-    """教程最后一步不再当场问开不开，改为打开设置抽屉、高亮管理入口。
+    """2026-08-13：教程最后一步不再当场问开不开，改为打开设置抽屉、高亮管理入口。
 
-    当场开关退役的理由：默认态已定（默认开），教程里塞一个一次性开关只会与
+    当场开关退役的理由：默认态已定（强化版默认开），教程里塞一个一次性开关只会与
     设置里的真实开关打架。这里钉死：没有任何一步携带 choice；最后一步锚定设置区
     使用反馈那一行；DOM 与 JS 里都不再有当场选择的残留。
     """
@@ -234,11 +234,11 @@ def test_consent_is_per_account_profile() -> None:
     assert body, "未找到 usageConsentGiven"
     assert "usageConsentGivenForScope" in body.group(1), "consent 必须委托 per-scope 单一真源"
     assert "nsKeyFor(LS.usageConsent, scope)" in code, "consent 必须按账户 scope 隔离"
-    assert "export function setUsageConsent(" in code, "必须提供 consent 写入接口（consent 弹窗要用）"
+    assert "export function setUsageConsent(" in code, "必须提供 consent 写入接口（S5 弹窗要用）"
 
 
 def test_training_consent_is_separate_opt_in_and_contract_is_versioned() -> None:
-    """产品改进授权不得偷换成训练授权；训练默认开启（策略，
+    """产品改进授权不得偷换成训练授权；训练默认开启（2026-08-25 产品方决策，
     显式 opt-out "0" 永远优先）、独立 per-profile、可机械过滤。"""
     html = INDEX.read_text(encoding="utf-8")
     core_js = (JS_DIR / "core" / "core.js").read_text(encoding="utf-8")
@@ -296,10 +296,10 @@ def test_queue_drops_are_observable_and_ack_safe() -> None:
 
 
 def test_upload_thresholds_stay_at_or_below_design() -> None:
-    """触发阈值常量存在且 **≤ 设计值**。 激进上传改版：
+    """触发阈值常量存在且 **≤ 设计值**。2026-08-22 激进上传改版：
 
     benchfb ≥1 轮 / usage ≥10 条（原 3 轮/50 条——benchfb 单条即一轮完整检索现场）；
-     起 usage 默认降到 **2 条**（无 hint 时几乎实时），阈值/间隔随服务器
+    起 usage 默认降到 **2 条**（无 hint 时几乎实时），阈值/间隔随服务器
     server_hint 动态调整（见 test_adaptive_upload_threshold_hint_pins）。
     「启动距上次成功 >6h」与 2 分钟评估节流退役，改为启动有待发即传 + 30s trailing 防抖
     + 5 分钟周期兜底 + pagehide/hidden 的 fetch keepalive 尽力一发。这些常量与钩子
@@ -340,7 +340,7 @@ def test_upload_thresholds_stay_at_or_below_design() -> None:
     # 两页 meta 显式配好生产 endpoint + 可轮换 client credential + allow-insecure 主机白名单，
     # 客户端开箱即上传（不静默断流）；白名单只含该主机，其它明文公网主机仍 fail-closed。
     assert '<meta name="biodata-telemetry-endpoint" content="http://<server-ip>:8471/v1/ingest">' in html, (
-        "首页必须显式配置生产遥测端点（tc1 合并裁决，不得静默断流）")
+        "首页必须显式配置生产遥测端点（合并裁决，不得静默断流）")
     for page in (html, detail):
         for name, value in (
             ("biodata-telemetry-endpoint", "http://<server-ip>:8471/v1/ingest"),
@@ -427,7 +427,7 @@ def test_payload_goes_through_the_sanitizer() -> None:
     """
     code = _strip_js_comments(CORE.read_text(encoding="utf-8"))
     assert "export function buildTelemetryPackage(" in code, "上传包构造函数必须存在"
-    assert '"biodata-telemetry/1"' in code, "schema 必须是 biodata-telemetry/1（设计约定）"
+    assert '"biodata-telemetry/1"' in code, "schema 必须是 biodata-telemetry/1（设计 §2）"
     for key in ("packet_id:", "install_id:", "client_id:", "profile_id:", "exported_at:", "usage_events:", "benchfb_records:"):
         assert key in code, f"上传包必须包含 {key} 字段"
     strip = re.search(r"const TELEMETRY_STRIP_KEY_RE\s*=\s*(/[^/]+/[a-z]*);", code)
@@ -435,7 +435,7 @@ def test_payload_goes_through_the_sanitizer() -> None:
     for pat in ("api", "key", "password", "username", "account"):
         assert pat in strip.group(1), f"脱敏正则必须覆盖 {pat!r}（api_key/密码/账户名红线）"
     assert "TELEMETRY_STRIP_KEY_RE.test(k)" in code, "构造包时必须实际执行剔除（不只是定义）"
-    # 值级遮蔽（键级剔除挡不住「值里夹带」的自由文本 PII）
+    # 2026-08-22：值级遮蔽（键级剔除挡不住「值里夹带」的自由文本 PII）
     # 与 MCP 中继记录字段（mcp_records 同样过整条脱敏链）。
     assert "export function telemetryMaskString(" in code, "值级遮蔽函数必须存在"
     for pat in ("1[3-9]", "[手机号]", "[证件号]", "[邮箱]"):
@@ -444,7 +444,7 @@ def test_payload_goes_through_the_sanitizer() -> None:
 
 
 def test_activation_ping_is_one_shot_double_gated_and_stays_in_the_upload_module() -> None:
-    """激活 ping：consent 同意即发一次性 hello 包。
+    """激活 ping（tl1 追加）：consent 同意即发一次性 hello 包。
 
     - **一次性**：幂等 ACK 后写 profile 级键 `biodata_ping_sent_v1`（LS.pingSent）=1，不再发；
       失败静默、下次触发点重试（绝不打扰主功能、无 toast）。
@@ -527,7 +527,7 @@ def test_the_report_never_truncates_silently() -> None:
 def test_ai_failures_are_never_folded_into_ai_being_off() -> None:
     """反馈包里「AI 真用上了」与「AI 没能完成」必须分开报。
 
-     修过的病根就是把故障说成「本次未启用」，于是接口坏了好几天也
+    2026-07-29 修过的病根就是把故障说成「本次未启用」，于是接口坏了好几天也
     没人看得出来。反馈包是同一个陷阱的下一个入口：把两者合成一个数，
     我这边看到的就还是一切正常。
     """
@@ -546,8 +546,8 @@ def test_the_ai_label_keys_match_the_real_trace_step_ids() -> None:
     """标签表的键必须逐字等于后端 search_trace 的 step id。
 
     记录层用 `USAGE_AI_LABELS[s.id]` 当准入判据：键要是对不上，后果不是报错，
-    而是**一条 AI 事件都记不进去、还没有任何提示**（同 FRONTEND.md 设计约定那类静默短路）。
-    这类对不上靠人读代码才能发现 —— 所以这里有道机械门。
+    而是**一条 AI 事件都记不进去、还没有任何提示**（同 FRONTEND.md §4.3 那类静默短路）。
+    本轮初稿就踩过这个，靠人读代码才发现 —— 所以补一道机械门。
     """
     labels = re.search(r"const USAGE_AI_LABELS = \{([^}]*)\}", CORE.read_text(encoding="utf-8"))
     assert labels, "未找到 USAGE_AI_LABELS"
@@ -562,10 +562,10 @@ def test_the_ai_label_keys_match_the_real_trace_step_ids() -> None:
 
 
 def test_the_feedback_channel_matches_the_build() -> None:
-    """单版本化：交付恒为同一版本，回传通道钉死不漂移——
+    """单版本化（2026-08-20 tl1）：交付恒为原反馈强化版，回传通道钉死不漂移——
 
     「生成反馈」聚合文字弹窗在岗则红（已退役）；benchfb「导出反馈包」入口必须健在；
-    usage_log.js 里也不得回潮退役弹窗符号。旧的 else 分支已随分叉删除。
+    usage_log.js 里也不得回潮退役弹窗符号。旧的主线版 else 分支已随分叉删除。
     """
     html = INDEX.read_text(encoding="utf-8")
     code = _strip_js_comments(LOG.read_text(encoding="utf-8"))
@@ -574,7 +574,7 @@ def test_the_feedback_channel_matches_the_build() -> None:
     for token in ("usageModal", "usageText", "usageCopyReport", "usageBuildReport"):
         assert token not in code, f"退役弹窗符号在 usage_log.js 回潮：{token}"
     for node_id in ("benchfbExportBtn", "benchfbModal"):
-        assert f'id="{node_id}"' in html, f"缺采集反馈入口：#{node_id}"
+        assert f'id="{node_id}"' in html, f"强化版缺采集反馈入口：#{node_id}"
 
 
 def test_turning_it_off_does_not_delete_what_was_already_collected() -> None:
@@ -650,7 +650,7 @@ def test_the_pure_core_stays_pure() -> None:
 # ------------------------------------------------- schema v3
 
 def test_schema_v3_impression_label_and_seen_wiring() -> None:
-    """遥测缺陷修复的结构性钉子（断真代码，全走注释剥离后的源码）：
+    """ 遥测缺陷修复的结构性钉子（断真代码，全走注释剥离后的源码）：
 
     - usage_core：USAGE_SCHEMA=3、imp/label 新 kind、曝光「看过」500ms 状态机三件套；
     - usage_log：ImpressionContext 归因三件套 + search 事件 policy_id 优先；
@@ -723,7 +723,7 @@ def test_telemetry_impression_spec_passes_under_node() -> None:
 
 
 def test_feedback_core_spec_passes_under_node() -> None:
-    """：意见反馈核心真行为门——队列（幂等/遮蔽/上限/状态流转/隔离）、
+    """意见反馈核心真行为门——队列（幂等/遮蔽/上限/状态流转/隔离）、
     buildDiagSnapshot（allowlist 聚合 + 遥测关闭语义）、WebCrypto 加解密往返。"""
     assert FEEDBACK_SPEC.is_file(), f"缺少意见反馈规格文件：{FEEDBACK_SPEC}"
     node = _resolve_node()
@@ -739,20 +739,20 @@ def test_feedback_core_spec_passes_under_node() -> None:
 
 
 def test_feedback_channel_is_isolated_and_independent() -> None:
-    """结构性钉子（断真代码，防回潮）：
-    - `feedback_core.js` 是纯逻辑核心：公钥配置点（醒目注释）、
+    """意见反馈通道隔离结构性钉子（断真代码，防回潮）：
+    - `feedback_core.js` 是纯逻辑核心：公钥配置点（FEEDBACK_PUBKEY_B64 醒目注释）、
       per-profile 队列、hasSendChannel 门、buildDiagSnapshot；
     - `usage_upload.js` 的 `sendFeedback()` 是独立入口：只发 feedback_pending 已授权记录，
       **绝不捎带** usage/benchfb/mcp 待发队列；复用既有退避/429 升档；
-    - 公钥已配置为生产值（65B raw 未压缩点）；清空即回退
+    - 公钥已于 2026-08-22 收口填生产值（65B raw 未压缩点）；清空即回退
       「未配置 = 零出网（UI 复制兜底）」，该兜底由 JS 规格钉住 hasSendChannel("")=false。
     """
     raw_core = FEEDBACK_CORE.read_text(encoding="utf-8")
-    assert "开发者公钥配置点" in raw_core, "必须有公钥配置点醒目注释"
-    assert "已配置" in raw_core, "公钥配置注释必须如实说明公钥已填"
+    assert "FEEDBACK_PUBKEY_B64 —— 开发者公钥配置点" in raw_core, "必须有公钥配置点醒目注释"
+    assert "已填生产公钥" in raw_core, "公钥配置点注释必须如实说明生产公钥已填"
     core = _strip_js_comments(raw_core)
     m = re.search(r'export const FEEDBACK_PUBKEY_B64 = "([^"]+)"', core)
-    assert m, "生产公钥必须已配置（清空时由 JS 规格钉住零出网兜底）"
+    assert m, "生产公钥必须已配置（2026-08-22 收口填入；清空=未配置零出网的兜底由 JS 规格钉住）"
     raw_pub = base64.b64decode(m.group(1))
     assert len(raw_pub) == 65 and raw_pub[0] == 4, (
         '生产公钥必须是 P-256 raw 未压缩点（65B、0x04 前缀，与 importKey("raw") 口径一致）')

@@ -1,30 +1,34 @@
 "use strict";
 
-/* 本文件是 ES Module：core 的工具、act_core 纯核（回执/事实句构造）、act_run 行动流、
+/* 本文件是 ES Module：core 的工具、act_core 纯核（回执/事实句构造）、
+   board_core 的检索事实句锚点（searchFactsReceiptText）、act_run 行动流、
    task_pack 的 previewTaskPack/buildTaskPack 与 _tpPlan/_tpChosen（活绑定只读）、
-   reuse_pack 的 downloadTextBlob、results 的 loadFeasibility、cards 的 openFilesModal、
+   reuse_pack 的 autoDownloadReuseTrio/REUSE_FILE_NAMES、results 的 loadFeasibility、cards 的 openFilesModal、
    search 的 LAST_RECOMMEND_DATA（活绑定只读）、shell 的 getConfig、
-   board 的 cbMarkLastSayAsAction/cbLogPush/cbUpdateEntry/cbRenderHistory/cbProgressDrop
+   board 的 cbMarkLastSayAsAction/cbLogPush/cbUpdateEntry/cbRenderHistory/cbProgressDrop/cbProgressDone
    经 import 取（act↔board 成环，但绑定都只在函数体内使用，ESM 允许）。
-   search.js 经 import 取 actAfterSearch。
-   起问卷弹窗（survey.js）退役：管护动词全自动化直推。
-    「按原话重新检索」「以后别自动执行」两颗 chip 退役（agent 能力已足够），
+   search.js 经 import 取 actAfterSearch（绞杀桥全退役）。
+   2026-08-03 起问卷弹窗（survey.js）退役：管护动词全自动化直推。
+   2026-08-16：「按原话重新检索」「以后别自动执行」两颗 chip 退役（agent 能力已足够），
    runRecommend/syncAiGates 随之不再引用。 */
-import { API, $, downloadBlobAs, escapeHtml, isHttp, toast } from "#core";
-import { ACT_BUSY_NOTE, actReceiptFrom, actSecondOrderGaps, actWhatHappened, tpBytes } from "#act_core";
+import { API, $, escapeHtml, isHttp, toast } from "#core";
+import { ACT_BUSY_NOTE, actExcludedFilesNote, actReceiptFrom, actSecondOrderGaps, actWhatHappened, tpBytes } from "#act_core";
+import { planIsRetrievalOnly, PLAN_CANCELLED_FALLBACK_ZH, searchFactsReceiptText } from "#board_core";
 import { arxActive, arxBegin, arxDecision, arxDecisionDone, arxFail, arxFinish, arxOnChange, arxStep } from "#act_run";
-import { previewTaskPack, buildTaskPack, tpDownloadConfirm, tpDownloadStart, _tpPlan, _tpChosen } from "#task_pack";
-import { downloadTextBlob } from "#reuse_pack";
-import { loadFeasibility } from "#results";
+import { flowVerbLabel } from "#flow_trace";
+import { previewTaskPack, buildTaskPack, _tpPlan, _tpChosen } from "#task_pack";
+import { dlqEnqueueDatasets, dlqFireBlob } from "#downloads";
+import { autoDownloadReuseTrio, REUSE_FILE_NAMES } from "#reuse_pack";
+import { loadFeasibility, clearActionHint } from "#results";
 import { openFilesModal } from "#cards";
 import { LAST_RECOMMEND_DATA } from "#search";
-import { getConfig, webGuardOn } from "#shell";
-import { cbExecReceiptCovered, cbLogPush, cbMarkLastSayAsAction, cbProgressDrop, cbRenderHistory, cbUpdateEntry, ubSubmit } from "#board";
+import { getConfig } from "#shell";
+import { cbExecReceiptCovered, cbFetchSearchReply, cbLogPush, cbMarkLastSayAsAction, cbProgressDone, cbProgressDrop, cbRenderHistory, cbSearchReplyFacts, cbUpdateEntry, flowSetPills, ubSubmit } from "#board";
 import { benchfbTurnAction } from "#benchfb";
 
-/*  · 一句话执行层的界面侧：**派发既有能力 + 行动流播报 + 由真实产物构造事实句**。
+/* 一句话执行层的界面侧：**派发既有能力 + 行动流播报 + 由真实产物构造事实句**。
 
-    长程多步执行起，本层多一条**图内已执行渲染通道**：agent 的 langgraph 图
+   2026-08-04 长程多步执行起，本层多一条**图内已执行渲染通道**：agent 的 langgraph 图
    已在后端真跑过 LOOP_TOOLS 工具时（plan.steps 非空，含每步结果/失败原样），这里只渲染
    卡片与总结、**绝不调 runner 再执行一遍**（双执行红线）；其余 plan 照旧走 runner 派发。
 
@@ -32,15 +36,15 @@ import { benchfbTurnAction } from "#benchfb";
    而且做的都是**页面上本来就有的那几件事**（预览/产包/导出引文/投稿材料/可行性/文件清单）——
    这一层没有自己的执行通道，也就没有「只有自动执行才会走到」的代码路径。
 
-   ## 执行形态（重做后）
+   ## 执行形态（2026-08-03 重做，用户指令）
 
    - **行动流播报**：每次派发开一条 act_run（arxBegin）——关键节点逐条上屏
      （arxStep：plan / 联网查询 / apply 各是一条，粒度=真实步骤边界，绝不伪造流式），
-     起**全自动化**：管护动词不再开问卷——plan（预览）→ apply（写盘）
+     2026-08-03 起**全自动化**：管护动词不再开问卷——plan（预览）→ apply（写盘）
      由 runner 链式直推（后端两步端点照走，confirm_token 重算指纹 fail-closed），
      记账 + 回收站可回退；唯一停点是浏览器安全边界（import 的系统文件对话框）。
      完成后步骤块折叠消失，对话流里只留下一条总结 sys（执行过程折进总结泡的 <details>）。
-   - **总结正文**（降噪）：先入**事实句**（act_core 构造，数字全部取自真实返回值——诚实红线），
+   - **总结正文**（§5.3 降噪）：先入**事实句**（act_core 构造，数字全部取自真实返回值——诚实红线），
      随后异步请 `/api/act/summary`（brief:true）让 LLM 改写成**一句话**（成功则原位替换正文 + 「AI 总结」标），
      LLM 缺席/失败则事实句留存（fail-open，与后端同哲学）；事实明细 / hint / uncertainty 标注
      一律折进总结泡的 details（只挪不删）。
@@ -69,7 +73,7 @@ let _actLastSaid = "";   // 当前这句话的原话：curate.search_online 的�
 /* ---------------- 开关 ---------------- */
 
 export function actEnabled() {
-    // AI 执行（维度 C，合并旧「说了就直接做」+「Agent 规划执行」）。
+    // AI 执行（维度，2026-08-03 合并旧「说了就直接做」+「Agent 规划执行」）。
     const box = $("cfgAgentExec");
     return !!(box && box.checked);
 }
@@ -100,11 +104,8 @@ function actPackPolicyLines() {
     if (_tpPlan.primary_only_policy_zh || _tpPlan.primary_only_zh) {
         lines.push(String(_tpPlan.primary_only_policy_zh || _tpPlan.primary_only_zh));
     }
-    let excluded = 0;
-    chosen.forEach(function (it) {
-        excluded += Math.max(0, (it.n_files_total || 0) - (it.n_files_selected || 0));
-    });
-    if (excluded > 0) lines.push("这几个数据集的来源清单里另有 " + excluded + " 个文件没有列入。");
+    let excluded = actExcludedFilesNote(chosen);
+    if (excluded) lines.push(excluded + "。");
     return lines;
 }
 
@@ -122,7 +123,7 @@ async function actRunPackPreview(plan) {
     arxStep("整理这批结果的清单");
     const pre = await previewTaskPack(want ? { count: want } : {});
     if (!pre.ok) return { ok: false, error: pre.error || "没能整理出这一批的清单" };
-    /* 打包预览分流（previewTaskPack 不再自动开面板）：
+    /* 2026-08-16 分流（previewTaskPack 起不再自动开面板）：
        · pack.preview（用户明说「我自己挑/先给我看看清单」）——开面板是履约：unhide + 滚进视野 +
          「清单面板已在结果区展开」口径照旧；
        · pack.download（actRunPackDownload 内部调本函数）——面板保持关闭、不滚动、
@@ -151,70 +152,60 @@ async function actRunPackDownload(plan) {
     arxStep("整理这批结果的清单");
     const pre = await actRunPackPreview(plan);
     if (!pre.ok) return pre;
-    /*真实数据下载优先。preview 之后先问 /api/download/plan 分级——
-       有 supported 就进「真实下载」流程；无 supported / plan 失败则诚实降级 + 自动落任务包兜底
-       （原 zip 链不变）。
-       分级 OK 后**直接开始真实下载**，不再停在确认闸——模型第一次调用就主动发起，
-       无需用户在面板点「开始下载」；失败（409 在途冲突 / no_downloadable / 磁盘不足 / 网络错）
-       如实回报，不伪造成功。手动从面板发起仍保留确认条（用户在面板里已有意确认）。
-       公网护栏硬化：护栏模式（webGuardOn）后端 download 系列端点一律 403——
-       跳过真实下载分支，直接走任务包 zip 兜底（zip 是既有核心功能，不受影响）。 */
-    if (webGuardOn()) {
-        arxStep("网页版不提供服务端代下数据，直接生成任务包");
-        arxStep("生成任务包并下载");
-        const guardBuilt = await buildTaskPack();
-        if (!guardBuilt.ok) return { ok: false, error: guardBuilt.error || "打包没有完成", policy: pre.policy };
-        const guardRequested = (guardBuilt.requested && guardBuilt.requested.n_datasets) || 0;
+    /* dl-browser-queue：「下载」= 浏览器直下主文件，全形态一致——
+       网页版护栏（webGuardOn）也放行：不再服务端代下，通道本身就是浏览器，
+       旧的「护栏模式跳真实下载」分支随之退役（后端 download 系列端点仍 403，前端不再调用）。
+       preview 后把勾选交给统一下载引擎（core/downloads.js）；零直下文件诚实降级任务包 zip。 */
+    const enq = await dlqEnqueueDatasets(Array.from(_tpChosen), { auto: true });
+    if (enq.queued > 0) {
+        arxStep("已把 " + enq.queued + " 个主文件交给浏览器下载（共约 " + tpBytes(enq.bytes) + "）");
+        /* 2026-08-30（用户定）：下载面板开关 = 每批一颗 pill，与检索结果 pill 同通道——
+           flowSetPills 持件，actFinish 总结泡（下一颗 sys 回执）领取，渲染在气泡内文字下方；
+           点击 = 打开下载面板（board.js data-dlq-pill 分支），不换批。 */
+        flowSetPills([{ dlq: true, label: "下载队列", count: enq.queued }]);
         return {
             ok: true,
-            artifact: {
-                filename: guardBuilt.artifact.filename,
-                bytes: guardBuilt.artifact.bytes,
-                n_datasets: guardRequested,
-                commands: pre.artifact.commands,
-            },
+            artifact: { n_datasets: enq.n_datasets, n_files: enq.queued, bytes: enq.bytes, mode: "browser-download" },
             policy: pre.policy,
             gaps: pre.gaps,
             onDisk: true,
+            extra: "已开始下载 " + enq.queued + " 个数据文件（仅各数据集的代表性主文件，共约 " + tpBytes(enq.bytes) + "）。"
+                + "进度与取消在浏览器自带的下载管理里（Ctrl+J）；下载面板里可取消还没开始的排队项、可继续追加。"
+                + (enq.already
+                    ? "另有 " + enq.already + " 个主文件此前已交给浏览器或在排队，这次没有重复下载。"
+                    : "")
+                + (enq.unsupported.length
+                    ? "另有 " + enq.unsupported.length + " 个暂不支持直下（"
+                        + enq.unsupported.map(function (u) { return u.title; }).join("、")
+                        + "），可在下载面板为它们生成任务包。"
+                    : "")
+                + (enq.failed.length
+                    ? "另有 " + enq.failed.length + " 个的文件清单没能取到，可稍后重试。"
+                    : ""),
         };
     }
-    const dlg = await tpDownloadConfirm();
-    if (dlg.ok) {
-        arxStep(dlg.supported + " 个数据集可直接下载真实数据（共约 " + tpBytes(dlg.totalBytes) + "）"
-            + (dlg.unsupported ? "；另有 " + dlg.unsupported + " 个暂不支持" : ""));
-        arxStep("直接开始下载");
-        const started = await tpDownloadStart(dlg.uids);
-        if (!started.ok) {
-            return {
-                ok: false,
-                error: started.message || started.error || "下载没能开始",
-                policy: pre.policy,
-                gaps: pre.gaps,
-            };
-        }
+    /* 全部去重命中（queued=0 且没有不支持/失败）：不是「零直下」，不能降级打包——
+       如实告诉用户这批已在下载中，重下走面板行内「重下」。 */
+    if (enq.already > 0 && !enq.unsupported.length && !enq.failed.length) {
+        arxStep("这批主文件此前已交给浏览器，未重复下载");
+        flowSetPills([{ dlq: true, label: "下载队列", count: enq.already }]);
         return {
             ok: true,
-            artifact: {
-                n_datasets: started.n, bytes: started.total_bytes, mode: "real-download",
-                dir: started.dir, job_id: started.job_id,
-            },
+            artifact: { n_datasets: enq.n_datasets, n_files: 0, bytes: 0, mode: "browser-download" },
             policy: pre.policy,
             gaps: pre.gaps,
-            extra: "已开始下载 " + started.n + " 个数据集的真实文件（仅含代表性主文件，共约 "
-                + tpBytes(started.total_bytes) + "），写入 " + started.dir
-                + "；进度可在下载面板查看，过程中可在列表里勾选/取消勾选数据集并点「更新下载」增删条目。"
-                + (dlg.unsupported ? "另有 " + dlg.unsupported + " 个数据集暂不支持直接下载，可随后生成任务包。" : ""),
+            onDisk: true,
+            extra: "这批数据集的主文件都已在下载队列里或已交给浏览器，没有重复下载；"
+                + "进度与取消在浏览器自带的下载管理里（Ctrl+J），要重下可在下载面板点对应行的「重下」。",
         };
     }
-    if (dlg.reason === "none_supported") {
-        arxStep("这批 " + dlg.unsupported + " 个数据集暂不支持直接下载，自动改生成任务包");
-    } else {
-        arxStep("没能确认哪些可直接下载，自动改生成任务包");
-    }
+    arxStep("这批没有可直下的主文件，自动改生成任务包");
     arxStep("生成任务包并下载");
     const built = await buildTaskPack();
     if (!built.ok) return { ok: false, error: built.error || "打包没有完成", policy: pre.policy };
     const requested = (built.requested && built.requested.n_datasets) || 0;
+    // 降级 zip 也进了统一队列（buildTaskPack → dlqFireBlob）——同样给一颗面板 pill，口径一致。
+    flowSetPills([{ dlq: true, label: "下载队列", count: 1 }]);
     return {
         ok: true,
         artifact: {
@@ -251,23 +242,22 @@ async function actRunCiteExport(plan) {
     // 字节数取自**同一份**文本要生成的 blob，不是估算。
     const bytes = new Blob([ris || ""]).size;
     // 引文导出自动下载 **RIS + BibTeX 两个文件**（有值才下；主产物 .ris
-    // 没存下才算失败，.bib 尽力而为）。返回值必须看：`downloadTextBlob` 内部 try/catch 只
-    // toast 一句「下载失败」，不看它就会在浏览器根本没存下文件时照样写「已导出引文」。
+    // 没存下才算失败，.bib 尽力而为）。返回值必须看：锚点内部 try/catch 只 toast 一句
+    // 「下载失败」，不看它就会在浏览器根本没存下文件时照样写「已导出引文」。
     arxStep("下载引文文件（ris + bib）");
-    // ris 是引文主产物（/api/reuse-pack 恒生成）；saved 判定必须消费返回值，否则浏览器没存下
-    // 也会写成「已导出引文」。.bib 尽力而为（有值才下）。
-    const saved = downloadTextBlob(ris, "reused-public-datasets.ris",
-        "application/x-research-info-systems;charset=utf-8", "已下载引文文件", "下载失败");
-    const savedBib = bib ? downloadTextBlob(bib, "reused-public-datasets.bib",
-        "application/x-bibtex;charset=utf-8", "已下载引文文件（bib）", "引文下载失败") : false;
+    const dl = autoDownloadReuseTrio({ ris: ris, bib: bib });
+    const saved = dl.ris, savedBib = dl.bib;
     if (!saved) return { ok: false, error: "浏览器没能把引文文件存下来" };
+    /* 下载 pill 一视同仁（2026-08-31 用户定）：引文导出也经统一下载引擎落了队列，
+       回执气泡照挂一颗 dlq pill（与 pack.download 同通道同位），点它开下载面板。 */
+    flowSetPills([{ dlq: true, label: "下载队列", count: (saved ? 1 : 0) + (savedBib ? 1 : 0) }]);
     return {
         ok: true, onDisk: true,
-        artifact: { filename: "reused-public-datasets.ris", bytes: bytes, n_datasets: got.uids.length },
+        artifact: { filename: REUSE_FILE_NAMES.ris, bytes: bytes, n_datasets: got.uids.length },
         policy: ["单独导出的引文不含任务包里的「投稿前需要自己核实」清单；投稿前请自行核对。"
-            + (savedBib ? "（已同时下载 reused-public-datasets.bib）" : "")],
-        extra: "已自动下载引文：reused-public-datasets.ris"
-            + (savedBib ? " 与 reused-public-datasets.bib" : "") + "。",
+            + (savedBib ? "（已同时下载 " + REUSE_FILE_NAMES.bib + "）" : "")],
+        extra: "已自动下载引文：" + REUSE_FILE_NAMES.ris
+            + (savedBib ? " 与 " + REUSE_FILE_NAMES.bib : "") + "。",
         gaps: actSecondOrderGaps(want, got.uids.length, null),
     };
 }
@@ -283,23 +273,22 @@ async function actRunReusePack(plan) {
     // 投稿材料三个文件（.md 主产物 + .ris/.bib 引文）**一起自动下载**。
     // 主产物 .md 没存下才算失败；.ris/.bib 尽力而为（有空值/失败如实标注，不假装成功）。
     arxStep("下载材料文件（md + ris + bib）");
-    const saved = downloadTextBlob(md, "reused-public-datasets.md", "text/markdown;charset=utf-8",
-        "已下载投稿材料", "下载失败");
-    const ris = got.data.ris || "", bib = got.data.bibtex || "";
-    const savedRis = ris ? downloadTextBlob(ris, "reused-public-datasets.ris",
-        "application/x-research-info-systems;charset=utf-8", "已下载引文（ris）", "引文下载失败") : false;
-    const savedBib = bib ? downloadTextBlob(bib, "reused-public-datasets.bib",
-        "application/x-bibtex;charset=utf-8", "已下载引文（bib）", "引文下载失败") : false;
+    const dl = autoDownloadReuseTrio({ md: md, ris: got.data.ris || "", bib: got.data.bibtex || "" });
+    const saved = dl.md, savedRis = dl.ris, savedBib = dl.bib;
     if (!saved) return { ok: false, error: "浏览器没能把这份材料存下来" };
-    const dlNote = ["投稿材料已下载：reused-public-datasets.md"
-        + (savedRis ? " + reused-public-datasets.ris" : "")
-        + (savedBib ? " + reused-public-datasets.bib" : "") + "。"]
+    /* 下载 pill 一视同仁（2026-08-31 用户定）：投稿材料三件套同走统一下载引擎，
+       回执气泡照挂一颗 dlq pill（与 pack.download 同通道同位），点它开下载面板。 */
+    flowSetPills([{ dlq: true, label: "下载队列",
+        count: (saved ? 1 : 0) + (savedRis ? 1 : 0) + (savedBib ? 1 : 0) }]);
+    const dlNote = ["投稿材料已下载：" + REUSE_FILE_NAMES.md
+        + (savedRis ? " + " + REUSE_FILE_NAMES.ris : "")
+        + (savedBib ? " + " + REUSE_FILE_NAMES.bib : "") + "。"]
         .concat((got.data.pack.gaps || []).length
             ? ["这份材料里列了 " + got.data.pack.gaps.length + " 项需要你自己核实的事，请照着核一遍。"]
             : []);
     return {
         ok: true, onDisk: true,
-        artifact: { filename: "reused-public-datasets.md", bytes: bytes, n_datasets: got.uids.length },
+        artifact: { filename: REUSE_FILE_NAMES.md, bytes: bytes, n_datasets: got.uids.length },
         policy: dlNote,
         extra: "已自动下载投稿材料三件套：Markdown（正文+补充表）、RIS 与 BibTeX 引文（若该批引文可生成）。",
         gaps: actSecondOrderGaps(want, got.uids.length, null),
@@ -336,7 +325,7 @@ async function actRunFilesShow() {
 
 /* ---------------- 管护（curate.*）：全自动化直推 ----------------
 
-   产品预先授权（推翻「写操作必须人批准」）：AI 执行开启时一切动作**直接执行**，
+   产品方预先授权（推翻「写操作必须人批准」）：AI 执行开启时一切动作**直接执行**，
    只保留两条——① 审计（后端账本逐行记账）；② 回退（删除走回收站；导入/联网入库的撤销
    复用同一回收站机制，回执里写明「说『删掉 …』即可撤销」）。四个写动作
    （import / search_online / remove / restore）的 runner 链式直推：plan（预览零写盘）
@@ -370,12 +359,18 @@ async function actCuratePost(url, body) {
 
 /* ---- curate.list：只读清点（无问卷） ---- */
 
+/* arx-card-row 的「名-值」双栏骨架唯一写法。参数必须是**已转义/已可信**的 HTML 片段
+   （各调用点保持各自的 escapeHtml 口径，本助手不再转义，保证产出逐字不变）。 */
+function arxRow(nameHtml, metaHtml) {
+    return '<div class="arx-card-row"><span class="arx-card-name">' + nameHtml
+        + '</span><span class="arx-card-meta">' + metaHtml + "</span></div>";
+}
+
 function actListCardHtml(r) {
     const files = r.files || [];
     const recycle = r.recycle || [];
     const row = function (name, meta) {
-        return '<div class="arx-card-row"><span class="arx-card-name">' + escapeHtml(name)
-            + '</span><span class="arx-card-meta">' + escapeHtml(meta) + "</span></div>";
+        return arxRow(escapeHtml(name), escapeHtml(meta));
     };
     let html = '<div class="arx-card"><div class="arx-card-title">外部库（'
         + escapeHtml(r.external_dir || "database/external") + "）· " + files.length + " 个文件</div>";
@@ -461,7 +456,7 @@ async function actRunCurateCheckUpdates(plan) {
     };
 }
 
-/* ---- curate.sync_updates：检查更新 → 有新增则自动入库（复合流，「工作流即工具」） ----
+/* ---- curate.sync_updates：检查更新 → 有新增则自动入库（复合流，2026-08-06） ----
    后端一次原子调用跑完整条固定流程（先只读比对、再把能闭环来源的疑似新增逐编号搜回入库），
    前端只展示事实：每源「疑似新增 X · 已入库 M · 文件名」，闭不了环的来源 note_zh 如实写明。 */
 
@@ -505,7 +500,7 @@ async function actRunCurateSyncUpdates(plan) {
     };
 }
 
-/* ---- curate.search_online：直接执行（全自动化，问卷已退役） ----
+/* ---- curate.search_online：直接执行（2026-08-03 全自动化，问卷已退役） ----
    条件由规划侧槽位供给（LLM 已解析 keywords/species/source），解析不出走确定性预填兜底；
    plan 拿候选 → 立刻 apply 入库（后端两步端点照走，前端链式直推）——记账 + 回收站可回退。 */
 
@@ -513,22 +508,19 @@ function actSearchCardHtml(pr, r) {
     const titles = (pr.sample_titles || []).map(function (t) {
         return '<div class="arx-card-row"><span class="arx-card-name">' + escapeHtml(t) + "</span></div>";
     }).join("");
-    //  （实体级去重）：已在库中的候选由后端跳过、不重复入库，这里如实分行呈现；
+    // （2026-08-10 实体级去重）：已在库中的候选由后端跳过、不重复入库，这里如实分行呈现；
     // 零新候选时 filename 为空，绝不渲染「0 条 → 」这种像故障的行。
     const skipped = Number(r.skipped_existing_count || pr.skipped_existing_count || 0);
     const wrote = Number(r.record_count || 0);
     const inMeta = wrote > 0 ? wrote + " 条 → " + escapeHtml(r.filename || "")
         : (skipped ? "0 条（候选全部已在库中，未重复入库）" : "0 条");
     const skippedRow = (skipped && wrote > 0)
-        ? '<div class="arx-card-row"><span class="arx-card-name">已在库中</span><span class="arx-card-meta">'
-            + skipped + " 条已跳过，未重复入库</span></div>"
+        ? arxRow("已在库中", skipped + " 条已跳过，未重复入库")
         : "";
     return '<div class="arx-card"><div class="arx-card-title">联网搜索入库 · ' + escapeHtml(pr.source_label || "ArrayExpress")
         + "</div>"
-        + '<div class="arx-card-row"><span class="arx-card-name">关键词</span><span class="arx-card-meta">'
-        + escapeHtml(String(pr.query || "") + (pr.species ? " · 物种 " + pr.species : "")) + "</span></div>"
-        + '<div class="arx-card-row"><span class="arx-card-name">入库</span><span class="arx-card-meta">'
-        + inMeta + "</span></div>"
+        + arxRow("关键词", escapeHtml(String(pr.query || "") + (pr.species ? " · 物种 " + pr.species : "")))
+        + arxRow("入库", inMeta)
         + skippedRow
         + (titles ? '<div class="arx-card-title">前 ' + (pr.sample_titles || []).length + " 条标题样本</div>" + titles : "")
         + "</div>";
@@ -567,7 +559,7 @@ async function actRunCurateSearchOnline(plan) {
     };
 }
 
-/* 关键词提取优先级（全自动化后它直接决定执行参数，不再是问卷初值）：
+/* 关键词提取优先级（2026-08-03 起；全自动化后它直接决定执行参数，不再是问卷初值）：
    ① plan.slots.keywords/species——规划侧（agent / action_plan）已解析好的槽位直接供给；
    ② 槽位没有时走 /api/interpret 的**确定性**解析（零 LLM、离线可用）——constraints 的
    英文规范值（Lung/Breast Cancer…）+ ASCII 自由词；
@@ -575,9 +567,12 @@ async function actRunCurateSearchOnline(plan) {
    旧的 ACT_PREFILL_STRIP 正则剥词补丁随「检查更新并入联网搜」的问题一起退役：
    关键词改由规划侧槽位 / 确定性解析供给，前端不再靠剥词猜。
    解析失败回退原话并如实提示；原话也提不出关键词时 runner 如实报错（不瞎搜）。 */
-// 与后端 corpus_curation._SEARCH_SOURCE_ALIASES / 检索 SOURCE_ALIASES 同口径：来源名不是检索关键词，兜底分词时剔除。
-//  补 zenodo（第 10 源登记时漏同步此处）与 refinebio/refine.bio（第 11 源）。
-const ACT_SOURCE_TOKEN_RE = /^(arrayexpress|ae|cellxgene|cxg|cellxgene discover|hca|human cell atlas|ebi scea|scea|encode|10x|10x genomics|hubmap|scp|single cell portal|broad single cell portal|geo|ncbi geo|zenodo|refinebio|refine\.?bio|refine bio)$/i;
+// 与后端 corpus_net.SOURCE_ALIASES（数据来源别名唯一真源）/ 检索 SOURCE_ALIASES 同口径：来源名不是检索关键词，兜底分词时剔除。
+// 2026-08-14 补 zenodo（第 10 源登记时漏同步此处）与 refinebio/refine.bio（第 11 源）。
+// 本表是后端两表的**超集**（后端别名必须全覆盖，tests/test_act_frontend.py 有对拍门）；
+// 反向前端多收 bare "encode"：剔除关键词是保守方向（少一个词），与后端「收了会静默收窄检索池」
+// 的风险方向相反，故不收窄对齐。联网分发通道别名（ddg/web/generic 等）不是来源名，不收。
+const ACT_SOURCE_TOKEN_RE = /^(arrayexpress|array[ -]?express|ae|cellxgene|cxg|cellxgene discover|cell x gene discover|czi cell|hca|human cell atlas|azul|ebi scea|scea|single[ -]?cell expression atlas|encode|encode ?project|encode portal|10x|10x genomics|tenx|tenx genomics|hubmap|hubmap consortium|scp|single[ -]?cell portal|broad single cell portal|geo|ncbi geo|zenodo|refinebio|refine\.?bio|refine bio)$/i;
 function actPrefillSpeciesZh(v) {
     const s = String(v || "").trim();
     if (/^human$/i.test(s)) return "Human";
@@ -635,7 +630,7 @@ async function actCuratePrefill(plan, said) {
     }
 }
 
-/* ---- curate.import：直接执行（全自动化，问卷已退役） ----
+/* ---- curate.import：直接执行（2026-08-03 全自动化，问卷已退役） ----
    本地文件只能由用户亲手给（浏览器安全边界，不是确认面板）：调起系统文件对话框选 .json
    → plan 预览 → 立刻 apply 入库。撞整集重复：按授权直接 force 入库（记账 + 回执如实说 +
    回收站可撤销），不再单开一道题。 */
@@ -661,10 +656,8 @@ function actPickJsonFile() {
 
 function actImportCardHtml(r) {
     return '<div class="arx-card"><div class="arx-card-title">导入本地数据</div>'
-        + '<div class="arx-card-row"><span class="arx-card-name">文件</span><span class="arx-card-meta">'
-        + escapeHtml(r.filename || "") + "</span></div>"
-        + '<div class="arx-card-row"><span class="arx-card-name">记录</span><span class="arx-card-meta">'
-        + (r.record_count || 0) + " 条 · 已写入外部库</span></div>"
+        + arxRow("文件", escapeHtml(r.filename || ""))
+        + arxRow("记录", (r.record_count || 0) + " 条 · 已写入外部库")
         + ((r.warnings || []).map(function (w) { return '<p class="arx-card-empty">⚠ ' + escapeHtml(w) + "</p>"; }).join(""))
         + "</div>";
 }
@@ -696,7 +689,7 @@ async function actRunCurateImport() {
         policy: policy.filter(Boolean), cardHtml: actImportCardHtml(Object.assign({}, pr, r)) };
 }
 
-/* ---- curate.remove：直接执行（全自动化，问卷已退役） ----
+/* ---- curate.remove：直接执行（2026-08-03 全自动化，问卷已退役） ----
    对象由 plan.slots.target（LLM 从原话读出的文件名）定位：清单里子串匹配——唯一命中 →
    plan → apply 链式直推（回收站可逆）；多个命中如实列出候选请用户说具体点；没命中如实报错。 */
 
@@ -751,7 +744,7 @@ async function actRunCurateRemove(plan) {
     };
 }
 
-/* ---- curate.restore：直接执行（全自动化，问卷已退役） ----
+/* ---- curate.restore：直接执行（2026-08-03 全自动化，问卷已退役） ----
    对象定位与 remove 同径（回收站清单子串匹配）；撞同名时后端 fail-closed，前端提前如实说。 */
 
 async function actRunCurateRestore(plan) {
@@ -793,7 +786,7 @@ async function actRunCurateRestore(plan) {
         policy: [applied.result.write_boundary].filter(Boolean) };
 }
 
-/* ---- curate.db_status：数据库状态汇报（只读） ----
+/* ---- curate.db_status：数据库状态汇报（2026-08-03 只读） ----
    事实双通道同一真源（corpus_status.db_status）：agent 图内 execute 已调过工具 → 用
    plan.observation；未装扩展（保底规划）→ POST /api/curate/status 现取。
    汇报措辞：数字卡在下面渲染；「组织成简明中文汇报」agent 路径由 narrate（plan.report_zh）、
@@ -816,8 +809,7 @@ function actDbStatusCardHtml(obs) {
     }).join("");
     const ledger = obs.ledger || {};
     const ledgerLine = ledger.entries
-        ? '<div class="arx-card-row"><span class="arx-card-name">近期联网操作记录</span><span class="arx-card-meta">'
-            + ledger.entries + " 条</span></div>"
+        ? arxRow("近期联网操作记录", ledger.entries + " 条")
         : '<p class="arx-card-empty">近期没有联网操作记录。</p>';
     return '<div class="arx-card"><div class="arx-card-title">本地库 · 共 ' + (obs.total_records || 0)
         + " 条 · " + (obs.sources || []).length + " 个来源</div>"
@@ -831,7 +823,7 @@ function actDbStatusCardHtml(obs) {
 }
 
 async function actRunCurateDbStatus(plan) {
-    arxStep("读取数据库状态");
+    arxStep(flowVerbLabel("curate.db_status"));
     let obs = plan && plan.observation;
     if (!obs) {
         const got = await actCuratePost(API.curateStatus, { action: "db_status" });
@@ -846,7 +838,7 @@ async function actRunCurateDbStatus(plan) {
     };
 }
 
-/* ---- 图内已执行渲染通道（长程多步执行） ----
+/* ---- 图内已执行渲染通道（2026-08-04 长程多步执行） ----
    agent 图内已**真跑过**工具（plan.steps 是后端执行的真实记录，含结果或失败原因）时，
    前端只渲染、**绝不调 runner**（双执行红线：同一批工具绝不在后端跑一遍、前端再跑一遍）。
    卡片复用既有渲染函数（同一种事实只有一份渲染真源）；ok=false 的步渲染错误卡——
@@ -875,7 +867,7 @@ function actLoopStepCardHtml(s) {
     if (s.card_kind === "search_online") return actSearchCardHtml(r, r);   // 合并 dict：pr/r 字段同在一份
     if (s.card_kind === "sync_updates") return actSyncUpdatesCardHtml(r);
     if (s.card_kind === "search_rerun") return actSearchRerunCardHtml(r);
-    //  四工具专项卡：同一种事实只有一份渲染真源（与既有 card_kind 分支同纪律）。
+    // 2026-08-19 四工具专项卡：同一种事实只有一份渲染真源（与既有 card_kind 分支同纪律）。
     if (s.card_kind === "compare") return actCompareCardHtml(r);
     if (s.card_kind === "cite_export") return actCiteExportCardHtml(r);
     if (s.card_kind === "compat_find") return actCompatFindCardHtml(r);
@@ -884,7 +876,7 @@ function actLoopStepCardHtml(s) {
         return '<div class="arx-card"><div class="arx-card-title">回滚写操作</div>'
             + '<p class="arx-card-empty">' + escapeHtml(actRollbackPolicyLine(s)) + "</p></div>";
     }
-    //  环内 display=false 探测步的兜底回执——如实说「没有要展示的」，
+    // （2026-08-17）：环内 display=false 探测步的兜底回执——如实说「没有要展示的」，
     // 不暗示有结果被藏起来（结果只进 observation 供后续步骤判断，本就设计上屏外）。
     return '<div class="arx-card"><p class="arx-card-empty">这一步已经跑完，没有需要展示的内容。</p></div>';
 }
@@ -932,22 +924,26 @@ function actCompareCardHtml(r) {
 
 /* 环内 cite.export 引文导出后，把落盘产物（RIS + BibTeX）自动下载到浏览器
    下载目录（卡片渲染即触发一次）；卡片上的「下载」按钮保留为重下入口。防重：同一份产物
-   （按文件名集合签名）只自动下一次，重画/重渲染不再重复触发。自动下载失败不阻断——手动按钮仍在。 */
+   （按文件名集合签名）只自动下一次，重画/重渲染不再重复触发。自动下载失败不阻断——手动按钮仍在。
+   返回本轮**新发起**的文件数（去重命中/无产物 = 0）——调用方据此挂下载 pill。 */
 let _citeAutoDownloaded = new Set();
 function actAutoDownloadCiteFiles(r) {
     const files = Array.isArray(r.files) ? r.files : [];
-    if (!files.length) return;
+    if (!files.length) return 0;
     const key = files.map(function (f) { return String(f.filename || ""); }).join("|");
-    if (_citeAutoDownloaded.has(key)) return;
+    if (_citeAutoDownloaded.has(key)) return 0;
     _citeAutoDownloaded.add(key);
+    let fired = 0;
     files.forEach(function (f) {
         const fn = String(f.filename || "");
         if (!fn) return;
+        fired += 1;
         fetch(API.citationsDownload + "?f=" + encodeURIComponent(fn))
             .then(function (resp) { if (!resp.ok) throw new Error("http " + resp.status); return resp.blob(); })
-            .then(function (blob) { downloadBlobAs(blob, fn); })
+            .then(function (blob) { dlqFireBlob(fn, blob, { kind: "cite" }); })
             .catch(function (_e) { /* 自动下载失败：手动按钮仍在，不报错 */ });
     });
+    return fired;
 }
 
 function actCiteExportCardHtml(r) {
@@ -997,12 +993,10 @@ function actCompatFindCardHtml(r) {
     return '<div class="arx-card"><div class="arx-card-title">元数据兼容 · ' + (Number(r.total) || 0) + " 个兼容数据集</div>"
         + (r.note_zh ? '<p class="arx-card-empty">' + escapeHtml(String(r.note_zh)) + "</p>" : "")
         + (seed.dataset_name
-            ? '<div class="arx-card-row"><span class="arx-card-name">种子数据集</span><span class="arx-card-meta">'
-                + escapeHtml(String(seed.dataset_name || "")) + "</span></div>"
+            ? arxRow("种子数据集", escapeHtml(String(seed.dataset_name || "")))
             : "")
         + (critBits.length
-            ? '<div class="arx-card-row"><span class="arx-card-name">兼容判据</span><span class="arx-card-meta">'
-                + escapeHtml(critBits.join(" · ")) + "</span></div>"
+            ? arxRow("兼容判据", escapeHtml(critBits.join(" · ")))
             : "")
         + (rows || '<p class="arx-card-empty">没有找到兼容数据集。</p>')
         + (r.caveat ? '<p class="arx-card-empty">' + escapeHtml(String(r.caveat)) + "</p>" : "")
@@ -1021,10 +1015,9 @@ function actFairCheckCardHtml(r) {
     const checks = Array.isArray(fair.checks) ? fair.checks : [];
     const statusZh = { pass: "充分", partial: "部分", unknown: "未知" };
     const rows = checks.map(function (c) {
-        return '<div class="arx-card-row"><span class="arx-card-name">'
-            + escapeHtml(String(c.id || "") + " " + String(c.label || "")) + '</span>'
-            + '<span class="arx-card-meta">' + escapeHtml(String(statusZh[c.status] || c.status || ""))
-            + (c.evidence ? " · " + escapeHtml(String(c.evidence)) : "") + "</span></div>";
+        return arxRow(escapeHtml(String(c.id || "") + " " + String(c.label || "")),
+            escapeHtml(String(statusZh[c.status] || c.status || ""))
+            + (c.evidence ? " · " + escapeHtml(String(c.evidence)) : ""));
     }).join("");
     const counts = (Number(summary.pass) || 0) + " 项充分 · " + (Number(summary.partial) || 0)
         + " 项部分 · " + (Number(summary.unknown) || 0) + " 项未知";
@@ -1038,7 +1031,7 @@ function actFairCheckCardHtml(r) {
         + "</div>";
 }
 
-/* ---- search.rerun（检索工具化 sr1）：换词重检步骤卡 ----
+/* ---- search.rerun（2026-08-16 检索工具化）：换词重检步骤卡 ----
    只出摘要三要素：改写词 + 采纳/拒绝 + n_before→n_after（择优闸口径，后端实算）。
    动作链里本工具恒 replace_screen=false（结果只进 observation 供后续步骤判断）——
    卡片措辞绝不暗示换屏；零命中救回通道的换屏不走这张卡（search.js 直接换屏 + sys 留痕）。
@@ -1083,7 +1076,7 @@ const ACT_RUNNERS = {
    配 node 真行为门）——本文件只负责把它们挂进对话流（sys 条目 + entry.html），
    并异步请后端 LLM 把事实句改写成自然语言总结（fail-open：不成则事实句留存）。 */
 
-/* 「撤回这次执行」的对象解析（用户：最近一次执行直接给撤回钮）。
+/* 「撤回这次执行」的对象解析（2026-08-04 用户：最近一次执行直接给撤回钮）。
    只有 curate 系**写**动词可撤——它们都在文件粒度有干净互逆：import/search_online 的撤＝remove 进回收站；
    remove 的撤＝restore 移回（定位键 recycle_name）；restore 的撤＝再 remove（定位键 restored_to 原名）。
    pack/cite/reuse 落的是用户下载目录，本工具删不掉——绝不给钮（test_act_frontend 门钉死）；只读动词无需撤。
@@ -1105,22 +1098,37 @@ function actUndoSpec(plan, outcome) {
     return null;
 }
 
+/* 「你提到了下载——检索本身不包含这一步」指路条的核销判定：
+   指路条只在该动作**没被执行**时成立。本轮把下载/打包/导出类动作真执行成了
+   （含环内 steps 的 cite.export），它就自相矛盾——成功收尾时由 actFinish 摘掉；
+   失败/取消保留（手动入口恰好是那时的正确退路）。 */
+const ACTION_HINT_COVERED_VERBS = { "pack.download": true, "pack.preview": true, "cite.export": true, "reuse.pack": true };
+function actCoversActionHint(plan) {
+    if (!plan) return false;
+    if (ACTION_HINT_COVERED_VERBS[String(plan.verb || "")]) return true;
+    const steps = Array.isArray(plan.steps) ? plan.steps : [];
+    return steps.some(function (s) { return s && s.ok && ACTION_HINT_COVERED_VERBS[String(s.verb || "")]; });
+}
+
 function actFixChips(plan, said, outcome) {
     /* 纠错通道。每颗都是**真会发生点什么**的按钮，不是安慰性文案。
        刻意不叫「撤销」：已经落到下载目录的文件，本工具删不掉，给一颗撤销按钮就是骗人。
        curate 写动词的「撤回这次执行」用锚点注释包裹——「只留最近一次可撤」时整段好摘（actStripUndoChip）。 */
     const verb = String((plan && plan.verb) || "");
     const bits = [];
-    if (verb === "pack.download" || verb === "pack.preview") {
+    /* 2026-08-30：pack.download 的面板 chip 退役——下载批的面板开关已由回执气泡内的
+       下载 pill（flowSetPills dlq，actRunPackDownload 置）承担，一批一颗、与检索结果 pill 同位；
+       同一面板两个开关是冗余。pack.preview 不触发下载、面板本身就是交付物，chip 保留。 */
+    if (verb === "pack.preview") {
         bits.push('<button type="button" class="btn act-chip" data-act-fix="panel">打开下载面板自己挑</button>');
     }
     // 文件类管护动词失败（典型：「未指明删哪份 / 文件不在外部库」——用户不知道确切的文件名）：
-    //  给一颗「列出外部库的文件」候选 chip（婉拒候选；点击即把这句重新入环，
+    // 给一颗「列出外部库的文件」候选 chip（2026-08-09 婉拒候选；点击即把这句重新入环，
     // curate.list 是只读动词）。死胡同变成下一步的入口，而不是一句报错了事。
     if (outcome && outcome.ok === false && (verb === "curate.remove" || verb === "curate.restore")) {
         bits.push('<button type="button" class="btn act-chip" data-act-say="列出外部库里现在有哪些文件">列出外部库的文件</button>');
     }
-    //  「按原话重新检索」「以后别自动执行」两颗 chip 退役——
+    // 2026-08-16：「按原话重新检索」「以后别自动执行」两颗 chip 退役——
     // 以现在 agent 的性能它们已无存在必要（用户原话）；keepConv 重搜通道本身保留（board 路径仍在用）。
     const undo = actUndoSpec(plan, outcome);
     if (undo) {
@@ -1132,7 +1140,7 @@ function actFixChips(plan, said, outcome) {
 
 function actSummaryHtml(opts) {
     // 执行披露精简：工具结果卡 / 「明细（x条）」/「执行过程（x步）」
-    // 折叠条全部撤下；工具调用计数摘要归入信息流压缩行（flow_trace.compressFlow，
+    // 折叠条全部撤下；工具调用计数摘要归信息流压缩行（flow_trace.compressFlow，
     // 渲染在气泡上方）。这里只留**功能钮**（撤回/纠错 chips）——
     // 它们是按钮不是披露；卡片/明细/执行过程的构造函数仍保留（测试钉死措辞），只是不再上屏。
     return (opts.chips ? opts.chips : "");
@@ -1140,10 +1148,12 @@ function actSummaryHtml(opts) {
 
 let _sumSeq = 0;   // LLM 总结请求代号：晚到的旧回包不改泡（与 _actBusy 串行叠加，双保险）
 
-/* 异步请 LLM 把事实句改写成**一句话**自然语言总结（brief:true，≤35 字、只用事实）；
+/* 异步请 LLM 把事实句改写成**一句话**自然语言总结（brief:true，：≤35 字、只用事实）
    成功则原位替换那条 sys 的正文（加「AI 总结」标；明细/hint/uncertainty 已在 details 折叠区，不动）。
-   fail-open：任何不成（无 key/mock/网络/后端判否）都静默——事实句本来就已经在泡上。 */
-function actFetchLlmSummary(plan, outcome, said, factual, entry) {
+   fail-open：任何不成（无 key/mock/网络/后端判否）都静默——事实句本来就已经在泡上。
+   混合轮：searchFacts（{total, shown}，actFinish 从 _actTurnSearchFacts 一次性消费传入）非空时
+   「前置检索」行**前置**进 done_lines——LLM 的一句话把检索与执行两段合并写完，全轮只有这一颗泡。 */
+function actFetchLlmSummary(plan, outcome, said, factual, entry, searchFacts) {
     if (!entry) return;
     const cfg = getConfig();
     if (cfg.provider === "mock") return;   // 结构性不调（后端同判否）：省一次注定无果的往返
@@ -1151,18 +1161,23 @@ function actFetchLlmSummary(plan, outcome, said, factual, entry) {
     const receipt = actReceiptFrom(plan, outcome, said);
     const gaps = receipt.rows.filter(function (r) { return r.k !== "做了什么"; })
         .reduce(function (acc, r) { return acc.concat(r.v); }, []);
+    const doneLines = [];
+    if (searchFacts && Number(searchFacts.total) > 0) {
+        doneLines.push(searchFactsReceiptText(searchFacts, "前置检索："));
+    }
+    doneLines.push(factual);
     fetch(API.actSummary, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             verb_zh: String(plan.verb_zh || ""), utterance: String(said || ""), ok: !!outcome.ok,
-            done_lines: [factual], gap_lines: gaps, policy_lines: [],
-            brief: true,   // 一句话模式：总结泡正文只留这一句，明细全在折叠区
+            done_lines: doneLines, gap_lines: gaps, policy_lines: [],
+            brief: true,   // 一句话模式（设计 §5.3）：总结泡正文只留这一句，明细全在折叠区
             provider: cfg.provider, use_llm: true, mock_llm: false,
             api_key: cfg.api_key, base_url: cfg.base_url, model: cfg.model,
         }),
     }).then(function (res) { return res.json(); }).then(function (d) {
         if (mySeq !== _sumSeq) return;
-        //  原位替换**正文**：「AI 总结」标照挂（entry.html 只剩功能钮，无折叠区可留）。
+        // 原位替换**正文**：「AI 总结」标照挂（entry.html 只剩功能钮，无折叠区可留）。
         if (d && d.ok && d.summary_zh) cbUpdateEntry(entry, { text: String(d.summary_zh), llmTag: true });
     }).catch(function () { /* fail-open：事实句留存 */ });
 }
@@ -1180,24 +1195,21 @@ function actStripUndoChip() {
     cbRenderHistory();
 }
 
-/* （唯一气泡规则的判定件）：计划是否纯检索（环内只有 rank/rerank/search.rerun）。
-   与 board.js _RETRIEVAL_VERBS 同一口径——两处同步维护。 */
-const _ACT_RETRIEVAL_VERBS = { "rank": true, "rerank": true, "search.rerun": true };
-function _actRetrievalOnly(plan) {
-    if (!plan || typeof plan !== "object") return false;
-    let verbs;
-    if (Array.isArray(plan.steps) && plan.steps.length) {
-        verbs = plan.steps.map(function (s) { return String((s && s.verb) || "").trim(); }).filter(Boolean);
-    } else {
-        const v = String(plan.verb || "").trim();
-        verbs = v ? [v] : [];
-    }
-    return verbs.length > 0 && verbs.every(function (v) { return !!_ACT_RETRIEVAL_VERBS[v]; });
-}
+/* 唯一气泡规则的判定件：纯检索判定锚点在 board_core.planIsRetrievalOnly。 */
 
 /* 一次执行的收尾：步骤块折叠（trace 进总结泡 details）→ 总结 sys 上屏 → LLM 改写（若可用）。 */
 function actFinish(plan, outcome, said, opts) {
     opts = opts || {};
+    /* 混合轮单泡化（「先检索后派发」）：本轮执行前跑过一次前置检索——actAfterSearch
+       把它的事实（命中/展示条数）stash 在 _actTurnSearchFacts，这里**一次性消费**（取走即清，
+       绝不泄漏到下一轮纯执行句）。去向：无汇报路径由 actFetchLlmSummary 把「前置检索」行前置进
+       done_lines，LLM 一句话合并覆盖检索+执行两段；report_zh（agent narrate）路径不调 summary、
+       不进正文（汇报是 narrate 据真实工具数据写成的，不拼非 LLM 行进去）。 */
+    const searchFacts = _actTurnSearchFacts;
+    _actTurnSearchFacts = null;
+    /* 指路条核销：本轮真把下载/打包/导出动作执行成了，结果区那条「检索本身不包含这一步」
+       就自相矛盾（明明做了却说没做）——摘掉。失败/取消保留：手动入口正是那时的退路。 */
+    if (outcome.ok && !outcome.cancelled && actCoversActionHint(plan)) clearActionHint();
     let factual;
     if (outcome.cancelled) {
         // 取消不是失败：用户主动叫停（如 import 的文件对话框取消），一个字节都没动——照实说，
@@ -1208,11 +1220,11 @@ function actFinish(plan, outcome, said, opts) {
         // 正文直接用它——不再二次调 /api/act/summary 改写（那是给没有汇报的执行路径的通道）。
         factual = plan.report_zh ? String(plan.report_zh) : actWhatHappened(plan, outcome);
     }
-    //  （执行披露精简）：工具结果卡 / 「明细（x条）」/「执行过程（x步）」折叠条
+    // 2026-08-18 执行披露精简：工具结果卡 / 「明细（x条）」/「执行过程（x步）」折叠条
     // 全部撤下——actSummaryHtml 只留功能钮（撤回/纠错 chips）；正文仍是 factual 这一句。
-    //  环内四工具专项卡经 opts.cardsHtml 走同一 html 通道上屏
+    // 2026-08-19：环内四工具专项卡经 opts.cardsHtml 走同一 html 通道上屏
     // （.cbh-sys-extra 区、气泡下方）——卡片进 entry.html，历史重画（cbRenderHistory）随 html
-    //  一起恢复；其余执行路径保持 精简（无卡片）。
+    // 一起恢复；其余执行路径保持精简（无卡片）。
     // 「执行了 N 次检索」摘要句不再走本泡的 execSummary 通道——职能由信息流压缩行
     // （entry.flow，渲染在气泡上方、与流式工具行同一口径）取代。
     const cardsHtml = String((opts && opts.cardsHtml) || "");
@@ -1223,16 +1235,21 @@ function actFinish(plan, outcome, said, opts) {
     // 环内 cite.export 步执行成功 → 卡片上屏即自动下载产物（RIS + BibTeX）。
     // 放这里一次性触发（actFinish 每轮执行恰一次），不干扰 actLoopStepCardHtml 的纯卡片收集；
     // 自动下载失败不阻断（手动「下载」按钮仍在）。
+    // 2026-08-31（用户定「pill 与工具执行绑定」）：新发起几个文件就挂一颗计数的 dlq pill——
+    // 引文导出与 pack.download 同通道同位；去重命中（0）不挂，不画没发生的下载。
     (Array.isArray(plan.steps) ? plan.steps : []).forEach(function (s) {
-        if (s && s.ok && s.card_kind === "cite_export") actAutoDownloadCiteFiles(s.result || {});
+        if (s && s.ok && s.card_kind === "cite_export") {
+            const _citeFired = actAutoDownloadCiteFiles(s.result || {});
+            if (_citeFired) flowSetPills([{ dlq: true, label: "下载队列", count: _citeFired }]);
+        }
     });
-    //  「撤回」只留给**最近一次**执行（用户）：新的可撤回执上屏时，旧泡的撤回钮就地摘除。
+    // 「撤回」只留给**最近一次**执行（用户 2026-08-04）：新的可撤回执上屏时，旧泡的撤回钮就地摘除。
     const undo = outcome.cancelled ? null : actUndoSpec(plan, outcome);
-    /* （唯一气泡规则）：纯检索计划（环内只有 rank/rerank/search.rerun）且 board 的批次
+    /* 唯一气泡规则：纯检索计划（环内只有 rank/rerank/search.rerun）且 board 的批次
        回执已接管本轮唯一气泡（cbExecReceiptCovered）→ 本函数闭嘴，不再推第二颗泡。
        保守例外：有可撤回产物 / 环内专项卡 / 取消回音时照出本泡（这些信息批次回执扛不了）。
        抑制时 benchfb 采集照跑（留痕不断档）。 */
-    if (!outcome.cancelled && !undo && !cardsHtml && _actRetrievalOnly(plan) && cbExecReceiptCovered()) {
+    if (!outcome.cancelled && !undo && !cardsHtml && planIsRetrievalOnly(plan) && cbExecReceiptCovered()) {
         benchfbTurnAction({ verb: plan.verb_zh || plan.verb || "", cancelled: false, receipt: factual, trace: opts.trace || [] });
         return;
     }
@@ -1241,13 +1258,13 @@ function actFinish(plan, outcome, said, opts) {
     // 汇报来源标注：后端契约字段 report_source 说明汇报是不是 LLM 写成——deterministic 兜底
     // 拼接不挂「AI 总结」小标（归因诚实）；字段缺席（旧后端）回退旧口径「有汇报即标」。
     if (plan.report_zh && plan.report_source !== "deterministic") cbUpdateEntry(entry, { llmTag: true });
-    if (!outcome.cancelled && !plan.report_zh) actFetchLlmSummary(plan, outcome, said, factual, entry);   // 失败也改写（铁律禁说「已」）
+    if (!outcome.cancelled && !plan.report_zh) actFetchLlmSummary(plan, outcome, said, factual, entry, searchFacts);   // 失败也改写（铁律禁说「已」）
     // benchmark 采集：工具执行回执收尾进档（在途轮并入、2 分钟内刚检索完的并回同一条）。
     benchfbTurnAction({ verb: plan.verb_zh || plan.verb || "", cancelled: !!outcome.cancelled, receipt: factual, trace: opts.trace || [] });
 }
 
 function actFixClick(event) {
-    //  婉拒候选 chips：data-act-say = 把这句当用户的话重新入环
+    // 婉拒候选 chips：data-act-say = 把这句当用户的话重新入环
     // （写进微信式输入行再走统一提交——与用户亲手打字同一条路径，不发明第二条入环通道）。
     const sayBtn = event.target.closest ? event.target.closest("[data-act-say]") : null;
     if (sayBtn) {
@@ -1268,14 +1285,14 @@ function actFixClick(event) {
         previewTaskPack();
         return;
     }
-    //  research（按原话重新检索）/off（以后别自动执行）两分支随 chip 一并退役。
+    // 2026-08-16：research（按原话重新检索）/off（以后别自动执行）两分支随 chip 一并退役。
     if (what === "undo") {
         actUndoRun(btn);
         return;
     }
 }
 
-/* 撤回最近一次执行（用户）：撤回对象在执行落地那一刻就烙进 chip 的 data 属性——
+/* 撤回最近一次执行（2026-08-04 用户）：撤回对象在执行落地那一刻就烙进 chip 的 data 属性——
    不靠账本反查（联网账本/agent 账行不落文件名），也不重新解析用户原话。
    plan/apply 两步与四个 curate runner 完全同径；逆映射在 actUndoSpec 一处说清。 */
 async function actUndoRun(btn) {
@@ -1331,7 +1348,7 @@ export async function actDispatchPlan(plan, said) {
     if (!plan || plan.kind !== "exec") return false;              // 路由类交回调用方，不算执行
     // 取消态（后端恒带 cancelled 字段）：动词照留但执行层**不得执行**——
     // 不开行动流、不出总结，只把后端的 reason_zh 原样交回，由调用方挂进对话流。
-    if (plan.cancelled) return String(plan.reason_zh || "你说先不做这一步，所以这次没有执行。");
+    if (plan.cancelled) return String(plan.reason_zh || PLAN_CANCELLED_FALLBACK_ZH);
     /* plan.trace（后端各节点真实记录）渲染进行动流，本函数两通道（图内已执行 / runner 派发）
        共用这一个闭包。去重：流式已播过的（plan._traceStreamed）不再二次渲染——
        步骤已经实时上屏，且会被 arxFinish 收进总结泡 details，再渲染一遍就是两套步骤。
@@ -1356,16 +1373,16 @@ export async function actDispatchPlan(plan, said) {
         });
         return snap;
     };
-    /* 图内已执行渲染通道（长程多步执行）：plan.steps 非空 = agent 图内已真跑过
+    /* 图内已执行渲染通道（2026-08-04 长程多步执行）：plan.steps 非空 = agent 图内已真跑过
        工具（结果/失败都已在后端落定，流式路径步骤也已实时播过）——这里只渲染卡片与总结，
        绝不走 runner 再执行一遍（双执行红线）。
-       必须在 busy 闸**之前**（A4）：上一句的 runner 还在跑时，这一句的图内执行
+       必须在 busy 闸**之前**：上一句的 runner 还在跑时，这一句的图内执行
        已经在后端真实发生（search_online 已入库、账本已落行）——先撞 busy 闸就永不渲染，
        还挂「没有执行」的注记，真实写入对界面隐身。本块无 await（纯同步渲染），且**绝不动
        _actBusy**：那是在途 runner 的闸，在这里清掉它，后续 runner 派发就失去保护。 */
     if (Array.isArray(plan.steps) && plan.steps.length) {
         // 行动流被在途 runner 占用时（_actBusy）不挤它的流：不 begin/step/finish，
-        //  总结照出（不再有执行过程快照进 details——折叠条已撤）。
+        // 总结照出（不再有执行过程快照进 details——折叠条已撤）。
         // 有未播过的 trace 步才开流——流式已播（_traceStreamed）或无 trace 时
         // 开流只会闪现一条「0 步」空行动流（过程展示归信息流工具行，见 board.js SSE 回调）。
         const flowFree = !_actBusy;
@@ -1382,8 +1399,8 @@ export async function actDispatchPlan(plan, said) {
                 loopUndo = { action: "remove", file: String(s.result.filename) };
             }
         });
-        //  四工具专项卡——图内多步只渲染 compare/cite_export/compat_find/
-        //  fair_check 四种 card_kind（精简哲学：其余工具不上卡），按执行顺序拼接，
+        // 2026-08-19：四工具专项卡——图内多步只渲染 compare/cite_export/compat_find/
+        // fair_check 四种 card_kind（精简哲学：其余工具不上卡），按执行顺序拼接，
         // 随 actFinish 的 html 通道进 .cbh-sys-extra。失败步/降级步交给 actLoopStepCardHtml
         // 各自的诚实分支（错误卡 / 降级句），不在这里静默吞掉。
         const FOUR_TOOL_CARD_KINDS = { compare: 1, cite_export: 1, compat_find: 1, fair_check: 1 };
@@ -1409,7 +1426,7 @@ export async function actDispatchPlan(plan, said) {
     if (!runner) return false;                            // 词表与派发表不同步 → 交回，不瞎做
     _actLastSaid = String(said || "");   // curate.search_online 的关键词从它做确定性解析（槽位没有时）
     _actBusy = true;
-    // 流式规划：ubSubmit 的 SSE 已开过行动流并播过规划步骤——这里接力续跑，
+    // 流式规划：ubSubmit 的 SSE 已开过行动流并播过规划步骤——这里接力续跑
     // 不重开（重开会把已播的规划步骤抹掉）；非流式路径照旧由这里开流。
     if (!arxActive()) arxBegin(plan.verb_zh || "执行");
     cbProgressDrop();   // 进度泡退场：这句的回复以行动流呈现，不重复回
@@ -1457,18 +1474,61 @@ export async function actDispatchPlan(plan, said) {
 /* 检索落地后的执行挂点。唯一档：`opts.actPlan`（统一框「先检索后派发」）——
    plan 是 /api/utterance 路由那次就规划好的，这里只派发、**不再二次调 /api/action/plan**。
    （旧主框 userSubmit 档与 actMaybeAutoAct 已退役：一切输入都过 /api/utterance 统一路由，
-   不存在「检索落地后才想起要规划执行」的路径。） */
+   不存在「检索落地后才想起要规划执行」的路径。）
+
+   混合轮单泡化：本档意味着 cbPushCurrent 已按 actPending **抑制**检索模板回执——进度泡
+   仍挂着，等这里的派发接管。三条出路都必须把泡收掉，绝不悬空：
+   - actDispatchPlan 接住（mark===true）：它内部 cbProgressDrop 退场，actFinish 的总结泡
+     经 _actTurnSearchFacts 把检索事实并进汇报（唯一气泡）；
+   - 取消注记 / busy（mark=字符串）/ 未接住（mark===false）：这里用 cbProgressDone 把泡
+     收尾成诚实文字（检索回执 + 注记原文）；
+   - 「AI 执行」在在途窗口被关掉（stashed 但 actEnabled() 为假）：同上，如实说明没有代劳。 */
+let _actTurnSearchFacts = null;   // 本轮前置检索的事实 {total, shown}（一次性：actFinish 消费即清）
+function _actSearchReceiptText(f) {
+    // 被抑制回执的补场句（边缘路径专用；主模板在 board.js cbPushCurrent，
+    // 事实句真源在 board_core.searchFactsReceiptText）。
+    return searchFactsReceiptText(f, "检索完成：");
+}
 export function actAfterSearch(query, opts) {
     const stashed = opts && opts.actPlan;
-    if (!stashed || !actEnabled()) return;
+    if (!stashed) return;
+    const _d = LAST_RECOMMEND_DATA || {};
+    _actTurnSearchFacts = {
+        total: Number(_d.result_total) || ((_d.results || []).length),
+        shown: (_d.results || []).length,
+    };
     const said = String(opts.actSaid || query || "");
+    /* 补网：三条边界收尾（AI 执行中途关 / 取消·busy·未接住 / 派发抛错）的诚实文字同样
+       接 LLM 原位改写——_d 是刚落地的那次前置检索响应（事实真源），note 把「没有执行」的
+       原因原样带给 LLM；fail-open 时下方的确定性拼接句一字不少。 */
+    const _receiptWithLlm = function (entry, note) {
+        if (entry) cbFetchSearchReply(entry, cbSearchReplyFacts(_d, said, String(query || ""), note));
+    };
+    if (!actEnabled()) {
+        const f = _actTurnSearchFacts; _actTurnSearchFacts = null;
+        const note = "「AI 执行」此时已关闭，没有代为执行。";
+        _receiptWithLlm(cbProgressDone(_actSearchReceiptText(f) + note), note);
+        return;
+    }
     actDispatchPlan(stashed, said).then(function (mark) {
-        // 执行注记挂到那句原话上（cbMarkLastSayAsAction 按 kind==="say" 定位——
-        // 总结 sys 先落地，末尾已不是原话，按位置找会标错泡）。
-        if (mark === true) cbMarkLastSayAsAction("");
-        else if (mark) cbMarkLastSayAsAction(mark);
+        if (mark === true) {   // 接住且全程由行动流 + 总结泡呈现（actFinish 已消费检索事实）
+            // 执行注记挂到那句原话上（cbMarkLastSayAsAction 按 kind==="say" 定位——
+            // 总结 sys 先落地，末尾已不是原话，按位置找会标错泡）。
+            cbMarkLastSayAsAction("");
+            return;
+        }
+        // 取消 / busy / 未接住：进度泡仍挂着（actPending 抑制了检索回执）——收尾成诚实文字。
+        const f = _actTurnSearchFacts; _actTurnSearchFacts = null;
+        const text = mark ? (_actSearchReceiptText(f) + String(mark)) : _actSearchReceiptText(f);
+        const e = cbProgressDone(text);
+        if (!e) { if (mark) cbMarkLastSayAsAction(mark); }   // 无泡（防御）→ 回退旧注记通道
+        else _receiptWithLlm(e, String(mark || ""));
     }).catch(function (err) {
-        toast("这一步没有执行：" + String((err && err.message) || err));
+        const f = _actTurnSearchFacts; _actTurnSearchFacts = null;
+        const emsg = "这一步没有执行：" + String((err && err.message) || err);
+        const e = cbProgressDone((f ? _actSearchReceiptText(f) : "") + emsg);
+        if (!e) toast(emsg);
+        else _receiptWithLlm(e, emsg);
     });
 }
 

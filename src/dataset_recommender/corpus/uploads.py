@@ -21,13 +21,13 @@ import json
 import os
 import re
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from ..app.runtime_paths import instance_data_dir_for
+from . import fs_utils
 from .corpus import EXTERNAL_DIR_NAME, invalidate_external_cache
 from .data_loader import extract_records
 
@@ -36,7 +36,7 @@ DEFAULT_UPLOAD_SOURCE = "用户上传"
 # 落盘规范化包裹里的溯源备注默认值（Web 用此默认；MCP 传入自己的备注）。不影响检索，仅供审计。
 DEFAULT_UPLOAD_NOTE = "用户上传（网页端 /api/upload）。"
 
-#: 单文件条数上限（**写入汇真源**，自 corpus_curation 迁移：原
+#: 单文件条数上限（**写入汇真源**，2026-08-09 评审迁移：原 corpus_curation
 #: MAX_IMPORT_RECORDS 只在 plan_import 一道门，/api/upload 与 MCP upload 直进本汇可绕过——
 #: 闸必须住在所有人都要经过的地方）。实测 150 万条合法 JSON 入库后 /api/datasets 37.8s、
 #: 并发下线程池饿死；上传语义是「用户自己的数据集元数据」，20 万条已是极宽上限。
@@ -48,7 +48,7 @@ EXTERNAL_TOTAL_MAX_RECORDS = 1_000_000
 
 #: 检查与落盘的临界区锁（TOCTOU：两个并发摄取不得同时看到旧总数双双越闸）。
 #: `_INGEST_LOCK` 只管进程内线程；`ingest_critical_section` 再叠加 OS 级跨进程文件锁
-#: （Web / MCP / CLI 是**独立进程**，同一临界区必须跨进程互斥）。
+#: （2026-08-10 Web MCP CLI 是**独立进程**，同一临界区必须跨进程互斥）。
 _INGEST_LOCK = threading.Lock()
 
 #: 跨进程摄取锁文件（固定在 .userdata 内；只创建不删除——删除与重建之间有竞态）。
@@ -67,44 +67,21 @@ def _ingest_lock_timeout() -> float:
 
 
 def _acquire_os_ingest_lock(project_root: Path):
-    """获取跨进程 OS 文件锁（stdlib only：msvcrt on Windows / fcntl on POSIX），返回打开的句柄。
+    """获取跨进程 OS 文件锁（等待/平台骨架唯一锚点在 `fs_utils.acquire_file_lock`），返回句柄。
     非阻塞尝试 + 100ms 退避，到 `_ingest_lock_timeout()` 仍未得 → UploadError(lock_busy)。"""
-    lock_dir = instance_data_dir_for(Path(project_root), ".userdata")
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    fh = (lock_dir / _INGEST_LOCK_FILE_NAME).open("a+b")
-    deadline = time.monotonic() + _ingest_lock_timeout()
-    while True:
-        try:
-            if os.name == "nt":
-                import msvcrt
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fh
-        except OSError:
-            if time.monotonic() >= deadline:
-                fh.close()
-                raise UploadError(
-                    "lock_busy",
-                    "另一个进程正在写入外部库（等待摄取锁超时）。本次没有任何写入；请稍后重试。",
-                ) from None
-            time.sleep(0.1)
+    lock_path = instance_data_dir_for(Path(project_root), ".userdata") / _INGEST_LOCK_FILE_NAME
+    try:
+        return fs_utils.acquire_file_lock(lock_path, timeout=_ingest_lock_timeout())
+    except fs_utils.FileLockBusy:
+        raise UploadError(
+            "lock_busy",
+            "另一个进程正在写入外部库（等待摄取锁超时）。本次没有任何写入；请稍后重试。",
+        ) from None
 
 
 def _release_os_ingest_lock(fh) -> None:
-    """释放 `_acquire_os_ingest_lock` 拿到的锁并关闭句柄（解锁与加锁锁同一字节位：先 seek(0)）。"""
-    try:
-        if os.name == "nt":
-            import msvcrt
-            fh.seek(0)
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
-    finally:
-        fh.close()
+    """释放 `_acquire_os_ingest_lock` 拿到的锁并关闭句柄。"""
+    fs_utils.release_file_lock(fh)
 
 
 @contextlib.contextmanager
@@ -142,10 +119,10 @@ SAFE_FILENAME_PATTERN = re.compile(r"[^a-zA-Z0-9._-]")
 _STAMP_PATTERN = re.compile(r"[0-9]{8}_[0-9]{6}_[0-9]{6}")
 
 
-#: `UploadError.code` 的机器码全集（从本模块**实际 raise 点**
+#: `UploadError.code` 的机器码全集（2026-08-06 schema 加固顺手项：从本模块**实际 raise 点**
 #: 逐处收集——bad_file=非 .json；bad_encoding=非 UTF-8；invalid_json=JSON 解析失败；
-#: no_records=未解析出数据集记录； 增 too_large=条数/累计超上限、
-#: journal_failed=落盘成功但流水账写不进去（事务回滚）； 增
+#: no_records=未解析出数据集记录；2026-08-09 增 too_large=条数/累计超上限、
+#: journal_failed=落盘成功但流水账写不进去（事务回滚）；2026-08-10 增
 #: lock_busy=跨进程摄取锁等待超时）。纯类型标注。
 UploadCode = Literal["bad_file", "bad_encoding", "invalid_json", "no_records",
                      "too_large", "journal_failed", "lock_busy"]
@@ -235,7 +212,7 @@ def _external_record_total(project_root: Path) -> int:
 
 
 def _append_upload_journal(project_root: Path, entry: dict) -> None:
-    """强制摄取流水账（验证）：每次成功落盘必须有一行
+    """强制摄取流水账：每次成功落盘必须有一行
     `.userdata/uploads_journal.jsonl`（action/filename/record_count/sha256/时间/备注/请求来源）。
     写与账不可分离——账写不进去 → 调用方回滚落盘文件并抛 journal_failed。"""
     path = instance_data_dir_for(Path(project_root), ".userdata") / "uploads_journal.jsonl"
@@ -248,7 +225,7 @@ def find_orphaned_uploads(external_dir: Path, journal_path: Path) -> list[str]:
     """扫描 `external_dir` 的 `upload_*.json`，返回在 `journal_path` 中**无对应
     `filename`** 的名单（仅告警用，不自动删、不阻塞启动）。
 
-    历史/极端 kill 可能留下「文件在、账不在」的残缺态（原子写加固已把正常写入改成
+    历史/极端 kill 可能留下「文件在、账不在」的残缺态（波次B 已把正常写入改成
     `.tmp → 流水账 → os.replace` 原子写，不会再新增该态；本函数只做启动期的遗留告警）。
     语义：
     - 目录/账本缺失 → 返回空（或保守全部告警）；
@@ -286,7 +263,7 @@ def find_orphaned_uploads(external_dir: Path, journal_path: Path) -> list[str]:
 def _tag_records_for_ingest(
     payload: Any, records: list[dict], form_source: str
 ) -> "tuple[str, dict[str, int], int, dict[str, int]]":
-    """逐条打来源标 + 收集校验素材（从 `_ingest_write_and_journal` 抽出，
+    """逐条打来源标 + 收集校验素材（2026-08-26 从 `_ingest_write_and_journal` 抽出，
     供 external 落盘与补丁包两条写入路径共用同一口径；行为与原内联实现逐位一致）。
 
     返回 (fallback_source, source_counts, missing_name, unknown_species)。"""
@@ -334,8 +311,8 @@ def _ingest_write_and_journal(
     note: str,
 ) -> UploadResult:
     """摄取的事务段（持 `_INGEST_LOCK` 调用）：打标 → 写 `.tmp` → 强制流水账 → 原子正名 → 清缓存。
-    账写不进去 → 删 `.tmp` 回滚 + UploadError(journal_failed)——「文件在、账不在」正是要消灭的
-    状态。落盘改为 `.tmp` → 记账 → `os.replace` 正名：杀进程只留 `.tmp` 残留
+    账写不进去 → 删 `.tmp` 回滚 + UploadError（journal_failed)——「文件在、账不在」正是要灭的
+    状态。2026-08-21 起落盘改为 `.tmp` → 记账 → `os.replace` 正名：杀进程只留 `.tmp` 残留
     （loader 只 glob `*.json`，不会被当残缺 JSON 装载），不再出现「upload_*.json 在、账不在」。"""
     fallback_source, source_counts, missing_name, unknown_species = _tag_records_for_ingest(
         payload, records, form_source)
@@ -429,7 +406,7 @@ def ingest_dataset(
             "no_records",
             '未解析出任何数据集记录。文件应是记录数组 [ {…} ]，或对象 { "records": [ {…} ] }。',
         )
-    # 写入汇条数闸（验证）：单文件上限 + 全库累计上限 + 强制流水账，检查/落盘/记账
+    # 写入汇条数闸：单文件上限 + 全库累计上限 + 强制流水账，检查/落盘/记账
     # 同一临界区（并发不得双双越闸；此前闸只在 plan_import，/api/upload 与 MCP upload 可绕过）。
     if len(records) > MAX_INGEST_RECORDS:
         raise UploadError(
@@ -437,7 +414,7 @@ def ingest_dataset(
             f"记录数 {len(records)} 超过单文件上限 {MAX_INGEST_RECORDS} 条。"
             "本产品面向数据集元数据管护，超大规模目录请拆分文件后再导入。",
         )
-    # 补丁包机制（基线+补丁包）：绑定补丁作用域（请求持有登录会话）时，写入改落
+    # 任务 3（2026-08-26 基线+补丁包）：绑定补丁作用域（请求持有登录会话）时，写入改落
     # **该账户的补丁包** `.userdata/patches/<account_id>.json`，共享 external 一个字节不动
     # （网页版多人隔离）；未绑定（本机匿名/CLI/MCP/冻结评测）→ 下方历史路径逐字节不变。
     from .patch_package import current_patch_scope  # 惰性：模块顶层零新边（隔离门安全）

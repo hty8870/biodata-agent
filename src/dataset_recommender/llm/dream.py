@@ -11,10 +11,11 @@
 - 产出**一律是 AI 生成物**：返回 `generated: true`，前端徽标「AI 整理」，预览勾选后才写入，
   绝不冒充用户手写偏好。
 
- 两道机械闸（出处核验是真正的安全门；词法过滤只当纵深防御，不当安全门）：
+2026-08-08 B6 调研六候选批——两道新机械闸（epub「持久记忆是第四致命要素」+「升级需两条
+非失败轨迹支持」+ Mem0 对账思想；审核 修订：词法过滤只当纵深防御，不当安全门）：
 1. **出处核验（证据门槛，真正的安全门）**：每条候选必须附 1~2 段逐字摘自对话原文的
    evidence；服务端归一化核验——每段 span 真实落在**单条消息**里（跨消息拼接的伪
-   evidence 不算），且全部 span 合计覆盖 **≥2 段不同对话**（对话按内容 hash
+   evidence 不算，E-03），且全部 span 合计覆盖 **≥2 段不同对话**（对话按内容 hash
    去重，防同一段重复提交凑数；k="sys" 系统消息不算证据面）。核验不过 → 丢弃记
    `dropped.evidence`。
 2. **注入审查（纵深防御）**：候选 text 命中指令形态（「忽略/你现在是/系统提示/指令/
@@ -31,10 +32,10 @@ from typing import Any, Callable
 
 from .llm_client import (
     LLMConfig,
-    _normalize_provider,
     _sanitize_provider_error,
     call_llm,
     load_llm_config,
+    should_use_llm as _should_use_llm,
 )
 
 DREAM_MAX_ITEMS = 8            # 一次整理最多产出的记忆条数（宁缺毋滥）
@@ -179,7 +180,7 @@ def _default_llm_call(prompt: str, config: LLMConfig) -> str | None:
     return result.text if result.succeeded else None
 
 
-# ==================== 两道机械闸 ====================
+# ==================== B6 两道机械闸 ====================
 
 #: 注入形态词表（纵深防御，不是安全门）：元词（系统/提示词/指令/ignore 等）+
 #: 行为封禁（不要/不许 返回|显示|回答）。刻意**不收**「不要 mouse」这类排除偏好——
@@ -197,7 +198,7 @@ def _looks_injection(text: str) -> bool:
 def _conversation_evidence_pools(conversations: list[dict[str, Any]]) -> list[tuple[int, str]]:
     """可引用原文面：**逐条消息一个 pool 单元**（query 一条、每条消息的 t/n 各一条，归一化
     文本），返回 (对话序号, 单条消息文本) 对——证据必须逐字摘自**单条消息**，「消息 A 尾 +
-    消息 B 头」跨消息拼接的伪 evidence 不得通过（此前整段 join 成一个串，拼接可绕过）。
+    消息 B 头」跨消息拼接的伪 evidence 不得通过（E-03：此前整段 join 成一个串，拼接可绕过）。
     对话仍按**内容 hash 去重**——同一段对话重复提交只算一段（防「复制同一段凑两段」绕过
     升级门槛）；k="sys" 的系统消息不算证据面。"""
     pools: list[tuple[int, str]] = []
@@ -266,15 +267,17 @@ def dream_from_conversations(
     if llm_call is None:
         try:
             cfg = config or load_llm_config()
-        except Exception as exc:  # 配置加载异常也兜底（LLM_TIMEOUT 等非法数值不再炸成 500）
+        except Exception as exc:  # 配置加载异常也兜底（E-04：LLM_TIMEOUT 等非法数值不再炸成 500）
             # 经脱敏层（防万一异常文本里带凭据；与 intro/act 层 config_error 同款写法）。
             detail = _sanitize_provider_error(exc)[:80]
             raise DreamError("config_error", f"AI 配置读取失败（{detail}）——请检查环境变量配置后重试。") from exc
-        # mock 短路纪律与 intro/act 层同款：call_mock_llm 忽略 prompt、空 records 必败，
-        # 放它走到底只会误报「没能连上 AI」。
-        if cfg.mock_llm or _normalize_provider(cfg.provider) == "mock":
-            raise DreamError("mock_not_used", "当前是 mock 演示模式，不会真的调用 AI——请关闭 MOCK_LLM 并配好密钥后再整理记忆。")
-        if not cfg.api_key:
+        # mock 短路纪律与 intro/act 层同款（E-02）：call_mock_llm 忽略 prompt、空 records 必败，
+        # 放它走到底只会误报「没能连上 AI」。dream 不查 enable_llm（只认 key），故 require_enabled=False；
+        # 该口径下否定原因只剩 mock_not_used / no_key 两档，下面逐字映射回 DreamError。
+        ok, reason = _should_use_llm(cfg, require_enabled=False)
+        if not ok:
+            if reason == "mock_not_used":
+                raise DreamError("mock_not_used", "当前是 mock 演示模式，不会真的调用 AI——请关闭 MOCK_LLM 并配好密钥后再整理记忆。")
             raise DreamError("no_key", "还没有配置 AI——先到「设置 → AI / API 配置」填好密钥，再来整理记忆。")
         llm_call = lambda prompt: _default_llm_call(prompt, cfg)  # noqa: E731
     raw = llm_call(build_dream_prompt(convs))

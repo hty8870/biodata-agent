@@ -15,6 +15,7 @@ import { initUsage } from "#usage_log";
 import { initBenchfb } from "#benchfb";
 import { initCondBoard } from "#board";
 import { initTaskPack } from "#task_pack";
+import { initDownloads } from "#downloads";
 import { initAct } from "#act";
 import { initHistWin } from "#browse";
 import { initOnboarding } from "#onboarding";
@@ -26,7 +27,7 @@ async function init() {
     await initAccounts();
     bind(); initUserMemory(); initDream(); initUsage(); initBenchfb(); initLocalModelControl(); syncAiGates(); showView("query");
     renderHeroGreeting(); initHeroRot(); playHero(); initTimeFilter(); initTimeSelector(); initSourceSelector();
-    setSourcesReady(initSourceChips()); initCondBoard(); initTaskPack(); initAct(); initLibWin(); initHistWinSkeleton(); initHistWin();
+    setSourcesReady(initSourceChips()); initCondBoard(); initTaskPack(); initDownloads(); initAct(); initLibWin(); initHistWinSkeleton(); initHistWin();
     initOnboarding(); initFabTuck(); syncAgentAvailability();
     initProjects();   // 追踪浮窗/存为追踪/上下文 chip（全 DOM 自守卫）
 }

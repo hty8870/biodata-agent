@@ -2,12 +2,21 @@
 
 /* 本文件是 ES Module：core 的工具/常量、usage 层、reuse_pack 的 downloadTextBlob 与
    fav_folders 的 openFavPopover 经 import 取（cards↔fav_folders 成环，绑定只在函数体内使用）。
-   dataset_page/browse/fav_folders/interactions/act 经 import 取卡片与介绍渲染函数。 */
-import { API, HEART, MOTION, $, escapeHtml, escapeHtmlStrong, fastqInfo, fmtThousands, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, toast } from "#core";
+   dataset_page/browse/fav_folders/interactions/act 经 import 取卡片与介绍渲染函数（绞杀桥已全退役）。 */
+import { API, HEART, MOTION, $, copyTextAny, escapeHtml, escapeHtmlStrong, fastqInfo, fmtThousands, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, toast } from "#core";
 import { USAGE_KINDS } from "#usage_core";
 import { usageCardRank, usageLog, usageLogCardAction } from "#usage_log";
 import { downloadTextBlob } from "#reuse_pack";
 import { openFavPopover } from "#fav_folders";
+
+/* 国内可达性徽章的唯一构造点（结果卡与数据集详情页头共用同一粒徽章）：
+   按下载 host 推断（非实测速度）；未识别的 host 返回空串，不臆造。 */
+export function reachBadgeHtml(it) {
+    const reach = it && it.reachability;
+    return (reach && reach.tier && reach.tier !== "unknown")
+        ? `<span class="reach reach-${escapeHtml(reach.tier)}" title="${escapeHtml((reach.hosting || "") + "：" + (reach.advice || "") + "（按托管位置推断、非实测速度）")}">🌐 ${escapeHtml(reach.tier_label)}</span>`
+        : "";
+}
 
 /* opts 一览：rank=结果序号角标；compact=精简卡（介绍弹窗下半窗的兼容网格/对比用——
    隐藏「数据集详情」「查看全部文件」按钮、rank 角标与承诺行，保留心形/徽章/CTA 直链）。 */
@@ -15,7 +24,7 @@ export function buildCard(rawItem, opts) {
     opts = opts || {};
     const it = normalizeItem(rawItem);
     const card = document.createElement("article");
-    const library = opts.variant === "library";   // ：我的库卡片化（候选/收藏/更新 delta）——保留「打开数据集页」「数据集详情」，省下载与文件展开
+    const library = opts.variant === "library";   // 我的库卡片化（候选/收藏/更新 delta）——保留「打开数据集页」「数据集详情」，省下载与文件展开
     card.className = "card" + (library ? " card-library" : "");
     const fq = fastqInfo(it.raw_data_status);
     const rank = opts.rank && !opts.compact ? `<span class="rank">#${opts.rank}</span>` : "";
@@ -27,7 +36,7 @@ export function buildCard(rawItem, opts) {
     const tags = [["物种", it.species], ["组织", it.tissue], ["疾病", it.disease]]
         .filter(([, v]) => v)
         // tags 容器限高截断（CSS max-height 2 行），每个 tag 的 title 兜住完整值——悬浮可见全文，不丢信息、不靠 JS 测量
-        .map(([k, v]) => `<span class="tag" title="${escapeHtml(`${k}：${v}`)}"><span class="tag-k">${k}</span>${escapeHtml(v)}</span>`).join("");   // F11：裸灰块加前缀小标签，不再像装饰
+        .map(([k, v]) => `<span class="tag" title="${escapeHtml(`${k}：${v}`)}"><span class="tag-k">${k}</span>${escapeHtml(v)}</span>`).join("");   // 裸灰块加前缀小标签，不再像装饰
     const faved = isFav(it);
     const dl = it.download_url || it.url;
     // 主 CTA 行：数据集页面(有独立页则填充=主按钮，视觉权重 ≥ 下载) 与 下载数据 等宽同排；
@@ -37,7 +46,7 @@ export function buildCard(rawItem, opts) {
         ? `<a class="cta cta-primary" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开数据集页 ↗</a>`
         : "";
     const dlBtn = library ? ""
-        : isHttp(dl) ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download>下载数据 ↓</a>`
+        : isHttp(dl) ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据 ↓</a>`
         : `<span class="cta cta-disabled" aria-disabled="true">暂无下载</span>`;
     // 「查看介绍」改为打开**独立浏览器标签页** /dataset（不再模态弹窗）。链接携 uid/url/name/source；
     // 点击时把**完整记录**写进 localStorage 供新标签页取回 download_url/n_files 等 URL 带不了的字段（见下方 detailLink 接线）。
@@ -45,11 +54,8 @@ export function buildCard(rawItem, opts) {
     // 非整值插值 → 不触发 isHttp sink 门；见 tests/test_frontend_url_safety.py）。
     // 改名「数据集详情 ↗」并从 card-foot 文字链升格为 .card-cta 之下的独立全宽按钮行（.btn-detail）。
     const detail = opts.compact ? "" : `<a class="btn-detail" href="/dataset?uid=${encodeURIComponent(it.dataset_uid || "")}&url=${encodeURIComponent(it.url || "")}&name=${encodeURIComponent(it.dataset_name || "")}&source=${encodeURIComponent(it.source || "")}" target="_blank" rel="noopener" aria-label="查看 ${escapeHtml(it.dataset_name || "该数据集")} 的数据集详情页（含介绍、文件、FAIR、引文、对比；在新标签页打开）">数据集详情 ↗</a>`;
-    // 国内可达性徽章：按下载 host 推断（非实测速度）。未识别的 host 不显示，不臆造。
-    const reach = it.reachability;
-    const reachBadge = (reach && reach.tier && reach.tier !== "unknown")
-        ? `<span class="reach reach-${escapeHtml(reach.tier)}" title="${escapeHtml((reach.hosting || "") + "：" + (reach.advice || "") + "（按托管位置推断、非实测速度）")}">🌐 ${escapeHtml(reach.tier_label)}</span>`
-        : "";
+    // 国内可达性徽章：构造函数见本文件 reachBadgeHtml（唯一锚点）
+    const reachBadge = reachBadgeHtml(it);
 
     const nFiles = it.n_files || 0;
     const filesBtnHtml = (!opts.compact && !library && nFiles > 1)
@@ -61,7 +67,7 @@ export function buildCard(rawItem, opts) {
     const footBits = [`<b>样本量</b> ${escapeHtml(fmtThousands(it.sample_size))}`];
     if (it.gene_count) footBits.push(`<b>基因数</b> ${escapeHtml(fmtThousands(it.gene_count))}`);
     if (it.published_date) footBits.push(`<b>发表</b> ${escapeHtml(String(it.published_date).slice(0, 4))}`);
-    //  底部钉齐：无文件按钮的完整卡补同盒尺寸占位槽（visibility:hidden、aria-hidden，结构与真实按钮一致 → 高度恒等），
+    // 底部钉齐：无文件按钮的完整卡补同盒尺寸占位槽（visibility:hidden、aria-hidden，结构与真实按钮一致 → 高度恒等），
     // 同行各卡「查看全部 N 个文件」有/无不再把 CTA 行错开；compact/库卡片不出按钮也不出槽。
     const filesRegion = (library || opts.compact) ? ""
         : (!filesBtnHtml) ? `<span class="files-open files-open-slot" aria-hidden="true"><span class="fo-ico">▤</span>查看全部<span class="fo-arrow">→</span></span>`
@@ -85,19 +91,19 @@ export function buildCard(rawItem, opts) {
         openFavPopover(favBtn, it);
     });
 
-    const filesBtn = card.querySelector("button.files-open");   // ：占位槽是 span.files-open-slot，只给真按钮绑事件
+    const filesBtn = card.querySelector("button.files-open");   // 占位槽是 span.files-open-slot，只给真按钮绑事件
     if (filesBtn) filesBtn.addEventListener("click", (event) => openFilesModal(it, event.currentTarget));
     // 详情按钮自身 target=_blank 导航到 /dataset；点击时同步把完整记录写进 localStorage（导航前执行，新标签页读得到）。
     const detailLink = card.querySelector(".btn-detail");
     if (detailLink) detailLink.addEventListener("click", () => {
-        //  handoff 双写——按 uid 分键是主通道（多标签连开不同数据集互不覆盖）；
+        // 2026-08-15：handoff 双写——按 uid 分键是主通道（多标签连开不同数据集互不覆盖）；
         // 旧单槽保留作兼容兜底（旧版详情页只认它）。两条各自 try，一条写满不影响另一条。
         try { localStorage.setItem("biodata_dataset_view_v1", JSON.stringify(it)); } catch (_e) {}
         try {
             if (it.dataset_uid) localStorage.setItem("biodata_dataset_view_v1:" + it.dataset_uid, JSON.stringify(it));
         } catch (_e) {}
-        //  v2：uid/pos 归因到具体条目与名次（r 保留——聚合器 usageRankBuckets 读它）。
-        //  v3：卡级动作经 usageLogCardAction——结果页的卡带展示快照 tid/iid，
+        // v2：uid/pos 归因到具体条目与名次（r 保留——聚合器 usageRankBuckets 读它）。
+        // v3：卡级动作经 usageLogCardAction——结果页的卡带展示快照 tid/iid，
         // 其它页面的卡（无绑定快照）显式 null，不冒领当前轮。
         const rank = usageCardRank(card);
         usageLogCardAction(card, USAGE_KINDS.open, { what: "intro", r: rank, uid: String(it.dataset_uid || ""), pos: rank });
@@ -131,10 +137,10 @@ export function fallbackIntroduction(it) {
     if (it.platform || it.assay || it.chemistry) pieces.push(`采用 ${[it.platform, it.assay, it.chemistry].filter(Boolean).join(" / ")}`);
     // 本地兜底：只在服务端没返回 introduction 时用。
     // **刻意不在这里判体裁**：体裁由「哪个 ingest 写的」决定，真源在后端 summary_genre.py
-    // （按 source 判定）。在 JS 里再抄一份 source→体裁映射，与后端判定迟早漂移。
-    // 所以这里如实说明「这是本地兜底、未经体裁判定」，
+    // （按 source 判定）。在 JS 里再抄一份 source→体裁映射，就是刚被 item_view 修掉的
+    // 「两份手抄迟早漂移」。所以这里如实说明「这是本地兜底、未经体裁判定」，
     // 不冒充「来源元数据」——旧代码 `it.description ? "来源元数据" : …` 会把 CELLxGENE
-    // 的论文标题误标成来源摘要，正是要避免的错误。
+    // 的论文标题标成来源摘要，正是后端刚修掉的那个错。
     return {
         summary: it.description || (pieces.length ? `该数据集的公开字段显示：${pieces.join("；")}。` : "当前只有有限索引信息，请到来源页面核对完整实验背景。"),
         source_label: "本页临时整理",
@@ -155,10 +161,10 @@ export function renderIntroduction(it, opts) {
     const ssCav = Array.isArray(intro.sample_size_caveats) ? intro.sample_size_caveats : [];
     const ssHtml = ssCav.length ? `<section class="intro-ss-caveats"><h4>样本量怎么读</h4><ul>${ssCav.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul></section>` : "";
     const reason = it.reason ? `<section class="intro-reason"><h4>为什么推荐给你</h4><p>${escapeHtml(it.reason)}</p></section>` : "";
-    // Round B：下载/来源页直链移到标题下常驻 tab 栏（href/target/rel 逐位保持）；
+    // 下载/来源页直链移到标题下常驻 tab 栏（href/target/rel 逐位保持）；
     // bare 正文（对比窗）仍给一行直链，方便对照时直接点走。
     const sourceLink = isHttp(it.url) ? `<a class="btn" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开来源页 ↗</a>` : "";
-    const downloadLink = isHttp(it.download_url) ? `<a class="btn btn-primary" href="${escapeHtml(it.download_url)}" target="_blank" rel="noopener" download>下载数据 ↓</a>` : "";
+    const downloadLink = isHttp(it.download_url) ? `<a class="btn btn-primary" href="${escapeHtml(it.download_url)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据 ↓</a>` : "";
     const directRow = (opts.bare && (downloadLink || sourceLink))
         ? `<div class="intro-bare-actions">${downloadLink}${sourceLink}</div>` : "";
     // LLM 中文导读（实验性、opt-in）。`llm_status` 键**只在用户点过「AI 导读」**（llm=1）后才出现，
@@ -243,7 +249,7 @@ export async function loadIntroductionInto(body, it, opts) {
     { const im = $("introModal"); if (body.dataset.introKey === key && (!im || !im.hidden)) bindIntroductionBody(body, it, opts); }
 }
 
-/*openIntroModal / closeIntroModal（介绍模态弹窗）已退役——「查看介绍」改为打开独立浏览器标签页
+/* openIntroModal / closeIntroModal（介绍模态弹窗）已退役——「查看介绍」改为打开独立浏览器标签页
    /dataset（dataset.html + dataset_page.js）。介绍**内容**渲染函数（renderIntroduction/loadIntroductionInto/
    loadLlmIntro/loadFairInto/loadCompatInto/loadCiteInto/loadFilesInto）保留在本文件，被详情页复用。 */
 
@@ -259,7 +265,7 @@ function fairStatusMeta(status) {
     return { cls: "unknown", mark: "?" };
 }
 
-/* Round B：toggle 面板已迁出正文——FAIR 走下半窗、引文/文件走推挤下拉（intro_tabs.js），
+/* toggle 面板已迁出正文——FAIR 走下半窗、引文/文件走推挤下拉（intro_tabs.js），
    这里只保留数据加载与渲染（loadXxxInto/renderXxxInto），供 tab 栏与下半窗复用。 */
 export async function loadFairInto(wrap, it) {
     const key = introKeyOf(it);
@@ -296,10 +302,10 @@ export async function loadCompatInto(wrap, it) {
     }
 }
 
-/*兼容数据集卡**完全对齐真正的检索结果卡**——直接用缺省 buildCard（心形 / 徽章 / 标题 / tags /
+/* 兼容数据集卡**完全对齐真正的检索结果卡**——直接用缺省 buildCard（心形 / 徽章 / 标题 / tags /
    样本量 /「数据集详情 ↗」/「查看全部 N 个文件」/ CTA 直链一应俱全，仅无结果序号角标），每条卡底附
    `_compat_basis` 兼容依据；顶部「必要非充分」caveat 逐字保留（诚实红线，不说「可整合」）。
-   （旧 Round B 的 compact 精简卡是下半窗窄栏的迁就；详情页子标签页空间充足，回归全卡。） */
+   （旧版 compact 精简卡是下半窗窄栏的迁就；详情页子标签页空间充足，回归全卡。） */
 export function renderCompatCards(wrap, data) {
     const list = Array.isArray(data.compatible) ? data.compatible : [];
     const crit = data.criteria || {};
@@ -324,7 +330,7 @@ export function renderCompatCards(wrap, data) {
     });
 }
 
-/* ---------- 单条引文导出：tab 栏「导出引文 RIS/BibTeX」推挤下拉 ----------
+/* ---------- 单条引文导出（可发现性）：tab 栏「导出引文 RIS/BibTeX」推挤下拉 ----------
    复用 /api/reuse-pack 的单 uid 既有用法；ris/bibtex 串**原样**来自后端 to_ris/to_bibtex
    （RIS TY-DATA / BibTeX @misc）——绝不在 JS 里拼引用串、绝不写成 article 类型。 */
 const _citeCache = new Map();
@@ -369,9 +375,7 @@ export function renderCiteInto(wrap, it, cite) {
     const btnCopy = wrap.querySelector(".cite-copy");
     if (btnCopy) btnCopy.addEventListener("click", () => {
         if (!cite.bibtex) { toast("暂无可复制的引文"); return; }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(cite.bibtex).then(() => toast("已复制 BibTeX")).catch(() => toast("复制失败，请手动选择"));
-        } else { toast("此浏览器不支持自动复制，请手动选择"); }
+        copyTextAny(cite.bibtex, { okMsg: "已复制 BibTeX" });
     });
 }
 
@@ -383,7 +387,7 @@ export function renderFairInto(wrap, report) {
     const groups = FAIR_PRINCIPLES.map(([p, label]) => {
         const rows = checks.filter((c) => c.principle === p).map((c) => {
             const m = fairStatusMeta(c.status);
-            //  c.action（由 c.improve 改名）：只写**复用者真能做的事**。
+            // c.action（2026-07-17 由 c.improve 改名）：只写**复用者真能做的事**。
             // 旧字段名预设读者能改进这份数据 —— 而这里全是别人的公开数据，改不了。
             const action = c.action ? `<div class="fair-action">↳ ${escapeHtml(c.action)}</div>` : "";
             return `<li class="fair-check ${m.cls}"><span class="fair-pill" aria-hidden="true">${m.mark}</span>`
@@ -408,10 +412,7 @@ export function renderFairInto(wrap, report) {
         + `非官方 FAIR 认证，也不是对该数据集质量的评价。「未知」= 来源未标注、或本工具未核验，都不等于不满足。</p></section>`;
     const copyBtn = wrap.querySelector(".das-copy");
     if (copyBtn) copyBtn.addEventListener("click", () => {
-        const text = das.statement || "";
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(text).then(() => toast("已复制英文数据可用性声明")).catch(() => toast("复制失败，请手动选择"));
-        } else { toast("此浏览器不支持自动复制，请手动选择"); }
+        copyTextAny(das.statement || "", { okMsg: "已复制英文数据可用性声明" });
     });
 }
 
@@ -448,7 +449,7 @@ export function renderFilesList(files) {
         const label = escapeHtml(f.title || f.filename || "文件");
         const fn = f.filename ? `<span class="file-fn">${escapeHtml(f.filename)}</span>` : "";
         const dl = isHttp(f.download_url)
-            ? `<a class="file-dl" href="${escapeHtml(f.download_url)}" target="_blank" rel="noopener" download>下载 ↓</a>`
+            ? `<a class="file-dl" href="${escapeHtml(f.download_url)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-name="${escapeHtml(f.filename || f.title || "数据文件")}">下载 ↓</a>`
             : `<span class="file-dl disabled">暂无下载</span>`;
         return `<li class="file-row${primary ? " primary" : ""}${f.problem ? " warn" : ""}"><span class="file-type">${escapeHtml(tag)}</span>`
             + `<span class="file-info"><span class="file-name">${label}${badge}${warn}</span>${fn}</span>`
