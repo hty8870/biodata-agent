@@ -31,7 +31,7 @@ _FALLBACK_DETAIL = "处理这句话时出了内部错误，请重试。"
 
 
 def _boom(*_args, **_kwargs):
-    raise RuntimeError("ta2-webobs 探针异常")
+    raise RuntimeError("-webobs 探针异常")
 
 
 def _error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
@@ -65,7 +65,7 @@ def test_route_turn_fallback_logs_full_traceback_non_stream(
     rec = errors[-1]
     assert rec.exc_info is not None and rec.exc_info[0] is RuntimeError, "必须带完整堆栈（exc_info）"
     tb = "".join(logging.Formatter().formatException(rec.exc_info))
-    assert "ta2-webobs 探针异常" in tb
+    assert "-webobs 探针异常" in tb
 
 
 def test_route_turn_fallback_logs_full_traceback_stream(
@@ -83,12 +83,12 @@ def test_route_turn_fallback_logs_full_traceback_stream(
     rec = errors[-1]
     assert rec.exc_info is not None and rec.exc_info[0] is RuntimeError
     tb = "".join(logging.Formatter().formatException(rec.exc_info))
-    assert "ta2-webobs 探针异常" in tb
+    assert "-webobs 探针异常" in tb
 
 
 def test_request_log_never_contains_api_key_or_query_string(caplog: pytest.LogCaptureFixture):
     """脱敏钉：请求体 api_key 与 URL query string 绝不出现在任何日志行（含请求日志与异常日志）。"""
-    secret = "ta2-webobs-SECRET-9f8e7d6c"
+    secret = "-webobs-SECRET-9f8e7d6c"
     with caplog.at_level(logging.INFO, logger=_LOGGER_NAME):
         res = client.post("/api/utterance", json={"utterance": "你好", "api_key": secret, **_AGENT_OFF})
         res2 = client.get(f"/api/health?probe={secret}")

@@ -166,7 +166,7 @@ def rule_match_summary(text: str, *, sources: Any = None,
     - 弃权时补一次轻量重解析（mask 来源专名后过 `parse_query`，与检索热路径同径），
       把「哪几个词卡住了」如实带给 LLM。
 
-    `search_params`（2026-08-16 prelim1 初步结果先行）：给了就改用**真实检索参数**跑
+    `search_params`（2026-08-16 初步结果先行）：给了就改用**真实检索参数**跑
     完整确定性管线（top_k/向量召回/分面/忽略/放宽/日期/策略；rerank 恒 off、
     use_llm 恒 False——pre-loop 不付 LLM 重排与润色）；None = 旧行为（top_k=3 轻量
     概览）逐位不变。`meta_out` 给了就把本次 run_with_meta 的 WorkflowResult append
@@ -245,7 +245,7 @@ def _none_route_suggestions(*, has_results: bool) -> list[dict[str, str]]:
     return out
 
 
-# ---- cr1（并发分流与确定性 RAG 策略）：RAG flight 与全局准入 ------------
+# ---- （并发分流与确定性 RAG 策略）：RAG flight 与全局准入 ------------
 # RAG 线程**只算不说不听**：不碰 on_event、不发 trace，结果写自锁盒子；发射全部在
 # 图线程（understand 入口 / 保底分支，§4.2）。线程池 + 全局准入信号量把「运行 + 排队
 # + deferred」总量封顶（≤3）——池满时新 flight 标 deferred **不起线程**（禁止内联跑，
@@ -395,7 +395,7 @@ class _RagFlight:
 
 
 def _warmup_rag_environment(search_params: dict | None) -> None:
-    """cr1 预热闭合（r3）：主线程幂等 ensure vector/env 初始化——flight 线程从此
+    """预热闭合（r3）：主线程幂等 ensure vector/env 初始化——flight 线程从此
     只读、不写不读 os.environ 易变项（`_setup_determinism` 写 CUBLAS_WORKSPACE_CONFIG、
     模型加载写全局缓存，都必须在 flight 起跑前由主线程完成；幂等 + 模块级单飞锁保证
     多线程并发安全）。"""
@@ -413,7 +413,7 @@ def _warmup_rag_environment(search_params: dict | None) -> None:
 
 def _emit_preliminary(flight: "_RagFlight | None", *, agent_path: bool,
                       on_event: Callable | None, state: dict) -> bool:
-    """cr1 发射（verdict-gated）：闸**全与**才发，至多一次，盒子持锁原子。
+    """发射（verdict-gated）：闸**全与**才发，至多一次，盒子持锁原子。
 
     闸 = agent_path ∧ on_event 在场 ∧ flight 完成 ∧ status==results ∧ total>0 ∧
     ¬abandoned ∧ ¬emitted。发射后置 flight.emitted 并回填 turn 局部真源
@@ -438,7 +438,7 @@ def _emit_preliminary(flight: "_RagFlight | None", *, agent_path: bool,
 
 
 def _make_route_verdict_hook(holder: dict) -> Callable[[str], None]:
-    """route_consensus verdict hook（cr1 ：**只做 abandoned/lazy 标记，不发射**）。
+    """route_consensus verdict hook（**只做 abandoned/lazy 标记，不发射**）。
 
     holder: {"flight", "markers", "text", "sources", "search_params"}——图线程调用，
     跨线程共享的飞行状态盒。
@@ -462,7 +462,7 @@ def _make_route_verdict_hook(holder: dict) -> Callable[[str], None]:
 
 def _make_retrieval_provider(holder: dict, *, agent_path: bool,
                              on_event: Callable | None, state: dict) -> Callable[[], dict | None]:
-    """understand 入口的 retrieval provider（cr1）：join（deferred 在此同步
+    """understand 入口的 retrieval provider：join（deferred 在此同步
     补跑）→ 闸过则发射（主路径唯一发射点）→ 返回摘要 dict。图线程调用。"""
     def provider() -> dict | None:
         flight = holder.get("flight")
@@ -476,7 +476,7 @@ def _make_retrieval_provider(holder: dict, *, agent_path: bool,
 
 
 def _rag_concurrent_enabled() -> bool:
-    """cr1 回退开关（设计 v3.1 §7 迭代杠杆③）：`BIODATA_RAG_CONCURRENT=off` → 整体回旧
+    """回退开关（设计 v3.1 §7 迭代杠杆③）：`BIODATA_RAG_CONCURRENT=off` → 整体回旧
     串行行为；缺省/on/其他值 → 开。读取点唯一（本模块），大小写/空白宽容。"""
     return str(os.environ.get("BIODATA_RAG_CONCURRENT", "on") or "on").strip().lower() != "off"
 
@@ -564,13 +564,13 @@ def _route_turn_serial(
     artifact_context: str = "",
     suggested_recipe: str = "",
 ) -> dict[str, Any]:
-    """cr1 回退开关的旧串行路径（`BIODATA_RAG_CONCURRENT=off`，设计 v3.1 §7）。
+    """回退开关的旧串行路径（`BIODATA_RAG_CONCURRENT=off`，设计 v3.1 §7）。
 
-    **逐位复刻 HEAD 版 `_route_turn_impl`**（master@1d634de，cr1 并发施工前）：同步
+    **逐位复刻 HEAD 版 `_route_turn_impl`**（并发施工前）：同步
     pre-loop `rule_match_summary`（meta_out 接 WorkflowResult）→ **图前机械闸**发射
     preliminary（on_event 在场 ∧ status==results ∧ total>0 ∧ **无动作标记**，标记句
     绝对不发——旧闸语义）→ retrieval 摘要 dict 直接进图（initial state，无
-    provider/hook/route_extra_zh 三缝，图内逐位等于 cr1 前）→ plan_action 保底
+    provider/hook/route_extra_zh 三缝，图内逐位等于前）→ plan_action 保底
     （retrieval 同源同步）；返回形状与 HEAD 版一致：`retrieval` 恒为摘要 dict（tool
     路线亦然）、**无** `retrieval_note`、**无** `_preliminary_trace`。不发 flight、
     不读 `BIODATA_RAG_CONCURRENT`（调用方已分流）。
@@ -579,7 +579,7 @@ def _route_turn_serial(
     本函数从「AI 执行」开的规则匹配段开始，等价于 HEAD 版同段的原文照搬。
     """
     # 「AI 执行」开：规则匹配概览 + 原始查询一起进 LLM 分流（100%，无短路）。
-    # prelim1：meta_out 接住本次 pre-loop 的 WorkflowResult（preliminary 载荷与闸判定用）。
+    # meta_out 接住本次 pre-loop 的 WorkflowResult（preliminary 载荷与闸判定用）。
     prelim_meta_holder: list = []
     retrieval = rule_match_summary(
         text, sources=sources, search_params=search_params, meta_out=prelim_meta_holder)
@@ -602,7 +602,7 @@ def _route_turn_serial(
         # 与 plan_action 同一把闸（enable_llm ∧ 非 mock ∧ 有 key）：闸口不一致会出现
         # 「单次分类路径说没接上、agent 路径却在调 LLM」的双重口径。
         if agent_cfg is not None and _ap.should_use_llm(agent_cfg)[0]:
-            # prelim1 初步结果先行（机械闸，**全与**才发；单调用点天然最多一次）：
+            #初步结果先行（机械闸，**全与**才发；单调用点天然最多一次）：
             # 流式回调在场 ∧ 确定走 agent 图路径（本分支即该条件的具身）∧ pre-loop 真实
             # 管线有命中（零命中 → 现有救回链负责，互不越界）∧ 无规则动作标记（动作句由
             # 工具环承接，不先摆检索结果）；clarify/abstain 被 status=="results" 天然覆盖。
@@ -703,7 +703,7 @@ def _route_turn_serial(
     # 允许集 → 降 none 如实回音（hint 只缩小不扩权，绝不执行用户没点的能力）。
     plan = _recipe_narrow_plan(plan, recipe_verbs)
 
-    # prelim1：环内 search.rerun 采纳档的 recommend_payload（多个采纳步取
+    #环内 search.rerun 采纳档的 recommend_payload（多个采纳步取
     # 最后一个）——数据本就在 plan.steps 实录里，扫出来挂 final 即可，不碰 state、不改图。
     # （2026-08-17 RAG 工具组）：rank/rerank 的 display 批次 payload 同样汇入环内上屏
     # 哨兵 loop_payload（display=true 语义即上屏，**不受**批次机制限制）。
@@ -795,7 +795,7 @@ def _route_turn_serial(
     if str(plan.get("verb") or "") in _ap.ROUTE_QUERY_VERBS:
         # LLM 判的检索指令：effective_query 为空 → 按用户原话检索（fail-open 不丢句）。
         final_query = str(plan.get("effective_query") or "").strip() or text
-        # prelim1 §2.1 b 档判定（**全与**，保守）：本请求真发过 preliminary（安全闸——
+        #§2.1 b 档判定（**全与**，保守）：本请求真发过 preliminary（安全闸——
         # 没发过却 true 会让前端跳过 /api/recommend 导致白屏，此条是设计清单外的结构性
         # 强化）∧ 无环内采纳 ∧ 查询无改写 ∧ 收敛后 rerank=off ∧ **润色不会跑**。
         # 「润色不会跑」显式判定（2026-08-16 收尾，ubRouteBody 第 10 参 polish 落地后
@@ -931,11 +931,11 @@ def _route_turn_impl(
     `on_event`（2026-08-03 流式）只在 agent 路径透传给 `plan_with_agent_events`
     （每节点落定时回调 trace 条目）；保底路径**不回调**——它是一次性 LLM 调用，没有节点可播。
 
-    `search_params`（2026-08-16 prelim1 初步结果先行，cr1 并发分流 v3.1
+    `search_params`（2026-08-16 初步结果先行，并发分流 v3.1
     重定发射语义）：/api/utterance 端点收敛后的真实检索参数（top_k/recall/strategy/
     facet_filters/suppressed_constraints/lenient_dims/date_from/date_to/rerank）——
     pre-loop 规则段用它跑完整确定性管线（rerank 恒 off、不付 LLM 重排/润色）；
-    None = 旧轻量概览逐位不变。cr1preliminary 改为 **verdict-gated**：
+    None = 旧轻量概览逐位不变。初步结果先行改为 **verdict-gated**：
     marker 命中 → 不起 RAG flight 直接进图（**永不发射**，纯执行不打印）；无标记 →
     flight 起跑（准入信号量 ≤3；池满 deferred）∥ 图起跑（共识盲跑）；发射点全在图线程
     ——主路径唯一发射点 = understand 节点入口（join/补跑完成后、构造 prompt 前，
@@ -950,12 +950,12 @@ def _route_turn_impl(
     （preliminary 在前、环内上屏批在后，各补 batch_id/seq/created_at/turn_id）与
     `active_batch`（默认最后一批）；无批时两键均不出现。
 
-    cr1 回退开关（设计 v3.1 §7）：`BIODATA_RAG_CONCURRENT=off` 时在早退之后整体走旧
+回退开关（设计 v3.1 §7）：`BIODATA_RAG_CONCURRENT=off` 时在早退之后整体走旧
     串行路径 `_route_turn_serial`（HEAD 版逐位复刻：同步 pre-loop、图前机械闸发射、
     无 flight/无三缝、tool 路线 retrieval 仍为摘要 dict、无 retrieval_note）；缺省 on
     走本函数 v3.1 并发路径。
 
-    cr1 迭代杠杆②（设计 v3.2 §4.3/§5）：并发路径在**图起跑前**同步跑关键词快速计数段
+迭代杠杆②（设计 v3.2 §4.3/§5）：并发路径在**图起跑前**同步跑关键词快速计数段
     （`_consensus_extra_zh`，strategy 强制 fixed + recall 强制 off = 纯关键词热态毫秒级），
     把「状态/命中数」信号以**逐字复刻今天串行路径共识检索概览段**的文案注入
     `route_extra_zh`（`**这句话**过规则匹配（关键词检索第一段）的结果：规则匹配…`）
@@ -1002,7 +1002,7 @@ def _route_turn_impl(
             "result_payload": None, "preliminary_final": False,
         }
 
-    # cr1 回退开关（设计 v3.1 §7）：BIODATA_RAG_CONCURRENT=off → 整体回旧串行——RAG
+    #回退开关（设计 v3.1 §7）：BIODATA_RAG_CONCURRENT=off → 整体回旧串行——RAG
     # 同步 pre-loop、图前机械闸发射 preliminary、无 flight/无三缝、tool 路线 retrieval
     # 仍为摘要 dict（HEAD 版形状）；缺省 on → 下面 v3.1 并发路径。旧行为真源 = HEAD 版
     # `_route_turn_impl`（复刻于 `_route_turn_serial`，逐位一致，无第三套变体）。早退
@@ -1020,7 +1020,7 @@ def _route_turn_impl(
         )
 
     # 「AI 执行」开：规则匹配概览 + 原始查询一起进 LLM 分流（100%，无短路）。
-    # cr1（并发分流）：agent 分支条件**先求值定型 agent_path**（跑与发射
+    #（并发分流）：agent 分支条件**先求值定型 agent_path**（跑与发射
     # 闸都含它，无竞态）；再按 marker 分层起跑——有标记 → 不起 RAG flight 直接进图
     # （共识上下文补一行机械标记事实）；无标记 → flight 起跑（准入信号量 ≤3，池满
     # deferred）∥ 图起跑（共识盲跑：命中数段缺席）。
@@ -1106,7 +1106,7 @@ def _route_turn_impl(
                     "search_date_from": str(_sp.get("date_from") or ""),
                     "search_date_to": str(_sp.get("date_to") or ""),
                 }
-                # cr1 三缝：retrieval_provider（understand 入口 join + 发射）
+                #三缝：retrieval_provider（understand 入口 join + 发射）
                 # on_route_verdict（route_consensus 只标记不发射）、route_extra_zh（有标记
                 # 分支的机械标记事实行）；provider 在场时图 initial state 的 retrieval=None
                 # （见 agent_exec，understand 用局部 resolved 汇合）。
@@ -1163,7 +1163,7 @@ def _route_turn_impl(
                         "turn 的降级审计落盘失败（仅记异常类型，不含正文/密钥）。")
     hybrid_abstain = False
     if plan is None:
-        # cr1 保底分支（②）：先 join flight（未起则就地起）构造分类
+        #保底分支（②）：先 join flight（未起则就地起）构造分类
         # 上下文；plan_action 判出非 EXEC（search/general 向）∧ 闸过 ∧ 未发射 → 发射；
         # EXEC/none 一律抑制（r3 ：plan_action 本身才判 EXEC，判前发射 = 无 verdict
         # 先显示）。agent_path=False 的保底：无标记句就地起（=今天同步时序，正确性保底）。
@@ -1210,7 +1210,7 @@ def _route_turn_impl(
     # 允许集 → 降 none 如实回音（hint 只缩小不扩权，绝不执行用户没点的能力）。
     plan = _recipe_narrow_plan(plan, recipe_verbs)
 
-    # cr1 return 装配（join 点）：search/general/none 路线必 join（图内已
+    #return 装配（join 点）：search/general/none 路线必 join（图内已
     # 汇合或保底已 join，瞬时）；tool 路线不 join——retrieval 恒 None（breaking 契约，
     # §4.1 r3）+ additive retrieval_note（"skipped_action_marker"=marker 分支未起 /
     # "discarded_action_route"=起了被弃；已完成时瞬时 join 防 future 泄漏）。
@@ -1234,7 +1234,7 @@ def _route_turn_impl(
         else ("skipped_marker" if markers
               else ("suppressed_action" if is_tool_route else "")))
 
-    # prelim1：环内 search.rerun 采纳档的 recommend_payload（多个采纳步取
+    #环内 search.rerun 采纳档的 recommend_payload（多个采纳步取
     # 最后一个）——数据本就在 plan.steps 实录里，扫出来挂 final 即可，不碰 state、不改图。
     # （2026-08-17 RAG 工具组）：rank/rerank 的 display 批次 payload 同样汇入环内上屏
     # 哨兵 loop_payload（display=true 语义即上屏，**不受**批次机制限制）。
@@ -1327,7 +1327,7 @@ def _route_turn_impl(
     if str(plan.get("verb") or "") in _ap.ROUTE_QUERY_VERBS:
         # LLM 判的检索指令：effective_query 为空 → 按用户原话检索（fail-open 不丢句）。
         final_query = str(plan.get("effective_query") or "").strip() or text
-        # prelim1 §2.1 b 档判定（**全与**，保守）：本请求真发过 preliminary（安全闸——
+        #§2.1 b 档判定（**全与**，保守）：本请求真发过 preliminary（安全闸——
         # 没发过却 true 会让前端跳过 /api/recommend 导致白屏，此条是设计清单外的结构性
         # 强化）∧ 无环内采纳 ∧ 查询无改写 ∧ 收敛后 rerank=off ∧ **润色不会跑**。
         # 「润色不会跑」显式判定（2026-08-16 收尾，ubRouteBody 第 10 参 polish 落地后

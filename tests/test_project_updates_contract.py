@@ -181,7 +181,7 @@ def test_corpus_sync_orchestration_present() -> None:
 
 def test_delta_entry_links_to_dataset_page() -> None:
     """设计 §4.4「待查看更新逐条可点开看数据集」：每条 uid 提供 /dataset?uid=… 链接
-    （dataset_page.js ux3b 的独立标签页约定，uid 为主键）。"""
+    （dataset_page.js 的独立标签页约定，uid 为主键）。"""
     ui = UI.read_text(encoding="utf-8")
     assert 'href = "/dataset?uid=" + encodeURIComponent(d.uid)' in ui, "待查看更新条目缺「查看数据集」链接"
     assert 'textContent = "查看数据集"' in ui, "「查看数据集」链接文案缺失"

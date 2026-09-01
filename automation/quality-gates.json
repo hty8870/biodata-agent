@@ -46,7 +46,6 @@
         "web-smoke",
         "mcp-protocol-selfcheck",
         "frozen-recommendation-evaluation",
-        "holdout-recommendation-evaluation",
         "dev-recommendation-evaluation",
         "installer-contracts"
       ]
@@ -171,20 +170,6 @@
       "description": "Enforce the frozen recommendation baseline, hard constraints, and FASTQ exclusion contract.",
       "commands": [
         ["{python}", "scripts/evaluate_recommendation.py"]
-      ],
-      "required_tools": ["python"],
-      "timeout_seconds": 600,
-      "offline": true,
-      "network": "forbidden",
-      "secrets": "forbidden",
-      "model_downloads": "forbidden",
-      "fallback": {"missing_tool": "fail", "timeout": "fail", "command_failure": "fail"}
-    },
-    {
-      "id": "holdout-recommendation-evaluation",
-      "description": "Generalization watchdog: run the blind-built held-out query set (eval/eval_queries_holdout.json) against thresholds pinned to its 2026-08-06 first-run baseline. The frozen set remains the only release gate; this gate never loosens it.",
-      "commands": [
-        ["{python}", "scripts/evaluate_recommendation.py", "--queries", "eval/eval_queries_holdout.json", "--expect-top1", "77.5", "--expect-top5", "79.5", "--expect-max-violation", "0.6", "--expect-max-fastq-violation", "0.0", "--expect-min-noresult", "1.0"]
       ],
       "required_tools": ["python"],
       "timeout_seconds": 600,

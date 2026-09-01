@@ -71,7 +71,7 @@ def test_action_clause_does_not_change_which_datasets_come_back(wf):
     assert a.result_total == b.result_total
 
 
-@pytest.mark.parametrize("rel", ["eval/eval_queries.json", "eval/multisource_queries.json", "eval/eval_queries_holdout.json", "eval/eval_queries_dev.json"])
+@pytest.mark.parametrize("rel", ["eval/eval_queries.json", "eval/multisource_queries.json", "eval/eval_queries_dev.json"])
 def test_frozen_eval_queries_are_out_of_reach(rel):
     """冻结基准的每一条查询都不含执行动作词 → 新路径在基准上恒为恒等映射。
 

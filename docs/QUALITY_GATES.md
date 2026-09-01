@@ -96,35 +96,17 @@ if ($LASTEXITCODE -ne 0) { throw '冻结推荐评测失败。' }
 
 > **基线变更史（2026-07-12）**：否定/排除语法落地，`eval/eval_queries.json` 的 adv03（不要小鼠的人类数据）、adv04（除了脑以外的人类组织数据）由「弃权/`no_result_expected`」改为可执行负向约束（adv03 = include human + `must_not_match` mouse；adv04 = include human + `must_not_match` brain）。**前→后**：NoResult 15/15→13/13；Top1/Top5 97.4→97.6（分母 39→41，新增两道命中题）；硬违规/FASTQ 仍 0。裁判新增 `must_not_match`（负向进 Top1/Top5/support/违规率同一口径），且 `scripts/evaluate_recommendation.py` 现在**指标不达标即非零退出**（原先只打印 PASS/FAIL、`$LASTEXITCODE` 门形同虚设）。
 
-### Held-out 泛化看门狗（2026-08-06 新增）
+### Held-out 泛化看门狗（2026-08-06 新增；held-out 集不随公开仓发布）
 
-主集 54 条同时充当开发回归门与发布门、没有 train/dev/test 划分——为补这个洞，新增**盲建** held-out 集 `eval/eval_queries_holdout.json`（50 条，id h01–h50；作者全程未读解析器/词表/检索源码与主集条目，声明见文件头 `_comment`）。
+主集 54 条同时充当开发回归门与发布门、没有 train/dev/test 划分——为补这个洞，曾**盲建** held-out 集（50 条，id h01–h50；作者全程未读解析器/词表/检索源码与主集条目）。**held-out 集与 recall/rerank 的 graded 分级答案不随公开仓发布**：holdout 公开即不再是 holdout，对可见集过拟合后宣称的指标没有公信力。首跑基线留档如下；想复现看门狗，用 `scripts/evaluate_recommendation.py --queries <自建集>` 配合 `--expect-*` 阈值参数即可。
 
-```powershell
-Set-Location -LiteralPath $RepoRoot
-& $Python scripts\evaluate_recommendation.py --queries eval\eval_queries_holdout.json `
-    --expect-top1 77.5 --expect-top5 79.5 --expect-max-violation 0.6 `
-    --expect-max-fastq-violation 0.0 --expect-min-noresult 1.0
-if ($LASTEXITCODE -ne 0) { throw 'held-out 泛化看门狗失败。' }
-```
-
-首跑基线（2026-08-06，base 774）：
-
-| 指标 | 阈值 | 首跑实测 |
-|---|---:|---:|
-| Top1 | ≥77.5 | 77.8（35/45） |
-| Top5 | ≥79.5 | 80.0（36/45） |
-| 硬违规 | ≤0.6 | 0.6（1 项，h20 霍奇金 vs 小淋巴细胞淋巴瘤亚型混淆——真实缺陷，留 dev 集修复） |
-| FASTQ 违规 | 0 | 0 |
-| NoResult | 5/5 | 5/5 |
+首跑基线（2026-08-06，base 774）：Top1 77.8（35/45）、Top5 80.0（36/45）、硬违规 0.6（1 项，霍奇金 vs 小淋巴细胞淋巴瘤亚型混淆——真实缺陷，留 dev 集修复）、FASTQ 违规 0、NoResult 5/5。
 
 制度口径：
 
 - **`eval/eval_queries.json` 仍是唯一发布门**（上节正式基线不变）；held-out 是泛化看门狗，只暴露主集外的过拟合，不用于放行发布。
-- **阈值=2026-08-06 首跑基线**：Top1/Top5 取首跑值小幅下浮；硬违规理想为 0，因 h20 实测 1 项违规如实定为 0.6；后续任何「调高阈值」视同放宽门，须按受控重基线流程记录授权与理由。
 - **held-out 只用一次**：首跑发现的问题已留档（逐条清单与泛化 gap 讨论），修复走下一轮 dev 集，禁止据本集结果回改解析器/词表后再拿本集邀功。
 - 脚本侧配套：`scripts/evaluate_recommendation.py` 阈值参数化（`--expect-top1/--expect-top5/--expect-max-violation/--expect-max-fastq-violation/--expect-min-noresult`，默认值=冻结基线常量，主集默认行为逐位不变），读 JSON 跳过 `_comment` 等无 `query` 字段的元信息项。
-- 自动化接线：`automation/quality-gates.json` 新增 `holdout-recommendation-evaluation`（offline，与冻结门同安全 posture），挂入 `full` profile——新增独立 gate 不改变既有门的命令与行为。
 
 ### Dev 集回归门（2026-08-06 新增）
 
@@ -217,7 +199,7 @@ spawn stdio process
 2. 判断是环境缺失、既有失败还是本次回归。
 3. 停止交付和合并。
 4. 不修改基线、不删除失败测试、不覆盖用户改动。
-5. 仅修复本任务范围内且能验证的原因；需要扩大范围时先请求授权和更新认领。
+5. 仅修复本任务范围内且能验证的原因；需要扩大范围时先请求授权并更新任务说明。
 6. 最终如实报告未通过项，不得用“应该没问题”替代证据。
 
 ## 8. 合并后复验

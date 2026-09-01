@@ -6,7 +6,7 @@
 
 安全要点：
 - 密码用 `hashlib.scrypt` + 每用户随机盐哈希；**绝不**明文存储 / 打印 / 记日志。校验用 `hmac.compare_digest`。
-- 会话 = 不透明随机 token（`secrets.token_urlsafe`）。2026-08-02 acct1 起**落盘持久化**
+- 会话 = 不透明随机 token（`secrets.token_urlsafe`）。2026-08-02 起**落盘持久化**
   （`.userdata/sessions.json`，原子写；此前只存进程内存、服务重启全体掉登录——「每次开前端都要
   重新登录」的根因）。会话是**可再生**的（丢了 = 重新登录，不丢账户数据），故会话库 fail-open
   （缺失/损坏 → 空库全体登出），与账户库的 fail-closed 相反。cookie 由接口层置 `HttpOnly` +
@@ -186,7 +186,7 @@ def _save_sessions(path: Path) -> None:
 
 def _hydrate_sessions(sessions_path: Path | None) -> None:
     """调用方须持 `_LOCK`。内存为空时把盘上活会话读回——进程重启（或测试清场）后首次触碰会话
-    即恢复登录态；服务重启不再全体掉登录（acct1，用户「每次开前端都要重新登录」的根因）。
+    即恢复登录态；服务重启不再全体掉登录（用户「每次开前端都要重新登录」的根因）。
     `_SESSIONS` 非空不重读：内存是运行期真源，盘上只是它的快照。"""
     if sessions_path is None or _SESSIONS:
         return

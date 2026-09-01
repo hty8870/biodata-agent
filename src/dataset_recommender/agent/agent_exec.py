@@ -235,11 +235,11 @@ class _AgentContext:
     # 按 anonymous + 空端点分区处理。
     principal: str = ""
     endpoint_fp: str = ""
-    # on_progress（2026-08-16 prelim1 信息流升级）：节点/工具「即将开始」的即时回调——
+    # on_progress（2026-08-16 信息流升级）：节点/工具「即将开始」的即时回调——
     # plan_with_agent_events 把 on_event 同一回调双通道接进来（tool_start 事件与 step
     # 完成事件同路，webapp 按 kind 透传给前端）；None = 非流式/rescue 路径，自然静默。
     on_progress: Any = None
-    # cr1（并发分流与确定性 RAG 策略）三个可选注入缝；缺省 = 今天逐位不变
+    #（并发分流与确定性 RAG 策略）三个可选注入缝；缺省 = 今天逐位不变
     # （既有 monkeypatch seam 全保）：
     # - retrieval_provider：Callable[[], dict | None] | None——understand 入口（join/
     #   deferred 补跑/发射后）取局部检索摘要；None = 用 state 传入的 retrieval（旧行为）。
@@ -954,7 +954,7 @@ _ROUTE_REQUEST_BUDGET_BLOCK_ZH = (
 def _rescue_block_zh(unresolved_terms: Any) -> str:
     """rescue 注入段（动态：原检索投影的未收录词逐字进提示）。
 
-    放宽依据（rescue-ev1 取证，设计决定）：5 次真触发全被择优闸「改空拒」挡下——
+    放宽依据（取证，设计决定）：5 次真触发全被择优闸「改空拒」挡下——
     「语义等价」要求下模型只敢近乎原样改写（4 次逐字相同、1 次加空格），而能救活的
     改写（「小鼠神经胶质瘤」→「小鼠胶质瘤」）都必须丢弃**库中未收录**的用户词。
     放宽只开这一道口：未收录词可丢弃/映射为收录近义词；**已收录条件必须全部保留**、
@@ -6232,7 +6232,7 @@ def _run_route_consensus(model: Any, prompt: str,
 
 
 def _notify_route_verdict(ctx: Any, route: str) -> None:
-    """cr1：verdict hook **只做 abandoned/lazy 标记，不发射**（r3 ：
+    """：verdict hook **只做 abandoned/lazy 标记，不发射**（r3 ：
     节点内发射会产生 tool_start→preliminary→step 乱序；主路径唯一发射点 =
     understand 入口）。机械闸快进与 LLM 共识两条路径同调本助手。"""
     if getattr(ctx, "on_route_verdict", None) is not None:
@@ -6289,7 +6289,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
                                 retrieval=state.get("retrieval"),
                                 current_query=state.get("current_query") or "",
                                 current_filters=state.get("current_filters"))
-    # cr1：有标记分支的机械标记事实行（route_extra_zh，缺省空串=今天
+    #有标记分支的机械标记事实行（route_extra_zh，缺省空串=今天
     # 逐位不变）拼在上下文尾部——共识盲跑时命中数段缺席，机械行补「规则动作标记」。
     if getattr(ctx, "route_extra_zh", None):
         context = context + "\n" + str(ctx.route_extra_zh).strip()
@@ -6319,7 +6319,7 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
                 response=str(_v.get("raw") or ""), ms=int(_v.get("ms") or 0),
                 channel="consensus_vote",
                 fallback_reason=str(_v.get("error") or ""))
-    # cr1：verdict hook 经 `_notify_route_verdict` 调用（只做标记不发射
+    # verdict hook 经 `_notify_route_verdict` 调用（只做标记不发射
     # rescue 短路不调——上面已早退；机械闸快进路径同助手）。
     _notify_route_verdict(ctx, route)
     return {"route_scope": route, "trace": [entry], "usage_ledger": usage_local}
@@ -6352,7 +6352,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
 
     started = time.monotonic()
     ctx: _AgentContext = runtime.context
-    # prelim1：长 LLM 节点的「即将开始」即时事件——verb="node"，
+    #长 LLM 节点的「即将开始」即时事件——verb="node"，
     # label_zh 与本节点 trace 行「理解意图」逐字一致（前端 pending 行按 label 匹配）。
     if getattr(ctx, "on_progress", None) is not None:
         ctx.on_progress("tool_start", {"verb": "node", "label_zh": "理解意图", "detail": ""})
@@ -6370,7 +6370,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     scoped_tools, scoped_names, face_specs = _scoped_understand_face(state)
     if scoped_tools is not None:
         tools, name_to_verb = scoped_tools, scoped_names
-    # cr1（并发分流，r3 关键核查①）：局部 resolved = 本节点视图的检索摘要。
+    #（并发分流，r3 关键核查①）：局部 resolved = 本节点视图的检索摘要。
     # retrieval 是默认覆盖字段（非 reducer），provider 在场且非 action 时在**构造
     # call_kwargs 前**取 join/补跑结果——本节点的 _context_zh / rescue 分支全部用局部
     # 值（return 增量只惠及下游，本次 prompt 必须见 resolved；二轮评审）。
@@ -6414,7 +6414,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
         # 限制段注入双壳尾部（动态信息在末尾，保 prefix 缓存前缀稳定）。
         # rescue2：未收录词清单取自原检索投影（端点注入 state.retrieval
         # 的 unresolved_terms，逐字来自用户原句）——动态段据此放宽「未收录词可丢弃」。
-        # cr1：改用局部 resolved 值（r3 关键核查①——rescue 分支不许再读 state.get）。
+        #改用局部 resolved 值（r3 关键核查①——rescue 分支不许再读 state.get）。
         block = _rescue_block_zh((resolved or {}).get("unresolved_terms"))
         context += block
         json_prompt += block
@@ -6505,7 +6505,7 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     # understand 原始投票 stash 进 turn 暂存袋——
     # route_turn 收尾发 route_decision 时并入 votes 字段（fail-soft，OFF 零操作）。
     _te.emit_understand_vote(raw, mode)
-    # cr1：return 增量带局部 resolved 的 retrieval（默认覆盖字段）——供 repair/execute
+    # return 增量带局部 resolved 的 retrieval（默认覆盖字段）——供 repair/execute
     # 经 state 读到（下游两处 (state.get("retrieval") or {}) 的 None 安全天然兼容）；
     # 禁止原地改写传入 state（图 reducer 语义）。
     return {
@@ -6698,7 +6698,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
     ok=False，decide 带全量结果再判）。**占位接地续步**：主步与续步的占位在
     本节点解析（`_resolve_placeholder_plan` 全闸助手），解析失败（resolver_error /
     dependency_unavailable）不执行、不记步、留 trace。"""
-    # prelim1：tool_start 即时事件回调（非流式/rescue 为 None，自然静默）。
+    # tool_start 即时事件回调（非流式/rescue 为 None，自然静默）。
     on_progress = getattr(runtime.context, "on_progress", None)
     plan = dict(state.get("plan") or {})
     active = dict(state.get("loop_plan") or plan)
@@ -6821,7 +6821,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         sp = LOOP_TOOLS[v]
         slots = dict(act.get("slots") or {})
         verb_zh = str(act.get("verb_zh") or sp["label_zh"])
-        # prelim1：工具「即将」执行的即时事件——label_zh 与下方 execute trace 行的
+        #工具「即将」执行的即时事件——label_zh 与下方 execute trace 行的
         # 「执行工具 · …」逐字一致（前端按 label 匹配 pending 行，完成帧改行不落新行）；
         # 主步与同批续步每调一次 _run_one 各发一条，天然逐个覆盖。
         if on_progress is not None:
@@ -7607,7 +7607,7 @@ def narrate(state: _AgentState, *, runtime: Any) -> dict:
     observation 汇报路径逐位保留**；其余（多步 / 其它工具 / 含失败步）由 LLM 据 steps
     紧凑投影组织（LLM 缺席/失败回退确定性拼接，同一批事实两条措辞路径）。"""
     started = time.monotonic()
-    # prelim1：长 LLM 节点的「即将开始」即时事件——verb="node"，
+    #长 LLM 节点的「即将开始」即时事件——verb="node"，
     # label_zh 与本节点 trace 行「生成说明」逐字一致（前端 pending 行按 label 匹配）。
     _on_progress = getattr(runtime.context, "on_progress", None)
     if _on_progress is not None:
@@ -7827,7 +7827,7 @@ def plan_with_agent_events(
     search_lenient_dims: Any = None,
     search_date_from: str = "",
     search_date_to: str = "",
-    # cr1（并发分流与确定性 RAG 策略）三缝透传——缺省 None/"" = 今天逐位
+    #（并发分流与确定性 RAG 策略）三缝透传——缺省 None/"" = 今天逐位
     # 不变（既有测试的 monkeypatch seam 全保）。
     retrieval_provider: Any = None,
     on_route_verdict: Any = None,
@@ -7856,7 +7856,7 @@ def plan_with_agent_events(
     decide 工具面收敛到 search.rerun（+none/finish），validate/裁决层各有一道机械闸兜底；
     `search_sources` 与五个 `search_*` 结构化条件是 search.rerun 的完整当前屏范围；
     rescue 与常规 /api/utterance 都从同一份检索参数透传，缺省全空保持旧调用兼容。
-    cr1 三缝：`retrieval_provider` 在场时图 initial state 的 retrieval 取 None（并发
+三缝：`retrieval_provider` 在场时图 initial state 的 retrieval 取 None（并发
     pre-loop 的摘要由 understand 入口经 provider 局部汇合）；`on_route_verdict` 在
     route_consensus 算完 route 后回调（只标记不发射）；`route_extra_zh` 拼进共识上下文
     尾部。三者缺省 = 旧行为逐位不变。
@@ -7911,9 +7911,9 @@ def plan_with_agent_events(
         chat_model=chat_model, model_name=str(getattr(config, "model", "") or ""),
         decide_model=decide_model, decide_model_name=decide_model_name, decide_lane=lane,
         principal=principal_norm, endpoint_fp=endpoint_fp,
-        # prelim1：tool_start/node_start 即时事件与 step 完成事件同一条回调通道。
+        # tool_start/node_start 即时事件与 step 完成事件同一条回调通道。
         on_progress=on_event,
-        # cr1 三缝。
+        #三缝。
         retrieval_provider=retrieval_provider,
         on_route_verdict=on_route_verdict,
         route_extra_zh=route_extra_zh,
@@ -7922,7 +7922,7 @@ def plan_with_agent_events(
     initial: _AgentState = {
         "utterance": text,
         "artifact_context": str(artifact_context or ""),
-        # cr1：provider 在场时 initial state 的 retrieval=None——并发 pre-loop 的摘要由
+        # provider 在场时 initial state 的 retrieval=None——并发 pre-loop 的摘要由
         # understand 入口经 provider 局部汇合（provider 缺省时原样透传）。
         "retrieval": (None if retrieval_provider is not None else retrieval),
         "current_query": str(current_query or ""),
@@ -8034,7 +8034,7 @@ def plan_with_agent(
     search_lenient_dims: Any = None,
     search_date_from: str = "",
     search_date_to: str = "",
-    # cr1 三缝透传（与 plan_with_agent_events 同名同义；缺省 = 今天逐位不变）。
+    #三缝透传（与 plan_with_agent_events 同名同义；缺省 = 今天逐位不变）。
     retrieval_provider: Any = None,
     on_route_verdict: Any = None,
     route_extra_zh: str = "",

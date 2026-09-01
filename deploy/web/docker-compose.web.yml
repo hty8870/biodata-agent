@@ -12,7 +12,7 @@ services:
     volumes:
       # 运行态数据（账号 .userdata / 上传 external / trace / 日志 / run）全部落宿主卷，
       # 回退换 tag 不动数据；宿主侧属主必须为 uid 1000（容器内 biodata 用户）。
-      - /data/biodata-web:/data
+      - ${BIODATA_DATA_DIR:-/data/biodata-web}:/data
     # 密钥与部署参数：root:600，由部署流程安装（README §4）；进程环境优先于应用内 .env 发现链
     # env_file 相对 compose 文件所在目录解析：compose 与 .env 同目录部署即可；
     # 若以 -f 指向其他位置启动，请改回绝对路径。

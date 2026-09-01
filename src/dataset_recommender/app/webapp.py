@@ -176,7 +176,7 @@ def _redacted_validation_error(request: Request, exc: RequestValidationError) ->
     return JSONResponse(status_code=422, content={"detail": errors}, media_type="application/json; charset=utf-8")
 
 
-# 公开字符串/数组参数统一预算（SEC-H01）：请求模型解析期直接拦（超限 422），缺省/合法值不受影响。
+# 公开字符串/数组参数统一预算（体积闸）：请求模型解析期直接拦（超限 422），缺省/合法值不受影响。
 # 数值都留足正常使用余量（净化逻辑里另有更严的收敛值，如 facet_filters ≤12）——这里拦的是
 # 「解析期不设防」的原始体量，避免攻击者用巨型数组/超长字符串在模型解析前制造大分配。
 _MAX_SOURCES_ITEMS = 50          # sources 来源池数组上限（现有来源十余个，余量充足）
@@ -350,7 +350,7 @@ class UtteranceRequest(_ExperimentContract):
         description="调用方生成的请求号：断流重发**同一句**时原样回传，服务端占用去重（重发拿缓存结果，"
                     "不二次执行写工具）；两次独立提交必须各自新号。None=无幂等，行为与不传逐位一致",
     )
-    # ---- 当前检索参数（2026-08-16 prelim1，additive；缺省=现状行为）----
+    # ---- 当前检索参数（2026-08-16 ，additive；缺省=现状行为）----
     # 前端 ubRouteBody 与 runRecommend 发 /api/recommend 同源构造；后端只用于 pre-loop
     # 确定性检索与 preliminary_final 判定，校验口径与 /api/recommend 完全相同。
     top_k: int | None = Field(default=None, ge=1, le=50, description="返回结果最大数量（默认 10，最大 50）")
@@ -839,7 +839,7 @@ _HOST_INVALID_DETAIL = "Host 无效。"
 _UNTRUSTED_HOST_DETAIL = "仅接受本机 loopback Host。"
 
 
-# ---------------------------------------------------------------- 原始 body 上限（SEC-H01）
+# ---------------------------------------------------------------- 原始 body 上限（体积闸）
 # 全站统一预算：单细胞元数据 JSON 远小于 64 MB，超出的只可能是误操作或本机 DoS 试探。
 # 与 /api/upload、/api/curate 的 payload 闸同值（`_MAX_UPLOAD_BYTES = _MAX_RAW_BODY_BYTES`，
 # 一处常量，防口径再分叉）。上限在中间件**调用时**读取模块全局，测试 monkeypatch 常量即可生效。
@@ -857,7 +857,7 @@ def _raw_body_too_large_response() -> JSONResponse:
 
 
 class _RawBodyLimitMiddleware:
-    """原始请求 body 字节上限（SEC-H01）：Content-Length 预检 + 实际字节计数双闸。
+    """原始请求 body 字节上限（体积闸）：Content-Length 预检 + 实际字节计数双闸。
 
     - Content-Length 头存在且超限 → 不读 body、直接 413 —— JSON/表单在 FastAPI/Pydantic
       模型解析**之前**被拒绝（payload_json 的 64 MB 检查不再发生在解析之后）。
@@ -1067,7 +1067,7 @@ def _require_same_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail=detail)
 
 
-# ---------------------------------------------------------------- 简单频率限制（SEC-H03）
+# ---------------------------------------------------------------- 简单频率限制（限流闸）
 # 服务端共享 LLM Key 的可产生费用入口（`/api/introduction?llm=1`，GET）需要一道轻量闸：
 # 同源检查（复用 `_require_same_origin`）+ 进程内滑动窗口频率限制。**不做权限体系**——
 # 公网认证是已暂缓的独立 epic；本闸只挡「脚本高频烧服务端共享 Key」这类滥用，本机单
@@ -1229,7 +1229,7 @@ def _materialize_request_llm_config(
 ) -> LLMConfig:
     """请求级 LLM 配置物化唯一通道：ENV_LOCK 内以服务器真实配置为信任基准构造 env 覆盖，
     `_temporary_env` 窗口内物化不可变 LLMConfig——请求级 provider/key/endpoint 冻结进配置
-    对象，并发请求的 env 覆盖串行安全，锁外下游不再读 os.environ（PERF-H01：锁内只做
+    对象，并发请求的 env 覆盖串行安全，锁外下游不再读 os.environ（锁内最小化：锁内只做
     「读配置/物化」，网络 I/O 一律在锁外）。
 
     `within`（可选）在同一 env 窗口内执行——需顺带物化其它对象的调用方
@@ -1530,7 +1530,7 @@ def _account_http_error(exc: AccountError) -> HTTPException:
 
 def _set_session_cookie(resp: JSONResponse, token: str, *, remember: bool = True) -> None:
     # loopback http：HttpOnly + SameSite=Strict 已足够防跨站读写；本机无 https 故不置 Secure。
-    # remember=False → 不传 max_age：浏览器会话级 cookie（关浏览器即失效）；True → 30 天（acct1）。
+    # remember=False → 不传 max_age：浏览器会话级 cookie（关浏览器即失效）；True → 30 天。
     # Secure 口（公网护栏硬化，2026-08-26）：`BIODATA_COOKIE_SECURE=1` 时置 Secure——独立于护栏
     # 开关的单独 env：灰度纯 HTTP 阶段开了会让浏览器拒存 cookie（等于全员掉登录），故默认关，
     # TLS 落地后再开。
@@ -1543,7 +1543,7 @@ def _set_session_cookie(resp: JSONResponse, token: str, *, remember: bool = True
 #: 会话 cookie 的 Secure 开关 env（默认关；公网 TLS 落地后由部署侧置 1）。与护栏开关互相独立。
 _COOKIE_SECURE_ENV = "BIODATA_COOKIE_SECURE"
 
-# 公网护栏硬化：护栏模式下登录/注册的 per-IP 进程内节流（复用 SEC-H03 的
+# 公网护栏硬化：护栏模式下登录/注册的 per-IP 进程内节流（复用 限流闸 的
 # _rate_limited 滑动窗口）。防公网批量撞库/批量占号；本机形态（闸关）完全不加、逐字节不变。
 _ACCOUNT_LOGIN_RATE_LIMIT = 10      # 每分钟每 IP 登录尝试上限
 _ACCOUNT_REGISTER_RATE_LIMIT = 5    # 每分钟每 IP 注册尝试上限
@@ -1664,7 +1664,7 @@ def api_account_trial_quota(request: Request) -> JSONResponse:
 
 @app.post("/api/account/switch")
 def api_account_switch(payload: AccountSwitchPayload, request: Request) -> JSONResponse:
-    """一键切换账号（acct1）：校验前端记住的会话 token → 有效则把 cookie 重设到该账号。
+    """一键切换账号：校验前端记住的会话 token → 有效则把 cookie 重设到该账号。
     token 无效/过期 → 401（前端丢弃该条记忆、退回密码登录）。
     公网护栏硬化：护栏模式下一键切换整体关闭（session_token 不再下发，
     前端也不记 token——共用浏览器的公网场景里「点一下换成别人」不成立）。"""
@@ -2568,7 +2568,7 @@ def _run_action_plan(
     provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
         provider, use_llm=use_llm, mock_llm=mock_llm, base_url=base_url)
 
-    # PERF-H01：锁内只物化请求级 config，`plan_action`（可能调 LLM）在锁外执行——
+    # 锁内最小化：锁内只物化请求级 config，`plan_action`（可能调 LLM）在锁外执行——
     # 显式传 `config=cfg`，plan_action 内部 `config or load_llm_config()` 不再读 env。
     cfg = _materialize_request_llm_config(
         provider, use_llm=use_llm, mock_llm=mock_llm,
@@ -2679,7 +2679,7 @@ def _utterance_request_fp(text: str, payload: Any, provider: str,
         # 另一次请求（撞指纹 409）；断流重发原样带回同 recipe 才合法复用缓存体。
         "suggested_recipe": str(getattr(payload, "suggested_recipe", "") or ""),
         "base_url": str(getattr(payload, "base_url", "") or ""),
-        # prelim1：检索参数进指纹——同号但检索参数不同 = 另一次请求
+        #检索参数进指纹——同号但检索参数不同 = 另一次请求
         # （撞指纹 409），不得共享幂等槽；stream 不进指纹的纪律不变。
         "top_k": getattr(payload, "top_k", None),
         "rerank": str(getattr(payload, "rerank", "") or ""),
@@ -2808,14 +2808,14 @@ def _utterance_response_body(result: dict[str, Any]) -> dict[str, Any]:
         "suggestions": list(result.get("suggestions") or []),
         # 前端置灰/行动流标注用：available=扩展装好且未被 env 关停；used=本次真的走了 agent。
         "agent": {"available": _agent_exec.agent_available(), "used": result["via"] == "agent"},
-        # prelim1（2026-08-16 additive）：result_payload=环内 search.rerun 采纳的
+        #（2026-08-16 additive）：result_payload=环内 search.rerun 采纳的
         # /api/recommend 同形载荷（前端直接换屏，不再调 recommend）；None=无采纳。
         "result_payload": result.get("result_payload"),
         # preliminary_final=true 表示初步结果即最终结果（清徽标收尾，不调 recommend）；
         # 缺省/任一条件不明恒 False（宁可重检不跳检）。
         "preliminary_final": bool(result.get("preliminary_final")),
     }
-    # cr1（并发分流 r3 / ，breaking）：tool 路线 retrieval 恒 None +
+    #（并发分流 r3 / ，breaking）：tool 路线 retrieval 恒 None +
     # additive retrieval_note（"skipped_action_marker"/"discarded_action_route"）——
     # 仅当 retrieval 为 None 且 note 非空时才带键（rule_direct/identifier 等早退路线的
     # None 不带，键集与现状逐位一致）。
@@ -2880,11 +2880,11 @@ def _utterance_event_stream(
 ) -> Iterator[str]:
     """`/api/utterance` 流式分支的 SSE 生成器。
 
-    事件序（cr1 并发分流 v3.1 重定，r3 裁定后的真实确定性序）：
+    事件序（并发分流 v3.1 重定，r3 裁定后的真实确定性序）：
     **tool_start(共识) → step(共识) → tool_start(understand) → preliminary? → … → final**
     ——preliminary 不再保证首帧：verdict-gated 后它在 understand 节点入口（join/补跑
     完成后、构造 prompt 前）发射，恒在 tool_start(understand) 之后、final 之前；action
-    路线永不发射（路由内部出错则只发 error）。prelim1 2026-08-16 起 on_event 的 kind
+    路线永不发射（路由内部出错则只发 error）。2026-08-16 起 on_event 的 kind
     透传不再一律打 step。step 是 agent 规划节点的 trace 条目
     （`turn.route_turn(on_event=...)` 透传给 `plan_with_agent_events`，每节点落定时
     回调）；保底路径（无 agent）没有节点可播，**只发 final**——前端维持非流式的
@@ -2892,7 +2892,7 @@ def _utterance_event_stream(
 
     两处刻意的结构决策：
 
-    1. **ENV_LOCK 只保护「读配置/物化」几行，SSE 泵送全程在锁外**（PERF-H01）：流式的路由
+    1. **ENV_LOCK 只保护「读配置/物化」几行，SSE 泵送全程在锁外**（锁内最小化）：流式的路由
        发生在生成器被迭代时（端点函数早已返回）。锁内先把请求级 env 覆盖物化成不可变的
        `cfg`（LLMConfig），worker 的 `route_turn` **显式接收 `config=cfg`**（turn 内部所有
        配置读取都是 `config or load_llm_config()`，config 恒非空 → 永不读 env）——于是生成
@@ -2915,7 +2915,7 @@ def _utterance_event_stream(
     done: Any = object()
 
     def on_event(kind: str, entry: dict) -> None:
-        # prelim1：kind 透传不再一律打 "step"——preliminary / tool_start
+        # kind 透传不再一律打 "step"——preliminary / tool_start
         # 与 step 同路进队列，_sse_line 对事件名无约束；旧前端对未知事件名天然忽略。
         events.put((kind, entry))
 
@@ -2955,7 +2955,7 @@ def _utterance_event_stream(
                 _utterance_idem_store(idem_entry, body or {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL})
             events.put(done)
 
-    # PERF-H01：锁内只做「读配置/物化」——把请求级 env 覆盖冻结成不可变 `cfg`；
+    # 锁内最小化：锁内只做「读配置/物化」——把请求级 env 覆盖冻结成不可变 `cfg`；
     # worker 与 SSE 泵送全程在锁外（`cfg` 显式传给 route_turn，worker 不再读 env）。
     cfg = _materialize_request_llm_config(
         provider, use_llm=use_llm, mock_llm=mock_llm,
@@ -2992,7 +2992,7 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     （search → `/api/recommend`，tool → 前端 act 结构派发）。
 
     `stream:true`改发 `text/event-stream`：preliminary? →
-    tool_start* → step* → final（prelim1 2026-08-16）
+    tool_start* → step* → final（2026-08-16）
     final 体与本响应逐位同形；细节见 `_utterance_event_stream`。
 
     `req_id`（2026-08-08 修复）：同号在途 → 等 owner 收尾回缓存体（不再二次
@@ -3014,7 +3014,7 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
         payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
         base_url=payload.base_url)
 
-    # prelim1：当前检索参数收敛——与 /api/recommend **同一口径**（非法日期
+    #当前检索参数收敛——与 /api/recommend **同一口径**（非法日期
     # 400、倒挂 400、垃圾值收敛安全默认，不新造规则）；只用于 pre-loop 确定性检索与
     # preliminary_final 判定。校验在幂等占用之前：400 的请求不得占幂等槽。
     sp_rerank = "llm" if str(payload.rerank or "").strip().lower() == "llm" else "off"
@@ -3384,14 +3384,14 @@ def api_search_reply(payload: SearchReplyRequest, request: Request) -> JSONRespo
 # 超出的只可能是误操作或本机 DoS 试探（/api/upload 此前无闸，68.7MB 整读内存照收）。
 # 数值与全站原始 body 上限（`_RawBodyLimitMiddleware`）同源，一处常量防口径分叉。
 _MAX_UPLOAD_BYTES = _MAX_RAW_BODY_BYTES
-# 分块流式读的块大小：1 MiB。拒绝前绝不整读进内存（SEC-H01）。
+# 分块流式读的块大小：1 MiB。拒绝前绝不整读进内存（体积闸）。
 _MAX_UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 async def _read_upload_bounded(file: UploadFile, *, max_bytes: int) -> bytes:
     """分块流式读取上传文件，累计超过 `max_bytes` 立即关闭并中止（413），绝不整读复制。
 
-    SEC-H01：旧实现 `await file.read()` 先占满内存（或 multipart 临时文件先落满盘）才检查
+    体积闸：旧实现 `await file.read()` 先占满内存（或 multipart 临时文件先落满盘）才检查
     `len(raw_bytes)`；缺失/非数字/谎报 Content-Length 或 chunked 的请求会在拒绝前占用完整内存。
     本函数每次只读固定块并累计，上限一到立即关闭 `UploadFile`（释放 multipart 临时文件）。"""
     chunks: list[bytes] = []
@@ -3423,7 +3423,7 @@ async def api_upload(
     if not file.filename:
         raise HTTPException(status_code=400, detail="缺少文件名。")
 
-    # 体积闸三道（SEC-H01）：① 全站 `_RawBodyLimitMiddleware` 的 Content-Length 预检 + 实际
+    # 体积闸三道（体积闸）：① 全站 `_RawBodyLimitMiddleware` 的 Content-Length 预检 + 实际
     # 字节计数（在路由/解析前拦，见中间件）；② 这里按 multipart 外层 Content-Length 再核一次
     #（端点级纵深防御，超限 413 人话）；③ `_read_upload_bounded` 分块流式读，文件真实字节
     # 累计超限立即关闭并中止——谎报/chunked 的请求拒绝前绝不整读占用完整内存。
@@ -3439,7 +3439,7 @@ async def api_upload(
         # Never let a user upload occupy a release-allowlisted public snapshot
         # filename, even if that public file is temporarily absent.
         safe_name = _new_upload_name(file.filename)
-        # 分块流式读 + 累计上限（SEC-H01）：超限立即关闭并 413，绝不整读复制。
+        # 分块流式读 + 累计上限（体积闸）：超限立即关闭并 413，绝不整读复制。
         raw_bytes = await _read_upload_bounded(file, max_bytes=_MAX_UPLOAD_BYTES)
         # ingest_dataset 是同步重活（≤64MB JSON 解析 + 写盘 + 缓存失效，可达秒级）——async
         # 端点里直接调会阻塞事件循环、拖停所有并发请求（含 /api/health），下沉线程池执行。
@@ -4256,12 +4256,12 @@ def api_introduction(
     **双层门**：需服务端 `ENABLE_LLM` 开 **且** 本请求显式 `llm=1` 才会真调；否则 `llm_summary=None`、
     确定性介绍逐字不变（fail-open）。`llm=0`（默认）时响应与从前逐字节一致。
 
-    SEC-H03：`llm=1` 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
+    限流闸：`llm=1` 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
     （`_require_same_origin`）与简单频率限制（`_rate_limited`）；`llm=0` 路径逐位不变
     （纯确定性只读，无成本，不加闸）。"""
     uid, url, name, source = (str(v or "").strip() for v in (uid, url, name, source))
     if llm:
-        # SEC-H03：llm=1 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
+        # 限流闸：llm=1 是 GET 但会产生费用的外部请求——加与写端点同级的同源检查
         # 与简单频率限制。`request` 由 FastAPI 自动注入（直调函数/单元测试不经 HTTP 时
         # 为 None，跳过同源检查——那是服务端内部调用，不是浏览器跨站请求）。
         if request is not None:
@@ -4742,7 +4742,7 @@ class DownloadUpdateRequest(BaseModel):
 def _sanitize_download_uids(raw: Any) -> list[str]:
     """入参严格校验：uids 必须是非空字符串数组；去重、去空白。坏形状一律 400。
 
-    SEC-H01：新增最大数量上限（`_MAX_DOWNLOAD_UIDS`，超限 422）——此前 uids 只要求非空，
+    体积闸：新增最大数量上限（`_MAX_DOWNLOAD_UIDS`，超限 422）——此前 uids 只要求非空，
     攻击者可控页面可一次性塞成千上万个编号，plan/start 都会随之放大 CPU/内存/磁盘。
     """
     if not isinstance(raw, list) or not raw:
@@ -4776,7 +4776,7 @@ _DOWNLOAD_ERROR_STATUS = {
     "unknown_job": 404,
 }
 
-#: 单次下载任务的最大数据集数量（SEC-H01）：uids 数组上限。下载是重 I/O 动作（逐数据集
+#: 单次下载任务的最大数据集数量（体积闸）：uids 数组上限。下载是重 I/O 动作（逐数据集
 #: 建目录 + 拉文件），超出的编号对任何正常使用都没有意义，只会放大 CPU/内存/磁盘。
 _MAX_DOWNLOAD_UIDS = 100
 

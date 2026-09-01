@@ -251,7 +251,7 @@ function renderAccountState() {
     }
 }
 
-/* ---------------- 侧栏账号 chip + 菜单（acct1） ---------------- */
+/* ---------------- 侧栏账号 chip + 菜单 ---------------- */
 
 export function renderAccountChip() {
     const name = $("accountChipName"), avatar = $("accountAvatar");
@@ -364,7 +364,7 @@ export function initAccounts() {
     renderAccountState();
     renderAccountChip();
     installAuthFetchGuard();   // T3：401 auth_required → 自动回登录锁定（护栏模式外 no-op）
-    // 账号 chip / 菜单（acct1；2026-08-03 起在设置·账户块内，登录/注册/登出/切换全走这颗 chip 的菜单）
+    // 账号 chip / 菜单（2026-08-03 起在设置·账户块内，登录/注册/登出/切换全走这颗 chip 的菜单）
     const chip = $("accountChip");
     if (chip) chip.addEventListener("click", toggleAccountMenu);
     const menu = $("accountMenu");

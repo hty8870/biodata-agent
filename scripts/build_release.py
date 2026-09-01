@@ -59,8 +59,6 @@ PUBLIC_DOC_FILES = {
 EVAL_INPUT_FILES = {
     "eval/baseline_L0.json",
     "eval/eval_queries.json",
-    "eval/eval_recall_graded.json",
-    "eval/eval_rerank_graded.json",
     "eval/multisource_queries.json",
 }
 REQUIRED_RELEASE_FILES = {

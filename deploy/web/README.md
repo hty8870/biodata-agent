@@ -96,8 +96,9 @@ ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-ip> "
 ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-ip> "sudo <deploy-dir>/deploy.sh $TAG"
 ```
 
-> compose 与 deploy.sh 需与实际部署目录一致：`deploy.sh` 顶部的 `BASE=/opt/biodata-web` 是默认值，
-> 部署到其他 `<deploy-dir>` 时同步修改；compose 的 `env_file` 使用相对路径 `.env`，要求 compose
+> compose 与 deploy.sh 需与实际部署目录一致：`deploy.sh` 顶部的 `BASE` 默认 `/opt/biodata-web`，
+> 可用环境变量 `BIODATA_DEPLOY_DIR` 覆盖；compose 的数据卷宿主目录默认 `/data/biodata-web`，
+> 可用 `BIODATA_DATA_DIR` 覆盖；compose 的 `env_file` 使用相对路径 `.env`，要求 compose
 > 文件与 `.env` 位于同一目录（即 `<deploy-dir>`）下启动。
 
 `BIODATA_TRUSTED_HOSTS` 是 webapp Host 守卫的显式白名单（本机形态默认仅 loopback）；

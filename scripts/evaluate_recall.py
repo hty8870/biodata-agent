@@ -46,6 +46,7 @@ from dataset_recommender.retrieval.retriever import DatasetRetriever, passes_har
 from dataset_recommender.retrieval.vector_recall import load_embedder, load_cross_encoder  # noqa: E402
 from evaluate_recommendation import constraint_satisfied, satisfies_must  # noqa: E402
 
+# 分级答案不随公开仓发布（防对可见集过拟合）；用 --queries 指向自建的分级答案文件。
 DEFAULT_QUERIES = AGENT_ROOT / "eval" / "eval_recall_graded.json"
 # dev/test 切分：test 覆盖多样 facet，冻结后只跑一次；其余为 dev（调参）。
 TEST_IDS = {"g02", "g05", "g09", "g11", "g14", "g17", "g20", "g23", "g25", "g27", "g29", "g31", "g34"}

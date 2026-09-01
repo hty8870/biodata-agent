@@ -382,7 +382,7 @@ def test_landing_goes_through_one_shared_entry():
     assert SEARCH.count("landRecommendResult(data, query, { noScroll") == 1, "真请求落地点没走共享入口"
     # 救回换屏路径已退役（救回不再发 /api/agent/search-rescue），共享入口只剩缓存 + 真请求
     # 两处调用。推帧仍在（preliminary 先行帧与 final a 档换屏按住进度泡不蜕变）。
-    # prelim1（2026-08-16 初步结果先行）：推帧加第三参 popts.keepProgress（preliminary 先行帧
+    #（2026-08-16 初步结果先行）：推帧加第三参 popts.keepProgress（preliminary 先行帧
     # 与 final a 档换屏按住进度泡不蜕变）——钉字刻意更新为三参形态。
     land = re.search(r"export function landRecommendResult\([^)]*\)\s*\{(.*?)\n\}", SEARCH, re.S)
     assert land and "cbPushCurrent(data, query, { keepProgress:" in land.group(1), (

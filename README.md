@@ -353,6 +353,8 @@ $Python = '.\.venv\Scripts\python.exe'
 
 `fast` 用于快速语法与自动化契约检查；`full` 还会执行依赖一致性、治理校验、全量 pytest、项目/Web/MCP smoke 和冻结推荐评测。runner 会清除密钥/进程注入变量、禁用模型下载，并用离线环境与网络 tripwire 约束受审查的门；这不是操作系统级网络沙箱。运行前仍需在当前环境安装所需依赖，并准备 Node.js 与 PowerShell。也可以单独运行常用检查定位失败：
 
+> 评测集口径：`eval/` 随仓发布冻结主集（`eval_queries.json`）与 dev 集；held-out 看门狗集与 recall/rerank 的 graded 分级答案**不公开发布**（holdout 公开即失效，防对可见集过拟合），可用 `scripts/evaluate_recommendation.py --queries <自建集> --expect-*` 自建看门狗，方法论见 `docs/QUALITY_GATES.md`。
+
 ```powershell
 & $Python -m pytest tests\ -q
 & $Python scripts\smoke_test.py

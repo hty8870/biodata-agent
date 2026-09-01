@@ -14,7 +14,7 @@
 #   5. 成功 → 追加 RELEASES.log（时间/当前 tag/上一 tag），清理只保留最近 5 个 biodata-web 镜像。
 set -euo pipefail
 
-BASE=/opt/biodata-web
+BASE="${BIODATA_DEPLOY_DIR:-/opt/biodata-web}"
 ENV_FILE="$BASE/.env"
 COMPOSE_FILE="$BASE/docker-compose.web.yml"
 RELEASES_LOG="$BASE/RELEASES.log"

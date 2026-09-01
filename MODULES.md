@@ -166,7 +166,7 @@
 > `_fetch`/`_fetch_logged` 加 keyword-only `method/body/headers`（默认 GET 逐位不变，账本形状不变）；
 > 来源名归一 `_resolve_search_source_key`（key/label/别名三段，fail-closed；现锚点已收口为 `corpus_net.SOURCE_ALIASES`/`resolve_source_key`）；
 > HuBMAP/SCP 端点不供 species/disease → `corpus_enrich.backfill_record` 反标留痕。
-> ② 评测体系引入 held-out：`eval/eval_queries_holdout.json` 盲建 50 条（作者未见解析器与主集）；
+> ② 评测体系引入 held-out：盲建 50 条（作者未见解析器与主集；该集后不随公开仓发布）；
 > `evaluate_recommendation.py` 阈值参数化（`--expect-*`，默认=冻结常量，主集 97.7/0 逐位不变）；
 > 基线阈值钉死首次评测结果（主要 gap 为弃权型措辞盲区，修复留给 dev 集，
 > **不得据 holdout 回改解析器**）；质量门 full profile 新增
@@ -473,7 +473,7 @@
 
 | 文件 | 职责 | 公共契约 |
 |---|---|---|
-| `automation/quality-gates.json` | 本地与 CI 共用的质量门单一真源 | `schema_version=1`；`fast`/`full` profiles；每个门显式工具、超时、离线/禁密钥/禁模型下载和 fail-closed 回退；full 新增 `holdout-recommendation-evaluation`（盲建 held-out 50 条泛化看门狗，阈值=首跑基线，主集 `eval/eval_queries.json` 仍是唯一发布门）；full 新增 `dev-recommendation-evaluation`（dev 集 55 条回归门——盲区修复的合法迭代集，holdout 保持只用一次纪律） |
+| `automation/quality-gates.json` | 本地与 CI 共用的质量门单一真源 | `schema_version=1`；`fast`/`full` profiles；每个门显式工具、超时、离线/禁密钥/禁模型下载和 fail-closed 回退；full 含 `dev-recommendation-evaluation`（dev 集 55 条回归门——盲区修复的合法迭代集）；held-out 泛化看门狗（盲建 50 条、只用一次）曾挂 full profile，其查询集与 graded 答案不随公开仓发布、该门同步撤出（方法论见 docs/QUALITY_GATES.md） |
 | `scripts/evaluate_curate_agent.py` | curate **execution-based** 冻结门（BIRD EX 思想：断言沙盒终态文件而非输出文本） | 金标 `eval/eval_curate_agent.json` 22 例（含 unknown_file/not_curatable/token_mismatch/duplicate 等负例零副作用断言）；`--case` 单例调试 · `--out` 报告；pytest 折叠入口 `tests/test_curate_execution_gate.py` |
 | `scripts/probe_decide_format.py` | decide/understand 工具通道**格式问题微验证**——探针捕获 `_invoke_tool_channel` 真实出入（含 tool_calls/invalid_tool_calls），`--replay` 对去重现场逐臂回放 | `--ids` · `--rounds`（捕获，沙箱真 API）；`--replay` · `--replay-rounds`（臂对照）；产物 `eval/agent_decide_capture.jsonl` 不入库 |
 | `scripts/benchfb_ingest.py` | benchmark 采集反馈包**接收侧**：用户导出的反馈包 JSON（schema `biodata-benchfb/1`）→ 校验/去重/合并 → 审阅 HTML（标注高亮）+ benchmark 候选 `candidates.jsonl`（query + 系统 top-k + 用户标注 uid + 完成度/原因（旧包为星级）/评语/路由/耗时/环境）。纯标准库、只读输入、坏包记错不炸批 | `benchfb_ingest.py 包.json… [--out 目录]`；产物 `merged.json` / `review.html` / `candidates.jsonl`；pytest `tests/test_benchfb_ingest.py` |

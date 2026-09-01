@@ -480,7 +480,7 @@ def _check_updates_model():
 
 def test_events_arrive_in_node_order_with_labels():
     """on_event 的 step 事件序 = 节点执行序，条目与 trace 元素同形（含 label_zh）。
-    prelim1（2026-08-16）起同一条回调通道多了 tool_start 即时帧：understand/narrate
+（2026-08-16）起同一条回调通道多了 tool_start 即时帧：understand/narrate
     节点档（verb="node"）与 execute 工具档都**先于**对应 step 落帧，label_zh 逐字一致
     （前端 pending 行按 label 匹配改行）。"""
     events: list = []
@@ -543,7 +543,7 @@ def test_events_cover_the_repair_loop_in_order():
     plan, _ = _plan_events("检查10x是否有更新", fake,
                            lambda kind, entry: events.append((kind, entry)))
     assert plan["slots"]["source"] == "10x Genomics"
-    # prelim1（2026-08-16）起事件流里混有 tool_start 即时帧——节点序钉只看 step 帧。
+    #（2026-08-16）起事件流里混有 tool_start 即时帧——节点序钉只看 step 帧。
     assert [e["node"] for kind, e in events if kind == "step"] == [
         "route_consensus", "understand", "validate", "repair", "validate", "execute", "decide", "narrate",
     ]

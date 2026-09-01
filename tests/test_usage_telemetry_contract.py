@@ -330,7 +330,7 @@ def test_upload_thresholds_stay_at_or_below_design() -> None:
 
     # 端点与令牌不再硬编码进可下载 JS：部署从 HTML meta 注入；公网只许 HTTPS。
     raw = UPLOAD.read_text(encoding="utf-8")
-    assert "<server-ip>" not in raw and "biodata-tl1-ingest-2026" not in raw
+    assert "<server-ip>" not in raw and "<your-ingest-token>" not in raw
     assert "biodata-telemetry-endpoint" in raw and "biodata-telemetry-token" in raw
     assert 'u.protocol !== "https:"' in code and 'u.protocol === "http:" && loopback' in code
     html = INDEX.read_text(encoding="utf-8")
@@ -344,7 +344,7 @@ def test_upload_thresholds_stay_at_or_below_design() -> None:
     for page in (html, detail):
         for name, value in (
             ("biodata-telemetry-endpoint", "http://<server-ip>:8471/v1/ingest"),
-            ("biodata-telemetry-token", "biodata-tl1-ingest-2026"),
+            ("biodata-telemetry-token", "<your-ingest-token>"),
             ("biodata-telemetry-allow-insecure", "<server-ip>"),
         ):
             assert re.search(rf'<meta name="{name}" content="{re.escape(value)}">', page), (

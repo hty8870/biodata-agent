@@ -89,7 +89,7 @@ def main() -> int:
         "/api/curate/plan",         # 管护预览（零写盘，search_online 的 plan 会联网并记账本）
         "/api/curate/apply",        # 回传 confirm_token 才真执行（前端 runner 链式直推，问卷已退役）
         "执行明细不可用（请重启后端）",  # 新前端遇到旧后端时不得猜成规则检索
-        "规则+本地精准重排",  # ku1 覆盖策略修复：非活动备选批的排序层标注（results.js _batchRankSuffix）
+        "规则+本地精准重排", #覆盖策略修复：非活动备选批的排序层标注（results.js _batchRankSuffix）
         'id="onboarding"',      # 首次进入轻量导览
         'id="tutorialReplay"',  # 帮助页可重放
         'id="onboardingProgress">1 / 14<',  # 14 步教程：第0步反馈承诺+高质量查询引导 + 第2屏「一句话交代整件事」能力心智 + 真实 API 配置表单 + 排序说明（规则开箱即用/两种增强随时补）+ 润色/细化/详情页实拍/条件板 + 我的库介绍 + 接进你自己的 AI 助手 + 使用反馈指路
@@ -145,7 +145,7 @@ def main() -> int:
             fail(f"frontend bundle missing variant token: {token}")
     assert_no_mojibake(html, "html")
 
-    # 1.5) 数据集介绍详情页（ux3b）：「查看介绍」改独立标签页 /dataset。GET 200 + 子标签骨架 + dataset_page.js 可服务。
+    # 1.5) 数据集介绍详情页：「查看介绍」改独立标签页 /dataset。GET 200 + 子标签骨架 + dataset_page.js 可服务。
     ds = client.get("/dataset")
     if ds.status_code != 200:
         fail(f"/dataset returned {ds.status_code}")

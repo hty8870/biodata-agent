@@ -119,7 +119,7 @@ def test_check_section_does_not_render_when_empty() -> None:
 
 def test_entry_points_and_skeleton_present() -> None:
     """我的库导航/存为追踪/浮窗/上下文 chip 挂点骨架必须在 index.html 里。
-    ku1：课题入口并入「我的库」浮窗（#libNav + #libWin 的追踪页签）。"""
+课题入口并入「我的库」浮窗（#libNav + #libWin 的追踪页签）。"""
     index = INDEX.read_text(encoding="utf-8")
     for token in ('id="libNav"', 'id="saveProjectBtn"', 'id="libWin"',
                   'id="artifactCtx"', 'id="libWinClose"', 'id="histNav"', 'id="histWin"'):

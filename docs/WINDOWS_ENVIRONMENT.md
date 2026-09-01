@@ -8,7 +8,7 @@ Windows 环境可能只有以下一种或几种：
 - `uv` 管理的 Python；
 - Python Launcher `py.exe`；
 - PATH 中的 `python.exe` / `python3.exe`；
-- Codex 自带但未加入 PATH 的运行时。
+- 某些 CLI 工具自带但未加入 PATH 的运行时。
 
 因此项目指令先解析并复用 `$Python` 绝对路径，而不是硬编码 `py`。
 
@@ -117,7 +117,7 @@ Write-Host "仓库根目录：$RepoRoot"
 
 找到解释器不代表项目依赖已经安装，仍需单独检查。创建环境、下载 Python 或安装包都可能需要联网和写权限；执行前先核对当前 `uv --help`、用户授权和项目约定。
 
-若客户端提供自己的运行时定位能力（例如 Codex 工作区依赖定位器），先取得绝对路径并设置当前进程的 `$env:BIODATA_PYTHON`，再运行上面的统一验证；不要把客户端私有路径写死进项目文件。
+若客户端提供自己的运行时定位能力（例如工作区依赖定位器），先取得绝对路径并设置当前进程的 `$env:BIODATA_PYTHON`，再运行上面的统一验证；不要把客户端私有路径写死进项目文件。
 
 ## 4. PowerShell 与中文路径
 
@@ -146,7 +146,7 @@ Set-Location -LiteralPath $RepoRoot
 if ($LASTEXITCODE -ne 0) { throw '只读 pytest 检查失败。' }
 ```
 
-只读任务通常不需要运行会写入的 `--yes`（清理孤儿认领）或上传流程；`--rotate` 现已是空操作、不写盘。
+只读任务通常不需要运行会写入的 `--yes`（清理孤儿任务记录）或上传流程。
 
 ## 6. 命令失败语义
 

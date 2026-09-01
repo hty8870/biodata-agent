@@ -60,7 +60,7 @@ _EMBEDDER_CACHE: "dict[str, Embedder]" = {}
 _CROSS_CACHE: "dict[str, CrossScorer]" = {}
 _WARNED: "set[str]" = set()
 _DETERMINISM_DONE = False
-#: cr1（并发分流 r3 /）：模块级单飞锁——`_setup_determinism`（写全局
+#:（并发分流 r3 /）：模块级单飞锁——`_setup_determinism`（写全局
 #: os.environ）与两个模型缓存的 check-then-load 全程持锁。该竞态今天多请求并发即存在
 #: （顺带修）；配合 turn 层预热闭合，flight 线程从此不触碰 os.environ。
 _MODEL_LOCK = threading.Lock()
@@ -99,7 +99,7 @@ def default_cross_encoder_dir(model_name: str = DEFAULT_CROSS_ENCODER_MODEL) -> 
 def _setup_determinism() -> None:
     """best-effort 可复现（幂等）：eval 语义 + 关 TF32 + cudnn 确定。不启用会崩的严格算法开关，
     因为向量召回只做**排列**，确定性关乎结果可复现而非 0% 违规不变量（那由终检结构性保证）。
-    cr1：check-then-set 全程持模块级单飞锁（并发下只有第一个线程执行初始化与 os.environ
+    check-then-set 全程持模块级单飞锁（并发下只有第一个线程执行初始化与 os.environ
     写入，其余线程看到 _DETERMINISM_DONE 即返回——flight 线程零 env 触碰）。"""
     global _DETERMINISM_DONE
     if _DETERMINISM_DONE:
@@ -152,10 +152,10 @@ def load_embedder(
     if cache_key in _EMBEDDER_CACHE:
         return _EMBEDDER_CACHE[cache_key]
 
-    # cr1（r3 /）：check-then-load 全程持模块级单飞锁——并发请求/线程
+    #（r3 /）：check-then-load 全程持模块级单飞锁——并发请求/线程
     # 首次加载模型时只有第一个线程真加载，其余等待后命中缓存（避免重复加载与
     # _setup_determinism 的 os.environ 写入竞态）。
-    # cr1 修复（2026-08-19 死锁）：`_setup_determinism` **先无锁调用**（它自带模块级
+    #修复（2026-08-19 死锁）：`_setup_determinism` **先无锁调用**（它自带模块级
     # 单飞锁、check-then-set 全程持锁）再持 `_MODEL_LOCK`——修复前若锁内再调它，会对
     # 不可重入的 `threading.Lock` 二次 acquire 自锁死锁（run_web.py 冷启动 warm 路径
     # 实测：CPU 0、>8 分钟无响应）。单飞语义逐位不变：并发首载仍只有一个线程真加载。
@@ -220,8 +220,8 @@ def load_cross_encoder(
     if cache_key in _CROSS_CACHE:
         return _CROSS_CACHE[cache_key]
 
-    # cr1（r3 /）：同 load_embedder，check-then-load 全程持单飞锁。
-    # cr1 修复（2026-08-19 死锁）：`_setup_determinism` 先无锁调用（自带单飞锁），
+    #（r3 /）：同 load_embedder，check-then-load 全程持单飞锁。
+    #修复（2026-08-19 死锁）：`_setup_determinism` 先无锁调用（自带单飞锁），
     # 再持 `_MODEL_LOCK` 做 check-then-load——锁内不再有对 `_MODEL_LOCK` 的二次 acquire
     # （threading.Lock 不可重入，修复前此处锁内调 `_setup_determinism` 必自锁死锁）。
     _setup_determinism()

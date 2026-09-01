@@ -24,7 +24,7 @@ def records():
 
 @pytest.fixture(scope="module")
 def items(records):
-    # 显式取策展产物 10x-Visium.json 的前 5 条，而非 records[:5]——2026-08-17 promo1 重基线后
+    # 显式取策展产物 10x-Visium.json 的前 5 条，而非 records[:5]——2026-08-17 重基线后
     # base 多了 10x-synced.json（文件序在其前），records[:5] 会变成无文件清单的 sync 记录，
     # 本组「声明带真数字」钉的输入语义（有主文件、有被排除文件）就空了。
     visium = [r for r in records if r.source_file == "10x-Visium.json"]

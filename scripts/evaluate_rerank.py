@@ -41,6 +41,7 @@ from dataset_recommender.retrieval.retriever import DatasetRetriever          # 
 from dataset_recommender.llm.llm_client import load_llm_config          # noqa: E402
 from evaluate_recommendation import constraint_satisfied, satisfies_must  # noqa: E402
 
+# 分级答案不随公开仓发布（防对可见集过拟合）；用 --queries 指向自建的分级答案文件。
 DEFAULT_QUERIES = AGENT_ROOT / "eval" / "eval_rerank_graded.json"
 
 

@@ -46,7 +46,7 @@ export function setArtifactCtxAfterSend(fn) { _artifactCtxAfterSend = (fn instan
 function _attachArtifactCtx(body) {
     if (!_artifactCtxProvider) return body;
     const ctx = _artifactCtxProvider();
-    // ku1：形状扩展读 .text/.kind——序列化文本首行显式带类型（追踪/数据集），后端 prompt 直读。
+    // 形状扩展读 .text/.kind——序列化文本首行显式带类型（追踪/数据集），后端 prompt 直读。
     if (ctx && typeof ctx.text === "string" && ctx.text) {
         const kindTag = ctx.kind === "dataset" ? "数据集" : "追踪";
         body.artifact_context = "【" + kindTag + "】" + ctx.text;
@@ -604,7 +604,7 @@ export function cbProgressDrop() {
     cbRenderHistory();   // 静默撤下：这句的回复以别的形式出现（执行注记泡 / 选项预览卡），不重复回
 }
 /* 不确定态文案换句（流式规划：规划落地→进入检索时把「规划中…」换成「检索中…」；
-   prelim1 preliminary 帧落地后换成「正在更深一步思考…」——search.js 共享落地入口也调它，故导出）。
+preliminary 帧落地后换成「正在更深一步思考…」——search.js 共享落地入口也调它，故导出）。
    只在流式路径起作用（非流式 _cbProgLabel 恒空，进度泡只有三点）。 */
 export function cbProgressRelabel(text) {
     if (!_cbProg || !_cbProgLabel) return;
@@ -1710,7 +1710,7 @@ function cbToggleCollapsed() {
    落地点 + 零命中救回换屏同走它，2026-08-16 sr1），绝不放进 applyRecommendResult：
    那里同时是「回到上一步」「从左侧历史回看」「切账户重渲」三条路径的落点，
    放进去会让点两次上一步原地不动、也会把三天前的一条历史当成对话的下一步推进栈。
-   popts.keepProgress（prelim1）：落地但按住进度泡不蜕变——preliminary 先行帧（环还在跑，
+   popts.keepProgress：落地但按住进度泡不蜕变——preliminary 先行帧（环还在跑，
    泡要换句「正在更深一步思考…」继续等）与 final a 档换屏（完成话术由调用方另行留痕）。 */
 export function cbPushCurrent(data, query, popts) {
     if (_cbReplaying) return;
@@ -1760,7 +1760,7 @@ export function cbPushCurrent(data, query, popts) {
     // 进度泡：检索落地＝这句的回复到了——进度泡原位蜕变成完成摘要。
     // runRecommend 的所有路径（含加入/去掉/忽略等改条件重跑）都已开泡，这里几乎总是兑现；
     // 无泡 no-op 仅作防御残留（如未来新增绕过开泡的落地点）。
-    // prelim1：popts.keepProgress 按住不蜕变（先行帧要等环、final a 档另行留痕）。
+    // popts.keepProgress 按住不蜕变（先行帧要等环、final a 档另行留痕）。
     const _total = Number(data && data.result_total) || ((data && data.results) || []).length;
     const _shown = ((data && data.results) || []).length;
     // R2-2 P2-2：零结果文案按结果区**真实给了什么**分口径——有放宽 chips 才许说「给了放宽方式」。
@@ -2063,7 +2063,7 @@ function ubRouteBody(text, opts) {
     opts = opts || {};
     const data = cbFrameData() || {};
     const cfg = getConfig();
-    // prelim1：后端 pre-loop 检索要按**当前检索参数**跑——top_k/rerank/recall/
+    //后端 pre-loop 检索要按**当前检索参数**跑——top_k/rerank/recall/
     // strategy/分面/抑制/宽容/时间窗与 runRecommend 发 /api/recommend 同源构造（search.js
     // searchParamSnapshot），两处口径不许漂移。pl1b 收尾加 polish：后端 preliminary_final
     // 判定要看「AI 润色会不会跑」（b 档只在不润色时成立）。
@@ -2174,14 +2174,14 @@ export async function ubSubmit(source, opts) {
     startProgress(estimateDuration(_cfg) + 3000);   // +3s 给统一路由那次后端判断（可能含 LLM）
     _ubBusy = true;
     const myGen = ++_ubSeq;
-    // prelim1：preliminary 帧落地前的代际闸——环跑期间用户另起了检索（分面重跑等，_recSeq
+    // preliminary 帧落地前的代际闸——环跑期间用户另起了检索（分面重跑等，_recSeq
     // 已自增）时，晚到的 pre-loop 先行帧不得盖新屏（search.js recSeqNow 只读取口）。
     const recGenAtSend = recSeqNow();
     let reply = null;
     // 流式播过的规划步数：>0 说明步骤已实时上屏（且会被 arxFinish 收进总结泡 details），
     // final 里的 plan 要打 _traceStreamed 去重标，actDispatchPlan 不再二次渲染 plan.trace。
     let streamStepCount = 0;
-    // prelim1：本流是否已把 pre-loop 先行结果放上屏（preliminary 帧到达过）——
+    //本流是否已把 pre-loop 先行结果放上屏（preliminary 帧到达过）——
     // final 三档分发（ubDispatch）要知道屏上是不是先行结果（徽标在不在）。
     let prelimShown = false;
     // 回复是否真的来自流式：只有这时才许打去重标——流式中途失败回退非流式后，
@@ -2195,7 +2195,7 @@ export async function ubSubmit(source, opts) {
             try {
                 reply = await ubFetchStream(text, reqId, function (step, evKind) {
                     if (myGen !== _ubSeq) return;   // 已被更晚的一次提交取代，迟到的帧不再上屏
-                    // prelim1：pre-loop 第一阶段结果先行上屏——共享落地入口 +
+                    // pre-loop 第一阶段结果先行上屏——共享落地入口 +
                     // 「初步结果」徽标 + 进度泡换句「正在更深一步思考…」（均收口在 landRecommendResult
                     // 的 fromPrelim 档）。代际闸：发送时的检索代被取代（用户环跑期间另起检索）→ 丢帧。
                     if (evKind === "preliminary") {
@@ -2284,7 +2284,7 @@ export async function ubSubmit(source, opts) {
     _ubBusy = false;
     // 流式去重标：步骤已随 SSE 播过，actDispatchPlan 跳过 plan.trace 二次渲染。
     if (replyFromStream && streamStepCount && reply.plan) reply.plan._traceStreamed = true;
-    // prelim1：本流上过先行结果 → 告诉 ubDispatch（final 三档：换屏摘徽标 / 免二次检索摘徽标 /
+    //本流上过先行结果 → 告诉 ubDispatch（final 三档：换屏摘徽标 / 免二次检索摘徽标 /
     // 现状 runRecommend 落地摘徽标）。
     if (prelimShown && reply) reply._prelimShown = true;
     // 采集：路由应答全量入档（agent 路径的 plan.trace 逐步执行记录随 reply.plan 一起来）。
@@ -2298,9 +2298,9 @@ export async function ubSubmit(source, opts) {
    带同一号，拿的是这次路由收尾后的缓存体，不会再执行一遍。
    手动解析 SSE：帧界是空行（\n\n），帧可能跨 chunk——只在缓冲里拼出完整帧后再按
    「data: 」行解析 JSON。事件五档：step（agent 各节点真实记录 {node,label_zh,detail,ok,ms}，
-   逐条喂 onStep 实时上屏）→ preliminary / tool_start（prelim1 新帧，同走 onStep 第二参
+   逐条喂 onStep 实时上屏）→ preliminary / tool_start（新帧，同走 onStep 第二参
    分种类）→ final（与非流式**同形**的
-   完整响应，含 route/plan/echo_zh/agent，prelim1 起 additive 带 result_payload/
+   完整响应，含 route/plan/echo_zh/agent，additive 带 result_payload/
    preliminary_final 两键）→ error（{detail}，视为协议失败抛给调用方走回退）。
    只在**传输/协议**层面失败时抛错（非 2xx / 断流 / 收不到 final）；final 里 ok:false 是
    业务回答，原样交回，由 ubSubmit 统一的 !reply.ok 出口处理——不为它多发一次请求。
@@ -2334,7 +2334,7 @@ async function ubFetchStream(text, reqId, onStep, opts) {
                 else if (msg.event === "tool_start" && msg.data) onStep(msg.data, "tool_start");
                 else if (msg.event === "final") finalReply = msg.data;
                 else if (msg.event === "error") errDetail = String((msg.data && msg.data.detail) || "路由失败");
-                // 其余事件种类一律忽略（prelim1 §8：additive 演进——旧前端对新流完全兼容，不留硬耦合）
+                // 其余事件种类一律忽略（§8：additive 演进——旧前端对新流完全兼容，不留硬耦合）
             });
         }
     }
@@ -2655,7 +2655,7 @@ function ubDispatch(text, reply, fromChat, wasChat) {
         const _prelim = !!(reply && reply._prelimShown);   // 屏上是 pre-loop 先行结果（「初步结果」徽标在）
         const _rpay = (reply && reply.result_payload) || null;
         usageLog(USAGE_KINDS.conv, { mode: "chat" });
-        // prelim1 final 三档。
+        //final 三档。
         // mb2（2026-08-17 复核中5 跨契约缺陷）：preliminary_final 分支必须**先于**
         // 通用 result_payload 分支判定——后端结果批常驻且仅 preliminary 批时，legacy
         // result_payload 也非 None（镜像活跃批，turn.py 组卷收尾），若 a 档先判就会把屏上已在的

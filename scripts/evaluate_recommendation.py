@@ -7,9 +7,9 @@
   py scripts/evaluate_recommendation.py --validate      # 只校验 eval 集：每条查询在库里的 ground-truth 支持数
   py scripts/evaluate_recommendation.py --out report.json           # 存报告
   py scripts/evaluate_recommendation.py --baseline before.json      # 与基线对比（优化前后表）
-  py scripts/evaluate_recommendation.py --queries eval/eval_queries_holdout.json \
+  py scripts/evaluate_recommendation.py --queries eval/eval_queries_dev.json \
       --expect-top1 XX --expect-top5 XX --expect-max-violation 0 --expect-min-noresult 1.0
-                                                        # held-out 看门狗：阈值=首跑基线（默认=冻结基线常量，主集行为不变）
+                                                        # 自定阈值看门狗（默认=冻结基线常量，主集行为不变）
 
 评测判据（独立于 retriever 自身逻辑的外部裁判）：
   - Top-1 Accuracy : 第 1 条是否满足全部 must_match
