@@ -89,6 +89,44 @@ _LLM_ABSENT_REASON_ZH = {
 }
 
 
+def _partition_intents(intents: list[dict[str, Any]]
+                       ) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None,
+                                  list[dict[str, Any]] | None]:
+    """子意图枚举清单 → ``(bypass_plan, intent_checklist, pending_frontend)`` 三元组。
+
+    「不少于我」下限合同的分流器（2026-09-01）：
+    - 空清单 / 全 cancelled → ``(None, None, None)``：无 EXEC 待办，走 agent 图（现状）。
+    - 非 cancelled 项**全部** ∈ 前端直派面 → ``(首项, None, None)``：bypass agent 图，
+      顶层 plan = 首个非 cancelled 项（形状/回执与单次探测逐位兼容），additive
+      ``plan["intents"]`` 带**全清单**（含 cancelled 项——前端只回音不执行）。
+    - 含环内 EXEC → ``(None, checklist, pending_frontend)``：checklist 注入图初始
+      state（环内项 ``plane="inloop"`` 待核销；直派面项 ``plane="frontend"`` 如实告知
+      decide「已交前端」、环内免核销），直派面项图跑完后经 additive
+      ``plan["pending_frontend"]`` 挂回响应让前端接力——**绝不进 plan.steps**
+      （steps 非空是「后端已执行」所有权令牌）。
+    """
+    active = [p for p in intents if not p.get("cancelled")]
+    if not active:
+        return None, None, None
+    frontend = [p for p in active if p.get("verb") in _FRONTEND_EXEC_PLANE]
+    inloop = [p for p in active if p.get("verb") not in _FRONTEND_EXEC_PLANE]
+    if not inloop:
+        top = active[0]
+        top["agent_bypassed"] = True        # additive 留痕：走前端直派，agent 图未执行
+        top["intents"] = intents            # additive：全清单（含 cancelled，前端只回音）
+        return top, None, None
+    checklist = [
+        {"verb": p.get("verb") or "", "verb_zh": p.get("verb_zh") or "",
+         "quoted": p.get("quoted") or "", "plane": "inloop"}
+        for p in inloop
+    ] + [
+        {"verb": p.get("verb") or "", "verb_zh": p.get("verb_zh") or "",
+         "quoted": p.get("quoted") or "", "plane": "frontend"}
+        for p in frontend
+    ]
+    return None, checklist, frontend
+
+
 def _norm_scope_list(value: Any) -> list[str]:
     """规范化 scope 列表（供指纹比较）：去空、逐项 str、排序去重——scope 不因项序变化。"""
     if value is None:
@@ -1076,23 +1114,45 @@ def _route_turn_impl(
         # 命中本面 → 采用探测 plan（不走 agent 图，agent_used 保持 False）；未命中（cite.export/
         # compare 等环内多步 / 非执行）→ 丢弃探测，走 agent 图。plan_action 纯规划无副作用，
         # 一次额外 LLM 探测换来前端直派动作不再被环内丢弃。
+        #
+        # 2026-09-01「不少于我」下限合同：单次分类升级为**子意图枚举**
+        # （`plan_action_intents`，同为一次额外调用）——「列出所有要做的事」比「选一个
+        # 意图」结构性难漏；枚举失败（None）→ 回落现状单次探测兜底（逐位保留）。
+        # 枚举成功由 `_partition_intents` 分流：全直派面 → bypass（intents 全清单挂
+        # plan 让前端依次执行）；含环内 EXEC → 走图 + intent_checklist 注入核销，
+        # 直派尾巴图后挂 pending_frontend 由前端接力。
+        _intent_checklist: list[dict[str, Any]] | None = None
+        _pending_frontend: list[dict[str, Any]] | None = None
         if markers:
             try:
-                _fe_probe = _ap.plan_action(
+                _intents = _ap.plan_action_intents(
                     text, has_results=has_results, result_total=result_total,
                     config=config, llm_call=llm_call, retrieval=None,
                     current_query=current_query, current_filters=current_filters,
                     allowed_verbs=recipe_verbs,
                 )
-            except Exception:                       # 探测失败不阻断：按未知处理走 agent 图
-                _fe_probe = None
-            if (_fe_probe is not None
-                    and str(_fe_probe.get("kind") or "") == _ap.EXEC
-                    and _fe_probe.get("verb") in _FRONTEND_EXEC_PLANE):
-                plan = _fe_probe
-                plan["agent_bypassed"] = True       # additive 留痕：走前端直派，agent 图未执行
+            except Exception:                       # 枚举异常不阻断：回落单次探测
+                _intents = None
+            if _intents is None:
+                # 枚举通道失败（LLM 缺席/空应答/解析不出/整单垃圾）→ 现状单次探测。
+                try:
+                    _fe_probe = _ap.plan_action(
+                        text, has_results=has_results, result_total=result_total,
+                        config=config, llm_call=llm_call, retrieval=None,
+                        current_query=current_query, current_filters=current_filters,
+                        allowed_verbs=recipe_verbs,
+                    )
+                except Exception:                   # 探测失败不阻断：按未知处理走 agent 图
+                    _fe_probe = None
+                if (_fe_probe is not None
+                        and str(_fe_probe.get("kind") or "") == _ap.EXEC
+                        and _fe_probe.get("verb") in _FRONTEND_EXEC_PLANE):
+                    plan = _fe_probe
+                    plan["agent_bypassed"] = True   # additive 留痕：走前端直派，agent 图未执行
+                else:
+                    plan = None                     # 丢弃探测，走 agent 图
             else:
-                plan = None                         # 丢弃探测，走 agent 图
+                plan, _intent_checklist, _pending_frontend = _partition_intents(_intents)
         if plan is None:
             try:
                 # 2026-08-18：search.rerun 与 pre-loop 必须吃同一份结构化检索现场。
@@ -1124,6 +1184,7 @@ def _route_turn_impl(
                         route_extra_zh=route_extra_zh,
                         # 课题上下文只进 agent prompt。
                         artifact_context=artifact_context,
+                        intent_checklist=_intent_checklist,
                         **_agent_search_kwargs,
                     )
                 else:
@@ -1139,9 +1200,14 @@ def _route_turn_impl(
                         route_extra_zh=route_extra_zh,
                         # 课题上下文只进 agent prompt。
                         artifact_context=artifact_context,
+                        intent_checklist=_intent_checklist,
                         **_agent_search_kwargs,
                     )
                 agent_used = True
+                if _pending_frontend:
+                    # 「不少于我」：图跑完后直派面尾巴挂回响应让前端接力（additive；
+                    # 绝不进 plan.steps——steps 非空是「后端已执行」所有权令牌）。
+                    plan["pending_frontend"] = _pending_frontend
             except _agent.AgentError:
                 plan = None  # 预期内失败（协议/通道类）——安静降级，行为契约不变
                 agent_fell_back = True

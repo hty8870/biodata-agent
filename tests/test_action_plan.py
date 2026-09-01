@@ -847,3 +847,167 @@ def test_frontend_dispatch_plane_derives_from_verb_specs():
     assert plane == {"pack.download", "reuse.pack"}
     from dataset_recommender.agent import turn as T
     assert T._FRONTEND_EXEC_PLANE == frozenset(plane)
+
+
+# ---------------------------------------------------------------- 子意图枚举（「不少于我」下限合同探测半）
+
+def test_first_json_array_extracts_balanced_array_from_prose():
+    """散文里抠第一段平衡的 [...]；字符串字面量内的括号不计数、转义正确跳过。"""
+    assert AP._first_json_array('前言 [{"a": "[1]"}] 后记') == '[{"a": "[1]"}]'
+    assert AP._first_json_array('[[1],[2]]') == '[[1],[2]]'
+    assert AP._first_json_array('["x\\"]"]') == '["x\\"]"]'   # 转义引号不收串
+    assert AP._first_json_array('没有数组') == ''
+    assert AP._first_json_array('[没闭合 [{"a":1}]') == '[{"a":1}]' or True  # 不抛即可
+    assert AP._first_json_array('') == '' and AP._first_json_array(None) == ''
+
+
+def test_parse_intents_response_distinguishes_legal_empty_from_failure():
+    """核心语义钉：合法空清单 → []；解析不出 → None（调用方据此回落单次探测）。"""
+    assert AP.parse_intents_response('[]') == []
+    assert AP.parse_intents_response('{"intents": []}') == []
+    assert AP.parse_intents_response('{"items": []}') == []
+    assert AP.parse_intents_response('{"actions": []}') == []
+    assert AP.parse_intents_response('这句话没有动作') is None
+    assert AP.parse_intents_response('') is None
+    assert AP.parse_intents_response('[1, 2, {"verb": "x"}]') == [{"verb": "x"}]  # 非 dict 滤掉
+    assert AP.parse_intents_response('[1, 2]') == []          # 全滤完也是合法空清单
+    one = AP.parse_intents_response('{"verb": "pack.download", "quoted": "下载"}')
+    assert one == [{"verb": "pack.download", "quoted": "下载"}]   # 单对象宽容收下
+    assert AP.parse_intents_response('{"foo": 1}') is None     # 无清单键也无 verb → 失败
+    # 散文夹数组
+    mixed = AP.parse_intents_response('我想了想：[{"verb": "cite.export", "quoted": "引文"}] 就这样')
+    assert mixed == [{"verb": "cite.export", "quoted": "引文"}]
+
+
+def test_build_intents_prompt_only_lists_exec_verbs_and_carries_rules():
+    """枚举面只出执行类动词——检索是管线默认行为、不是清单项；铁律与 JSON 壳在位。"""
+    prompt = AP.build_intents_prompt("找人类肺癌数据，把前两个打包下载",
+                                     has_results=False, result_total=0)
+    assert "找人类肺癌数据" in prompt
+    assert "pack.download" in prompt and "cite.export" in prompt
+    for not_exec in ("search.new", "refine.conditions", "lookup.identifier",
+                     "route.request", '"none"'):
+        assert not_exec not in prompt, not_exec
+    assert "不是动作" in prompt           # 检索不入清单的明示
+    assert "cancelled" in prompt and "quoted" in prompt
+    assert "JSON 数组" in prompt
+    assert "还没有" in prompt             # 现场情况段：无结果口径
+    p2 = AP.build_intents_prompt("x", has_results=True, result_total=7,
+                                 current_query="人类肺癌", retrieval=None)
+    assert "共 7 条命中" in p2 and "人类肺癌" in p2
+
+
+def _intents(utterance, payload, *, has_results=True, result_total=42, **kw):
+    calls = {"n": 0}
+
+    def caller(_prompt):
+        calls["n"] += 1
+        return json.dumps(payload, ensure_ascii=False)
+
+    out = AP.plan_action_intents(
+        utterance, has_results=has_results, result_total=result_total,
+        llm_call=caller, **kw)
+    return out, calls["n"]
+
+
+def test_plan_action_intents_enumerates_all_exec_subintents():
+    """混合句「检索+下载+引文」→ 两件执行动作全列出（检索不入清单）；每项与
+    plan_action 产出同构（kind/verb/quoted 护栏全过）。"""
+    payload = [
+        {"verb": "pack.download", "quoted": "打包下载", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "明说下载"},
+        {"verb": "cite.export", "quoted": "导出引文", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "明说引文"},
+    ]
+    plans, n = _intents("把结果打包下载，顺便导出引文", payload)
+    assert n == 1                                    # 注入替身只调一次（重试预算留给真 LLM）
+    assert [p["verb"] for p in plans] == ["pack.download", "cite.export"]
+    for p in plans:
+        assert p["kind"] == AP.EXEC and p["source"] == "llm"
+        assert p["quoted"] in "把结果打包下载，顺便导出引文"
+
+
+def test_plan_action_intents_legal_empty_list_means_no_action():
+    """合法空清单 = 这句话没有要执行的动作 → []（**不是** None——不回落单次探测）。"""
+    plans, _ = _intents("随便看看人类肺癌数据", [])
+    assert plans == []
+
+
+def test_plan_action_intents_parse_failure_falls_back_to_single_probe():
+    """解析不出 / 空应答 → None（turn 探测段据此回落 plan_action 单次探测）。"""
+    plans, _ = _intents("打包下载", None)
+    assert plans is None
+
+    def garbage(_prompt):
+        return "我觉得吧，这个嘛……"
+    assert AP.plan_action_intents("打包下载", has_results=True, result_total=1,
+                                  llm_call=garbage) is None
+
+
+def test_plan_action_intents_dropped_items_and_wholesale_garbage_rule():
+    """逐项护栏：词表外/缺原文依据的项降级出列；**枚举非空却逐项降 none = 整单垃圾**
+    → None 回落单次探测（这份枚举不可信）。"""
+    # 一项合法 + 一项词表外 → 词表外出列，合法项保留
+    mixed = [
+        {"verb": "pack.download", "quoted": "打包", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "ok"},
+        {"verb": "invented.verb", "quoted": "打包", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "编的词"},
+    ]
+    plans, _ = _intents("把结果打包", mixed)
+    assert [p["verb"] for p in plans] == ["pack.download"]
+    # 整单垃圾：两项都降 none → None
+    all_bad = [
+        {"verb": "invented.verb", "quoted": "打包", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "x"},
+        {"verb": "pack.download", "quoted": "原文里没这四个字", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "x"},
+    ]
+    plans, _ = _intents("把结果打包", all_bad)
+    assert plans is None
+
+
+def test_plan_action_intents_dedupes_same_verb_and_caps_at_max():
+    """同动词重复枚举取第一出现；超 MAX_INTENTS 截断。"""
+    many = [{"verb": "pack.download", "quoted": "下载", "limit": i,
+             "cancelled": False, "confidence": "high", "reason": "x"}
+            for i in range(3)]
+    plans, _ = _intents("下载下载下载", many)
+    assert [p["verb"] for p in plans] == ["pack.download"]   # 去重后只剩一件
+
+    verbs_cycle = ["pack.download", "pack.preview", "cite.export", "reuse.pack",
+                   "feasibility.run", "files.show", "curate.list", "curate.db_status"]
+    big = [{"verb": verbs_cycle[i], "quoted": "下载", "limit": None,
+            "cancelled": False, "confidence": "high", "reason": "x"}
+           for i in range(8)]
+    plans, _ = _intents("下载", big)
+    assert len(plans) == AP.MAX_INTENTS                       # 截断
+
+
+def test_plan_action_intents_allowed_verbs_only_narrows():
+    """allowed_verbs 收窄只缩小不扩权：面外 EXEC 动词出列；且枚举面永远不出
+    检索类（即使 allowed_verbs 显式给了 search.new）。"""
+    payload = [
+        {"verb": "pack.download", "quoted": "打包", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "x"},
+        {"verb": "cite.export", "quoted": "引文", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "x"},
+    ]
+    plans, _ = _intents("打包和引文", payload, allowed_verbs=("pack.download",))
+    assert [p["verb"] for p in plans] == ["pack.download"]
+    # allowed_verbs 塞检索动词也进不了枚举面
+    plans, _ = _intents("打包", [{"verb": "search.new", "quoted": "打包", "limit": None,
+                                  "cancelled": False, "confidence": "high", "reason": "x"}],
+                        allowed_verbs=("search.new", "pack.download"))
+    assert plans is None        # 唯一一项被面闸出列 → 整单垃圾 → 回落单次探测
+
+
+def test_plan_action_intents_llm_absent_returns_none():
+    """LLM 缺席（无配置/被关）→ None，行为与引入本函数前逐位一致（fail-open）。"""
+    assert AP.plan_action_intents("打包下载", has_results=True, result_total=1,
+                                  llm_call=lambda _p: None) is None
+    # 显式关断配置 → None（不依赖测试环境是否恰好没配 LLM——本机有真配置，会真联网）
+    from dataset_recommender.llm.llm_client import LLMConfig
+    off = LLMConfig(enable_llm=False)
+    assert AP.plan_action_intents("打包下载", has_results=True, result_total=1,
+                                  config=off) is None

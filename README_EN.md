@@ -6,7 +6,7 @@
 
 [中文](README.md) · **English**
 
-A **conversational dataset-discovery agent** for public single-cell and spatial omics catalogs. Describe your experiment in one sentence; the system hard-filters, transparently ranks, and organizes citations and downloads across 8,022 public dataset metadata records. Architecturally it is a **ReAct loop with a RAG retrieval core** — offline by default, zero tokens burned by default, and every tool call carries its full execution context, so the whole session is **auditable and reversible**.
+A **conversational dataset-discovery agent** for public single-cell and spatial omics catalogs. Describe your experiment in one sentence; the system hard-filters, transparently ranks, and organizes citations and downloads across 8,022 public metadata records. A **ReAct execution loop** sits around a **RAG retrieval core**: deterministic retrieval is offline and token-free by default, while local vectors and LLMs are optional enhancements. The tool surface is scoped to the task, independent read-only calls may be safely batched, and every call retains its execution context, evidence, and receipt, so the session is **auditable and reversible**.
 
 ![Demo: one-sentence search → result cards → follow-up chat](docs/assets/readme/demo.gif)
 
@@ -53,12 +53,12 @@ A **conversational dataset-discovery agent** for public single-cell and spatial 
 | Blind-built holdout (generalization watchdog) | 50 queries | 97.8% | 97.8% | 0 | Built without ever seeing the retrieval implementation or main-set items |
 
 - Trajectory (every step a controlled re-baseline on record): Top1 71.8% → 97.7%, Top5 79.5% → 97.7%, hard violations 37.7% → 0.
-- The discipline is the product: a SHA-256 fingerprint lock on the frozen corpus (CRLF/LF immune); thresholds may only tighten — loosening one requires recorded authorization; the holdout is single-use and unpublished, and using it to claim improvements after tuning is forbidden; all evaluations reproduce offline.
+- The discipline is the product: a SHA-256 fingerprint lock on the frozen corpus (CRLF/LF immune); thresholds may only tighten — loosening one requires recorded authorization. The private holdout is single-use and unpublished. Public users can reproduce the frozen, dev, and independent public-validation gates offline; the historical holdout number is explicitly private evidence, not a public reproducibility claim.
 
 ### Engineering credibility
 
-- 4,558 pytest cases + 19 frontend JS specs, all green (as of 2026-09-01; policy pins "all pass", not the count).
-- 13 manifest-driven quality gates: dependency consistency, governance checks, the full test suite, project/Web/MCP smoke tests, three frozen evaluations, and installer contracts.
+- Policy requires the current suite to pass in full; it does not hand-maintain a passed count that drifts on every commit. CI retains a machine-readable report for the exact revision.
+- Public full has 11 manifest-driven gates: dependency consistency, the full suite, project/Web/MCP smoke tests, frozen + dev evaluation, and installer contracts. Private adds governance and the unpublished holdout for 13 gates.
 - CI runs a three-leg matrix (Windows full gate + Ubuntu fast gate on two Python versions), first-launch smoke tests of the source package on three platforms, and a delivery-surface contamination scan that blocks internal material at the source.
 
 ## Interface
@@ -294,7 +294,7 @@ Without the extension or an LLM, the system falls back to the built-in planner a
 
 ## Development & testing
 
-Environment, architecture, HTTP endpoints, extension points, and the verification matrix for developers: see [DEVELOPMENT.md](DEVELOPMENT.md). The current Web API version is `2.9.0`. Manifest-driven unified quality gates are the preferred path for development and delivery:
+Environment, architecture, HTTP endpoints, extension points, and the verification matrix for developers: see [DEVELOPMENT.md](DEVELOPMENT.md). The current Web API version is `2.9.1`. Manifest-driven unified quality gates are the preferred path for development and delivery:
 
 ```powershell
 $Python = '.\.venv\Scripts\python.exe'

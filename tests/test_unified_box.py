@@ -518,9 +518,14 @@ def test_curate_verbs_dispatch_directly_without_a_search_detour():
     assert ub, "找不到 ubDispatchAction"
     code = _strip_comments(ub.group(1))
     assert '"curate.")' in code or '"curate."' in code, "curate 直派分支不存在"
-    # 「先检索后派发」的闸门必须带 requires_results：不需要结果的动词不许被拿去先搜一遍
-    gate = re.search(r"if \(!hasResults && plan\.requires_results\)", code)
-    assert gate, "先检索闸门必须是 requires_results 专属"
+    # 「先检索后派发」的闸门必须带 requires_results：不需要结果的动词不许被拿去先搜一遍。
+    # 枚举清单在场时任一执行项 requires_results 同样触发——
+    # 条件仍是 requires_results 专属（curate.* 恒 false、清单项同为护栏产物，语义不变）。
+    gate = re.search(
+        r"if \(!hasResults && \(plan\.requires_results \|\|.*?"
+        r"_activeIntents\.some\(function \(p\) \{ return !!p\.requires_results; \}\)\)\)",
+        code, re.S)
+    assert gate, "先检索闸门必须是 requires_results 专属（含枚举清单的逐项判据）"
     # curate 绕过 actEnabled 的判据要在；「结果区露脸」分支已退役（行动流与总结长在对话流，
     # 结果区不再为执行面板提前露头）——这里反向钉死它不得回来。
     assert "isCurate" in code and "actEnabled()" in code

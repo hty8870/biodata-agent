@@ -8,4 +8,4 @@ uvicorn==0.52.4
 sqlalchemy==2.0.52
 psycopg2-binary==2.9.12
 # 意见反馈解密（ECDH/HKDF/AES-256-GCM，见 app.py）；改这里后必须重生成 requirements.lock
-cryptography==49.0.0
+cryptography==50.0.1

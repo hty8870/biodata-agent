@@ -306,6 +306,11 @@ def _minimal_project(root: Path) -> None:
         path = root.joinpath(*Path(relative).parts)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("public\n" if path.suffix == ".md" else "[]\n", encoding="utf-8")
+    for relative in build_release.EVAL_INPUT_FILES | {"database/SOURCES.yml"}:
+        source = build_release.source_relpath(relative)
+        path = root.joinpath(*Path(source).parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("sources: []\n" if path.suffix == ".yml" else "{}\n", encoding="utf-8")
 
     # mac/Linux 一键启动链（本次新增的可执行条目 + 既有 run_web.sh）。
     (root / "scripts" / "run_web.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")

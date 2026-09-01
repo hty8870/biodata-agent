@@ -1452,3 +1452,211 @@ def plan_action(
         raw, text, has_results=has_results, result_total=total, llm_status="ok",
         allowed_verbs=narrow_allowed,   # 提示不是围栏，表外动词机械拒（闸层）；suggested_recipe 再收窄
     )
+
+
+# ---------------------------------------------------------------- 子意图枚举（「不少于我」下限合同）
+
+#: 枚举清单上限（2026-09-01）：防模型失控长篇枚举烧后续预算；真实多事项句实测 2~4 件，
+#: 6 是宽松上限。超出截断（同动词重复枚举取第一出现，见 `plan_action_intents`）。
+MAX_INTENTS = 6
+
+
+def _first_json_array(text: str) -> str:
+    """从散文里抠第一段平衡的 `[...]`（枚举应答解析用）；找不到 → ""。
+
+    与 `rerank._first_json_object` 同族同纪律：字符串字面量内的括号不计数、
+    反斜杠转义正确跳过。绝不抛。"""
+    text = text or ""
+    start = text.find("[")
+    if start < 0:
+        return ""
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return ""
+
+
+def parse_intents_response(text: str) -> list[dict[str, Any]] | None:
+    """解析枚举输出 → raw dict 列表。**区分「没有动作」与「失败」**：
+
+    合法空清单（`[]` / `{"intents": []}`）→ `[]`；解析不出 → `None`（调用方回落
+    单次探测）。单个对象按一件清单宽容收下。极其宽容、绝不抛。"""
+    for candidate in (text, _first_json_array(text or "")):
+        if not candidate:
+            continue
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, list):
+            return [x for x in parsed if isinstance(x, dict)]
+        if isinstance(parsed, dict):
+            for key in ("intents", "items", "actions"):
+                arr = parsed.get(key)
+                if isinstance(arr, list):
+                    return [x for x in arr if isinstance(x, dict)]
+            if str(parsed.get("verb") or "").strip():
+                return [parsed]
+    return None
+
+
+def build_intents_prompt(utterance: str, *, has_results: bool, result_total: int,
+                         retrieval: Any = None, current_query: str = "",
+                         current_filters: Any = None, verbs: Any = None) -> str:
+    """子意图枚举 prompt（2026-09-01「不少于我」下限合同，turn 探测段专用，纯函数）。
+
+    与 `build_action_prompt` 的分工：那是「挑恰好一个 verb」的单次分类；这里问的是
+    「这句话里有哪几件要执行的事」——枚举比单选结构性难漏（单选漏判 = 子意图彻底消失
+    且无机制发现：GLM 把「检索+下载」整句判成 search.new 的生产事故即此源）。只枚举
+    **执行类**动词：检索是管线默认行为、不是动作，不列入清单。现场情况段的构造口径与
+    `build_action_prompt` 同源（同一批 `_filters_zh`/`_retrieval_zh` 助手）。"""
+    if has_results:
+        ctx = f"当前屏幕上已经有一批检索结果（共 {int(result_total)} 条命中）。"
+    else:
+        ctx = "当前屏幕上**还没有**检索结果。"
+    current_query = str(current_query or "").strip()
+    if current_query:
+        ctx += f"\n当前查询：「{current_query}」。"
+        filters_zh = _filters_zh(current_filters)
+        ctx += f"\n当前生效条件：{filters_zh or '（无）'}。"
+    retrieval_zh = _retrieval_zh(retrieval)
+    if retrieval_zh:
+        ctx += "\n**这句话**过规则匹配（关键词检索第一段）的结果：" + retrieval_zh
+    return (
+        "你在帮一个**单细胞公开数据集检索工具**把用户这一句话拆成一份「要做的事」清单。\n"
+        "这个工具除了检索，还能执行几件具体的事（见下方动作表）。\n"
+        "你的任务：列出这句话要求执行的**全部**动作，**一件也不能漏**\n"
+        "（「检查一下10x有没有新发布的数据集，有的话帮我更新入库」是两件事：检查 + 更新入库）。\n"
+        "\n----- 可选动作（执行类）-----\n"
+        # verbs 缺省 = 执行类子表（枚举面语义），不是 _verb_table_zh 的全表缺省——
+        # 检索/路由类动词出现在枚举面只会让模型把检索当动作列进清单。
+        + _verb_table_zh(verbs if verbs is not None else tuple(
+            s for s in _PLAN_ACTION_SPECS if s.kind == EXEC))
+        + "\n\n----- 现场情况 -----\n"
+        + ctx
+        + "\n\n----- 用户这一句 -----\n"
+        + utterance
+        + "\n\n铁律（违反任一条都是错误）：\n"
+        "1. verb 只能从上面那张表里选，**不要发明新的**。检索需求（找某类数据）**不是动作**、\n"
+        "   不列入清单——检索由系统默认完成。这句话没有要执行的动作时，输出空数组 []。\n"
+        "2. 每个动作的 quoted 必须是用户原话里**逐字出现**的一段连续文字，不改写、不加字、不翻译；\n"
+        "   给不出原文依据的动作不要列。\n"
+        "3. 用户**明确说不做**某个动作时（不要打包、别下载了）→ 该动作**照列**，并加 "
+        "\"cancelled\": true（界面要能回一句「好，不做了」）；「能不能/要不要…吧」是征询不是否定。\n"
+        "4. limit 只在用户**明确说了条数**时填数字，否则填 null；年份、编号、版本号不是条数。\n"
+        "5. 动作之间互不合并：两件事就是两个数组元素，哪怕它们共用同一段原文。\n"
+        "\n只输出**一个 JSON 数组**（不要任何其它文字、不要代码块）：\n"
+        '[{"verb": "表里的一个 verb", "limit": 数字或 null, "quoted": "原文片段", '
+        '"cancelled": true 或 false, "confidence": "high" 或 "low", "reason": "一句中文理由，20 字以内"}]\n'
+        "动作声明了字符串槽位的（source/keywords/species/target），按原话里的说法填，没有就不填。\n"
+    )
+
+
+def plan_action_intents(
+    utterance: str,
+    *,
+    has_results: bool = False,
+    result_total: int = 0,
+    config: LLMConfig | None = None,
+    llm_call: Callable[[str], str | None] | None = None,
+    retrieval: Any = None,
+    current_query: str = "",
+    current_filters: Any = None,
+    allowed_verbs: Any = None,
+) -> list[dict[str, Any]] | None:
+    """一句话 → 全部 EXEC 子意图的 plan 清单（每项与 `plan_action` 产出逐位同构）。
+
+    「不少于我」下限合同的探测半（2026-09-01，`turn.py` 探测段专用）：枚举句内全部
+    执行类子意图，逐项过 `build_plan_from_raw` 同一套机械护栏（词表外/缺原文依据降级
+    出列、极性门派生 cancelled、allowed_verbs 收窄只缩小不扩权）。
+
+    返回 `None` = 枚举通道失败（LLM 缺席/空应答/解析不出/异常/**整单垃圾**——枚举非空
+    却逐项降 none，说明这份枚举不可信）——调用方回落 `plan_action` 单次探测，行为与
+    引入本函数前逐位一致（fail-open 不动摇）。合法空清单 = `[]`（这句话没有要执行的动作）。
+    与 `plan_action` 的关系：互补不替代——单计划通道（/api/action/plan、MCP）逐位不动。
+    """
+    text = normalize_utterance(utterance)
+    total = max(0, int(result_total or 0))
+
+    if llm_call is None:
+        try:
+            cfg = config or load_llm_config()
+        except Exception:                           # 配置加载异常也按失败回落单次探测
+            return None
+        ok, _reason = should_use_llm(cfg)
+        if not ok:
+            return None
+        caller: Callable[[str], str | None] = lambda p: _default_llm_call(p, cfg)  # noqa: E731
+    else:
+        caller = llm_call
+
+    # 收窄面与 plan_action 同源同口径（allowed_verbs 只缩小不扩权）；枚举面只出执行类
+    # 动词——检索是管线默认行为、不是清单项。提示层出表与闸层机械拒用同一个 exec_allowed。
+    narrow_allowed: Any = PLAN_ACTION_VERBS
+    if allowed_verbs is not None:
+        allowed = set(allowed_verbs)
+        narrow_allowed = tuple(v for v in PLAN_ACTION_VERBS if v in allowed)
+    exec_allowed = tuple(v for v in narrow_allowed
+                         if v in VERB_BY_NAME and VERB_BY_NAME[v].kind == EXEC)
+    exec_specs = tuple(s for s in _PLAN_ACTION_SPECS if s.verb in exec_allowed)
+
+    prompt = build_intents_prompt(
+        text, has_results=has_results, result_total=total,
+        retrieval=retrieval, current_query=current_query,
+        current_filters=current_filters, verbs=exec_specs)
+
+    # 瞬时失败重试一次再认栽（与 plan_action 同 `_RETRY_BACKOFF_SECONDS` 口径）。
+    # 注入的 caller 是测试替身：只调一次，调用次数留给测试断言。
+    raw_items: list[dict[str, Any]] | None = None
+    for attempt in range(1 if llm_call is not None else 2):
+        if attempt:
+            time.sleep(_RETRY_BACKOFF_SECONDS)
+        try:
+            answer = caller(prompt)
+        except Exception:                               # provider 层任何异常 → 回落单次探测
+            continue
+        if not answer:
+            continue
+        raw_items = parse_intents_response(answer)
+        if raw_items is not None:
+            break
+    if raw_items is None:
+        return None
+
+    intents: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    n_dropped = 0
+    for item in raw_items:
+        plan = build_plan_from_raw(
+            item, text, has_results=has_results, result_total=total,
+            llm_status="ok", allowed_verbs=exec_allowed)
+        if str(plan.get("verb") or "") == "none":
+            n_dropped += 1      # 降级出列（词表外/缺原文依据）；被拒 verb 留在该项自身的 rejected
+            continue
+        if plan["verb"] in seen:
+            continue            # 同动词重复枚举：取第一出现
+        seen.add(plan["verb"])
+        intents.append(plan)
+        if len(intents) >= MAX_INTENTS:
+            break
+    if raw_items and not intents and n_dropped:
+        return None             # 整单垃圾：枚举非空却逐项降 none → 不可信，回落单次探测
+    return intents

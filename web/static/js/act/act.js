@@ -1489,6 +1489,20 @@ function _actSearchReceiptText(f) {
     // 事实句真源在 board_core.searchFactsReceiptText）。
     return searchFactsReceiptText(f, "检索完成：");
 }
+export async function actDispatchPlanList(plans, said) {
+    /* 「不少于我」多意图依次派发（2026-09-01）：枚举探测产出的句内 EXEC 清单逐项过
+       同一个 actDispatchPlan——取消/busy/失败/总结泡语义逐项复用，绝不另立第二套执行通道。
+       串行 await：actDispatchPlan 的 busy 闸（_actBusy）在每项 finally 释放，下一项正常进闸。
+       返回聚合 mark：全接住 → true；否则第一项的非 true mark（字符串注记 / false）。 */
+    let firstMark = true;
+    for (const p of (plans || [])) {
+        if (!p || p.kind !== "exec" || p.cancelled) continue;   // 取消项由调用方回音，不派
+        const mark = await actDispatchPlan(p, said);
+        if (mark !== true && firstMark === true) firstMark = mark;
+    }
+    return firstMark;
+}
+
 export function actAfterSearch(query, opts) {
     const stashed = opts && opts.actPlan;
     if (!stashed) return;
@@ -1510,7 +1524,15 @@ export function actAfterSearch(query, opts) {
         _receiptWithLlm(cbProgressDone(_actSearchReceiptText(f) + note), note);
         return;
     }
-    actDispatchPlan(stashed, said).then(function (mark) {
+    /* 「不少于我」（2026-09-01）：stashed.intents 非空 = 枚举探测的全清单——依次派发
+       各非取消项（取消项在 ubDispatchAction 的清单预处理段已回音）；无清单 = 旧单 plan 档逐位不变。 */
+    const _intents = (Array.isArray(stashed.intents))
+        ? stashed.intents.filter(function (p) { return p && p.kind === "exec" && !p.cancelled; })
+        : null;
+    const _dispatching = (_intents && _intents.length)
+        ? actDispatchPlanList(_intents, said)
+        : actDispatchPlan(stashed, said);
+    _dispatching.then(function (mark) {
         if (mark === true) {   // 接住且全程由行动流 + 总结泡呈现（actFinish 已消费检索事实）
             // 执行注记挂到那句原话上（cbMarkLastSayAsAction 按 kind==="say" 定位——
             // 总结 sys 先落地，末尾已不是原话，按位置找会标错泡）。

@@ -1,0 +1,107 @@
+schema_version: 1
+scope: metadata snapshots only
+last_reviewed: 2026-09-02
+project_license_boundary: >-
+  The repository MIT license covers project code, not third-party records. Each
+  snapshot remains subject to the source and record-level terms below.
+contact_data_policy: >-
+  Email addresses and similar contact details are not required for dataset
+  discovery and are removed from redistributed descriptions. Stable accessions,
+  creator names, source URLs, DOI values, and required attribution are retained.
+
+sources:
+  - id: 10x_genomics_sync
+    snapshot: database/base/10x-synced.json
+    official_terms: https://www.10xgenomics.com/legal/terms-of-use
+    metadata_rights: record-specific
+    attribution_required: true
+    redistribution_review: required
+    note: >-
+      This smaller synchronized catalogue follows the same record-level review
+      rule as the main 10x snapshot; no blanket site-content license is assumed.
+
+  - id: 10x_genomics
+    snapshot: database/base/10x-Visium.json
+    official_terms: https://www.10xgenomics.com/legal/terms-of-use
+    metadata_rights: record-specific
+    attribution_required: true
+    redistribution_review: required
+    note: >-
+      Official example-dataset pages often state CC BY 4.0, while general site
+      content has narrower terms. Preserve per-record license evidence; do not
+      infer one blanket license for every 10x record.
+
+  - id: cellxgene
+    snapshot: database/external/cellxgene.json
+    official_terms: https://cellxgene.cziscience.com/tos
+    metadata_rights: public-study data available for public view, redistribution, and reuse
+    attribution_required: true
+    redistribution_review: source-and-record
+    note: Only public collections are eligible; contributor permissions still govern submitted data.
+
+  - id: human_cell_atlas
+    snapshot: database/external/hca.json
+    official_terms: https://data.humancellatlas.org/about/data-use-agreement
+    metadata_rights: CC-BY-4.0 for the referenced release
+    attribution_required: true
+    redistribution_review: release-specific
+    note: Future HCA releases may use different terms; controlled-access Tier 2 metadata is excluded.
+
+  - id: ebi_single_cell_expression_atlas
+    snapshot: database/external/ebi_scea.json
+    official_terms: https://www.ebi.ac.uk/about/terms-of-use/
+    metadata_rights: no additional EMBL-EBI restriction beyond original-owner rights
+    attribution_required: true
+    redistribution_review: source-and-record
+
+  - id: arrayexpress_biostudies
+    snapshot: database/external/arrayexpress.json
+    official_terms: https://www.ebi.ac.uk/about/terms-of-use/
+    metadata_rights: no additional EMBL-EBI restriction beyond original-owner rights
+    attribution_required: true
+    redistribution_review: source-and-record
+
+  - id: encode
+    snapshot: database/external/encode.json
+    official_terms: https://www.encodeproject.org/about/data-use-policy/
+    metadata_rights: unrestricted use after public release
+    attribution_required: true
+    redistribution_review: public-record-only
+
+  - id: ncbi_geo
+    snapshot: database/external/geo.json
+    official_terms: https://www.ncbi.nlm.nih.gov/geo/info/disclaimer.html
+    metadata_rights: NCBI imposes no restriction; submitter third-party rights may remain
+    attribution_required: true
+    redistribution_review: source-and-record
+
+  - id: hubmap
+    snapshot: database/external/hubmap.json
+    official_terms: https://hubmapconsortium.org/policies/external-data-sharing-policy/
+    metadata_rights: open data released under a permissive license such as CC-BY-4.0
+    attribution_required: true
+    redistribution_review: access-tier-and-record
+    note: Controlled-access records and participant-identifying metadata are excluded.
+
+  - id: broad_single_cell_portal
+    snapshot: database/external/single_cell_portal.json
+    official_terms: https://singlecell.broadinstitute.org/single_cell/terms_of_service
+    metadata_rights: public-study data available for unrestricted public view, redistribution, and reuse
+    attribution_required: true
+    redistribution_review: public-study-only
+    note: The source permits public contact information, but this project removes emails by data-minimization policy.
+
+  - id: refine_bio
+    snapshot: database/external/refinebio.json
+    official_terms: https://docs.refine.bio/en/latest/license.html
+    metadata_rights: inherited from upstream records; documentation is CC-BY
+    attribution_required: true
+    redistribution_review: required
+    note: Do not treat the documentation license as a blanket license for processed source records.
+
+  - id: zenodo
+    snapshot: database/external/zenodo.json
+    official_terms: https://support.zenodo.org/help/en-gb/2-content/21-can-i-get-permission-to-use-a-specific-record
+    metadata_rights: CC0 metadata; files/content remain record-license-specific
+    attribution_required: record-specific
+    redistribution_review: metadata-only

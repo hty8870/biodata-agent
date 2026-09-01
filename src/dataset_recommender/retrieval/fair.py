@@ -412,7 +412,7 @@ def build_data_availability_statement(item: dict[str, Any]) -> dict[str, Any]:
     elif any_url:
         # 修复前这里写「仅数据集页面链接，无文件级下载直链」—— 那是对 4900 条 external 的**假事实断言**：
         # 本工具的文件级台账只覆盖 10x 的 base 记录，从没查过其余四源有没有文件级直链。
-        missing.append("本工具未核验该来源的文件级可及性（文件级台账只覆盖 10x Genomics 的 base 记录）")
+        missing.append("本工具未核验该来源的文件级可及性（文件级台账只覆盖 10x Genomics 的 767 条）")
 
     # ---- 原始数据：带作用域、带证据、带日期的否定；未核验则**一个字都不写** ----
     raw = provenance.raw_data_provenance(item)

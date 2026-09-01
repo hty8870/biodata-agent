@@ -141,7 +141,7 @@ def test_health_reports_account_gate_and_trial(client, monkeypatch):
     body = client.get("/api/health").json()
     trial = body["llm_server"]["trial"]
     assert trial["available"] is True
-    assert trial["model"] == "glm-5.3-flash"
+    assert trial["model"] == "deepseek-v4-flash"
     assert body["llm_server"]["provider"] and body["llm_server"]["base_url"]
     assert TRIAL_KEY not in json.dumps(body) and "code-xyz" not in json.dumps(body)
 
@@ -150,7 +150,6 @@ def test_health_gate_off_defaults(client, monkeypatch):
     monkeypatch.delenv("BIODATA_REQUIRE_ACCOUNT", raising=False)
     monkeypatch.delenv("BIODATA_INVITE_CODE", raising=False)
     monkeypatch.delenv("BIODATA_TRIAL_API_KEY", raising=False)
-    monkeypatch.delenv("BIODATA_EMBED_API_KEY", raising=False)  # 起试用凭据可回落 embed key
     body = client.get("/api/health").json()
     assert body["account"] == {"required": False, "invite": False}
     assert body["llm_server"]["trial"]["available"] is False
@@ -348,50 +347,45 @@ def test_normalize_provider_recognizes_trial():
     assert webapp._normalize_provider(" Trial ") == "trial"
 
 
-def test_trial_config_defaults_and_thinking_unsent(monkeypatch, tmp_path):
-    """trial 换型后：默认 bigmodel 端点 + 模型；
-    thinking=None（不发该参数——该模型始终思考、拒收 disabled，实测见
-    scripts/probe_glm53flash_trial.py 的 验证记录）。"""
+def test_trial_config_defaults_and_thinking_off(monkeypatch, tmp_path):
+    """trial 默认使用 DeepSeek，且关闭会与工具选择冲突的思考档。"""
     monkeypatch.setenv("BIODATA_TRIAL_API_KEY", TRIAL_KEY)
     monkeypatch.delenv("ENABLE_LLM", raising=False)
     monkeypatch.delenv("BIODATA_TRIAL_THINKING", raising=False)
     cfg = load_llm_config(project_root=tmp_path, provider_override="trial")
     assert cfg.provider == "trial"
     assert cfg.api_key == TRIAL_KEY
-    assert cfg.base_url == "https://open.bigmodel.cn/api/paas/v4/"
-    assert cfg.model == "glm-5.3-flash"
-    assert cfg.thinking is None
+    assert cfg.base_url == "https://api.deepseek.com/v1"
+    assert cfg.model == "deepseek-v4-flash"
+    assert cfg.thinking is False
     assert cfg.enable_llm is True
 
 
-def test_trial_config_falls_back_to_embed_key(monkeypatch, tmp_path):
-    """BIODATA_TRIAL_API_KEY 未设时回落 BIODATA_EMBED_API_KEY
-    （试用与 embedding 共用智谱 key）；专用变量在时优先。"""
+def test_trial_config_never_falls_back_to_embed_key(monkeypatch, tmp_path):
+    """试用凭据不回落 embedding key；不同服务商的 key 不得串用。"""
     monkeypatch.delenv("BIODATA_TRIAL_API_KEY", raising=False)
-    monkeypatch.setenv("BIODATA_EMBED_API_KEY", "embed-shared-key")
+    monkeypatch.setenv("BIODATA_EMBED_API_KEY", "embed-key-not-for-trial")
     cfg = load_llm_config(project_root=tmp_path, provider_override="trial")
-    assert cfg.api_key == "embed-shared-key"
-    monkeypatch.setenv("BIODATA_TRIAL_API_KEY", TRIAL_KEY)
-    cfg = load_llm_config(project_root=tmp_path, provider_override="trial")
-    assert cfg.api_key == TRIAL_KEY
+    assert cfg.api_key is None
 
 
 def test_trial_config_thinking_escape_hatch(monkeypatch, tmp_path):
-    """BIODATA_TRIAL_THINKING 逃逸口：enabled/disabled 显式发思考参数（换回可关思考的模型时用）。"""
+    """BIODATA_TRIAL_THINKING 逃逸口：enabled→True、none→None（不发参数，始终思考的
+    模型用）；disabled/未设/未知值 → False（默认 deepseek-v4-flash 需要 disabled）。"""
     monkeypatch.setenv("BIODATA_TRIAL_API_KEY", TRIAL_KEY)
-    monkeypatch.setenv("BIODATA_TRIAL_THINKING", "disabled")
-    assert load_llm_config(project_root=tmp_path, provider_override="trial").thinking is False
     monkeypatch.setenv("BIODATA_TRIAL_THINKING", "enabled")
     assert load_llm_config(project_root=tmp_path, provider_override="trial").thinking is True
-    monkeypatch.setenv("BIODATA_TRIAL_THINKING", "bogus")
+    monkeypatch.setenv("BIODATA_TRIAL_THINKING", "none")
     assert load_llm_config(project_root=tmp_path, provider_override="trial").thinking is None
+    monkeypatch.setenv("BIODATA_TRIAL_THINKING", "disabled")
+    assert load_llm_config(project_root=tmp_path, provider_override="trial").thinking is False
+    monkeypatch.setenv("BIODATA_TRIAL_THINKING", "bogus")
+    assert load_llm_config(project_root=tmp_path, provider_override="trial").thinking is False
 
 
 def test_trial_config_never_falls_back_to_generic_keys(monkeypatch, tmp_path):
-    """试用凭据只认 BIODATA_TRIAL_API_KEY / BIODATA_EMBED_API_KEY：
-    LLM_API_KEY/OPENAI_API_KEY 绝不变成试用通道凭据。"""
+    """试用凭据只认 BIODATA_TRIAL_API_KEY：LLM_API_KEY/OPENAI_API_KEY 绝不变成试用通道凭据。"""
     monkeypatch.delenv("BIODATA_TRIAL_API_KEY", raising=False)
-    monkeypatch.delenv("BIODATA_EMBED_API_KEY", raising=False)
     monkeypatch.setenv("LLM_API_KEY", "sk-not-for-trial")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-not-for-trial-either")
     cfg = load_llm_config(project_root=tmp_path, provider_override="trial")
@@ -420,9 +414,9 @@ def test_trial_request_overrides_lock_channel(monkeypatch, tmp_path):
         cfg = load_llm_config(project_root=tmp_path)
     assert cfg.provider == "trial"
     assert cfg.api_key == TRIAL_KEY                        # 请求级 key 被忽略
-    assert cfg.base_url == "https://open.bigmodel.cn/api/paas/v4/"   # 请求级端点被锁掉
-    assert cfg.model == "glm-5.3-flash"                    # 请求级模型被锁掉
-    assert cfg.thinking is None
+    assert cfg.base_url == "https://api.deepseek.com/v1"         # 请求级端点被锁掉
+    assert cfg.model == "deepseek-v4-flash"                      # 请求级模型被锁掉
+    assert cfg.thinking is False
 
 
 def test_trial_request_masks_server_formal_key(monkeypatch, tmp_path):
@@ -436,7 +430,7 @@ def test_trial_request_masks_server_formal_key(monkeypatch, tmp_path):
         server_base_url="https://open.bigmodel.cn/api/paas/v4/")
     assert overrides.get("ZHIPUAI_API_KEY") == "" and overrides.get("LLM_API_KEY") == ""
     assert "BIODATA_TRIAL_API_KEY" not in overrides   # 试用 key 绝不进遮罩名单
-    assert "BIODATA_EMBED_API_KEY" not in overrides   # embed 回落 key 同样不进
+    assert "BIODATA_EMBED_API_KEY" not in overrides   # embed key 同样绝不进遮罩名单
 
 
 # ---------------------------------------------------------------- trial 额度回显端点（/api/account/trial-quota）
@@ -470,18 +464,17 @@ def test_trial_quota_endpoint_reports_remaining(client, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["available"] is True
-    assert body["model"] == "glm-5.3-flash"
+    assert body["model"] == "deepseek-v4-flash"
     assert body["daily_limit"] == 30 and body["used"] == 4 and body["remaining"] == 26
     assert body["unlimited"] is False
     assert TRIAL_KEY not in r.text   # key 绝不回显
 
 
 def test_trial_quota_endpoint_unavailable_without_server_key(client, monkeypatch):
-    """服务端没配试用 key（embed 回落 key 也没有）：available=False（前端按通道不可用隐藏额度块）。"""
+    """服务端没配试用 key：available=False（前端按通道不可用隐藏额度块）。"""
     monkeypatch.setenv("BIODATA_REQUIRE_ACCOUNT", "1")
     monkeypatch.setenv("BIODATA_INVITE_CODE", "code-xyz")
     monkeypatch.delenv("BIODATA_TRIAL_API_KEY", raising=False)
-    monkeypatch.delenv("BIODATA_EMBED_API_KEY", raising=False)
     assert _register(client, invite="code-xyz").status_code == 200
     body = client.get("/api/account/trial-quota").json()
     assert body["available"] is False

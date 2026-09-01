@@ -894,3 +894,60 @@ def test_pending_count_query_jitiao_boundary():
     # 车道路由面（同一词表真源）：「十几条」不再给 simple 请求误加档
     assert agent_exec.decide_lane(
         "检查一下ArrayExpress有没有更新，顺便说说那十几条都是什么") == "simple"
+
+
+# ---------------------------------------------------------------- 「不少于我」句内动作清单（2026-09-01）
+
+def _icl(verb, verb_zh, quoted, plane="inloop"):
+    return {"verb": verb, "verb_zh": verb_zh, "quoted": quoted, "plane": plane}
+
+
+def test_intent_checklist_item_states_settlement_channels():
+    """归宿两通道：ok 步（带步骤号）或核销报告点名（verb_zh/quoted 字面子串，全角折叠口径）；
+    plane=frontend 恒 delegated（环内免核销）。"""
+    cl = [_icl("cite.export", "导出引文", "导出成 BibTeX 引文"),
+          _icl("pack.download", "打包下载", "打包下载", plane="frontend")]
+    states = agent_exec._intent_checklist_item_states(cl, [_step("cite.export")])
+    assert states[0]["status"] == "done" and states[0]["step_no"] == 1
+    assert states[1]["status"] == "delegated"
+    # 报告点名（verb_zh 或 quoted 任一子串）→ accounted
+    st = agent_exec._intent_checklist_item_states(cl[:1], [], "引文没导：导出引文这步做不了")
+    assert st[0]["status"] == "accounted"
+    st2 = agent_exec._intent_checklist_item_states(cl[:1], [], "报告里含：导出成 BibTeX 引文，因缺结果未做")
+    assert st2[0]["status"] == "accounted"
+    # 全角标点折叠后仍算点名
+    st3 = agent_exec._intent_checklist_item_states(
+        [_icl("fair.check", "检查 FAIR", "检查 FAIR 就绪度")], [],
+        "检查ＦＡＩＲ这步没做成")  # 全角 ＦＡＩＲ 不折叠字母，换半角场景：
+    assert st3[0]["status"] in ("missing", "accounted")   # 不抛即可（字母不折叠）
+    # 两皆无 → missing
+    st4 = agent_exec._intent_checklist_item_states(cl[:1], [], "别的都说完了")
+    assert st4[0]["status"] == "missing"
+
+
+def test_intent_checklist_unsettled_only_missing():
+    cl = [_icl("cite.export", "导出引文", "导出引文"),
+          _icl("pack.download", "打包下载", "打包下载", plane="frontend")]
+    assert agent_exec._intent_checklist_unsettled(cl, [_step("cite.export")]) == []
+    assert agent_exec._intent_checklist_unsettled(cl, [], "导出引文已交代") == []
+    missing = agent_exec._intent_checklist_unsettled(cl, [], "")
+    assert [m["verb"] for m in missing] == ["cite.export"]   # frontend 项不算未决
+
+
+def test_finish_veto_all_intent_checklist_leg():
+    """第六腿：句内动作未核销 → intent_unsettled 进聚合；核销（步骤/点名）后空。"""
+    cl = [_icl("cite.export", "导出引文", "导出引文")]
+    out = agent_exec._finish_veto_all("都做完了", 0, [], [], [], "", "随便一句",
+                                      intent_checklist=cl)
+    codes = [c for _t, c in out]
+    assert "intent_unsettled" in codes
+    assert agent_exec._finish_veto_all("都做完了", 1, [], [], [_step("cite.export")], "",
+                                       "随便一句", intent_checklist=cl) == []
+    assert agent_exec._finish_veto_all("导出引文做不到：没有可导的结果", 0, [], [], [], "",
+                                       "随便一句", intent_checklist=cl) == []
+    # 缺省 intent_checklist=() → 旧调用零变化
+    assert agent_exec._finish_veto_all("都做完了", 0, [], [], [], "", "随便一句") == []
+
+
+def test_intent_unsettled_has_teaching_suffix():
+    assert "intent_unsettled" in agent_exec._VETO_TEACHING_SUFFIX

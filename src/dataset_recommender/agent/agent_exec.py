@@ -212,6 +212,7 @@ class _AgentState(TypedDict, total=False):
     route_scope: str              #: scoped 路由：route_consensus 的共识结果 ""/"search"/"action"/"general"；route.request 步放行后由 execute 改写（覆写语义）
     required_capabilities: list[dict]  #: 混合诉求能力账（2026-08-22 覆写语义）：机械闸命中时由 route_consensus 产出（{capability, verbs, label_zh, anchor}），finish 机械核销逐项对账，缺项拒收回灌
     artifact_context: str        #: 课题上下文卡：独立字段，只进 route_consensus/understand 的 prompt 作结构化上下文块；缺省空串 = 与旧版逐位一致
+    intent_checklist: list[dict]  #: 句内 EXEC 子意图清单 {verb, verb_zh, quoted, plane=inloop|frontend}；decide 逐项核销，frontend 项由前端接管
 
 
 @dataclass(frozen=True)
@@ -3814,12 +3815,35 @@ def _agent_status_block_zh(state: "_AgentState", *, steps: list[dict], moratoriu
             else:
                 mark = "未做"
             cap_lines.append(f"[{it['capability']}] {mark} {it['label_zh']}")
+    intent_lines: list[str] = []
+    intent_cl = list(state.get("intent_checklist") or [])
+    if intent_cl:
+        # 「不少于我」下限合同（2026-09-01）：turn 枚举探测的句内动作清单逐项现算——
+        # 模型只读不写；plane=frontend 项如实告知「已交前端」（环内免核销、不许再做）。
+        intent_states = _intent_checklist_item_states(intent_cl, steps)
+        intent_missing = sum(1 for it in intent_states if it["status"] == "missing")
+        parts.append(f"句内动作未决 {intent_missing}")
+        for it in intent_states:
+            label = it["verb_zh"] or it["verb"]
+            if it["status"] == "done":
+                mark = f"已做（第{it['step_no']}步）"
+            elif it["status"] == "delegated":
+                mark = "已交前端（环内别再做）"
+            elif it["status"] == "accounted":
+                mark = "已在核销报告交代"
+            else:
+                mark = "未做"
+            frag = f"「{it['quoted'][:20]}」" if it.get("quoted") else ""
+            intent_lines.append(f"[{it['verb']}] {mark} {label}{frag}")
     lines = ["\n----- 执行状态（系统机械账本，实时）-----", "；".join(parts) + "。"]
     if item_lines:
         lines.append("清单逐项（代码对账，勿凭印象改判）：" + "；".join(item_lines) + "。")
     if cap_lines:
         lines.append("混合诉求能力逐项（代码对账，勿凭印象改判）："
                      + "；".join(cap_lines) + "。")
+    if intent_lines:
+        lines.append("句内动作逐项（代码对账，勿凭印象改判；全部核销后才许 finish）："
+                     + "；".join(intent_lines) + "。")
     if remaining == 1:
         lines.append("剩余步数 = 1：下一步执行后就必须调用 finish——这是最后一次执行机会。")
     return "\n".join(lines) + "\n"
@@ -4105,8 +4129,54 @@ def _capabilities_unsettled(caps: list[dict], steps: list[dict],
     return unsettled
 
 
-_CHECKLIST_PROMPT_ZH = (
+def _intent_checklist_item_states(intent_checklist: list[dict], steps: list[dict],
+                                  report: str = "") -> list[dict]:
+    """句内动作清单（「不少于我」下限合同，2026-09-01）逐项**代码现算**状态——
+    与 `_checklist_item_states`/`_capability_item_states` 同哲学：零信任 steps 实录
+    对账，模型只读不写。
+
+    返回 [{verb, verb_zh, quoted, plane, status, step_no}]：
+    - plane="frontend"（前端直派面：已交前端接力）→ status 恒 "delegated"，环内免核销；
+    - plane="inloop"：存在 ok=True 且动词匹配的步 → done（证据步=首个匹配步号）；
+      否则核销报告（finish 的 completion_report）点名它（verb_zh 或 quoted 字面
+      子串，全角折叠口径）→ "accounted"（模型已如实交代，例如条件不成立/做不到）；
+      两皆无 → "missing"。"""
+    report_folded = str(report or "").translate(_WIDTH_FOLD)
+    out: list[dict] = []
+    for item in intent_checklist:
+        if not isinstance(item, dict):
+            continue
+        verb = str(item.get("verb") or "")
+        verb_zh = str(item.get("verb_zh") or "")
+        quoted = str(item.get("quoted") or "")
+        plane = str(item.get("plane") or "inloop")
+        if plane == "frontend":
+            out.append({"verb": verb, "verb_zh": verb_zh, "quoted": quoted,
+                        "plane": plane, "status": "delegated", "step_no": None})
+            continue
+        step_no = next((i for i, s in enumerate(steps, 1)
+                        if _step_ok_verb(s, verb)), None) if verb else None
+        if step_no is not None:
+            out.append({"verb": verb, "verb_zh": verb_zh, "quoted": quoted,
+                        "plane": plane, "status": "done", "step_no": step_no})
+            continue
+        named = any(frag and frag.translate(_WIDTH_FOLD) in report_folded
+                    for frag in (verb_zh, quoted))
+        out.append({"verb": verb, "verb_zh": verb_zh, "quoted": quoted,
+                    "plane": plane,
+                    "status": "accounted" if named else "missing",
+                    "step_no": None})
+    return out
+
+
+def _intent_checklist_unsettled(intent_checklist: list[dict], steps: list[dict],
+                                report: str = "") -> list[dict]:
+    """句内动作清单对账器：返回**未决**项（status=="missing" 的子集），空 = 全部核销。
+    缺项语义：既没有成功步骤、收尾报告也没点名交代——「做一个勾一个」的机械检出。"""
+    return [it for it in _intent_checklist_item_states(intent_checklist, steps, report)
+            if it["status"] == "missing"]
     "把用户这句话拆成「要做的几件事」的清单。输出一个 JSON 数组，每项：\n"
+_CHECKLIST_PROMPT_ZH = (
     '{"text": "这件事的简明中文（≤40字）", "anchor": "原话里对应这句话的逐字片段（≥4字，'
     '必须逐字摘自原话，不许改写）", "expect_verb": 预期执行动作}。\n'
     "expect_verb 只能取：curate.check_updates（检查来源更新）/ curate.search_online"
@@ -4171,6 +4241,7 @@ _VETO_TEACHING_SUFFIX = {
     "reask_write_unaccounted": "——重问后放行的写操作，必须写明它的步骤号并单独交代结果",
     "checklist_unsettled": "——清单里的这件事没有对应的成功步骤",
     "capability_unsettled": "——混合诉求里的这一半没有对应的成功步骤（或明确交代做不到）",
+    "intent_unsettled": "——句内交代的这个动作没有对应的成功步骤；做不了就在核销报告里点名它并说明原因",
     "unfinished": "——你的核销报告里写着还有没做的事",
 }
 
@@ -4187,18 +4258,22 @@ _PENDING_VETO_FORCED_VERB: dict[str, tuple[str, str]] = {
 def _finish_veto_all(report: str, n_steps: int, reask_writes: list[dict],
                      checklist: list[dict], steps: list[dict],
                      declined_zh: str, utterance: str,
-                     capabilities: tuple | list = ()) -> list[tuple[str, str]]:
-    """finish 否决的**聚合口**（两闸分次否决会耗尽重试额度）——
+                     capabilities: tuple | list = (),
+                     intent_checklist: tuple | list = ()) -> list[tuple[str, str]]:
+    """finish 否决的**聚合口**（分次否决会耗尽重试额度）——
     一次返回全部 (否决描述, 形态码)，去重、稳定排序。调用方把整张列表一次回灌。
 
-    汇聚五路（原文本闸与重问写步闸维持单条语义，清单对账与 pending 硬闸可多条）：
+    汇聚六路（原文本闸与重问写步闸维持单条语义，清单对账与 pending 硬闸可多条）：
     - `_completion_report_veto` 三形态（报告文本自认的缺口）；
     - `_reask_write_veto`（重问写步未单独交代）；
     - 清单对账 `_checklist_unsettled`（有清单时；形态码 checklist_unsettled）；
     - 混合诉求能力账 `_capabilities_unsettled`（机械闸产出 capabilities 时
       形态码 capability_unsettled）——混合句只做一半不许收尾；
+    - 句内动作清单对账 `_intent_checklist_unsettled`（2026-09-01「不少于我」下限合同，
+      turn 枚举探测注入时；形态码 intent_unsettled）——枚举出的每个环内动作须有归宿：
+      成功步骤或报告点名交代，缺一即拒收；
     - pending 硬闸 `_pending_violations`（机械可判的未决事实升闸；码见各规则）。
-    `capabilities` 为关键字默认参数（缺省空 = 旧调用零变化）。"""
+    `capabilities`/`intent_checklist` 为关键字默认参数（缺省空 = 旧调用零变化）。"""
     out: list[tuple[str, str]] = []
     line, shape = _completion_report_veto(report, n_steps)
     if line:
@@ -4223,6 +4298,11 @@ def _finish_veto_all(report: str, n_steps: int, reask_writes: list[dict],
             else:
                 out.append((f"混合诉求里的「{label}」这一半没有对应的成功步骤",
                             "capability_unsettled"))
+    if intent_checklist:
+        for item in _intent_checklist_unsettled(list(intent_checklist), steps, report):
+            label = str(item.get("verb_zh") or item.get("verb") or "")[:40]
+            out.append((f"句内交代的「{label}」没有对应的成功步骤，核销报告也没点名交代它",
+                        "intent_unsettled"))
     out.extend(_pending_violations(utterance, steps))
     # 去重（保序）+ 限幅（评审：回灌 ≤2KB——按条数与单条长度双控）。
     seen: set[str] = set()
@@ -7122,6 +7202,10 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                        and not _capabilities_unsettled(
                            list(state.get("required_capabilities") or []), steps,
                            str(state.get("declined_zh") or ""))
+                       # 「不少于我」下限合同（2026-09-01）：句内动作清单同步对账——
+                       # 到顶语境没有核销报告文本，归宿只认 ok 步（report=""）。
+                       and not _intent_checklist_unsettled(
+                           list(state.get("intent_checklist") or []), steps, "")
                        and all(s.get("ok") for s in steps))
         except Exception:
             settled = False
@@ -7409,7 +7493,9 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                                          list(state.get("checklist") or []), steps,
                                          str(state.get("declined_zh") or ""), state["utterance"],
                                          capabilities=list(
-                                             state.get("required_capabilities") or []))
+                                             state.get("required_capabilities") or []),
+                                         intent_checklist=list(
+                                             state.get("intent_checklist") or []))
             line, shape = veto_list[0] if veto_list else (None, "")
             if not veto_list:
                 break
@@ -7431,6 +7517,7 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
             # 枚举，可直接钉成必做动作；槽位仍由模型填、机械闸照常兜底）。
             vetoes += 1
             if len(veto_list) > 1 or shape in ("checklist_unsettled", "capability_unsettled",
+                                               "intent_unsettled",
                                                "pending_source_untouched",
                                                "pending_count_query", "pending_new_not_imported"):
                 gap = ("你的核销报告里写着还有没交代的事：\n"
@@ -7835,6 +7922,10 @@ def plan_with_agent_events(
     # 课题上下文卡——独立字段透传进图状态
     # 只被 route_consensus/understand 的 prompt 结构化注入消费；缺省空串 = 旧版逐位不变。
     artifact_context: str = "",
+    # 「不少于我」下限合同（2026-09-01）：turn 枚举探测的句内 EXEC 子意图清单
+    # （{verb, verb_zh, quoted, plane=inloop|frontend}），图入口一次写入 state；
+    # decide 状态栏逐项现算、finish 闸对 plane=inloop 逐项核销。缺省 None = 旧版逐位不变。
+    intent_checklist: list[dict] | None = None,
 ) -> tuple[dict, list[dict]]:
     """一句话 → (plan, trace)。plan 形状与 `action_plan.plan_action` 输出逐位同形，
     仅 `source="agent"`、`llm_status="ok"`，并附 `trace`（节点步骤，供前端行动流渲染）。
@@ -7944,6 +8035,8 @@ def plan_with_agent_events(
         "steps": [],         # execute 真跑工具的实录（plan.steps 与它同步；未真跑则恒空）
         "loop_next": False,
         "last_ran": False,
+        # 「不少于我」（2026-09-01）：句内动作清单图入口一次写入（覆写语义；空 = 缺席）。
+        "intent_checklist": [dict(it) for it in (intent_checklist or []) if isinstance(it, dict)],
     }
 
     # 逐节点推进（values 模式：每节点完成后 yield 一次全量 state，末帧即终态）。
@@ -8040,6 +8133,8 @@ def plan_with_agent(
     route_extra_zh: str = "",
     # 课题上下文卡，与 plan_with_agent_events 同义。
     artifact_context: str = "",
+    # 「不少于我」下限合同（2026-09-01）：句内动作清单，与 plan_with_agent_events 同义。
+    intent_checklist: list[dict] | None = None,
 ) -> tuple[dict, list[dict]]:
     """`plan_with_agent_events` 的无回调薄封装——
     返回值/异常契约与旧版逐位不变，调用方（turn.route_turn 非流式路径）无需任何改动。"""
@@ -8059,4 +8154,5 @@ def plan_with_agent(
         on_route_verdict=on_route_verdict,
         route_extra_zh=route_extra_zh,
         artifact_context=artifact_context,
+        intent_checklist=intent_checklist,
     )

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "audience": "public",
+  "entity_gap": {
+    "query_sets": [
+      "eval_queries.json",
+      "eval_queries_dev.json",
+      "eval_queries_public_validation.json"
+    ],
+    "expected_min_unique_queries": 105
+  },
+  "withheld_sets": [
+    "eval_queries_holdout.json",
+    "eval_recall_graded.json",
+    "eval_rerank_graded.json"
+  ],
+  "withheld_reason": "A published holdout is no longer held out. Public full uses the independent public validation set; private full keeps the one-use holdout watchdog."
+}

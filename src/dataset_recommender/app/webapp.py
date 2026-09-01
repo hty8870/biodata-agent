@@ -108,7 +108,7 @@ DATA_DIR = PATHS.shipped_base_dir
 
 ENV_LOCK = threading.Lock()
 
-WEB_API_VERSION = "2.9.0"
+WEB_API_VERSION = "2.9.1"
 
 app = FastAPI(title="BioData Agent Web UI", version=WEB_API_VERSION)
 # 大列表/API JSON 在回环上也会占用显著的序列化与 WebView 传输时间。仅压缩 >=1KiB
@@ -1143,9 +1143,8 @@ def _build_request_overrides(
         # LLM_API_KEY is deliberately first in load_llm_config's precedence.
         # Override it as well as the provider-specific key so a server secret
         # can never shadow the request-scoped credential.
-        # （trial 永不接受请求级 key：试用通道凭据只能是服务端 BIODATA_TRIAL_API_KEY
-        #  / BIODATA_EMBED_API_KEY（进程环境），请求带 key 也忽略，落到下方 else 的
-        #  服务端密钥遮罩逻辑。）
+        # （trial 永不接受请求级 key：试用通道凭据只能是服务端 BIODATA_TRIAL_API_KEY，
+        #  请求带 key 也忽略，落到下方 else 的服务端密钥遮罩逻辑。）
         overrides["LLM_API_KEY"] = api_key
         if provider == "zhipuai":
             overrides["ZAI_API_KEY"] = api_key

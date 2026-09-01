@@ -428,6 +428,31 @@ def scan_secret_values(
     return violations
 
 
+_CONTACT_EMAIL_RE = re.compile(
+    r"(?i)(?<![A-Z0-9._%+\-])[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}(?![A-Z0-9._%+\-])"
+)
+
+
+def scan_metadata_contacts(files: list[Path], root: Path = REPO_ROOT) -> list[dict]:
+    """Reject contact email values embedded in distributable metadata snapshots.
+
+    Only database JSON snapshots are in scope.  Locations are returned without
+    the matched address so CI logs cannot become a second disclosure channel.
+    """
+    violations: list[dict] = []
+    for path in files:
+        rel = path.relative_to(root).as_posix()
+        if not rel.startswith("database/") or path.suffix.lower() != ".json":
+            continue
+        text = _read_scannable_text(path)
+        if text is None:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if _CONTACT_EMAIL_RE.search(line):
+                violations.append({"path": rel, "line": lineno})
+    return violations
+
+
 def count_allowlisted_secret_hits(
     files: list[Path], root: Path = REPO_ROOT,
     allowlist: "set[tuple[str, int]] | frozenset[tuple[str, int]] | None" = None,
@@ -540,6 +565,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     violations = scan_forbidden(files)
     secret_hits = scan_secret_values(files)
+    contact_hits = scan_metadata_contacts(files)
     colon_hits = scan_orphan_colons(files)
     allowlisted_hits = count_allowlisted_secret_hits(files)
     unscannable = unscannable_text_files(files)
@@ -575,6 +601,11 @@ def main(argv: "list[str] | None" = None) -> int:
               file=sys.stderr)
         for h in secret_hits:
             print(f"  {h['path']}:{h['line']}  pattern={h['pattern']}", file=sys.stderr)
+    if contact_hits:
+        print(f"\n[交付安全] 发现 {len(contact_hits)} 处元数据联系邮箱（只报位置，不回显地址）：",
+              file=sys.stderr)
+        for h in contact_hits:
+            print(f"  {h['path']}:{h['line']}", file=sys.stderr)
     if colon_hits:
         print(f"\n[交付安全] 发现 {len(colon_hits)} 处行首全角冒号残骸（删标签遗留的机械残骸，必须清除）：",
               file=sys.stderr)
@@ -586,7 +617,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"\n[交付安全] {allowlisted_hits} 处已审计的脱敏测试夹具命中已按白名单豁免"
               "（make_delivery.SECRET_SCAN_ALLOWLIST，精确到 文件:行）：", file=sys.stderr)
 
-    if violations or secret_hits or colon_hits or unscannable:
+    if violations or secret_hits or contact_hits or colon_hits or unscannable:
         if not args.force:
             print("\n拒绝打包。修掉上述泄漏，或把该文件加入 .deliveryignore 后重试。", file=sys.stderr)
             return 1
@@ -605,7 +636,8 @@ def main(argv: "list[str] | None" = None) -> int:
             return 1
         total_mb = sum(f.stat().st_size for f in files) / (1024 * 1024)
         print(f"[交付安全] 复核通过：交付文件集 {len(files)} 个（{total_mb:.1f} MiB），"
-              f"0 内部专名 / 0 secret 值 / 0 冒号残骸 / 0 不可解码文本命中；文件集已与 git 已跟踪集取交，"
+              f"0 内部专名 / 0 secret 值 / 0 元数据联系邮箱 / 0 冒号残骸 / 0 不可解码文本命中；"
+              f"文件集已与 git 已跟踪集取交，"
               f"且工作树中没有游离在 git 之外的文件。")
 
     if args.out:

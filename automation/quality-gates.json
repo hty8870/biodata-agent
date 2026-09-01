@@ -85,7 +85,7 @@
       "id": "automation-contracts",
       "description": "Lock the manifest runner, workflow security posture, pinned actions, and dependency-lock contract.",
       "commands": [
-        ["{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_quality_gate.py", "tests/test_ci_contract.py", "tests/test_release_workflow_contract.py", "tests/test_release_builder.py", "tests/test_project_skill.py", "tests/test_release_version_contract.py"]
+        ["{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_quality_gate.py", "tests/test_ci_contract.py", "tests/test_deploy_security_contract.py", "tests/test_metadata_distribution_contract.py", "tests/test_public_mirror_contract.py", "tests/test_release_workflow_contract.py", "tests/test_release_builder.py", "tests/test_project_skill.py", "tests/test_release_version_contract.py"]
       ],
       "required_tools": ["python"],
       "timeout_seconds": 120,
@@ -181,7 +181,7 @@
     },
     {
       "id": "dev-recommendation-evaluation",
-      "description": "Dev-set regression gate: run the dev query set (eval/eval_queries_dev.json, 54 cases covering negation-suffix / disjunction / fastq-colloquial / V(D)J / non-human-model-organism / subtype phenomena). Thresholds = post-fix measurement (Top1/Top5 100.0) floated down slightly to 99.5 — with 49 scored cases a single miss reads 98.0 and goes red; violation/FASTQ pinned at 0.0, NoResult at 5/5. Unlike the held-out watchdog this set MAY be iterated against, so the gate locks the achieved level, not a first-run baseline.",
+      "description": "Dev-set regression gate: run the dev query set (eval/eval_queries_dev.json, 55 cases covering negation-suffix / disjunction / fastq-colloquial / V(D)J / non-human-model-organism / subtype phenomena). Thresholds = post-fix measurement (Top1/Top5 100.0) floated down slightly to 99.5 — with 50 scored cases a single miss reads 98.0 and goes red; violation/FASTQ pinned at 0.0, NoResult at 5/5. Unlike the held-out watchdog this set MAY be iterated against, so the gate locks the achieved level, not a first-run baseline.",
       "commands": [
         ["{python}", "scripts/evaluate_recommendation.py", "--queries", "eval/eval_queries_dev.json", "--expect-top1", "99.5", "--expect-top5", "99.5", "--expect-max-violation", "0.0", "--expect-max-fastq-violation", "0.0", "--expect-min-noresult", "1.0"]
       ],

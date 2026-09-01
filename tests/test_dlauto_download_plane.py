@@ -85,3 +85,107 @@ def test_frontend_plane_excludes_preview_and_inloop(monkeypatch):
     assert "pack.download" in plane and "reuse.pack" in plane
     assert "pack.preview" not in plane
     assert "cite.export" not in plane
+
+
+# ---------------------------------------------------------------- 「不少于我」枚举分流（2026-09-01）
+
+def _mk_plan(verb, quoted, cancelled=False):
+    return {"verb": verb, "verb_zh": verb, "kind": AP.EXEC, "quoted": quoted,
+            "cancelled": cancelled, "requires_results": True, "slots": {}}
+
+
+def test_partition_intents_empty_or_all_cancelled_goes_to_graph():
+    """空清单 / 全 cancelled → (None, None, None)：无 EXEC 待办，走 agent 图（现状）。"""
+    assert turn._partition_intents([]) == (None, None, None)
+    only_cancelled = [_mk_plan("pack.download", "下载", cancelled=True)]
+    assert turn._partition_intents(only_cancelled) == (None, None, None)
+
+
+def test_partition_intents_all_frontend_bypasses_with_full_list():
+    """非 cancelled 全在直派面 → bypass：顶层=首个非取消项、agent_bypassed=True、
+    intents 带**全清单**（含 cancelled 项，前端只回音不执行）。"""
+    intents = [_mk_plan("pack.download", "下载"),
+               _mk_plan("reuse.pack", "复用打包", cancelled=True)]
+    top, checklist, pending = turn._partition_intents(intents)
+    assert top is not None and top["verb"] == "pack.download"
+    assert top["agent_bypassed"] is True
+    assert [i["verb"] for i in top["intents"]] == ["pack.download", "reuse.pack"]
+    assert top["intents"][1]["cancelled"] is True
+    assert checklist is None and pending is None
+
+
+def test_partition_intents_inloop_splits_checklist_and_pending_frontend():
+    """含环内 EXEC → 走图：checklist 两 plane 分段（inloop 待核销 / frontend 已交前端），
+    直派面项进 pending_frontend（图后挂回响应，绝不进 plan.steps）。"""
+    intents = [_mk_plan("cite.export", "导出引文"), _mk_plan("pack.download", "下载")]
+    top, checklist, pending = turn._partition_intents(intents)
+    assert top is None
+    assert [(c["verb"], c["plane"]) for c in checklist] == [
+        ("cite.export", "inloop"), ("pack.download", "frontend")]
+    assert [p["verb"] for p in pending] == ["pack.download"]
+
+
+_LLM_TWO_FRONTEND = json.dumps([
+    {"verb": "pack.download", "quoted": "下载top2", "limit": 2,
+     "cancelled": False, "confidence": "high", "reason": "明说下载"},
+    {"verb": "reuse.pack", "quoted": "打包复用", "limit": None,
+     "cancelled": False, "confidence": "high", "reason": "明说复用"},
+], ensure_ascii=False)
+
+
+def test_enumeration_multi_frontend_intents_bypass_with_intents(monkeypatch):
+    """枚举出两件直派面动作 → bypass（agent 图 stub 抛错未被调用即证）且
+    plan.intents 带全两件——「做一个勾一个」的前端派发素材。"""
+    monkeypatch.setattr(AP, "_default_llm_call", lambda prompt, config: _LLM_TWO_FRONTEND)
+    out = turn.route_turn("小鼠空间转录组，下载top2再打包复用", has_results=False, config=CFG)
+    p = out["plan"]
+    assert out["route"] == "tool" and p["agent_bypassed"] is True
+    assert p["verb"] == "pack.download"
+    assert [i["verb"] for i in p["intents"]] == ["pack.download", "reuse.pack"]
+
+
+def test_enumeration_inloop_routes_to_graph_with_checklist_and_pending(monkeypatch):
+    """枚举含环内 EXEC（cite.export）+ 直派尾巴（pack.download）→ 走 agent 图：
+    intent_checklist 缝收到两 plane 分段清单；图跑完后 pending_frontend 挂回响应。"""
+    captured = {}
+
+    def fake_graph(text, **kw):
+        captured["intent_checklist"] = kw.get("intent_checklist")
+        return ({"verb": "cite.export", "kind": AP.EXEC, "source": "agent",
+                 "llm_status": "ok", "slots": {}, "requires_results": True}, [])
+
+    monkeypatch.setattr(agent_exec, "plan_with_agent", fake_graph)
+    monkeypatch.setattr(agent_exec, "plan_with_agent_events", fake_graph)
+    llm = json.dumps([
+        {"verb": "cite.export", "quoted": "导出成 BibTeX 引文", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "明说引文"},
+        {"verb": "pack.download", "quoted": "并下载", "limit": None,
+         "cancelled": False, "confidence": "high", "reason": "明说下载"},
+    ], ensure_ascii=False)
+    monkeypatch.setattr(AP, "_default_llm_call", lambda prompt, config: llm)
+    out = turn.route_turn("检索 Visium HD 人类乳腺癌数据，导出成 BibTeX 引文并下载",
+                          has_results=False, config=CFG)
+    cl = captured.get("intent_checklist")
+    assert cl is not None, "含环内 EXEC 的枚举必须把 intent_checklist 注入图"
+    assert [(c["verb"], c["plane"]) for c in cl] == [
+        ("cite.export", "inloop"), ("pack.download", "frontend")]
+    p = out["plan"]
+    assert [x["verb"] for x in p["pending_frontend"]] == ["pack.download"]
+    assert not any(s.get("verb") == "pack.download"
+                   for s in (p.get("steps") or [])), "pending_frontend 绝不进 plan.steps"
+
+
+def test_enumeration_failure_falls_back_to_single_probe(monkeypatch):
+    """枚举通道失败（整单垃圾：quoted 非原文 → 逐项降 none）→ 回落单次探测，行为与
+    引入枚举前逐位一致（单次探测通道的 pack.download 仍命中直派）。"""
+    def flaky(prompt, config):
+        # 枚举调用（prompt 含「清单」特征）回垃圾；单次探测调用回合法单对象
+        if "JSON 数组" in prompt:
+            return json.dumps([{"verb": "pack.download", "quoted": "原文没这词",
+                                "confidence": "high"}], ensure_ascii=False)
+        return _LLM_PACK_DOWNLOAD
+    monkeypatch.setattr(AP, "_default_llm_call", flaky)
+    out = turn.route_turn("小鼠空间转录组，并下载top2", has_results=False, config=CFG)
+    p = out["plan"]
+    assert p["verb"] == "pack.download" and p["agent_bypassed"] is True
+    assert "intents" not in p        # 单次探测兜底路径：无枚举清单字段

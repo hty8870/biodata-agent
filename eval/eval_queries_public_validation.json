@@ -1,0 +1,21 @@
+{
+  "_comment": {
+    "name": "eval_queries_public_validation",
+    "version": "2026-09-02",
+    "purpose": "公开、可重复运行的独立验证补充集。它不是私有 holdout，也不用于宣称未见测试集泛化；用途是让 public full/实体缺口报告在不公开 holdout 的前提下保持完整、fail-closed、可复现。",
+    "annotation_convention": "与 eval_queries.json 相同；本集只使用公开语料与公开规则设计，不复制私有 holdout 条目。",
+    "counts": {"total": 10}
+  },
+  "queries": [
+    {"id": "pv01", "category": "public_validation", "query": "推荐人类肝脏的数据集", "must_match": {"species": "human", "tissue": "liver"}, "nice_to_have": {}},
+    {"id": "pv02", "category": "public_validation", "query": "查小鼠肺组织的数据", "must_match": {"species": "mouse", "tissue": "lung"}, "nice_to_have": {}},
+    {"id": "pv03", "category": "public_validation", "query": "大鼠肝脏的单细胞数据", "must_match": {"species": ["rat", "norvegicus"], "tissue": "liver", "modality": "single-cell"}, "nice_to_have": {}},
+    {"id": "pv04", "category": "public_validation", "query": "结直肠癌相关数据", "must_match": {"disease": ["colorectal", "colon cancer", "rectal cancer"]}, "nice_to_have": {}},
+    {"id": "pv05", "category": "public_validation", "query": "小鼠心脏单细胞数据", "must_match": {"species": "mouse", "tissue": "heart", "modality": "single-cell"}, "nice_to_have": {}},
+    {"id": "pv06", "category": "public_validation", "query": "人类肾脏的 Visium 数据", "must_match": {"species": "human", "tissue": "kidney", "technology": "visium"}, "nice_to_have": {}},
+    {"id": "pv07", "category": "public_validation", "query": "空间转录组数据，但不要小鼠的", "must_match": {"technology": "visium"}, "must_not_match": {"species": "mouse"}, "nice_to_have": {}},
+    {"id": "pv08", "category": "public_validation", "query": "有人脑原始 FASTQ 的数据吗", "must_match": {"species": "human", "tissue": "brain", "has_raw_data": true}, "nice_to_have": {}},
+    {"id": "pv09", "category": "public_validation", "query": "单细胞免疫组库数据", "must_match": {"technology": "v(d)j", "modality": "single-cell"}, "nice_to_have": {}},
+    {"id": "pv10", "category": "public_validation_no_result", "query": "章鱼心脏的单细胞数据", "must_match": {"species": "octopus", "tissue": "heart", "modality": "single-cell"}, "nice_to_have": {}, "no_result_expected": true}
+  ]
+}

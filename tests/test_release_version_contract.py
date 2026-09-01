@@ -78,7 +78,9 @@ def test_launcher_expected_version_matches_web_health_version() -> None:
     # 2.9.0：新增 `/api/search/reply`（2026-08-30：检索回执 LLM 原位改写——纯检索轮的
     #        确定性事实句先上屏、LLM 成功才替换并挂「AI 总结」标，fail-open 留事实句；
     #        混合轮由 actPending 抑制模板回执、检索事实并入执行总结，全轮单泡；additive）。
-    assert web_match.group(1) == ps_match.group(1) == sh_match.group(1) == "2.9.0"
+    # 2.9.1：多动作句新增 `plan.intents` / `plan.pending_frontend` additive 字段，并把
+    #        环内动作写入 intent_checklist 逐项核销；旧单动作路径与响应字段保持兼容。
+    assert web_match.group(1) == ps_match.group(1) == sh_match.group(1) == "2.9.1"
     assert "src\\dataset_recommender\\app\\webapp.py" in ps_launcher
     assert "src/dataset_recommender/app/webapp.py" in sh_launcher
     assert "src\\dataset_recommender\\webapp.py" not in ps_launcher
@@ -346,8 +348,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260901-web1"  # 2026-09-01 web1（令牌号从 20260831-web2 升 20260901-web1、指纹重算）：交付面卫生批——两 html 遥测令牌改占位符 <your-ingest-token>（生产侧同步轮换）、index/dataset 注释批次号中性化、board.js/accounts.js 注释清理。
-STATIC_ASSETS_SHA256 = "df40c34f7cdc1387e1a73543bf3aa2c7e1d62bd4a4d397ef97858beea7363ff7"
+CACHE_GENERATION = "20260902-web1"  # 多动作句逐项派发与核销、trial 默认配置同步；缓存令牌随前端变更提升。
+STATIC_ASSETS_SHA256 = "8f051e8f23536929a300e7436b6405516f3e5c7df28affc3c86a5184add35eee"
 
 
 def _static_assets_digest() -> str:

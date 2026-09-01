@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "private_repository": "hty8870/biodata-agent-private",
+  "public_repository": "hty8870/biodata-agent",
+  "source_private_commit": "cd5579d570cc3b05201ad04a544118915390e830",
+  "transform_version": "2026-09-02.1",
+  "runtime_version": "2.9.1",
+  "python_normalization": [
+    "docstrings",
+    "Field.description",
+    "Field.title"
+  ],
+  "reviewed_file_pairs": [
+    {
+      "path": "web/static/js/act/act.js",
+      "private_sha256": "b9bc2fc0bf8f85fca42aa78db1a4c084b4c260c3aa26ece3f867ff7d1bbcd995",
+      "public_sha256": "493fb9a331d13b310dcd3916b973576ba6c7a2477ed53e7666fa7994af605cc6",
+      "reason": "Runtime code reviewed as equivalent; public comments omit internal development labels."
+    },
+    {
+      "path": "web/static/js/panel/board.js",
+      "private_sha256": "f0eee782fa2ffcd7f7929b46d538d6dbbbe125725bfb38a2228f04de37cd5e44",
+      "public_sha256": "19016035024259e27633b1090991217d5bef69f7870490cac8f21ce7690b6024",
+      "reason": "Runtime code reviewed as equivalent; public comments omit internal development labels."
+    },
+    {
+      "path": "web/static/js/core/shell.js",
+      "private_sha256": "4a18faf97f6ec804e7e20c68fb38c1cdc4e5303297d242e40d3c24e36d4b1adb",
+      "public_sha256": "4a18faf97f6ec804e7e20c68fb38c1cdc4e5303297d242e40d3c24e36d4b1adb",
+      "reason": "Trial-provider defaults are byte-identical."
+    }
+  ]
+}

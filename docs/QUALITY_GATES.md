@@ -21,7 +21,7 @@ Set-Location -LiteralPath $RepoRoot
 | Profile | 用途 | 门 |
 |---|---|---|
 | `fast` | 每个受支持平台的快速确定性门 | Python AST 编译、浏览器 JS 语法、自动化/CI/发布/项目 skill 契约测试 |
-| `full` | 主 Windows/Python 环境的权威离线门 | `fast` 全部内容，加 `pip check` 依赖一致性、全量 pytest、项目/Web/MCP smoke、冻结/held-out/dev 三档推荐评测、安装器契约 |
+| `full` | 主 Windows/Python 环境的权威公开离线门 | `fast` 全部内容，加 `pip check`、全量 pytest、项目/Web/MCP smoke、冻结+dev 评测、公开 validation manifest、安装器契约 |
 
 本地执行并保留报告：
 
@@ -108,9 +108,16 @@ if ($LASTEXITCODE -ne 0) { throw '冻结推荐评测失败。' }
 - **held-out 只用一次**：首跑发现的问题已留档（逐条清单与泛化 gap 讨论），修复走下一轮 dev 集，禁止据本集结果回改解析器/词表后再拿本集邀功。
 - 脚本侧配套：`scripts/evaluate_recommendation.py` 阈值参数化（`--expect-top1/--expect-top5/--expect-max-violation/--expect-max-fastq-violation/--expect-min-noresult`，默认值=冻结基线常量，主集默认行为逐位不变），读 JSON 跳过 `_comment` 等无 `query` 字段的元信息项。
 
+### Public validation 输入合同（2026-09-02）
+
+公开仓不发布私有 holdout，但也不能因此把 Windows 主腿降成 fast。`eval/evaluation-manifest.json`
+显式列出实体缺口报告使用的主集、dev 集和 `eval_queries_public_validation.json`；缺任一文件、
+路径越界或去重样本低于 manifest 阈值均 fail-closed。public validation 是公开、可反复运行的
+回归输入，不冒充未见测试集；private 另有自己的 manifest，把一次性 holdout 加回内部看门狗。
+
 ### Dev 集回归门（2026-08-06 新增）
 
-held-out 首跑发现的措辞盲区按纪律**不据 holdout 回改**，修复走 dev 集路线：`eval/eval_queries_dev.json`（54 条，id dv01–dv54）系统覆盖否定后缀句（「X的不要」「X的就不用给了」「别带X」）、「或」句式（「或者…哪个都行」）、fastq 口语（「有fastq吗」「能下到」「得含」「里头有」）、V(D)J（VDJ/TCR/免疫受体库）、非人模式生物（玉米/maize/拟南芥等）、亚型辨析（霍奇金 vs 小淋巴细胞淋巴瘤、急髓 vs 急淋），另含 10 条典型正常用例对照与 5 条 no_result。设计与支撑数口径见文件头 `_comment`。
+held-out 首跑发现的措辞盲区按纪律**不据 holdout 回改**，修复走 dev 集路线：`eval/eval_queries_dev.json`（55 条，id dv01–dv55）系统覆盖否定后缀句（「X的不要」「X的就不用给了」「别带X」）、「或」句式（「或者…哪个都行」）、fastq 口语（「有fastq吗」「能下到」「得含」「里头有」）、V(D)J（VDJ/TCR/免疫受体库）、非人模式生物（玉米/maize/拟南芥等）、亚型辨析（霍奇金 vs 小淋巴细胞淋巴瘤、急髓 vs 急淋），另含 10 条典型正常用例对照与 5 条 no_result。设计与支撑数口径见文件头 `_comment`。
 
 ```powershell
 Set-Location -LiteralPath $RepoRoot

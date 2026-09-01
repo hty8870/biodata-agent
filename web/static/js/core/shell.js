@@ -370,8 +370,8 @@ export function initHistWinSkeleton() {
 // 通用 LLM 连接预设：底层统一走 OpenAI 兼容 /chat/completions。
 // wire = 真正发给后端的 provider（后端认 mock / zhipuai / openai-compatible / trial）；
 // 其余预设都映射成 openai-compatible，仅 base_url + model 不同 → 经安全校验的兼容端点即插即用。
-// trial（限量试用，2026-08-25）：key/地址/模型全部由服务端托管并锁定（BIODATA_TRIAL_API_KEY，
-// 缺省回落 BIODATA_EMBED_API_KEY；2026-08-27 起默认模型 glm-5.3-flash），
+// trial（限量试用，2026-08-25）：key/地址/模型全部由服务端托管并锁定（BIODATA_TRIAL_API_KEY；
+// 2026-09-01 起默认模型改回 deepseek-v4-flash），
 // base/model 留空不是「缺省」而是「不可填」——applyPreset 对 trial 禁用三个输入框。
 const LLM_PRESETS = {
     mock: {
@@ -830,7 +830,7 @@ export function applyPreset(key, opts) {
         const t = _healthLlm && _healthLlm.trial;
         $("cfgBaseUrl").value = "";
         $("cfgApiKey").value = "";
-        $("cfgModel").value = (t && t.model) || "glm-5.3-flash";
+        $("cfgModel").value = (t && t.model) || "deepseek-v4-flash";
     }
     _setCfgRowHidden("cfgBaseUrl", isTrial || guard);   // 护栏模式：自定义地址行整行隐藏（后端一律 400）
     _setCfgRowHidden("cfgApiKey", isTrial);

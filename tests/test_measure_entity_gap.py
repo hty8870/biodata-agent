@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -17,17 +18,9 @@ _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 sys.path.insert(0, str(_ROOT / "scripts"))
 
-# 与 tests/test_evaluate_recommendation.py 同一处坑：measure_entity_gap 顶层 import
-# evaluate_recommendation，后者在 import 时 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, ...)`
-# （CLI 中文编码用）；pytest 下这会夺走并关闭捕获缓冲。import 期间临时换成无 `.buffer` 的
-# StringIO 触发其 try/except 跳过 swap；import 后恢复。
-import io as _io  # noqa: E402
-_saved_stdout = sys.stdout
-sys.stdout = _io.StringIO()
-try:
-    import measure_entity_gap as meg  # noqa: E402
-finally:
-    sys.stdout = _saved_stdout
+# measure_entity_gap 对 evaluate_recommendation 使用惰性导入，顶层 import 不再触碰
+# pytest stdout 捕获。
+import measure_entity_gap as meg  # noqa: E402
 
 
 # ---------- Wilson 区间 ----------
@@ -66,7 +59,6 @@ def pipeline():
 
 
 def _eval_query(qid: str) -> dict:
-    import json
     data = json.loads((_ROOT / "eval" / "eval_queries.json").read_text(encoding="utf-8"))
     for q in data["queries"]:
         if q["id"] == qid:
@@ -94,7 +86,38 @@ def test_report_shape_and_class_sum(pipeline, tmp_path):
     """全样本跑一遍：类别计数自洽（总和=样本数）、裁决行非空、报告文件落盘。"""
     settings, records = pipeline
     queries = meg.load_all_queries()
-    assert len(queries) >= 100   # 三集去重后样本量钉（防加载静默退化）
+    manifest = meg.load_evaluation_manifest()
+    assert len(queries) >= manifest["entity_gap"]["expected_min_unique_queries"]
     rows = [meg.classify_query(q, records, settings) for q in queries]
     assert sum(1 for _ in rows) == len(queries)
     assert all(r["cls"] in ("C1", "C2", "C3", "C4", "OK") for r in rows)
+
+
+def test_manifest_missing_input_fails_closed(tmp_path):
+    manifest = {
+        "schema_version": 1,
+        "audience": "test",
+        "entity_gap": {
+            "query_sets": ["missing.json"],
+            "expected_min_unique_queries": 1,
+        },
+    }
+    path = tmp_path / "evaluation-manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="input is missing"):
+        meg.load_all_queries(path)
+
+
+def test_manifest_rejects_unsafe_query_set_path(tmp_path):
+    manifest = {
+        "schema_version": 1,
+        "audience": "test",
+        "entity_gap": {
+            "query_sets": ["../private.json"],
+            "expected_min_unique_queries": 1,
+        },
+    }
+    path = tmp_path / "evaluation-manifest.json"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="unsafe evaluation"):
+        meg.load_all_queries(path)

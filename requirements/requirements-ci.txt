@@ -16,3 +16,6 @@ websockets==15.0.1
 # agent_exec 扩展探测同时要求 langgraph + langchain_openai（find_spec 双闸，
 # agent_exec.py:268）——少一个就 179 条 agent 测试整体 AgentUnavailable。版本对齐 venv。
 langchain-openai==1.4.1
+# Security floor shared with the Web/runtime locks. 49.0.0 is affected by
+# CVE-2026-69247; keeping this direct prevents transitive resolver drift.
+cryptography==50.0.1

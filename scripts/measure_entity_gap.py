@@ -11,8 +11,9 @@
   C3 条目存在且相关，但被解析出的硬过滤条件误滤（字段覆盖/标注不足）；
   C4 条目过了硬过滤但 Top-K 排名失败（支持 >0、结果非空、Top5 无命中）。
 
-样本：eval 三个人工标注集（eval_queries{,_dev,_holdout}.json，自带 must_match/must_not_match
-= 现成的查询—相关条目对），按查询文本去重。
+样本：由 `eval/evaluation-manifest.json` 显式列出的人工标注集（自带
+must_match/must_not_match = 现成的查询—相关条目对），按查询文本去重。private manifest
+保留私有 holdout；public manifest 使用独立公开验证集，二者都对缺文件和样本静默退化 fail-closed。
 （方案 v2 提到的「历史查询」只作补充——它们存在浏览器 localStorage，服务端不可得，
 本测量以三个人工标注集为全样本，此处如实注明偏差。）
 
@@ -51,11 +52,7 @@ def _er():
         _ER = er
     return _ER
 
-QUERY_SETS = (
-    "eval_queries.json",
-    "eval_queries_dev.json",
-    "eval_queries_holdout.json",
-)
+EVALUATION_MANIFEST = AGENT_ROOT / "eval" / "evaluation-manifest.json"
 
 CLASS_ZH = {
     "C1": "解析器/词表未识别实体（可满足的查询被弃权或抽错挡下）",
@@ -161,15 +158,54 @@ def classify_query(q: dict, records, settings, top_k: int = 5) -> dict:
     return row
 
 
-def load_all_queries() -> list[dict]:
+def load_evaluation_manifest(path: Path | None = None) -> dict:
+    """读取实体缺口输入合同；坏 schema/路径/阈值一律 fail-closed。"""
+    path = EVALUATION_MANIFEST if path is None else Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"missing evaluation manifest: {path}") from exc
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"invalid evaluation manifest: {path}") from exc
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        raise RuntimeError("evaluation manifest schema_version must be 1")
+    entity_gap = data.get("entity_gap")
+    if not isinstance(entity_gap, dict):
+        raise RuntimeError("evaluation manifest is missing entity_gap")
+    names = entity_gap.get("query_sets")
+    minimum = entity_gap.get("expected_min_unique_queries")
+    if not isinstance(names, list) or not names or not all(isinstance(x, str) for x in names):
+        raise RuntimeError("entity_gap.query_sets must be a non-empty string list")
+    if len(names) != len(set(names)):
+        raise RuntimeError("entity_gap.query_sets contains duplicates")
+    if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum <= 0:
+        raise RuntimeError("entity_gap.expected_min_unique_queries must be a positive integer")
+    for name in names:
+        if Path(name).name != name or not name.endswith(".json"):
+            raise RuntimeError(f"unsafe evaluation query-set path: {name!r}")
+    return data
+
+
+def load_all_queries(manifest_path: Path | None = None) -> list[dict]:
+    manifest_path = EVALUATION_MANIFEST if manifest_path is None else Path(manifest_path)
+    manifest = load_evaluation_manifest(manifest_path)
+    eval_dir = manifest_path.parent
     seen: set[str] = set()
     out: list[dict] = []
-    for name in QUERY_SETS:
-        path = AGENT_ROOT / "eval" / name
+    for name in manifest["entity_gap"]["query_sets"]:
+        path = eval_dir / name
         if not path.exists():
-            continue
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for q in data.get("queries", []):
+            raise RuntimeError(f"evaluation manifest input is missing: eval/{name}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"invalid evaluation query set: eval/{name}") from exc
+        queries = data.get("queries") if isinstance(data, dict) else None
+        if not isinstance(queries, list):
+            raise RuntimeError(f"evaluation query set has no queries list: eval/{name}")
+        for q in queries:
+            if not isinstance(q, dict):
+                raise RuntimeError(f"evaluation query set contains a non-object row: eval/{name}")
             key = " ".join(str(q.get("query", "")).split()).lower()
             if not key or key in seen:
                 continue
@@ -177,6 +213,11 @@ def load_all_queries() -> list[dict]:
             q2 = dict(q)
             q2["_set"] = name
             out.append(q2)
+    minimum = manifest["entity_gap"]["expected_min_unique_queries"]
+    if len(out) < minimum:
+        raise RuntimeError(
+            f"evaluation query sample degraded: unique={len(out)} expected_min={minimum}"
+        )
     return out
 
 

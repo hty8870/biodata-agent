@@ -54,6 +54,11 @@ def _minimal_project(root: Path) -> None:
         path = root.joinpath(*Path(relative).parts)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("public\n" if path.suffix == ".md" else "[]\n", encoding="utf-8")
+    for relative in build_release.EVAL_INPUT_FILES | {"database/SOURCES.yml"}:
+        source = build_release.source_relpath(relative)
+        path = root.joinpath(*Path(source).parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("sources: []\n" if path.suffix == ".yml" else "{}\n", encoding="utf-8")
 
 
 def _rewrite_self_consistent_candidate(
@@ -643,3 +648,12 @@ def test_delivery_tool_file_is_excluded_from_release_allowlist(tmp_path: Path) -
     result = build_release.build_release(root, tmp_path / "out")
     assert result["ok"] is True
 
+
+def test_build_rejects_contact_email_in_metadata_snapshot(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    snapshot = root / "database" / "external" / "arrayexpress.json"
+    snapshot.write_text('[{"description":"person@example.invalid"}]\n', encoding="utf-8")
+    with pytest.raises(build_release.ReleaseError, match="contact email"):
+        build_release.build_release(root, tmp_path / "out")

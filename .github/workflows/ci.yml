@@ -38,14 +38,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 本仓不含 eval/（冻结/holdout/dev 评测输入）等重资产，
-        # full profile 的 pytest 全量与评测门不可跑；三条腿统一执行 fast 契约门
-        # （Python 语法、JS 语法、自动化契约测试）。
         include:
-          - label: windows-primary-fast
+          # Public full uses the frozen + dev + independent public-validation sets.
+          # The private one-use holdout stays private and is not required here.
+          - label: windows-primary-full
             os: windows-2025
             python: "3.12"
-            profile: fast
+            profile: full
           - label: ubuntu-min-fast
             os: ubuntu-24.04
             python: "3.10"
@@ -85,6 +84,38 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  runtime_smoke:
+    name: source zip first launch / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            os: windows-2025
+          - platform: macos
+            os: macos-15
+          - platform: linux
+            os: ubuntu-24.04
+    steps:
+      - name: Check out the exact revision
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up bootstrap Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/requirements.txt
+
+      - name: Build, extract, and probe a clean first launch
+        run: python scripts/smoke_release_first_launch.py --platform ${{ matrix.platform }}
+
   delivery_scan:
     name: delivery hygiene scan
     runs-on: ubuntu-24.04
@@ -109,7 +140,7 @@ jobs:
   gate:
     name: gate
     if: always()
-    needs: [quality, delivery_scan]
+    needs: [quality, runtime_smoke, delivery_scan]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions: {}
@@ -117,7 +148,9 @@ jobs:
       - name: Require every quality leg to pass
         env:
           QUALITY_RESULT: ${{ needs.quality.result }}
+          RUNTIME_SMOKE_RESULT: ${{ needs.runtime_smoke.result }}
           DELIVERY_SCAN_RESULT: ${{ needs.delivery_scan.result }}
         run: >-
           test "$QUALITY_RESULT" = "success" &&
+          test "$RUNTIME_SMOKE_RESULT" = "success" &&
           test "$DELIVERY_SCAN_RESULT" = "success"

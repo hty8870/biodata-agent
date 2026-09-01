@@ -26,19 +26,19 @@ OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 ZHIPU_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 ZHIPU_DEFAULT_MODEL = "glm-5.1"
-#: 限量试用通道（网页版护栏，2026-08-25；2026-08-27 换型 GLM-5.3-Flash）：部署方在
-#: 服务端环境变量托管 key（`BIODATA_TRIAL_API_KEY`，未设时回落 `BIODATA_EMBED_API_KEY`——
-#: 试用与 embedding 召回共用同一把智谱 key，免双份维护；两者都只在进程环境，请求级
-#: 覆盖链从不注入），前端「限量试用」预设不带 key/地址/模型（锁定不可改），每日轮数由
-#: webapp 配额闸限制。base/model 另有 `BIODATA_TRIAL_BASE_URL` / `BIODATA_TRIAL_MODEL`
-#: 可覆盖；默认锁定 bigmodel 端点 + glm-5.3-flash（与 embedding 通道同源）。
-#: 思考档（2026-08-27 实测，scripts/probe_glm53flash_trial.py）：glm-5.3-flash 始终思考，
-#: thinking={"type":"disabled"} 直接 400；且思考开启下 tool_choice="required"/"auto"
-#: 均正常返回 tool_calls——故 trial 默认**不发** thinking 参数（None），
-#: `BIODATA_TRIAL_THINKING=enabled|disabled` 留逃逸口（换回可关思考的模型时用）。
+#: 限量试用通道：部署方在
+#: 服务端环境变量托管 key（`BIODATA_TRIAL_API_KEY`，只在进程环境，请求级覆盖链从不注入），
+#: 前端「限量试用」预设不带 key/地址/模型（锁定不可改），每日轮数由 webapp 配额闸限制。
+#: base/model 另有 `BIODATA_TRIAL_BASE_URL` / `BIODATA_TRIAL_MODEL` 可覆盖；默认锁定
+#: DeepSeek 端点 + deepseek-v4-flash。凭据**不**回落 `BIODATA_EMBED_API_KEY`——那是智谱
+#: key，对 DeepSeek 端点无效。
+#: 思考档：deepseek-v4-flash 默认思考档拒收 tool_choice="required"
+#: 且更慢，故 trial 默认 thinking=False（发 disabled）；`BIODATA_TRIAL_THINKING` 逃逸口
+#: （enabled/disabled/none）留给换模型时用——none=不发该参数，是始终思考模型
+#: （如 glm-5.3-flash）的兼容档。
 TRIAL_PROVIDER = "trial"
-TRIAL_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
-TRIAL_DEFAULT_MODEL = "glm-5.3-flash"
+TRIAL_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+TRIAL_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_PROVIDER_ERROR_READ_BYTES = 8192
 MAX_PROVIDER_ERROR_CHARS = 2048
 MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
@@ -220,10 +220,9 @@ def _provider_api_key(provider: str) -> str | None:
     if provider == TRIAL_PROVIDER:
         # 试用通道只认部署方专用变量，绝不回落 LLM_API_KEY/OPENAI_API_KEY——
         # 否则请求级 _temporary_env 注入的 key 会静默变成试用通道的凭据。
-        # 回落 BIODATA_EMBED_API_KEY（2026-08-27 换型 GLM）不违此原则：该变量只在
-        # 进程环境，webapp 请求级覆盖链（_build_request_overrides）从不注入它——
-        # 试用与 embedding 召回共用一把智谱 key，部署侧免双份维护。
-        return _sanitized_api_key("BIODATA_TRIAL_API_KEY", "BIODATA_EMBED_API_KEY")
+        # 也不回落 BIODATA_EMBED_API_KEY：那是智谱 key，对默认 DeepSeek 端点无效
+        # （2026-08-27 换型 GLM 时曾短暂回落共用，2026-09-01 改回 DeepSeek 时移除）。
+        return _sanitized_api_key("BIODATA_TRIAL_API_KEY")
     if provider == "mock":
         return _sanitized_api_key("LLM_API_KEY", "OPENAI_API_KEY", "ZAI_API_KEY", "ZHIPUAI_API_KEY", "ZHIPUAI_TOKEN")
     return _sanitized_api_key("LLM_API_KEY", "OPENAI_API_KEY")
@@ -280,26 +279,27 @@ def load_llm_config(
         timeout=float(_env_first("LLM_TIMEOUT", "LLM_TIMEOUT_SECONDS") or "60"),
         temperature=float(_env_first("LLM_TEMPERATURE") or "0.2"),
         max_tokens=int(_env_first("LLM_MAX_TOKENS") or "8000"),   # 与 LLMConfig 字段默认同值（8000 的出处见字段注释）
-        # trial 默认不发 thinking 参数（None）：glm-5.3-flash 始终思考、拒收
-        # thinking={"type":"disabled"}（2026-08-27 实测 400），且思考开启下
-        # tool_choice 强制/自动档均正常——见 TRIAL_PROVIDER 头注释与探针脚本。
-        # `BIODATA_TRIAL_THINKING=enabled|disabled` 是换回可关思考模型时的逃逸口。
+        # trial 默认关思考档（False → 发 {"type":"disabled"}）：deepseek-v4-flash
+        # 默认思考档拒收 tool_choice="required"（2026-08-25 实测 400）且更慢。
+        # `BIODATA_TRIAL_THINKING=enabled|disabled|none` 是换模型时的逃逸口
+        # （none=不发该参数，始终思考的模型用）——见 TRIAL_PROVIDER 头注释。
         thinking=_trial_thinking_env() if provider == TRIAL_PROVIDER else None,
     )
 
 
 def _trial_thinking_env() -> bool | None:
-    """试用通道思考旋钮（`BIODATA_TRIAL_THINKING`，2026-08-27）。
+    """试用通道思考旋钮（`BIODATA_TRIAL_THINKING`，2026-08-27 引入，2026-09-01 默认翻回）。
 
-    enabled/on/1/true/yes → True（发 {"type":"enabled"}）；disabled/off/0/false/no →
-    False（发 {"type":"disabled"}）；未设/其他 → None（**不发** thinking 参数——
-    glm-5.3-flash 始终思考、拒收 disabled，这是它的唯一合法形态）。"""
+    enabled/on/1/true/yes → True（发 {"type":"enabled"}）；none/omit → None
+    （**不发** thinking 参数——始终思考的模型如 glm-5.3-flash 的唯一合法形态，
+    它拒收 disabled，2026-08-27 实测 400）；disabled/off/0/false/no 与未设/其他
+    → False（发 disabled；默认模型 deepseek-v4-flash 思考档拒收 tool_choice 且更慢）。"""
     raw = (_env_first("BIODATA_TRIAL_THINKING") or "").strip().lower()
     if raw in ("1", "on", "true", "yes", "enabled"):
         return True
-    if raw in ("0", "off", "false", "no", "disabled"):
-        return False
-    return None
+    if raw in ("none", "omit"):
+        return None
+    return False
 
 
 def complex_model_name() -> str:
@@ -443,9 +443,10 @@ def _call_chat_completions(
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
     }
-    # 思考旋钮（与 agent_exec langchain 路径同语义，2026-08-25 补齐 plain 路径）：
-    # None = 不发该参数（全部既有 provider 行为逐位不变）；trial 默认 None——
-    # glm-5.3-flash 始终思考、拒收 disabled（2026-08-27 实测），详见 TRIAL_PROVIDER 头注释。
+    # 思考旋钮与 agent_exec 的 langchain 路径同语义：
+    # None = 不发该参数（全部既有 provider 行为逐位不变）；trial 默认 False →
+    # {"thinking": {"type": "disabled"}}——v4-flash 默认思考档拒收 tool_choice 且更慢，
+    # 详见 TRIAL_PROVIDER 头注释。
     if config.thinking is not None:
         payload["thinking"] = {"type": "enabled" if config.thinking else "disabled"}
         if config.thinking and config.reasoning_effort:
@@ -630,7 +631,7 @@ def call_llm(prompt: str, config: LLMConfig, retrieved_records: list[dict[str, A
         if provider == "zhipuai":
             missing_key_error = "missing ZhipuAI API key"
         elif provider == TRIAL_PROVIDER:
-            missing_key_error = "trial channel not configured (missing BIODATA_TRIAL_API_KEY / BIODATA_EMBED_API_KEY)"
+            missing_key_error = "trial channel not configured (missing BIODATA_TRIAL_API_KEY)"
         else:
             missing_key_error = "missing OPENAI_API_KEY"
         return LLMResult(
@@ -647,8 +648,8 @@ def call_llm(prompt: str, config: LLMConfig, retrieved_records: list[dict[str, A
         return call_zhipuai(prompt, config)
 
     if provider == TRIAL_PROVIDER:
-        # 试用通道走 OpenAI 兼容协议（bigmodel 官方端点，2026-08-27 起），但归因如实标
-        # trial——trace/遥测里试用与 BYOK 的 openai-compatible 必须可分。
+        # 试用通道走 OpenAI 兼容协议（DeepSeek 官方端点），但归因如实标 trial——
+        # trace/遥测里试用与 BYOK 的 openai-compatible 必须可分。
         return _call_chat_completions(
             prompt=prompt,
             config=config,

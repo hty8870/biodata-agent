@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # reuse make_delivery's own definitions so the customer-delivery gate and this release gate
 # cannot drift apart (do NOT copy a second list here — DEVELOPMENT.md §11 / make_delivery.md).
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-from make_delivery import FORBIDDEN_TOKENS, _TEXT_SUFFIXES  # noqa: E402
+from make_delivery import FORBIDDEN_TOKENS, _CONTACT_EMAIL_RE, _TEXT_SUFFIXES  # noqa: E402
 
 MANIFEST_NAME = "release-manifest.json"
 DEFAULT_ARCHIVE_NAME = "biodata-agent-release-candidate.zip"
@@ -55,17 +55,25 @@ PUBLIC_EXTERNAL_FILES = {
 PUBLIC_DOC_FILES = {
     "docs/AUTOMATION_AND_RELEASE.md",
     "docs/CHANGELOG.md",
+    "docs/PUBLIC_MIRROR.md",
 }
 EVAL_INPUT_FILES = {
     "eval/baseline_L0.json",
+    "eval/evaluation-manifest.json",
     "eval/eval_queries.json",
+    "eval/eval_queries_dev.json",
+    "eval/eval_queries_public_validation.json",
     "eval/multisource_queries.json",
 }
 REQUIRED_RELEASE_FILES = {
     "README.md",
     "SECURITY.md",
     "automation/quality-gates.json",
+    "database/SOURCES.yml",
     "docs/AUTOMATION_AND_RELEASE.md",
+    "eval/evaluation-manifest.json",
+    "eval/eval_queries_dev.json",
+    "eval/eval_queries_public_validation.json",
     "mcp_server.py",
     "requirements-ci.lock",
     "requirements.txt",
@@ -94,6 +102,7 @@ ROOT_FILES = {
     "PRODUCT.md",
     "README.md",
     "SECURITY.md",
+    "database/SOURCES.yml",
     "mcp_server.py",
     "requirements-embeddings.txt",
     "requirements-ci.lock",
@@ -302,6 +311,19 @@ def _reject_release_forbidden_tokens_bytes(payload: bytes, relative: str) -> Non
 
 def _reject_release_forbidden_tokens_paths(path: Path, relative: str) -> None:
     _reject_release_forbidden_tokens_bytes(path.read_bytes(), relative)
+
+
+def _reject_metadata_contact_bytes(payload: bytes, relative: str) -> None:
+    """Keep contact-email values out of redistributed metadata without logging them."""
+    if not relative.startswith("database/") or not relative.endswith(".json"):
+        return
+    try:
+        text = payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ReleaseError(f"metadata snapshot is not valid UTF-8: {relative}") from exc
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if _CONTACT_EMAIL_RE.search(line):
+            raise ReleaseError(f"metadata snapshot contains a contact email at {relative}:{lineno}")
 
 
 def _validate_relative(relative: str) -> PurePosixPath:
@@ -578,6 +600,7 @@ def build_release(
     # reach the artifact. `make_delivery`-sourced FORBIDDEN_TOKENS is the single source.
     for item in files:
         _reject_release_forbidden_tokens_paths(item.path, item.relative)
+        _reject_metadata_contact_bytes(item.path.read_bytes(), item.relative)
     manifest = make_manifest(root, files, resolved_product_version)
     manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if len(manifest_bytes) > MAX_RELEASE_MANIFEST_BYTES:
@@ -765,6 +788,7 @@ def verify_release(archive: Path) -> dict[str, object]:
                 raise ReleaseError(f"release archive is missing manifest file: {relative}")
             _reject_private_home_bytes(payload, relative)
             _reject_release_forbidden_tokens_bytes(payload, relative)
+            _reject_metadata_contact_bytes(payload, relative)
             size = raw.get("size")
             if type(size) is not int or size < 0:
                 raise ReleaseError(f"invalid size in release manifest for {relative}")

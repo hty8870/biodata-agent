@@ -31,10 +31,14 @@ from pathlib import Path
 # --- 路径与真实管线导入 ---
 AGENT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENT_ROOT / "src"))
-try:
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
-except Exception:
-    pass
+
+
+def _ensure_cli_utf8_stdout() -> None:
+    """CLI-only encoding shim; importing the evaluator must never replace pytest/app stdout."""
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    except Exception:
+        pass
 
 from dataset_recommender.llm.config import get_settings          # noqa: E402
 from dataset_recommender.corpus.data_loader import load_raw_records  # noqa: E402
@@ -297,6 +301,7 @@ def _load_queries(path: str) -> list:
 
 
 def main():
+    _ensure_cli_utf8_stdout()
     ap = argparse.ArgumentParser()
     ap.add_argument("--queries", default=str(DEFAULT_QUERIES))
     ap.add_argument("--validate", action="store_true")

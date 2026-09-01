@@ -24,7 +24,7 @@ $ExpectedService = 'dataset-recommender-web'
 # Fallback literal only - the real value is parsed from webapp.py just below (single
 # source of truth), so a future version bump can never drift the "already running"
 # detection. tests/test_release_version_contract.py pins this fallback to WEB_API_VERSION.
-$ExpectedVersion = '2.9.0'
+$ExpectedVersion = '2.9.1'
 
 try {
     $webappPy = Join-Path (Split-Path -Parent $PSScriptRoot) 'src\dataset_recommender\app\webapp.py'

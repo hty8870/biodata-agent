@@ -220,3 +220,24 @@ def test_understand_prompt_has_no_status_block(monkeypatch):
     understand_messages = model.invocations[0]
     joined = "\n".join(str(getattr(m, "content", "")) for m in understand_messages)
     assert "执行状态（系统机械账本" not in joined
+
+
+def test_intent_checklist_section_in_status_block():
+    """「不少于我」（2026-09-01）：state 带 intent_checklist 时状态栏逐项现算——
+    未决计数 + 逐项状态行 + 「全部核销后才许 finish」规则行；缺省零变化。"""
+    cl = [
+        {"verb": "cite.export", "verb_zh": "导出引文", "quoted": "导出成引文", "plane": "inloop"},
+        {"verb": "pack.download", "verb_zh": "打包下载", "quoted": "打包下载", "plane": "frontend"},
+    ]
+    block = agent_exec._agent_status_block_zh({"intent_checklist": cl},
+                                              steps=[_step("cite.export")], moratorium=False)
+    assert "句内动作未决 0" in block
+    assert "[cite.export] 已做（第1步）" in block
+    assert "[pack.download] 已交前端（环内别再做）" in block
+    assert "全部核销后才许 finish" in block
+    block2 = agent_exec._agent_status_block_zh({"intent_checklist": cl},
+                                               steps=[], moratorium=False)
+    assert "句内动作未决 1" in block2 and "[cite.export] 未做" in block2
+    # 缺省（无 intent_checklist）→ 无该段，旧输出逐位不变
+    block3 = agent_exec._agent_status_block_zh({}, steps=[], moratorium=False)
+    assert "句内动作" not in block3
