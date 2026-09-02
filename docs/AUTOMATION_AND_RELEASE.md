@@ -12,6 +12,24 @@
 - 当前候选发布只生成并上传经过验证的 ZIP、SHA-256 sidecar 和质量报告。它不会创建 GitHub Release，不会读取部署凭据，也不会部署任何主机。
 - 产品默认以本机 loopback 形态运行（受信任单用户）；另提供网页版形态，部署走 [deploy/web/README.md](../deploy/web/README.md) 的通用模板（版本化 Docker 镜像 + 可选的登录/邀请/配额护栏）。`.github/workflows/web-image.yml` 只构建镜像并做容器冒烟与漏洞扫描，不执行任何部署。公开、多用户或互联网部署若要继续扩大，认证、授权、限流、上传配额、TLS/反向代理、监控、持久数据备份和自动化部署回滚仍需按目标环境补齐，详见 [SECURITY.md](../SECURITY.md)。
 
+### 1.1 私库到公开仓的确定性镜像
+
+公开仓不是人工清洗后的第二份源码。镜像合同由三份受版本控制的输入组成：
+
+- `packaging/public-mirror/files.txt`：公开输出的完整路径集；
+- `packaging/public-mirror/policy.json`：三个显式映射、禁止路径/文本规则与有限豁免；
+- `.deliveryignore`：私库 tracked 文件的显式 private 分类。
+
+构建器会要求每个 tracked path 必须属于公开源或 private 分类，并扫描用户主目录路径、未声明邮箱、真实公网 IP 与内部资料引用。日常流程是：
+
+```powershell
+python scripts/build_public_mirror.py validate
+python scripts/build_public_mirror.py apply --public-root <public-worktree>
+python scripts/verify_public_mirror.py --private-root <private-worktree> --public-root <public-worktree>
+```
+
+`apply` 只接受干净的私库提交和干净的 public 工作树，产生的 `public-mirror.json` 记录源 commit、运行时版本、策略摘要和全树摘要。public 工作树里的手工修改会被精确路径+字节比较拒绝；问题必须回源端修复。
+
 ## 2. 环境与哈希锁
 
 `requirements/requirements.txt` 只含生产运行依赖，不含 pytest。日常开发或需要复现 CI/候选发布环境时，应使用 `requirements/requirements-ci.lock`：

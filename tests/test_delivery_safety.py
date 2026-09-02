@@ -271,26 +271,17 @@ def test_secret_scan_allowlist_skips_only_exact_line(tmp_path):
     assert {h["line"] for h in hits3} == {2, 3}
 
 
-def test_secret_scan_allowlist_covers_exactly_the_audited_fixture_lines():
-    """交付安全回归钉：9 个脱敏测试夹具（故意放置形似 key 的字符串以验证遮蔽/不回显；
-    .py 遮蔽还原夹具 + feedback_core_spec.mjs 的 API Key 遮蔽夹具）被
-    SECRET_SCAN_ALLOWLIST 白名单化。钉死三件事：
-      1. 白名单命中的 (文件:行) 在真实文件里确实存在、且全部命中 openai-secret-key；
-      2. 这些文件里除白名单外再无其他 secret 命中（夹具行号漂移或新增未豁免 key → 立即翻红）；
-      3. 白名单豁免后这些文件零 secret 命中 → 交付门不再被测试夹具误伤。
-    """
+def test_secret_scan_test_fixtures_need_no_allowlist():
+    """脱敏夹具以运行时拼接构造，源码必须保持零 secret 命中、零行号豁免。"""
     targets = [MD.REPO_ROOT / "tests" / "test_telemetry_export.py",
                MD.REPO_ROOT / "tests" / "test_telemetry_receiver.py",
                MD.REPO_ROOT / "tests" / "js" / "feedback_core_spec.mjs"]
-    hits = MD.scan_secret_values(targets, allowlist=set())  # 不豁免 → 应命中全部
-    got = {(h["path"], h["line"]) for h in hits}
-    assert got == set(MD.SECRET_SCAN_ALLOWLIST), f"夹具命中集与白名单不一致：{sorted(got)}"
-    assert all(h["pattern"] == "openai-secret-key" for h in hits)
-    # 白名单豁免后这些文件 → 零 secret 命中
+    assert MD.SECRET_SCAN_ALLOWLIST == frozenset()
+    assert MD.scan_secret_values(targets, allowlist=set()) == []
     assert MD.scan_secret_values(targets) == []
 
 
-# ---- 文本覆盖面与解码 fail-closed（round23 加固的回归钉）----
+# ---- 文本覆盖面与解码 fail-closed（2026-08 加固的回归钉）----
 
 def test_is_scannable_text_covers_suffixes_and_exact_filenames():
     """无后缀/整名文件（Dockerfile、LICENSE、dotfile）与新增文本后缀必须被扫描覆盖；

@@ -292,7 +292,7 @@ pip install -r requirements/requirements-langchain.txt
 
 ## 开发与测试
 
-面向开发者的环境、架构、HTTP 端点、扩展方法和验证矩阵见[开发指南](DEVELOPMENT.md)。当前 Web API 版本为 `2.9.1`。开发和交付优先使用清单驱动的统一质量门：
+面向开发者的环境、架构、HTTP 端点、扩展方法和验证矩阵见[开发指南](DEVELOPMENT.md)。当前 Web API 版本为 `3.0.0`。开发和交付优先使用清单驱动的统一质量门：
 
 ```powershell
 $Python = '.\.venv\Scripts\python.exe'

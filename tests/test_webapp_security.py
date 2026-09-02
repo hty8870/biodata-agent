@@ -54,8 +54,6 @@ def _empty_meta() -> SimpleNamespace:
         active_filters=[],
         strategy=None,
         search_trace={},
-        audit=None,
-        action_audit=None,
         degraded_search=None,
         clarification=None,
         llm_called=False,

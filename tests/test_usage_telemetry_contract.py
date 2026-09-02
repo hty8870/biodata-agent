@@ -356,6 +356,20 @@ def test_upload_thresholds_stay_at_or_below_design() -> None:
     assert "hosts.indexOf(host) < 0" in code, "明文公网主机不在白名单必须拒绝（fail-closed）"
 
 
+def test_runtime_telemetry_meta_is_injected_without_source_rewrite(monkeypatch) -> None:
+    from dataset_recommender.app import webapp
+
+    monkeypatch.setenv("BIODATA_TELEMETRY_ENDPOINT", "https://telemetry.example/v1/ingest?a=1&b=2")
+    monkeypatch.setenv("BIODATA_TELEMETRY_TOKEN", 'token-"quoted"')
+    monkeypatch.setenv("BIODATA_TELEMETRY_ALLOW_INSECURE", "telemetry.example")
+    html = webapp._index_html()
+    assert "https://telemetry.example/v1/ingest?a=1&amp;b=2" in html
+    assert "token-&quot;quoted&quot;" in html
+    assert "<your-ingest-token>" not in html
+    assert "<your-ingest-token>" in (webapp.STATIC_DIR / "index.html").read_text(encoding="utf-8"), (
+        "运行时注入不得改写源 HTML")
+
+
 def test_adaptive_upload_threshold_hint_pins() -> None:
     """：上传阈值/节奏随服务器 server_hint 自适应（结构性钉子，断真代码）：
 

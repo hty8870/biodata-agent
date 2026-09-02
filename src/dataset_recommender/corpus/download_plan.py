@@ -31,6 +31,8 @@
 """
 from __future__ import annotations
 
+from ..content.labels import UNNAMED_DATASET
+
 import re
 from typing import Any, Sequence
 from urllib.parse import unquote, urlsplit
@@ -308,7 +310,7 @@ def build_plan(items: Sequence[dict], *, scope: str = SCOPE_PRIMARY) -> dict:
         plan_items.append({
             "dataset_uid": uid,
             "safe_uid": dataset_dir,
-            "dataset_name": _text(item.get("dataset_name")) or "（未命名）",
+            "dataset_name": _text(item.get("dataset_name")) or UNNAMED_DATASET,
             "source": source or "未说明",
             "page_url": _text(item.get("url")),
             "tier": tier,

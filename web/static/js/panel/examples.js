@@ -10,6 +10,7 @@
  * ========================================================================== */
 
 import { API, $, escapeHtml, toast } from "#core";
+import { selectedValues, setStatusLine } from "../core/copy.js";
 
 /* 端点坐标（分区键入参）直接读设置表单两个输入框——刻意不 import #shell 的 getConfig：
    memory.js 已 import 本模块，而 #shell 经 browse 间接回到 #memory，再引 shell 会成环
@@ -29,11 +30,7 @@ function _endpointBody() {
 }
 
 function examplesStatus(text, isError) {
-    const box = $("examplesStatus");
-    if (!box) return;
-    box.hidden = !text;
-    box.textContent = text || "";
-    box.classList.toggle("is-error", !!isError);
+    setStatusLine($("examplesStatus"), text, isError);
 }
 
 function _stepLabel(step) {
@@ -51,8 +48,7 @@ async function _post(url, ids) {
 }
 
 function _selectedIds(box) {
-    return Array.from(box.querySelectorAll("[data-ex-id]:checked"))
-        .map(function (el) { return el.getAttribute("data-ex-id"); });
+    return selectedValues(box, "[data-ex-id]:checked", "data-ex-id");
 }
 
 function _renderList(rows) {

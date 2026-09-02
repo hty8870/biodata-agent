@@ -905,12 +905,7 @@ RAW_OPTIONAL_PATTERNS = tuple((_re.compile(p), action) for p, action in (
 ))
 
 
-# ---------- 规则可识别规范词提示（供 LLM 重排审核改写用；只读、纯确定性）----------
-# 背景：rerank_audit 让 LLM 对照原句审核规则抽词是否完整，不完整则**改写**成规则更易正确解析的句式。
-# 改写要落到规则真正认识的词面上，故把 CATALOG 各维度的 display 规范名按维度列给 LLM 作候选。
-# 只列 display（规范名，紧凑）、不列全部 alias（太长）；absent 物种也列（让规则"看见"约束→诚实无结果）。
-# 纯读 CATALOG、无副作用；供 workflow 构造审核提示词时调用（rerank.py 只消费本模块的
-# FILLER_GRAMMAR/DIM_LABELS_CN 词表锚点，不直接调本函数——审核输入仍由 workflow 算好传入）。
+# ---------- 维度中文名公共锚点 ----------
 #: 维度中文名的**全局锚点**（6 键与 query_parser.DIMENSIONS 的维度集对齐；不能反向 import
 #: query_parser——那会成环，键集对齐靠注释与测试守护）。query_parser 的筛选项标签、
 #: retriever 的 FACET_LABELS 等所有「维度中文名」消费方都从这里取。
@@ -919,37 +914,6 @@ DIM_LABELS_CN: dict[str, str] = {
     "platform": "平台", "assay": "技术", "modality": "模态",
 }
 
-#: LLM hint 语境的措辞覆盖：给模型看的提示里 assay/modality 用更完整的说法（比 UI 标签啰嗦无妨）。
-_DIM_LABELS_LLM_HINT_OVERRIDE: dict[str, str] = {"assay": "实验技术", "modality": "数据模态"}
-
-_DIM_LABELS_CN: dict[str, str] = {**DIM_LABELS_CN, **_DIM_LABELS_LLM_HINT_OVERRIDE}
-
-
-def known_terms_hint(max_per_dim: int = 60) -> str:
-    """按维度列出 CATALOG 的规范 display 名，作为 LLM 改写查询时的『规则认识的词』候选。
-
-    返回形如：
-        物种：Human、Mouse、Rat、Macaque、…
-        组织：Breast、Lung、Brain、…
-    确定性、可复现；维度顺序与标签取自 _DIM_LABELS_CN，未登记维度按 CATALOG 原键名兜底。
-    """
-    lines: list[str] = []
-    for dim, entries in CATALOG.items():
-        if not isinstance(entries, list):
-            continue
-        seen: list[str] = []
-        for e in entries:
-            disp = str((e or {}).get("display") or "").strip()
-            if disp and disp not in seen:
-                seen.append(disp)
-            if len(seen) >= max_per_dim:
-                break
-        if seen:
-            label = _DIM_LABELS_CN.get(dim, dim)
-            lines.append(f"{label}：{'、'.join(seen)}")
-    return "\n".join(lines)
-
-
 def _is_cjk(text: str) -> bool:
     return any("一" <= ch <= "鿿" for ch in text)
 
@@ -957,7 +921,7 @@ def _is_cjk(text: str) -> bool:
 def suggestable_terms(dim: str, max_n: int = 8) -> list[dict]:
     """给用户当「点一下就能用」的候选说法。只读、确定性。
 
-    与 `known_terms_hint` 的关键差别：**只收 display 本身也是自己 alias 的条目**。
+    **只收 display 本身也是自己 alias 的条目**。
     像 Eye（别名只有 眼睛/眼部）、Rice（只有 水稻/oryza）、Cancer 这些条目，display 并不是任何 alias，
     照抄给用户会诱导他输入一个必然触发未收录实义词、整句弃权的词——那是把系统的内部规范名当成用户词。
 

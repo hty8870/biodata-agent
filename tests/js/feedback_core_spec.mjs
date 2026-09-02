@@ -22,6 +22,7 @@ class MemoryStorage {
 globalThis.localStorage = new MemoryStorage();
 
 const core = await import(new URL("../../web/static/js/core/feedback_core.js", import.meta.url));
+const fakeApiKey = "sk-" + "abcdefghijklmnopqrstuvwxyz0123";
 
 let failed = 0;
 function check(label, ok, detail) {
@@ -63,13 +64,13 @@ check("配置公钥后 hasSendChannel(pub)=true", core.hasSendChannel(devPubB64)
 localStorage.clear();
 core.feedbackEnqueue("alice", {
     feedback_id: "fb-1", authorized_at: "2026-08-22T06:00:00Z",
-    text: " 搜索「肺癌 10x」时结果很慢，我的 key 是 sk-abcdefghijklmnopqrstuvwxyz0123 请勿外泄 ",
+    text: ` 搜索「肺癌 10x」时结果很慢，我的 key 是 ${fakeApiKey} 请勿外泄 `,
     diag: null, with_diag: false,
 });
 const q1 = core.feedbackPendingForScope("alice");
 check("入队返回队列含 1 条", q1.length === 1, q1.length);
 check("正文 trim 后落队", q1[0].text.indexOf("搜索「肺癌 10x」时结果很慢") === 0, q1[0].text);
-check("正文入队时过 API Key 遮蔽", q1[0].text.indexOf("sk-abcdefghijklmnopqrstuvwxyz0123") < 0
+check("正文入队时过 API Key 遮蔽", q1[0].text.indexOf(fakeApiKey) < 0
     && q1[0].text.indexOf("[API Key]") >= 0, q1[0].text);
 check("authorized_at 定格", q1[0].authorized_at === "2026-08-22T06:00:00Z");
 check("初始 status=pending", q1[0].status === "pending");
@@ -145,7 +146,7 @@ check("全部 pending 时才丢最旧 pending", core.feedbackPendingForScope("ca
     const plain = {
         feedback_id: "fb-crypto-1",
         authorized_at: "2026-08-22T07:00:00Z",
-        text: "加密往返：结果页刷新后收藏丢失，sk-testsecret1234567890 别外传",
+        text: `加密往返：结果页刷新后收藏丢失，${fakeApiKey} 别外传`,
         diag: { available: true, errors: 1, features: { search: 3 } },
     };
     const record = await core.feedbackEncrypt(plain, "profile-test-0001", devPubB64);
@@ -178,7 +179,7 @@ check("全部 pending 时才丢最旧 pending", core.feedbackPendingForScope("ca
         && got.authorized_at === plain.authorized_at && got.text === plain.text
         && JSON.stringify(got.diag) === JSON.stringify(plain.diag), decrypted);
     check("密文不泄漏明文（正文与 API Key 都不出现）",
-        record.ciphertext.indexOf("收藏") < 0 && record.ciphertext.indexOf("sk-testsecret") < 0);
+        record.ciphertext.indexOf("收藏") < 0 && record.ciphertext.indexOf(fakeApiKey) < 0);
 }
 
 console.log(failed ? "\nFEEDBACK_CORE_SPEC_FAIL" : "\nFEEDBACK_CORE_SPEC_OK");

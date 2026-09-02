@@ -42,6 +42,7 @@ from telemetry_idempotency import event_receipts, legacy_packet_id, packet_recei
 
 TOKEN = "test-token"
 STATS_TOKEN = "test-stats-token"
+FAKE_API_KEY = "sk-" + "abcdefghijklmnopqrstuvwxyz0123"
 
 
 def _valid_body() -> dict:
@@ -950,7 +951,7 @@ def test_ingest_feedback_roundtrip_decrypts_and_masks():
                               feedback_decrypt_key=priv_pem))
     with TestClient(app) as c:
         plain = {"feedback_id": "fb-test-0001", "authorized_at": "2026-08-22T06:00:00Z",
-                 "text": "搜「肺癌」时我的 key 是 sk-abcdefghijklmnopqrstuvwxyz0123 很卡",
+                 "text": f"搜「肺癌」时我的 key 是 {FAKE_API_KEY} 很卡",
                  "diag": {"available": True, "errors": 2, "features": {"search": 3}}}
         body = _feedback_body(priv_pem=priv_pem, pub_b64=pub_b64, plain=plain, with_diag=True)
         resp = c.post("/v1/ingest", json=body, headers={"X-Ingest-Token": TOKEN})
@@ -968,8 +969,8 @@ def test_ingest_feedback_roundtrip_decrypts_and_masks():
         # 密文载荷不进 payload（明文已还原并遮蔽；ephemeral/nonce/ciphertext 不落库）
         assert "ciphertext" not in stored and "ephemeral_pubkey" not in stored
         # 明文（含 API Key 原值）不出现在响应/库存任何位置
-        assert "sk-abcdefghijklmnopqrstuvwxyz0123" not in resp.text
-        assert "sk-abcdefghijklmnopqrstuvwxyz0123" not in json.dumps(row["payload"], ensure_ascii=False)
+        assert FAKE_API_KEY not in resp.text
+        assert FAKE_API_KEY not in json.dumps(row["payload"], ensure_ascii=False)
 
 
 def test_ingest_feedback_accepts_base64_der_key():
@@ -1203,7 +1204,7 @@ def test_ingest_sanitizes_secret_keys_and_base_url(client, app):
     body = _valid_body()
     body["usage_events"] = [{
         "event_id": "u9", "t": 9, "k": "mcp",
-        "api_key": "sk-should-never-be-stored",
+        "api_key": FAKE_API_KEY,
         "nested": {"Password": "p@ss", "email": "zhang.san@example.com"},
         "base_url": "https://proxy.internal:8443/v1/chat?token=abc",
         "note": "证件 110101199003074321 备用",
@@ -1219,7 +1220,7 @@ def test_ingest_sanitizes_secret_keys_and_base_url(client, app):
     assert stored["base_url"] == "proxy.internal:8443"  # host（含端口）保留，路径/查询整段不采
     assert stored["note"] == "证件 [证件号] 备用"
     # 响应/库存任何位置都不得出现原始秘密值
-    assert "sk-should-never-be-stored" not in resp.text
+    assert FAKE_API_KEY not in resp.text
     assert "p@ss" not in json.dumps(row["payload"], ensure_ascii=False)
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..corpus.corpus import raw_data_false_is_guess
+from ..content.labels import raw_fastq_status
 from ..retrieval.units import format_sample_size
 
 if TYPE_CHECKING:  # 仅类型标注：运行时不在本模块载 workflow（保持依赖方向单向）
@@ -71,14 +72,8 @@ def rows_from_retrieved(payload: "list[dict[str, object]]") -> "list[dict[str, o
 
 def _raw_status_text(item: "dict[str, object]") -> str:
     """payload dict 版的原始数据状态文案（与 webapp 原 _raw_status_text 逐字同约）。"""
-    has_raw_data = item.get("has_raw_data")
-    if has_raw_data is True:
-        return "✅ 包含 FASTQ"
-    if has_raw_data is False:
-        if raw_data_false_is_guess(item):
-            return "⚪ 未确认"   # 猜测的 False 不许印成「无 FASTQ」
-        return "❌ 无 FASTQ"
-    return "⚪ 未说明"
+    return raw_fastq_status(
+        item.get("has_raw_data"), guessed_false=raw_data_false_is_guess(item))
 
 
 def recommend_payload(meta: "WorkflowResult", *, provider: str = "") -> dict:
@@ -111,6 +106,5 @@ def recommend_payload(meta: "WorkflowResult", *, provider: str = "") -> dict:
         "query_constraints": meta.active_filters,
         "interpretation": meta.interpretation,
         "search_trace": meta.search_trace,
-        "audit": meta.audit,
         "warnings": warnings,
     }

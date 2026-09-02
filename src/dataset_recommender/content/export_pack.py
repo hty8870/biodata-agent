@@ -32,6 +32,8 @@ keys-only 哲学：一旦开了「把数据集描述贴进来」的口子，产�
 """
 from __future__ import annotations
 
+from .labels import PROJECT_CONDITION_LABELS, UNNAMED_DATASET
+
 import json
 from typing import Any, Sequence
 
@@ -214,8 +216,8 @@ def sanitize_snapshot(raw: Any) -> dict:
         "project_id": project_id,
         "name": _text(raw.get("name")) or (project_id or "未命名追踪"),
         "goal": _text(raw.get("goal")),
-        "include_conditions": _str_list(raw.get("include_conditions"), limit=8, name="纳入条件"),
-        "exclude_conditions": _str_list(raw.get("exclude_conditions"), limit=8, name="排除条件"),
+        "include_conditions": _str_list(raw.get("include_conditions"), limit=8, name=PROJECT_CONDITION_LABELS["include"]),
+        "exclude_conditions": _str_list(raw.get("exclude_conditions"), limit=8, name=PROJECT_CONDITION_LABELS["exclude"]),
         "candidates": _norm_candidates(raw.get("candidates")),
         "check_condition": _norm_check_condition(raw.get("check_condition")),
         "provenance": _norm_provenance(raw.get("provenance")),
@@ -468,7 +470,7 @@ def build_export_pack(snapshot: dict, records: Sequence[Any], today: str | None 
         cand = it.get("_candidate") or {}
         manifest_rows.append({
             "uid": str(it.get("dataset_uid") or ""),
-            "name": str(it.get("dataset_name") or "（未命名）"),
+            "name": str(it.get("dataset_name") or UNNAMED_DATASET),
             "identifier": _stable_identifier(it),
             "source": str(it.get("source") or "未说明"),
             "url": str(it.get("url") or ""),
@@ -572,9 +574,9 @@ def _render_readme(pack: dict, kind: str) -> str:
         f"- 候选共 {len(rows)} 个：待核验 {counts['待核验']} · 已核验 {counts['已核验']} · 已排除 {counts['已排除']}。",
     ]
     if snapshot.get("include_conditions"):
-        lines.append("- 纳入条件：" + "；".join(snapshot["include_conditions"]))
+        lines.append(f"- {PROJECT_CONDITION_LABELS['include']}：" + "；".join(snapshot["include_conditions"]))
     if snapshot.get("exclude_conditions"):
-        lines.append("- 排除条件：" + "；".join(snapshot["exclude_conditions"]))
+        lines.append(f"- {PROJECT_CONDITION_LABELS['exclude']}：" + "；".join(snapshot["exclude_conditions"]))
     if prov.get("retrieved_at"):
         lines.append(f"- 检索日期：{prov['retrieved_at']}")
     lines += ["", "## 需要你自己确认的事", ""]

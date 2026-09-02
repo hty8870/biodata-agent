@@ -4,6 +4,7 @@ import { upsertMemory, getUserMemories, renderMemoryManager, renderMemorySuggest
 import { dreamCollectConversations, dreamClipConversations, dreamFilterNew, DREAM_MAX_CONV } from "#dream_core";
 import { API, LS, nsKey, $, escapeHtml, getHist, toast } from "#core";
 import { getConfig } from "#shell";
+import { selectedValues, setStatusLine } from "../core/copy.js";
 
 /* ============================================================================
  * dream.js —— dream 记忆界面层（**ES Modules 试点**：前端模块化改造的第一个模块）
@@ -26,11 +27,7 @@ function dreamConsentGive() {
 }
 
 function dreamStatus(text, isError) {
-    const box = $("dreamStatus");
-    if (!box) return;
-    box.hidden = !text;
-    box.textContent = text || "";
-    box.classList.toggle("is-error", !!isError);
+    setStatusLine($("dreamStatus"), text, isError);
 }
 
 function dreamHidePreview() {
@@ -100,8 +97,8 @@ function dreamShowPreview(candidates, dropped) {
 
 function dreamWriteAccepted(candidates) {
     const box = $("dreamPreview");
-    const checks = box ? Array.from(box.querySelectorAll("[data-dream-i]:checked")) : [];
-    const accepted = checks.map(function (el) { return candidates[Number(el.getAttribute("data-dream-i"))]; }).filter(Boolean);
+    const indexes = selectedValues(box, "[data-dream-i]:checked", "data-dream-i");
+    const accepted = indexes.map(function (index) { return candidates[Number(index)]; }).filter(Boolean);
     if (!accepted.length) { dreamStatus("一条都没选，没有写入。", false); return; }
     let written = 0;
     accepted.forEach(function (c) { if (upsertMemory("dream", c.text, c.summary)) written += 1; });

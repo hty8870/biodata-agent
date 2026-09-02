@@ -102,10 +102,10 @@ class VerbSpec:
     when_zh: str                #: 什么时候该选它——**这段话会原样进 prompt**
     slots: tuple[str, ...]      #: 允许携带的槽位
     requires_results: bool      #: 屏上必须先有检索结果才谈得上做
-    #: 前端直派面：True = 本动词有前端 ACT_RUNNERS runner（act.js）、
-    #: **不在** agent 图 LOOP_TOOLS 环内注册表、命中时由 turn 单次分类直派前端自动执行。
-    #: `turn._FRONTEND_EXEC_PLANE` 从本属性词表派生（不再私藏第二份 frozenset）；
-    #: 直派旁路本体的删除留待后续拍板（改变执行路径）。
+    #: 前端执行面：True = 本动词有前端 ACT_RUNNERS runner（act.js）、但不在 agent 图
+    #: LOOP_TOOLS 环内真执行。`turn._FRONTEND_EXEC_PLANE` 从本属性词表派生（不再私藏第二份
+    #: frozenset）；命中项作为 `pending_frontend` 随图结果交给同一 act dispatcher 接力，
+    #: 不再绕过图。
     frontend_dispatch: bool = False
 
 
@@ -145,8 +145,7 @@ _LEAD_VERBS: tuple[str, ...] = ("打包", "打开", "导出", "整理", "统计"
 #: （scoped 路由 / RAG 工具组 / 多批结果；蓝本
 #: 设计文档）已**转正**：
 #: rank / rerank / route.request 常驻动词表，原三个环境开关连同 OFF 分支一并摘除
-#:（开关全名与旧逻辑快照见归档 `docs/归档/旧逻辑_scoped路由替代_2026-08-17/`，
-#: 基线 tag oldlogic-final）。
+#:（退役开关与旧逻辑仅保留在 private 历史记录中，现行代码不再引用）。
 
 
 def _local_library_sources_zh() -> str:

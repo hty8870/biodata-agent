@@ -645,9 +645,7 @@ export function syncStrategyNode() {
         : "手动模式：规则排序始终启用；可按需叠加本地精准重排或 AI 重排。";
     $("nodeRecall").classList.toggle("active", $("cfgRecall").checked && !on);
     $("nodeRerank").classList.toggle("active", $("cfgRerank").checked && !on);
-    // AI 重排参数区：手动模式且开关开时整区可见；自动模式下整区常显但「自动补全关键词」行
-    // 由 CSS（.auto-owned .strategy-rerank-audit）藏掉——「AI 重排候选数」保留可调（用户 2026-08-04：
-    // 后端 auto 分支本就消费 rerank_top_n，藏起来等于剥夺了这项调节权）。
+    // AI 重排候选数：手动模式开重排时显示；自动模式常显，因为 auto 同样消费 rerank_top_n。
     const detail = $("rerankDetail");
     if (detail) detail.classList.toggle("off", !on && !$("cfgRerank").checked);
 }
@@ -909,12 +907,8 @@ export function getConfig() {
         model: ($("cfgModel").value || "").trim(),
         rerank, recall, top_k: topK, rerank_top_n: rerankTopN,
         strategy: $("cfgStrategy").checked ? "auto" : "fixed",   // auto=分类器按候选压力和语义信息接管 recall/rerank
-        rerank_audit: $("cfgRerankAudit").checked,   // 重排时顺带审关键词 + 按需改写重搜（仅 rerank=llm 生效）
         // AI 润色推荐说明（只改说明文字，不动结果与排序；API 可用时生效）。
         polish: useLlm && $("cfgPolish").checked,
-        // 执行侧（下载/打包/导出）关键词核对：真实（非 mock）LLM 可用时自动带上——用户说的「LLM 开启时应包含」。
-        // 后端只核对+上报（meta.action_audit），绝不代劳；规则漏认时前端 actionHint 也指路到打包入口。
-        action_audit: useLlm && !mockLlm,
         // AI 执行（维度 C，2026-08-03 合并旧「说了就直接做」+「Agent 规划执行」）：
         // 开 → 所有消息过 LLM 分流（langgraph 优先、基础规划保底），执行类动词直接派发；
         // 关 → 一切输入按规则检索处理，操作句只回降级气泡。随 /api/utterance 请求带给后端。
@@ -937,7 +931,6 @@ export function loadConfig() {
     $("cfgRecall").checked = !!c.recall;
     $("cfgStrategy").checked = !!c.strategy;
     if ($("cfgAutoLlm")) $("cfgAutoLlm").checked = !!c.autoAllowLlm;
-    $("cfgRerankAudit").checked = !!c.rerankAudit;
     $("cfgAgentExec").checked = c.agentExec !== undefined ? !!c.agentExec
         : (c.agent !== undefined || c.autoAct !== undefined) ? !!(c.agent || c.autoAct) : true;
     // 兼容旧存档：曾经存在的品牌 preset 恢复为同名一键预设；协议名与未单列品牌落到兼容接口。
@@ -969,7 +962,7 @@ export function saveConfig() {
     if ($("cfgSaveSession").checked) {
         // 护栏模式（网页版）：强制不持久化 key——勾选框已被禁用/隐藏，这里再兜底一道。
         const rememberApiKey = !webGuardOn() && $("cfgRememberApiKey").checked === true;
-        const stored = { polish: c.polish, preset: c.preset, baseUrl: c.base_url, model: c.model, rerank: c.rerank === "llm", recall: c.recall !== "off", strategy: c.strategy === "auto", autoAllowLlm: c.auto_allow_llm, rerankAudit: c.rerank_audit, agentExec: c.agent, topK: c.top_k, rerankTopN: c.rerank_top_n, save: true, rememberApiKey };
+        const stored = { polish: c.polish, preset: c.preset, baseUrl: c.base_url, model: c.model, rerank: c.rerank === "llm", recall: c.recall !== "off", strategy: c.strategy === "auto", autoAllowLlm: c.auto_allow_llm, agentExec: c.agent, topK: c.top_k, rerankTopN: c.rerank_top_n, save: true, rememberApiKey };
         if (rememberApiKey) stored.apiKey = c.api_key;
         writeJSON(LS.cfg, stored);
     } else {

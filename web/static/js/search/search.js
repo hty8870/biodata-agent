@@ -222,7 +222,7 @@ export async function runRecommend(opts) {
     try { await SOURCES_READY; } catch (_e) {}
     const cfg = getConfig();
     const btn = $("submitBtn");
-    const reqBody = Object.assign({ query: queryForRetrieval(query), provider: cfg.provider, use_llm: cfg.use_llm, mock_llm: cfg.mock_llm, api_key: cfg.api_key, base_url: cfg.base_url, model: cfg.model, auto_allow_llm: cfg.auto_allow_llm, rerank_audit: cfg.rerank_audit, action_audit: cfg.action_audit, rerank_top_n: cfg.rerank_top_n, sources: cfg.sources, auto_parse_sources: cfg.auto_parse_sources }, searchParamSnapshot(query));
+    const reqBody = Object.assign({ query: queryForRetrieval(query), provider: cfg.provider, use_llm: cfg.use_llm, mock_llm: cfg.mock_llm, api_key: cfg.api_key, base_url: cfg.base_url, model: cfg.model, auto_allow_llm: cfg.auto_allow_llm, rerank_top_n: cfg.rerank_top_n, sources: cfg.sources, auto_parse_sources: cfg.auto_parse_sources }, searchParamSnapshot(query));
     const cacheKey = queryCacheKey(reqBody);
     // final a 档（设计 §2.1）：环内采纳的更优结果随 utterance final 抵达
     // （opts.prefetched）——不再发 /api/recommend，把它当本次响应走完落地+收尾链；

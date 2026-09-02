@@ -2,7 +2,7 @@
 """search.rerun 专项门。**全离线**：
 
 - 机械闸分档直调 `_loop_search_rerun`：真实 database/base 规则检索（与
-  test_rerank_audit 的探测事实同源——"human blood"/"mouse brain" 有结果且结果集不同；
+  探测事实："human blood"/"mouse brain" 有结果且结果集不同；
   "小鼠 胰腺癌" 恒零命中 no_match），adopted / 改空也采纳（设计决定：
   条件变更重检的空结果就是诚实答案，空结果集照常上屏）/ rewrite_no_change /
   空 query 槽 bad_param / 无基准五档钉死，出口顺手过 `SearchRerunResult` 形状闸；
@@ -67,13 +67,13 @@ def _tool_call(verb, **args):
 
 
 def _rescue_plan(utterance, model):
-    """rescue 入口的图级驱动：entry_mode="rescue" + current_query=原句（端点同口径）。"""
+    """rescue 入口的图级驱动：route_scope="rescue" + current_query=原句。"""
     return agent_exec.plan_with_agent_events(
         utterance,
         has_results=False, result_total=0,
         config=CFG, retrieval=None,
         current_query=utterance, current_filters=None,
-        chat_model=model, entry_mode="rescue", search_sources=None,
+        chat_model=model, route_scope="rescue", search_sources=None,
     )
 
 
@@ -246,7 +246,8 @@ def test_loop_search_rerun_no_baseline_adopts_nonempty_rewrite():
 # ---------------------------------------------------------------- 裁决层两道机械闸（直调）
 
 def _state(**kw):
-    base = {"utterance": "human blood", "steps": [], "dead_ends": [], "entry_mode": ""}
+    base = {"utterance": "human blood", "steps": [], "dead_ends": [],
+            "route_scope": "general"}
     base.update(kw)
     return base
 
@@ -267,25 +268,27 @@ def test_adjudicate_rescue_gate_rejects_other_verbs():
     → 机械拒，按 done 收尾、note 如实点名。"""
     raw, note, declined, violation = agent_exec._adjudicate_decide_obj(
         {"verb": "curate.db_status", "quoted": "human blood"},
-        _state(entry_mode="rescue"))
+        _state(route_scope="rescue"))
     assert raw is None and violation == ""
-    assert "检索救回回合" in note and "只允许换词重检" in note
+    assert "rescue" in note and "工具面" in note
 
 
 def test_adjudicate_rescue_gate_allows_search_rerun():
     """对偶钉：rescue 回合提议 search.rerun 本身 → 两道闸都放行（预算未用、面内动词）。"""
     raw, note, declined, violation = agent_exec._adjudicate_decide_obj(
         {"verb": "search.rerun", "quoted": "human blood", "query": "mouse brain"},
-        _state(entry_mode="rescue"))
+        _state(route_scope="rescue"))
     assert raw is not None and raw["verb"] == "search.rerun"
     assert violation == "" and declined == ""
 
 
 def test_decide_tool_specs_rescue_shape():
     """rescue 档 decide 工具面从真表滤出：恰好 search_rerun + finish（面收敛到改写或放弃）。"""
-    names = [t["function"]["name"] for t in agent_exec._DECIDE_TOOL_SPECS_RESCUE]
+    names = [t["function"]["name"]
+             for t in agent_exec._DECIDE_TOOL_SPECS_BY_SUITE["rescue"]]
     assert names == ["search_rerun", "finish"]
-    assert agent_exec._DECIDE_TOOL_NAME_TO_VERB_RESCUE == {"search_rerun": "search.rerun"}
+    assert agent_exec._DECIDE_TOOL_NAME_TO_VERB_BY_SUITE["rescue"] == {
+        "search_rerun": "search.rerun"}
 
 
 # ---------------------------------------------------------------- rescue 收敛面（图级）
@@ -323,7 +326,7 @@ def test_rescue_graph_validate_gate_rejects_other_verb():
     fake = _FakeToolsModel(AIMessage(content=bad), AIMessage(content=bad))
     with pytest.raises(agent_exec.AgentPlanInvalid) as exc_info:
         _rescue_plan("human blood", fake)
-    assert "检索救回回合" in str(exc_info.value)
+    assert "rescue" in str(exc_info.value) and "不在本路线面内" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------- /api/agent/search-rescue 端点三态
@@ -484,7 +487,7 @@ def test_rescue_graph_prompt_carries_unresolved_terms():
                    "abstain_reason": "unresolved_term", "unresolved_terms": ["神经"],
                    "note": ""},
         current_query="小鼠神经胶质瘤", current_filters=None,
-        chat_model=fake, entry_mode="rescue", search_sources=None,
+        chat_model=fake, route_scope="rescue", search_sources=None,
     )
     assert plan["source"] == "agent"
     prompt_text = str(fake.invocations[0][-1].content)
@@ -514,7 +517,7 @@ def test_loop_graph_search_rerun_gets_unresolved_from_state_retrieval():
                    "abstain_reason": "unresolved_term", "unresolved_terms": ["神经"],
                    "note": ""},
         current_query="小鼠神经胶质瘤", current_filters=None,
-        chat_model=fake, entry_mode="", search_sources=None,
+        chat_model=fake, route_scope="", search_sources=None,
     )
     assert plan["source"] == "agent"
     rerun = [s for s in plan["steps"] if s.get("verb") == "search.rerun"]
@@ -536,7 +539,7 @@ def test_loop_graph_search_rerun_gets_unresolved_from_state_retrieval():
         "小鼠神经胶质瘤",
         has_results=False, result_total=0, config=CFG,
         retrieval=None, current_query="小鼠神经胶质瘤", current_filters=None,
-        chat_model=fake2, entry_mode="", search_sources=None,
+        chat_model=fake2, route_scope="", search_sources=None,
     )
     rerun2 = [s for s in plan2["steps"] if s.get("verb") == "search.rerun"]
     assert rerun2 and rerun2[0]["result"]["dropped_terms"] == []
@@ -637,7 +640,7 @@ def test_loop_graph_condition_change_empty_adopted():
         "换成小鼠胰腺癌的",
         has_results=True, result_total=36, config=CFG, retrieval=None,
         current_query="human blood", current_filters=None,
-        chat_model=fake, entry_mode="", search_sources=None,
+        chat_model=fake, route_scope="", search_sources=None,
     )
     assert plan["source"] == "agent"
     rerun = [s for s in plan["steps"] if s.get("verb") == "search.rerun"]

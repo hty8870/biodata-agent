@@ -293,10 +293,9 @@ def test_settings_group_strategy_controls_and_keep_copy_concise():
     assert ".strategy-choice-rule" in css and ".strategy-choice-icon" not in css
     assert ".strategy-auto-ai.off, .strategy-rerank-detail.off" in css
     # 2026-08-03 agent2：B（自动选择）开 → 隐藏 A 的手动项（.auto-owned 单一收口，不再逐个 disabled）
-    assert ".ranking-control.auto-owned .strategy-choice-grid," in css
+    assert ".ranking-control.auto-owned .strategy-choice-grid { display: none; }" in css
     assert ".ranking-control:not(.auto-owned) .strategy-auto-ai" in css
-    # 2026-08-04（用户）：自动模式下「AI 重排候选数」保留可调——只藏「自动补全关键词」行，不藏整区
-    assert ".ranking-control.auto-owned .strategy-rerank-audit" in css
+    # 自动模式下「AI 重排候选数」保留可调，不隐藏整区
     assert ".ranking-control.auto-owned .strategy-rerank-detail" not in css
     assert 'detail.classList.toggle("off", !on && !$("cfgRerank").checked)' in shell
     # AI 门控标注三件套（未配 key 禁点 / 降级标注 / 技术细节「?」钮）

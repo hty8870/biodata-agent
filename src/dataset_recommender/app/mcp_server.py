@@ -278,8 +278,6 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        recommend_datasets 响应 additive 新增 **degraded_search**：规则因未收录词弃权时，
 #        「先忽略这几个词能搜到什么」的**建议**（含条数与忽略后真正生效的条件）。**不自动应用**。
 #        无新工具、无新错误码；冻结 774 逐项不变（评测走 retriever.retrieve、不经编排层）。
-#        另加一个 opt-in 参 **degrade_with_llm**（默认 False）：让 LLM 判「这几个未收录词能不能忽略」，
-#        判可以才真降级（resolution_status="degraded"）；判不可以 / LLM 缺席 / 解析失败 → 保持弃权。
 # 1.29.0：provisioning 闭环进 MCP + 调用留痕——(a) 新增第 18 个工具 **provision_dataset**（对齐 CLI
 #        scripts/provision_dataset.py）：把数据集文件真正下载到调用方指定的 dest_dir（download_executor
 #        单一真源：https+计划白名单、.part→原子改名、md5/大小核对、.corrupt 留证据、旗标默认跳过）。
@@ -329,7 +327,9 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        显式拒绝（online_tool_disabled）；显式 LLM 参数推离安全档显式拒绝（online_llm_disabled，
 #        成本闸——在线调用消耗服务端 key）；隐式 LLM 路径经 scope_gate.force_llm_off 降级规则版。
 #        stdio 本地形态逐字节不变；工具数/入参/错误码对本地不变。
-_SERVER_VERSION = "1.35.0"
+# 1.36.0：退役 recommend_datasets 的 rerank_audit/degrade_with_llm/action_audit 环外
+#        LLM 参数；检索救回统一进 Agent search.rerun 套件。工具数不变。
+_SERVER_VERSION = "1.36.0"
 
 
 # ============================ 在线形态（网页版挂载 /mcp，2026-08-28）============================
@@ -350,8 +350,8 @@ _ONLINE_DISABLED_TOOLS: dict[str, str] = {
 #: 推离安全档才显式 ToolError（客户端可见、去掉后重试即可；纯确定性管线本身就是完整能力）。
 _ONLINE_LLM_SAFE: dict[str, dict[str, object]] = {
     "recommend_datasets": {
-        "use_llm": False, "rerank": "off", "rerank_top_n": None, "rerank_audit": False,
-        "degrade_with_llm": False, "auto_allow_llm": False, "strategy": "fixed",
+        "use_llm": False, "rerank": "off", "rerank_top_n": None,
+        "auto_allow_llm": False, "strategy": "fixed",
     },
     "get_dataset_introduction": {"llm": False},
     "biodata_llm_status": {"check_connection": False},
@@ -685,9 +685,6 @@ def recommend_datasets(
     use_llm: bool = False,
     rerank: str = "off",
     rerank_top_n: StrictInt | None = None,
-    rerank_audit: bool = False,
-    degrade_with_llm: bool = False,
-    action_audit: bool = False,
     strategy: str = "fixed",
     auto_parse: bool = True,
     auto_allow_llm: bool = False,
@@ -727,23 +724,6 @@ def recommend_datasets(
       rerank:  "off"（默认）| "llm"（**LLM 重排**存活集）。
                ⚠️ 同告诫②：llm 需 key + 联网、非确定性；缺 key 静默回退原序。
       rerank_top_n: 仅对存活集前 N 条做重排；None = 用默认。
-      degrade_with_llm: False（默认）| True。规则因**未收录词**弃权时，让 LLM 判断「这几个词能不能忽略」，
-               判**可以**才真降级并返回结果（此时 resolution_status="degraded"，不会混进 "results"）。
-               判**不可以**、或 LLM 缺席 / 调用失败 / 输出解析不出来 → **保持弃权**（fail-closed）。
-               这是用户「给 LLM 执行零返回的权力」那条想法的镜像实现：同一个判断点，但默认不放行——
-               把关的人不在场时不能自动放行，否则「翼龙的单细胞数据」会返回 3473 条无关数据。
-               决策回显在 degraded_search.llm_verdict / llm_reason / applied。
-      rerank_audit: False（默认）| True。**仅当 rerank="llm" 时生效**：审核规则抽取的关键词是否正确
-               完整，不完整则把原句改写成规则更易解析的句式、**重走一次检索**并择优（改写更差则退回原句）。
-               存活集**非空**时在那次重排 LLM 调用里顺带审核（meta.audit.mode="rerank"）；存活集**为空**
-               （无匹配/规则弃权，clarification 除外）时脱离重排、独立审核一次尝试改写救回（mode="empty"）。
-               ⚠️ 同告诫②：需 key + 联网、非确定性；缺 key 时重排本身静默回退原序 → 审核不触发。
-               决策见返回 meta.audit（含改写回显 + mode）。
-      action_audit: False（默认）| True。**开了真实（非 mock）LLM 时**让 LLM 核对「执行侧（下载/打包/
-               导出）关键词的命中」：独立判断这句话是不是在要求下载/打包/导出，与规则命中 action_markers
-               对照。规则是裸词匹配、换个说法就漏（「存成压缩包」）；LLM 能补认（missed_by_rule=True）。
-               **只核对 + 上报，绝不代劳**：产包/下载仍走 build_task_pack 的预览→确认流程。缺 key / 失败 /
-               解析不出 → fail-open（triggered=False，规则命中原样保留）。决策见返回 meta.action_audit。
       strategy: "fixed"（默认）| "auto"。
                "fixed" = 用上面显式的 recall/rerank（逐位复刻旧行为）。
                "auto" = 综合候选压力、自由语义信息与可用后端，选择纯规则、本地语义、LLM 或两层组合；
@@ -818,8 +798,7 @@ def recommend_datasets(
                            排除项）这次全都没参与筛选。`count` 是该档能救回多少条。
                            第二档只在条件够多时才出现，它是「去掉任何单独一个仍是 0 条」时唯一还救得回来的一档。
       degraded_search   —— 规则因**未收录词**弃权时的降级建议 {ignored_terms, query, count, results,
-                           active_filters}（`degrade_with_llm=true` 时另含 llm_verdict / llm_reason /
-                           applied）：「先忽略这几个不认识的词，能搜到 N 条，实际按这几个条件筛」。
+                           active_filters}：「先忽略这几个不认识的词，能搜到 N 条，实际按这几个条件筛」。
                            **服务器不会自动应用**：实测「翼龙的单细胞数据」忽略「翼龙」后是 3473 条无关
                            数据，自动降级等于把「查无此物」答成「给你一堆别的」。要用就带着 query 再调一次，
                            并把 ignored_terms 如实告诉用户。null=没有可给的降级（忽略后一个条件都不剩，
@@ -833,7 +812,6 @@ def recommend_datasets(
                            recall_used / rerank_used / links_snapshot / evidence_scope / notes(注意事项)；
                            另含 **recall_applied / rerank_applied / llm_applied**（**实际采用的后端**——是否发生
                            回退看这些，而非 *_used/*_requested 这类「请求形态」字段）、strategy（auto 决策）、
-                           audit（关键词审核+改写）、
                            search_trace（执行轨迹）。
     """
     try:
@@ -908,9 +886,6 @@ def recommend_datasets(
                 recall_backend=eff_recall,   # off(默认) / cross_encoder / dense；未预热已被护栏降级为 off
                 rerank_backend=rerank,       # off(默认) / llm
                 rerank_top_n=rerank_top_n,
-                rerank_audit=bool(rerank_audit),  # 仅 rerank=llm 时生效：审核抽词 + 改写重搜择优
-                degrade_with_llm=bool(degrade_with_llm),  # 未收录词弃权时让 LLM 判「能不能忽略」，判可以才降级
-                action_audit=bool(action_audit),  # 真 LLM 开时核对执行侧（下载/打包/导出）关键词命中；只报不代劳
                 date_from=eff_date_from,     # 发表时间范围（显式优先，覆盖 NL 相对时间）
                 date_to=eff_date_to,
                 facet_filters=eff_facet_filters,           # 分面细化（默认空 → no-op）
@@ -966,12 +941,6 @@ def recommend_datasets(
             "llm_applied": bool(res.llm_response_used) or (rerank_actual == "llm"),
             # 分类器决策（仅 strategy=auto 非 None）：{mode,tier,recall_backend,rerank_backend,reason,signals}。
             "strategy": (strategy_result if strategy_norm == "auto" else None),
-            # 关键词审核决策（仅 rerank_audit=True 非 None）：{triggered,verdict,rewritten_query,used,reason,...}。
-            # used=True 表示 answer/candidates 来自**改写后**的查询（改写句见 rewritten_query）。
-            "audit": (getattr(res, "audit", None) if rerank_audit else None),
-            # 执行侧（下载/打包/导出）关键词命中的 LLM 核对（仅 action_audit=True 非 None）：
-            # {triggered,llm_is_action,llm_markers,rule_markers,missed_by_rule,agree,reason}。只报不代劳。
-            "action_audit": (getattr(res, "action_audit", None) if action_audit else None),
             "search_trace": search_trace,
             "links_snapshot": _LEDGER_SNAPSHOT,
             "evidence_scope": (

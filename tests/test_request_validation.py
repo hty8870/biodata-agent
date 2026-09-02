@@ -134,7 +134,6 @@ def test_recommend_params_defaults_single_truth():
     assert p.rerank_backend == "off" and p.recall_backend == "off"
     assert p.strategy == "fixed" and p.preferred_recall == "cross_encoder"
     assert p.sources is None and p.auto_parse_sources is False
-    assert p.rerank_audit is False and p.degrade_with_llm is False and p.action_audit is False
     assert p.base_llm_config is None
 
 

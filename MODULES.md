@@ -104,7 +104,7 @@
 | 接口 | `webapp.py` | FastAPI HTTP（Web API `2.7.0`，59 路由（含 `/`GET+HEAD、`/dataset`GET+HEAD、`/favicon.ico`、可选本地模型 `/api/local-model/status`+`/install`+`/cancel`（独立 venv 在线安装/取消，单飞，失败不影响规则排序）、条件板 `/api/board/plan`、执行层 `/api/action/plan`、统一路由 `/api/utterance`（可选 `req_id` 幂等占用：断流重发同号返回缓存结果，写工具不会跨请求重复执行）、任务包 `/api/task-pack/preview`+`/build`、管护 `/api/curate/plan`+`/apply`+`/check-updates`+`/sync-updates`+`/sync-status`+`/recall`、追踪更新检查 `/api/watch/check`、追踪导出 `/api/artifacts/export-pack`、样例库 `/api/curate-examples/pending`+`/approve`+`/dismiss`、引文下载 `/api/citations/download`（把环内 `cite.export` 落盘在 `.userdata/citations/` 的文件发回浏览器，入参 `f` 只接受裸文件名、目录穿越/`..`/绝对路径拒绝、resolve 后须仍在 `.userdata/citations/` 内、不存在 404、attachment 响应）、真下载 `start`/`status`/`cancel`/`update`（在途增删，additive））；默认整库 `/api/datasets` 缓存已序列化 bytes，以语料代际自动失效，提供弱 ETag/304 并由 GZipMiddleware 压缩大响应；`/api/diagnose` 为 POST JSON；`/api/fair` = FAIR 自检+DAS；`/api/account/*` = 本地账户（注册/登录/登出/whoami））；服务端 LLM 配置读取一律持 `ENV_LOCK`（`_temporary_env` 请求级注入的串读防线—— dream 模块后补的锁，此前是唯一漏网读取点，钉 `tests/test_dream.py::test_dream_endpoint_config_load_holds_env_lock`） | `app` |
 | 账户 | `accounts.py` | 本地单机用户账户（注册/登录/登出 + 落盘会话 `.userdata/sessions.json`：30 天 TTL、原子写、过期即销毁）：scrypt 哈希密码、gitignore 的 `.userdata/` 库、防枚举/节流/fail-closed 存储；`BIODATA_ACCOUNTS_FILE`/`BIODATA_SESSIONS_FILE` 覆盖路径经 `_assert_runtime_path` fail-closed——运行时状态绝不许落仓库 `database/` | `register` · `authenticate` · `create_session` · `resolve_session` · `destroy_session` · `AccountError` · `SESSION_COOKIE` · `default_store_path` |
 | 接口 | `cli.py` | 命令行入口 | `main` |
-| 接口 | `mcp_server.py`（`src/dataset_recommender/app/`） | MCP stdio 19 工具（16 只读 + 3 写盘：`upload_dataset` 写外部库、`provision_dataset` 写调用方指定 dest_dir、`curate_datasets` 管护外部库 upload_* 与回收站；与网页能力对齐；版本以 `_SERVER_VERSION` 为准，当前 v1.35.0（v1.35.0：在线形态落地——同一 FastMCP 实例两用，webapp 挂载 `/mcp`（streamable-HTTP + Bearer 令牌，落盘只存 sha256 摘要）；在线 17 工具（provision_dataset/verify_local_assets 本机文件系统语义不开放、tools/list 直接过滤），显式 LLM 参数推离安全档 ToolError 显式拒绝 + 隐式路径 contextvar 降级（llm/scope_gate），账户语料走 bind_patch_scope；stdio 本地形态逐字节不变）；v1.34.0：`curate_datasets` 补齐 `check_updates`/`sync_updates` 执行动作，sync 落盘返回 operation receipt 可整次撤回（对齐 Web `/api/curate/sync-updates`+`/recall`）；v1.33.0：`browse_datasets` limit 硬上限 200→100，与 Web `/api/datasets` 同源 `app/limits.MAX_DATASETS_LIMIT`，超限错误语义一致；调用留痕 schema v0→v1，每行新增 `call_id`，Web `/api/telemetry/mcp-calls` 按行号增量中继；v1.32.0：recommend/task_pack 日期参数拉齐 Web 严格档——非法格式/日历不存在/from>to 倒挂一律 bad_param 点名）；recommend 新增 opt-in `action_audit`＝真 LLM 开时核对执行侧下载/打包关键词命中，只报不代劳；全部工具入口 append-only 调用留痕到 `.userdata/mcp_calls.jsonl`（参数名+字符串值双层脱敏，值级真源 `dataset_recommender.secret_patterns`），`BIODATA_MCP_CALL_LOG=off` 关闭，汇总走 `scripts/summarize_mcp_calls.py`） | `recommend_datasets`（+`facet_filters`/`suppressed_constraints`/`lenient_dims`/`date_from`/`date_to` opt-in；回显 `coverage_caveats`）· `get_file_manifest` · `parse_constraints` · `browse_datasets`（对齐 `/api/datasets`）· `get_dataset_introduction`（对齐 `/api/introduction`）· `assess_dataset_fair`（FAIR 自检 + DAS，对齐 `/api/fair`）· `lookup_identifier`（对齐 `/api/recommend`.identifier_lookup）· `find_compatible_datasets`（对齐 `/api/compatible`）· `assess_feasibility`（对齐 `/api/feasibility`）· `build_reuse_pack`（对齐 `/api/reuse-pack`）· `plan_query_edit`（接着改条件：一句话 → 一次具体改动，只规划不检索；对齐 `/api/board/plan`）· `plan_action`（一句话要做什么 → 封闭动词表里的一个动作，只出计划不执行；`quoted` 保证是用户原话字面子串、否定取消时动词照留并标 `cancelled=true`（执行层据此不执行只回音）；对齐 `/api/action/plan`）· `build_task_pack`（一句话任务包：四件套口径一致；对齐 `/api/task-pack/*`）· `verify_local_assets`（对齐 CLI `scan_lab_assets.py`）· **`provision_dataset`**（按需真下载到调用方 dest_dir：download_executor 单一真源；默认 scope=primary 只下主文件、max_files 默认 50 硬上限 500 超限报错、dry_run 预演不写；fail-closed 绝不写 database/；对齐 CLI `provision_dataset.py`）· **`curate_datasets`**（对话式数据库管护，写工具 ③：action=list/import/search_online/remove/restore/check_updates/sync_updates 共用 corpus_curation 单一真源；plan 默认 dry_run 零写盘、apply 回传 confirm_token 才写盘/联网、token 不符零写入；search_online 联网限官方源注册表 + 请求账本 + 实体级去重（同来源编号/同页面链接已在库中则跳过并回显 skipped_existing；apply 落盘前重检防 TOCTOU）；对齐 `/api/curate/*` 与 CLI `curate_datasets.py`）· `upload_dataset`（写 `database/external/`，对齐 `/api/upload`）· `biodata_status` · `biodata_llm_status`；CLI `--selfcheck` / `--llm-check` |
+| 接口 | `mcp_server.py`（`src/dataset_recommender/app/`） | MCP stdio 19 工具（16 只读 + 3 写盘：`upload_dataset` 写外部库、`provision_dataset` 写调用方指定 dest_dir、`curate_datasets` 管护外部库 upload_* 与回收站；与网页能力对齐；版本以 `_SERVER_VERSION` 为准，当前 v1.36.0（v1.36.0：Wave 3 退役 recommend 的三个环外 LLM 参数，救回统一进 Agent search.rerun 套件；v1.35.0：在线形态落地——同一 FastMCP 实例两用，webapp 挂载 `/mcp`（streamable-HTTP + Bearer 令牌，落盘只存 sha256 摘要）；在线 17 工具（provision_dataset/verify_local_assets 本机文件系统语义不开放、tools/list 直接过滤），显式 LLM 参数推离安全档 ToolError 显式拒绝 + 隐式路径 contextvar 降级（llm/scope_gate），账户语料走 bind_patch_scope；stdio 本地形态逐字节不变）；v1.34.0：`curate_datasets` 补齐 `check_updates`/`sync_updates` 执行动作，sync 落盘返回 operation receipt 可整次撤回（对齐 Web `/api/curate/sync-updates`+`/recall`）；v1.33.0：`browse_datasets` limit 硬上限 200→100，与 Web `/api/datasets` 同源 `app/limits.MAX_DATASETS_LIMIT`，超限错误语义一致；调用留痕 schema v0→v1，每行新增 `call_id`，Web `/api/telemetry/mcp-calls` 按行号增量中继；v1.32.0：recommend/task_pack 日期参数拉齐 Web 严格档——非法格式/日历不存在/from>to 倒挂一律 bad_param 点名）；全部工具入口 append-only 调用留痕到 `.userdata/mcp_calls.jsonl`（参数名+字符串值双层脱敏，值级真源 `dataset_recommender.secret_patterns`），`BIODATA_MCP_CALL_LOG=off` 关闭，汇总走 `scripts/summarize_mcp_calls.py`） | `recommend_datasets`（+`facet_filters`/`suppressed_constraints`/`lenient_dims`/`date_from`/`date_to` opt-in；回显 `coverage_caveats`）· `get_file_manifest` · `parse_constraints` · `browse_datasets`（对齐 `/api/datasets`）· `get_dataset_introduction`（对齐 `/api/introduction`）· `assess_dataset_fair`（FAIR 自检 + DAS，对齐 `/api/fair`）· `lookup_identifier`（对齐 `/api/recommend`.identifier_lookup）· `find_compatible_datasets`（对齐 `/api/compatible`）· `assess_feasibility`（对齐 `/api/feasibility`）· `build_reuse_pack`（对齐 `/api/reuse-pack`）· `plan_query_edit`（接着改条件：一句话 → 一次具体改动，只规划不检索；对齐 `/api/board/plan`）· `plan_action`（一句话要做什么 → 封闭动词表里的一个动作，只出计划不执行；`quoted` 保证是用户原话字面子串、否定取消时动词照留并标 `cancelled=true`（执行层据此不执行只回音）；对齐 `/api/action/plan`）· `build_task_pack`（一句话任务包：四件套口径一致；对齐 `/api/task-pack/*`）· `verify_local_assets`（对齐 CLI `scan_lab_assets.py`）· **`provision_dataset`**（按需真下载到调用方 dest_dir：download_executor 单一真源；默认 scope=primary 只下主文件、max_files 默认 50 硬上限 500 超限报错、dry_run 预演不写；fail-closed 绝不写 database/；对齐 CLI `provision_dataset.py`）· **`curate_datasets`**（对话式数据库管护，写工具 ③：action=list/import/search_online/remove/restore/check_updates/sync_updates 共用 corpus_curation 单一真源；plan 默认 dry_run 零写盘、apply 回传 confirm_token 才写盘/联网、token 不符零写入；search_online 联网限官方源注册表 + 请求账本 + 实体级去重（同来源编号/同页面链接已在库中则跳过并回显 skipped_existing；apply 落盘前重检防 TOCTOU）；对齐 `/api/curate/*` 与 CLI `curate_datasets.py`）· `upload_dataset`（写 `database/external/`，对齐 `/api/upload`）· `biodata_status` · `biodata_llm_status`；CLI `--selfcheck` / `--llm-check` |
 
 > 以下补记块为**历史设计决策记录**（其中版本号与数量为当时口径）；当前状态以模块表正文与 `docs/CHANGELOG.md` 为准。
 
@@ -238,7 +238,7 @@
   非空）；decide 节点据此带检查意见重问一次，与非法应答重问**共享同一份预算**（每次
   decide 至多一次）；去重/覆盖闸/死路/联网暂停等刻意机械停不重问；重问后放行写步照常落
   强制核销账。该不对称就此根治。search_online bad_param 补修正指引。
-  
+
 
 > **refine.bio 第 11 源端到端**：早期调研判「无全文搜索」
   是打在 `/v1/experiments/` 上（`?search=` 400），实测 `/v1/search/`（ElasticSearch）
@@ -254,7 +254,7 @@
   `alternate_accession` 等值匹配（副号 GSE 直达镜像条目）；检索侧 SOURCE_ALIASES 登记
   refine.bio；act.js 来源 token 剔除正则补 zenodo/refinebio（zenodo 第 10 源时漏同步）。
   前端面板数据驱动自动出现（默认勾选与既有 10 源同口径——zenodo 先例无默认关机制）。
-  
+
 
 > **DeepSeek V4 迁移 + GEO 降级 + Zenodo 第 10 源 + 评测层升级 + 对抗扩增**：
 > ① **DeepSeek V4 迁移**：别名实测=v4-flash（reasoner 别名=thinking 开）；`LLMConfig`
@@ -342,25 +342,7 @@
 > `nhl` 因子串撞域内机构名 NHLBI 已剔除。**扩词**：正向复合词长尾（非典型/非经典/NAFLD…）按同法增补，避免碰真歧义否定
 > （非糖尿病/非肿瘤等保持弃权）。改此逻辑前同步 `tests/test_negation_exempt.py`、`tests/test_negation_contract.py`。
 
-> **rerank 关键词审核（rerank_audit，opt-in；空池独立档已删除）**：挂在 **LLM 重排旗下**
-> 的子开关（默认关，仅 `rerank=llm` 时生效）。审核规则抽词是否正确完整、不完整则把原句改写成规则更易解析的
-> 句式（尽量落到 `vocabulary.known_terms_hint()` 给的规范词），有改写 → workflow 拿改写句**重走一次**
-> `_prepare_context`（audit 关、防循环）→ 结果非空采纳、空则退回原句；改写经 `_validated_rewrite` 校验
-> （空/等价/超长/**空转**即弃——空转=去填充词后与原句同核，见 `_rewrite_core`）。**两条触发路径（`audit.mode`）**：
-> ① `rerank`——存活集**非空**时在那次重排 LLM 调用的 prompt 里顺带审核，一次输出 `{order, keywords_ok, rewrite}`
-> （`rerank.build_rerank_prompt(audit_keywords=...)` + `parse_audit_response`；载荷 `rerank_candidates(audit_ctx=)`
-> 经 `retriever.retrieve(rerank_audit_ctx=)` 透传）；② `empty`——存活集**为空**（无匹配/规则弃权，非 clarification）
-> 时的独立审核档 ** 随检索工具化整段删除**：零命中救回搬进 ReAct 环——检索管线封装为环内工具
-> `search.rerun`（同一管线的第二个调用点，工具内机械择优闸：改空/同集如实拒绝），前端门禁全过
-> （零命中非澄清/无激活分面/agent 扩展在/"AI 执行"开/非 mock/本查询未救过）才发
-> `POST /api/agent/search-rescue`，采纳才经共享落地入口换屏。触发开关随之从 "rerank=llm 子开关"
-> 改挂 "AI 执行"（它是 agent 动作，与环同闸）——AI 执行开 + AI 重排关的用户从此也有救回。
-> **逐位隔离**：`rerank_audit=False`（默认 + 评测）
-> 时两路都不触发、`build_rerank_prompt` 非 audit 分支字面不变、`parse_order` 行为等价 → 冻结门结构性安全
-> （评测直调 retriever、rerank 默认 off）。**fail-open**：LLM 无 key/异常/空/解析失败/改写更差/空转 →
-> 退回原序或原句，绝不报错、绝不违规。规则解析 + `passes_hard_filter` 仍是唯一守门员（LLM 只改文本）。
-> 决策经 `WorkflowResult.audit` / `/api/recommend` 的 `audit` / MCP `meta.audit` / CLI `--show-pipeline`
-> 只读回显，改写在前端 `#auditBanner` 展示（textContent，XSS 安全）。改此逻辑前同步 `tests/test_rerank_audit.py`。
+> **Agent 救回通道**：零命中或未收录词的改写只能进 `search.rerun` 正式套件；检索管线不再自带 LLM 审核或动作判断旁路。
 
 **关键数据边界**
 - `database/base/`（原 `shujuku/`）：冻结 784 条 10x 基准（10x-Visium.json 774 + 10x-synced.json 10），**严格**装载。别改内容。
@@ -530,14 +512,13 @@
 | `facets[]` | `facets.js`(renderFacets 可细化维度) | 分面细化 |
 | `result_total` | `results.js`(renderResultSummary 方法句里「库中共 N 条匹配」) | 计数提示（并入结果摘要卡的一段自然语言，不再单独渲染 #resultsTotal） |
 | `relaxation_options[]` | `results.js`(0 结果一键放宽：`buildRelaxBlock` 按 `kind` 分组 + 「更多放宽方式」展开；`applyRelaxation` 按 `kind` 选横幅措辞) | 引导式放宽。`kind` = `"drop"`（去掉一个条件，其余都在）/ `"only"`（只按一个条件搜，其余全放开——第一档全军覆没时唯一还救得回来的一档）。**措辞不可混用**：「去掉 X」与「只按 X 搜」是相反的两件事 |
-| `degraded_search`（`{ignored_terms,query,count,results,active_filters}` 或 `null`；`degrade_with_llm=true` 时另含 `llm_verdict`/`llm_reason`/`applied`） | `results.js`(未收录词弃权态的「忽略这几个词再搜」芯片 + `applyRelaxation(data,"degraded")`；`resolution_status="degraded"` 时结果区顶部的「这批结果忽略了 X」横幅) | 未收录词降级**建议**；**默认永不自动应用**（自动降级会把「查无此物」答成「给你一堆无关数据」，见 `workflow.build_degraded_search`）。`degrade_with_llm` 档由 LLM 批准才真降级，LLM 缺席/失败 → 保持弃权（fail-closed） |
+| `degraded_search`（`{ignored_terms,query,count,results,active_filters}` 或 `null`） | `results.js`(未收录词弃权态的「忽略这几个词再搜」芯片 + `applyRelaxation(data,"degraded")`；`resolution_status="degraded"` 时结果区顶部的「这批结果忽略了 X」横幅) | 确定性降级**建议**，永不在 workflow 内自动应用。需要 LLM 换词救回时只走 Agent `rescue/search.rerun` 套件，由工具内机械择优闸决定是否换屏 |
 | `action_markers[]` | `results.js`(renderActionHint → `#actionHint`) | 用户在查询里说出的执行类诉求（打包/下载脚本/导出引文）。这些词此前会让**整句检索弃权**；现在不再阻断检索，但也不静默吞掉——只指路到「下载这批数据」，**不代劳** |
 | `markdown` | `results.js`(诊断/原始输出) | 无结果/原始文案 |
 | `llm_response_used` · `provider` | `results.js`(来源标签)·`search.js`(缓存决策) | LLM 状态 |
 | `interpretation` | `/api/recommend`：`search.js`→`interactions.js`；`/api/interpret`：`interactions.js` 输入防抖预览（来源/时间摘要均采用后端真源） | 原句、送入规则解析的清洗句、实际来源与完整 intent 投影；轻量预览不装载语料、不执行检索排序 |
 | `search_trace`（`{version,automatic,summary,strategy_reason,total_duration_ms,steps[]}`；执行型 step 可含 `duration_ms`；**`status="fallback"` 的 step additive 带 `fallback_note`**） | `results.js`（renderResultSummary： 摘要卡的方法句据真实 `steps[].status=used/fallback` 生成；回退附注由 `fallbackLayerNotes` 直接转述 `fallback_note`，覆盖 `local_semantic`/`llm_rerank`/`llm_polish` 三层） | 后端保留完整执行轨迹；客户界面默认只用一句话说明实际启用的排序层与任何回退，硬过滤/规则基础排序/终检等内部例行步骤不展示；无 trace 时如实说「执行明细不可用（请重启后端）」，不含 Key、内部路径或服务商原始错误。**`fallback_note`（1.7.0 起）是「这次回退该怎么对用户说」的单一真源**（生产者 `workflow._fallback_note`）：`未启用：…` = 这一层压根没开（没装本地模型 / 没配 AI 接口），`没能完成：…` = 试过但失败（provider 拒、超时、返回坏格式）。**前端不许自己写死这句措辞**——此前前端把两者一律写成「本次未启用」，provider 真返 400 时，一次故障在界面上读起来像一个选择。老后端没这个字段时前端退到「没能完成」（宁重不轻）；门在 `tests/test_fallback_wording_honesty.py` |
 | `ok` · `fallback_reason` | `search.js`(错误/回退判定)·`results.js` | 请求成败 |
-| `audit`（仅 `rerank_audit=true` 非 null；`{triggered,verdict,rewritten_query,used,reason,mode,n_before,n_after,was_no_result}`；`mode`=`rerank` 存活集非空顺带审 / `empty` 空池弃权独立审 / `null` 未触发） | `shell.js`(renderStatus→fmtAudit 填 `stAudit`；renderAuditBanner 在 `used` 时展示"我把问题理解成 XX"横幅 `#auditBanner`)·`search.js`(reqBody 回传 `rerank_audit`) | 关键词审核 + 改写重搜决策回显（改字段名/形状 → 横幅/开发者信息静默失效） |
 | `coverage_caveats`（`[{dim,label,count,by_source:[{source,count}]}]`） | `results.js`(renderCoverageCaveats：渲染进结果摘要卡内的 `#coverageCaveats`——「另有 N 条因缺 <维度> 未核验」+「放宽方式 ▸」展开两档策略 `.cov-strat`：①纳入未标注「X」的 N 条（toggleLenient）②不按「X」筛选（relaxDimFully）；误读版 `examples` 字段已回退) | 诚实降级：满足其它条件但某维未标注（无法核验）的记录计数，本可能相关却被静默判负；改字段名/形状 → 覆盖提示静默失效 |
 | `applied_lenient`（被宽容的维度列表） | `results.js`(renderCoverageCaveats「已纳入未标注「X」✕」撤销 chip)·`search.js`(reqBody 回传 `lenient_dims`) | 诚实降级已生效维度回显（前端据此渲染撤销 + 持续宽容） |
 | `unused_query_terms`（`[str]`：无对应筛选维度的实义描述词） | `results.js`(renderUnusedQueryTerms：结果上方「以下词未作为筛选维度」只读提示) | 静默丢词诚实层：性别/年龄/受试者/功能类等系统结构上无维度可落的词，原本静默丢弃零信号，现回显；来自 `QueryIntent.unused_query_terms`（`FILLER_DOMAIN`），改字段名/形状 → 提示静默失效 |

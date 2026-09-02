@@ -47,10 +47,9 @@ RECOMMEND_TOP = {
     # 同步改本文件」——漏同步时 API 层会把它们整个丢掉，全量套件仍然全绿。
     "degraded_search",      # 未收录词弃权时的降级建议（无建议时为 null，键必须在）
     "action_markers",       # 执行类说法回显（没说时为空数组，键必须在）
-    "action_audit",         # 执行侧关键词命中的 LLM 核对（未开 action_audit 时为 null，键必须在）
     "or_handling",          # 「A 或 B」实际怎么执行的（没写「或」时为空 dict，键必须在）
     "interpretation", "search_trace", "markdown", "strategy",
-    "clarification", "audit", "warnings", "pipeline",
+    "clarification", "warnings", "pipeline",
     "llm_response_used", "provider", "fallback", "fallback_reason",
     "policy_id", "policy_id_str",  # 结构体 + 稳定紧凑串；组装失败均为 null
     "experiment",                   # 完整实验三件套；普通流量为 null

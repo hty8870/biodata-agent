@@ -21,6 +21,7 @@
  */
 
 import { ARTIFACTS_LIMITS, artifactsProvenance, artifactsUidSet } from "./artifacts.js";
+import { COPY } from "./copy.js";
 
 /* ---------- 上下文卡常量（的数值上限，UI 与规格共读） ---------- */
 export const PROJECTS_CTX_MAX_CHARS = 2000;      // 序列化后硬 cap（Unicode 字符数）
@@ -159,7 +160,7 @@ export function projectsContextSerialize(project, opts) {
     // 精确序列化长度（含节标题与 \n 分隔），硬 cap 判据与最终 text 完全一致——
     // 不许用「只算正文」的近似预算（会漏目标与标题开销，实测超 2000 字）。
     const exactLen = () => {
-        const segs = [section("研究目标", goalText), section("纳入条件", incText), section("排除条件", excText), section("候选", candText)].filter(Boolean);
+        const segs = [section("研究目标", goalText), section(COPY.conditions.include, incText), section(COPY.conditions.exclude, excText), section("候选", candText)].filter(Boolean);
         return segs.join("\n").length;
     };
     // 硬 cap 2000：从优先级最低的候选开始砍（整体砍掉 → 逐条从尾部砍），再排除、再纳入。
@@ -185,7 +186,7 @@ export function projectsContextSerialize(project, opts) {
     const finalGoal = exactLen() > PROJECTS_CTX_MAX_CHARS
         ? goalText.slice(0, PROJECTS_CTX_MAX_CHARS - (exactLen() - goalText.length) - 3) : goalText;
 
-    const partsArr = [section("研究目标", finalGoal), section("纳入条件", incText), section("排除条件", excText), section("候选", candText)];
+    const partsArr = [section("研究目标", finalGoal), section(COPY.conditions.include, incText), section(COPY.conditions.exclude, excText), section("候选", candText)];
     const text = partsArr.filter(Boolean).join("\n");
     return { text: text, omitted: omitted };
 }

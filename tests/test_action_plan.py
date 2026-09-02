@@ -283,7 +283,7 @@ def test_interrogative_mei_masking_is_length_preserving():
     assert "没" not in masked
 
 
-# ---------------------------------------------------------------- 顺承「没」掩码（2026-08-15 
+# ---------------------------------------------------------------- 顺承「没」掩码（2026-08-15
 
 @pytest.mark.parametrize("utterance,quoted,verb", [
     ("没找到就联网搜", "联网搜", "curate.search_online"),

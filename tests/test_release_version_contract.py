@@ -78,9 +78,10 @@ def test_launcher_expected_version_matches_web_health_version() -> None:
     # 2.9.0：新增 `/api/search/reply`（2026-08-30：检索回执 LLM 原位改写——纯检索轮的
     #        确定性事实句先上屏、LLM 成功才替换并挂「AI 总结」标，fail-open 留事实句；
     #        混合轮由 actPending 抑制模板回执、检索事实并入执行总结，全轮单泡；additive）。
-    # 2.9.1：多动作句新增 `plan.intents` / `plan.pending_frontend` additive 字段，并把
-    #        环内动作写入 intent_checklist 逐项核销；旧单动作路径与响应字段保持兼容。
-    assert web_match.group(1) == ps_match.group(1) == sh_match.group(1) == "2.9.1"
+    # 3.0.0：Wave 3 行为合同收口——前端 plan-only 动词不再绕过 Agent 图；
+    #        rescue 成为第四套件；退役 rerank_audit/degrade_with_llm/action_audit
+    #        三条环外 LLM 通道及串行 RAG 副本。响应/请求面因而 breaking。
+    assert web_match.group(1) == ps_match.group(1) == sh_match.group(1) == "3.0.0"
     assert "src\\dataset_recommender\\app\\webapp.py" in ps_launcher
     assert "src/dataset_recommender/app/webapp.py" in sh_launcher
     assert "src\\dataset_recommender\\webapp.py" not in ps_launcher
@@ -348,8 +349,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260902-web1"  # 多动作句逐项派发与核销、trial 默认配置同步；缓存令牌随前端变更提升。
-STATIC_ASSETS_SHA256 = "8f051e8f23536929a300e7436b6405516f3e5c7df28affc3c86a5184add35eee"
+CACHE_GENERATION = "20260902-web2"  # Wave 3 交互文案/确认/模态/本地队列核单源化。
+STATIC_ASSETS_SHA256 = "a1144fb488f874675f8e4b67f82c5fc0bddbe4d997d586d69aeab3535498371d"
 
 
 def _static_assets_digest() -> str:

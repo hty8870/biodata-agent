@@ -70,7 +70,8 @@ def test_append_jsonl_concurrent_zero_loss_corpus_curation(tmp_path):
 
 def test_curation_polite_wait_concurrent_zero_violation(monkeypatch):
     """R2-8 P1-2：8 线程并发 _polite_wait，完成时刻两两间隔不得 <0.2s（修复前最小 0.00ms）。"""
-    monkeypatch.setattr(corpus_curation, "_last_request_monotonic", 0.0)
+    # curation 已委托 corpus_net 的按 host 限速核；清共享状态而非重置退役的第二套时钟。
+    monkeypatch.setattr(corpus_net, "_last_request_by_host", {})
     stamps: list[float] = []
     threads = 8
     calls_per_thread = 3

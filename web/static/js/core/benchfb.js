@@ -63,6 +63,8 @@ import {
 /* 意见反馈队列（相对 import，不进 importmap/静态图——同 usage_upload 的哲学）；
    仅导出反馈包时读明文本地账本，其余路径零接触。 */
 import { feedbackPendingForScope } from "./feedback_core.js";
+import { armTwoStepConfirm, closeModal, openModal } from "./copy.js";
+import { queueMigrateLegacyArray, queueRead, queueRemoveIds, queueRemovePrefix, queueWrite } from "./storage_queue.js";
 
 const BENCH_RECORD_MARK = "::record::";
 let _bfCache = new Map();   // scope -> 记录数组；每条记录独立 key，跨标签页 append 不再整表覆盖
@@ -94,7 +96,6 @@ function _gridFingerprint(grid) {
         return a ? (a.getAttribute("href") || "") : "";
     }).join("|");
 }
-let _clearArmed = false;    // 清空按钮两段式确认
 let _returnFocus = null;    // 导出弹窗关闭后焦点还回
 
 /* ---------- 开关与存储 ---------- */
@@ -106,33 +107,22 @@ function _benchPrefix(scope) { return _benchBase(scope) + BENCH_RECORD_MARK; }
 
 function _migrateLegacyBench(scope) {
     const oldKey = _benchBase(scope);
-    let legacy = [];
-    try { legacy = readJSON(oldKey, []); } catch (_e) { legacy = []; }
-    if (!Array.isArray(legacy) || !legacy.length) return;
-    const prefix = _benchPrefix(scope);
-    let complete = true;
-    legacy.forEach(function (raw, index) {
-        const rec = (raw && typeof raw === "object") ? Object.assign({}, raw) : {};
-        rec.id = String(rec.id || ("legacy-b-" + String(Number(rec.t) || 0) + "-" + index));
-        try { localStorage.setItem(prefix + rec.id, JSON.stringify(rec)); } catch (_e) { complete = false; }
+    queueMigrateLegacyArray(localStorage, {
+        legacyKey: oldKey, prefix: _benchPrefix(scope),
+        normalize: function (raw, index) {
+            const rec = (raw && typeof raw === "object") ? Object.assign({}, raw) : {};
+            rec.id = String(rec.id || ("legacy-b-" + String(Number(rec.t) || 0) + "-" + index));
+            return rec;
+        },
+        id: function (rec) { return rec.id; },
     });
-    if (complete) { try { localStorage.removeItem(oldKey); } catch (_e) {} }
 }
 
 function _readRecords(scope) {
     _migrateLegacyBench(scope);
-    const prefix = _benchPrefix(scope);
-    const out = [];
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith(prefix)) continue;
-            const rec = JSON.parse(localStorage.getItem(key));
-            if (rec && typeof rec === "object") out.push(rec);
-        }
-    } catch (_e) {}
-    out.sort(function (a, b) { return (Number(a.t) || 0) - (Number(b.t) || 0) || String(a.id || "").localeCompare(String(b.id || "")); });
-    return out;
+    return queueRead(localStorage, _benchPrefix(scope), function (a, b) {
+        return (Number(a.t) || 0) - (Number(b.t) || 0) || String(a.id || "").localeCompare(String(b.id || ""));
+    });
 }
 
 function _records(scope) {
@@ -145,7 +135,7 @@ function _records(scope) {
 
 function _persistRecord(rec, scope) {
     try {
-        localStorage.setItem(_benchPrefix(scope) + rec.id, JSON.stringify(rec));
+        if (!queueWrite(localStorage, _benchPrefix(scope), rec.id, rec)) throw new Error("storage_full");
         _bfCache.delete(scope);
         return true;
     } catch (_e) { usageNoteDropsForScope(scope, "storage_error", 1); return false; }
@@ -202,7 +192,7 @@ function _findRecord(id, scope) {
 export function benchfbRecordsForScope(scope) { return _records(scope); }
 
 export function benchfbRemoveRecordsForScope(scope, ids) {
-    (ids || []).forEach(function (id) { try { localStorage.removeItem(_benchPrefix(scope) + String(id)); } catch (_e) {} });
+    queueRemoveIds(localStorage, _benchPrefix(scope), ids);
     _bfCache.delete(scope);
 }
 
@@ -214,16 +204,8 @@ export function benchfbMarkOversizeForScope(scope, id) {
 }
 
 export function benchfbClearScope(scope) {
-    const prefix = _benchPrefix(scope);
-    const remove = [];
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.startsWith(prefix)) remove.push(key);
-        }
-        remove.forEach(function (key) { localStorage.removeItem(key); });
-        localStorage.removeItem(_benchBase(scope));
-    } catch (_e) {}
+    queueRemovePrefix(localStorage, _benchPrefix(scope));
+    try { localStorage.removeItem(_benchBase(scope)); } catch (_e) {}
     _bfCache.delete(scope);
 }
 
@@ -836,7 +818,6 @@ export function benchfbOpenExport(trigger) {
     const modal = $("benchfbModal");
     if (!modal) return;
     _returnFocus = trigger || document.activeElement;
-    _clearArmed = false;
     const clearBtn = $("benchfbClearBtn");
     if (clearBtn) clearBtn.textContent = "清空本地待发记录";
     const recs = _records();
@@ -853,19 +834,13 @@ export function benchfbOpenExport(trigger) {
     if (prev) { prev.value = ""; }
     const det = $("benchfbPreviewWrap");
     if (det) det.open = false;
-    modal.hidden = false;
-    document.body.classList.add("modal-lock");
     const closeBtn = $("benchfbCloseBtn");
-    if (closeBtn) closeBtn.focus();
+    openModal(modal, { returnFocus: _returnFocus, initialFocus: closeBtn });
 }
 
 export function benchfbCloseExport() {
     const modal = $("benchfbModal");
-    if (!modal || modal.hidden) return;
-    modal.hidden = true;
-    document.body.classList.remove("modal-lock");
-    _clearArmed = false;
-    if (_returnFocus && document.body.contains(_returnFocus)) _returnFocus.focus();
+    if (!closeModal(modal)) return;
 }
 
 export function benchfbDownload() {
@@ -893,12 +868,8 @@ export function benchfbTogglePreview() {
 
 export function benchfbClearWithConfirm() {
     const btn = $("benchfbClearBtn");
-    if (!_clearArmed) {
-        _clearArmed = true;
-        if (btn) btn.textContent = "确认清空？（不可恢复）";
-        return;
-    }
-    _clearArmed = false;
+    if (!armTwoStepConfirm(btn, { idleText: "清空本地待发记录",
+                                     confirmText: "再点一次确认清空（不可恢复）" })) return;
     if (btn) btn.textContent = "清空本地待发记录";
     const scope = usageScope();
     benchfbClearScope(scope);

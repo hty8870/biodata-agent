@@ -33,7 +33,7 @@ requirements 依赖清单位于 requirements/ 目录下，路径以克隆布局�
   2. 确认页面能显示自动识别到的来源 / 时间等条件、推荐结果，以及结果上方的检索摘要（一句话说明用了哪些排序方式、库中共匹配多少条）。
   3. 打开“数据集浏览”，确认来源筛选和分页可用。
   4. 打开“设置”，确认排序策略和 AI / API 配置可以展开、保存。
-  5. 访问 http://127.0.0.1:7860/api/health，确认返回 ok=true、version="2.9.1"。
+  5. 访问 http://127.0.0.1:7860/api/health，确认返回 ok=true、version="3.0.0"。
 
 不配置 API Key 也能完成上述验收。规则检索始终可用。
 
@@ -77,8 +77,8 @@ MCP 自检使用 MCP 安装教程创建的专用 Python：
 四、候选发布包
 
 只有 full 通过后才构建候选包：
-  & $Python scripts\build_release.py build --output-dir artifacts\candidate-2.9.1 --expected-version 2.9.1
-  & $Python scripts\build_release.py verify --archive artifacts\candidate-2.9.1\biodata-agent-release-candidate.zip
+  & $Python scripts\build_release.py build --output-dir artifacts\candidate-3.0.0 --expected-version 3.0.0
+  & $Python scripts\build_release.py verify --archive artifacts\candidate-3.0.0\biodata-agent-release-candidate.zip
 
 候选 ZIP 必须解压到仓库外的全新临时目录，再运行项目 smoke、Web smoke 和 MCP selfcheck。
 不要解压到仓库内部，否则发布包内容会与仓库文件混在一起、干扰校验与运行。保留 ZIP、

@@ -268,7 +268,7 @@ def _recycle_manifest(project_root: Path) -> Path:
 
 
 def _net_ledger_path(project_root: Path) -> Path:
-    return instance_data_dir_for(Path(project_root), USERDATA_DIR_NAME) / NET_LEDGER_NAME
+    return corpus_net._net_ledger_path(Path(project_root))
 
 
 def _now_iso() -> str:
@@ -292,17 +292,9 @@ def _load_file_records(path: Path) -> list[dict]:
     return [r for r in extract_records(payload) if isinstance(r, dict)]
 
 
-# 并发账本写必须互斥：sync def 端点走线程池，Windows 上 open("a") 的 seek-to-EOF+write 跨并发句柄
-# 非原子，裸写会整行覆盖丢行/撕裂（对抗评审 / 实测 20 线程丢 7-13%、2 线程也丢）。
-# 一把进程内锁兜住线程池并发；跨进程（Web↔MCP 双实例）残余风险已知悉（审计面，不挡主功能）。
-_ledger_lock = threading.Lock()
-
-
 def _append_jsonl(path: Path, entry: dict) -> None:
-    with _ledger_lock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    """Compatibility seam; the lock/write primitive lives in corpus_net."""
+    corpus_net._append_jsonl(path, entry)
 
 
 def _read_manifest(project_root: Path) -> list[dict]:
@@ -608,37 +600,15 @@ def apply_import(
 # ==============================================================================================
 
 _FETCH_TIMEOUT = 30
-#: 单次响应体读取上限，2026-08-21）：urlopen 的 resp.read() 此前无界——异常/恶意
-#: 对端可用超大响应吃爆内存。本出口取官方源元数据 JSON（MB 级，如 CELLxGENE 全库单次拉取），
-#: 64MiB 是正常上界加宽裕（对齐 llm_client 的 8MiB 限读范式，联网单页更大故放宽）；
-#: 超限视为对端异常（确定性失败），不重试。
-_FETCH_MAX_BYTES = 64 * 1024 * 1024
-_FETCH_RETRIES = 3           # 429/503 与瞬时连接错误的指数退避次数（≤3 次）
-_MIN_REQUEST_INTERVAL = 0.2  # 礼貌限速 ≤5 req/s
-_RETRYABLE_HTTP = {429, 503}
-_last_request_monotonic = 0.0
-# 限速的 check-then-set 必须整体互斥（与 corpus_net 同型同口径）：sync def 端点
-# （/api/curate/plan、/api/curate/check-updates）走线程池，裸全局下 N 个并发请求同时读旧值、
-# 同时通过、同时打出 N 倍红线速率（对抗评审实测 8 线程 40 调用 35 次违规）。
-_rate_limit_lock = threading.Lock()
+_FETCH_MAX_BYTES = corpus_net._MAX_RESPONSE_BYTES
+_FETCH_RETRIES = corpus_net._RETRIES
+_MIN_REQUEST_INTERVAL = corpus_net._DEFAULT_MIN_INTERVAL
+_RETRYABLE_HTTP = corpus_net._RETRYABLE_HTTP
 
 
 def _polite_wait(min_interval: float = _MIN_REQUEST_INTERVAL) -> None:
-    """请求间距 ≥0.2s（≤5 req/s），与 ingest 脚本的礼貌限速同纪律。
-
-    2026-08-07：GEO（NCBI E-utilities）官方红线更严（无 key ≤3 req/s）→ 间隔参数化，
-    默认 0.2s 对其余各源逐位不变。"""
-    global _last_request_monotonic
-    with _rate_limit_lock:
-        # 睡到死线为止而非只睡一拍：Windows 上 time.sleep 可能提前返回（本机实测 0.2s 档
-        # 最早 -12ms，测得锁内 187ms<200ms 欠隔），循环复查把提前返回补满。
-        deadline = _last_request_monotonic + min_interval
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(remaining)
-        _last_request_monotonic = time.monotonic()
+    """Compatibility seam backed by the shared per-host limiter."""
+    corpus_net._polite_wait("curation-compat", min_interval)
 
 
 def _fetch(
@@ -651,78 +621,16 @@ def _fetch(
     min_interval: float = _MIN_REQUEST_INTERVAL,
     attempts: list[int] | None = None,
 ) -> tuple[Any, int]:
-    """**唯一网络出口**：请求 url → (解析后的 JSON, HTTP 状态码)。
-
-    纪律（WORK_RULES 网络口径）：官方公开 API、礼貌限速 ≤5 req/s、429/503 与瞬时连接错误
-    指数退避 ≤3 次、其余 4xx 不重试、禁绕登录/robots。一切失败 → CurateError(network_error)。
-    测试在本接缝注入假响应（monkeypatch），全模块测试禁网。
-
-    method/body/headers 为 keyword-only 可选参（2026-08-06 为 HuBMAP 的 POST ES 查询扩）：
-    默认 GET 且不带 body，与扩前行为逐位一致；headers 逐键覆盖默认 UA（默认
-    biodata-agent-curate/1.0）。POST 的是幂等只读查询体，退避重试语义不变。
-    min_interval（2026-08-07 为 GEO 的 NCBI ≤3 req/s 红线扩）：礼貌限速间隔，默认
-    0.2s 对其余各源逐位不变。
-    attempts（2026-08-15 G-10）：可选出参（单元素列表），回填实际请求次数——重试在函数内部
-    发生，不带回尝试数的话账本只能记最终一条，「刚才为什么卡了几秒」无从回答。"""
-    last_exc: Exception | None = None
-    for attempt in range(_FETCH_RETRIES):
-        if attempts is not None:
-            attempts[0] = attempt + 1
-        _polite_wait(min_interval)
-        oversize = False  # S-6 超限标记：为什么不在 try 内直接 raise，见下方 oversize raise 处注释
-        try:
-            req_headers = {"User-Agent": "biodata-agent-curate/1.0"}
-            if headers:
-                req_headers.update(headers)
-            req = urllib.request.Request(url, data=body, headers=req_headers, method=method.upper())
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read(_FETCH_MAX_BYTES + 1)
-                status_code = int(getattr(resp, "status", 200) or 200)
-            if len(raw) > _FETCH_MAX_BYTES:
-                # 审计 S-6（2026-08-21）：确定性失败（对端异常）——重试只会再白读 64MB+。
-                # 这里只记标记、到 try 外再 raise：CurateError 继承 ValueError，若在 try 内
-                # raise 会被下方 except ValueError（G-10 的 JSON 解析失败子句）捕获并改写成
-                # 「不是合法 JSON」的误导文案，走样且难排查。
-                oversize = True
-            else:
-                return json.loads(raw), status_code
-        except urllib.error.HTTPError as exc:
-            last_exc = exc
-            if exc.code in _RETRYABLE_HTTP and attempt < _FETCH_RETRIES - 1:
-                time.sleep(1.0 * (2 ** attempt))  # 指数退避：1s、2s
-                continue
-            raise CurateError(
-                "network_error",
-                (f"官方来源请求失败（HTTP {exc.code}）。"
-                 + ("这个状态码不会自动重试。" if exc.code not in _RETRYABLE_HTTP
-                    else f"已自动重试 {_FETCH_RETRIES} 次仍未成功，可稍后再试。")),
-            ) from exc
-        except ValueError as exc:
-            # G-10：JSON 解析失败是对端改了返回形状，属确定性失败——
-            # 当瞬时错误退避重试只是白打两次，直接如实报错、不重试。
-            raise CurateError(
-                "network_error",
-                f"官方来源返回的内容不是合法 JSON（{exc}）。这是对端响应形状问题，不是瞬时抖动，"
-                "没有重试；可到官网人工核对。",
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            # URLError/超时/连接重置：瞬时错误，退避重试；非 4xx 语义，不违反「其余 4xx 不重试」。
-            last_exc = exc
-            if attempt < _FETCH_RETRIES - 1:
-                time.sleep(1.0 * (2 ** attempt))
-                continue
-            raise CurateError(
-                "network_error",
-                f"官方来源请求失败，已自动重试 {_FETCH_RETRIES} 次仍未成功，可稍后再试。",
-            ) from exc
-        if oversize:
-            # 审计 S-6（2026-08-21）：在 except 链之外 raise（原因见 try 内注释），绝不重试。
-            raise CurateError(
-                "network_error",
-                f"官方来源响应体超过 {_FETCH_MAX_BYTES // (1024 * 1024)} MiB 上限（对端异常）；已停止读取，不重试。",
-            )
-    assert last_exc is not None  # 防御：循环只经 raise 退出
-    raise CurateError("network_error", "官方来源请求失败，可稍后再试。")
+    """Thin curation adapter over corpus_net's shared HTTP+JSON kernel."""
+    try:
+        return corpus_net.fetch_json(
+            url, timeout=timeout, min_interval=min_interval, headers=headers,
+            method=method, body=body, attempts=attempts,
+            # Preserve the long-standing monkeypatch seam in adapter tests.
+            opener=urllib.request.urlopen,
+        )
+    except corpus_net._NetError as exc:
+        raise CurateError("network_error", str(exc)) from exc
 
 
 def _fetch_logged(
@@ -736,48 +644,22 @@ def _fetch_logged(
     headers: dict[str, str] | None = None,
     min_interval: float = _MIN_REQUEST_INTERVAL,
 ) -> Any:
-    """_fetch 的账本包装：每次联网（含失败）追加 `.userdata/curate_net_ledger.jsonl`。
-
-    条数口径：BioStudies 搜索取 hits 列表长度；Elasticsearch 搜索（HuBMAP，hits.hits 嵌套）
-    取内层列表长度；10x 官网接口（meta/results 形态）取 results 长度；全量列表端点
-    （CELLxGENE / SCP site/studies，顶层数组）取数组长度；详情响应记 1；失败记 0。
-    不记秘密（endpoint + 查询词 + 状态）。账本条目形状不变；
-    method/body/headers/min_interval 原样透传 _fetch（POST 由 endpoint+query 文本可辨）。"""
-    entry: dict[str, Any] = {"ts": _now_iso(), "endpoint": endpoint, "query": query}
-    tries = [1]
-    try:
-        payload, status = _fetch(url, method=method, body=body, headers=headers,
-                                 min_interval=min_interval, attempts=tries)
-    except CurateError as exc:
-        entry.update({"http_status": None, "records": 0, "error": exc.hint})
-        if tries[0] > 1:
-            entry["attempts"] = tries[0]  # G-10：重试留痕（账本条目形状只增不减）
-        _append_jsonl(_net_ledger_path(project_root), entry)
-        raise
-    n = 0
-    if isinstance(payload, dict):
-        hits = payload.get("hits")
-        if isinstance(hits, list):
-            n = len(hits)
-        elif isinstance(hits, dict) and isinstance(hits.get("hits"), list):
-            n = len(hits["hits"])  # Elasticsearch 形态（HuBMAP search.api）
-        elif isinstance(payload.get("results"), list):
-            n = len(payload["results"])  # 10x 官网接口形态（meta/results）
-        elif payload:
-            n = 1
-    elif isinstance(payload, list):
-        n = len(payload)  # 全量列表形态（CELLxGENE / SCP site/studies）
-    entry.update({"http_status": status, "records": n})
-    if tries[0] > 1:
-        entry["attempts"] = tries[0]  # G-10：重试后成功同样留痕（第几次才成功可追）
-    _append_jsonl(_net_ledger_path(project_root), entry)
-    return payload
+    """Thin record-enrichment adapter over the shared fetch+ledger kernel."""
+    return corpus_net.fetch_json_logged(
+        url, project_root=project_root, endpoint=endpoint, query=query,
+        timeout=_FETCH_TIMEOUT, min_interval=min_interval, headers=headers,
+        method=method, body=body,
+        # Keep adapter tests and callers able to replace the neutral fetch seam;
+        # the logging/counting/error algorithm itself remains single-source.
+        fetcher=lambda tries: _fetch(
+            url, timeout=_FETCH_TIMEOUT, method=method, body=body, headers=headers,
+            min_interval=min_interval, attempts=tries),
+        ledger_append=_append_jsonl, ledger_path=_net_ledger_path,
+    )
 
 
-#: 无分页全量端点的进程内 TTL 缓存（秒）。CELLxGENE / SCP 的列表端点单次返回全量
-#: （2026-08-06 实测 2,198+ 1,032 条，MB 级），同一进程内连续两次搜索不该各拉一遍全量；
-#: 300s 是「数据新鲜度 vs 官方端点礼貌」的折中（与 _MIN_REQUEST_INTERVAL 同旨）。
-#: 缓存命中 = 没有发生联网 → 不记请求账本；失败不缓存（fail-closed，下次仍真联网）。
+# Only payload enrichment remains in this module; transport, parsing, retry,
+# rate limiting and request-ledger semantics are owned by corpus_net.
 _LIST_CACHE_TTL = 300.0
 _LIST_CACHE: dict[str, tuple[float, Any]] = {}
 _list_cache_lock = threading.Lock()
@@ -3882,42 +3764,73 @@ def _degrade_to_snapshot(entry: dict, spec: dict, local_count: int, path: Path, 
     })
 
 
+def _accession_item_keys(item: dict, case: str = "keep") -> set[str]:
+    value = str(item.get("accession") or "").strip()
+    if case == "upper":
+        value = value.upper()
+    elif case == "lower":
+        value = value.lower()
+    return {value} - {""}
+
+
+# Online update wiring is data, not an if/elif program. Adding a source requires
+# one registry row with four narrow callables; a missing row fails closed below.
+_ONLINE_CHECK_NET: dict[str, dict[str, Any]] = {
+    "encode": {
+        "fetch": lambda root: corpus_net.encode_recent_items(project_root=root, limit=_AE_RECENT_LIMIT),
+        "local": _encode_local_accessions,
+        "item_keys": _accession_item_keys,
+        "scope_zh": "官方源最近",
+    },
+    "hca": {
+        "fetch": lambda root: corpus_net.hca_recent_items(project_root=root, limit=_AE_RECENT_LIMIT),
+        "local": _hca_local_keys,
+        "item_keys": lambda item: _accession_item_keys(item, "lower"),
+        "scope_zh": "HCA 官方源最近",
+    },
+    "geo": {
+        "fetch": lambda root: corpus_net.geo_recent_items(project_root=root, limit=_AE_RECENT_LIMIT),
+        "local": _geo_local_accessions,
+        "item_keys": lambda item: _accession_item_keys(item, "upper"),
+        "scope_zh": "GEO 官方源最近",
+    },
+    "zenodo": {
+        "fetch": lambda root: corpus_net.zenodo_recent_items(project_root=root, limit=_AE_RECENT_LIMIT),
+        "local": _zenodo_local_accessions,
+        "item_keys": _accession_item_keys,
+        "scope_zh": "Zenodo 官方源全领域最新",
+    },
+    "refinebio": {
+        "fetch": lambda root: corpus_net.refinebio_recent_items(project_root=root, limit=_AE_RECENT_LIMIT),
+        "local": _refinebio_local_accessions,
+        "item_keys": lambda item: _accession_item_keys(item, "upper"),
+        "scope_zh": "refine.bio 官方源全库最新",
+    },
+    "tenx": {
+        "fetch": lambda root: corpus_net.tenx_dataset_items(project_root=root),
+        "local": _tenx_local_keys,
+        "item_keys": _tenx_item_keys,
+        "scope_zh": "10x 官网当前清单",
+    },
+}
+
+
 def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path, root: Path) -> None:
     """encode/10x/hca/geo/zenodo 在线比对：经 corpus_net 拉最新清单 → 与本地键集合差分 → 如实报新增候选。
 
     corpus_net 一律返回 {ok, items, ...} 不抛异常；ok=False（网络失败/parse_changed）→ 降级 snapshot。"""
     kind = str(spec.get("net_kind") or "")
     local_errs: list[str] = []  # D5：快照损坏如实带出（损坏 ≠ 空库，否则 diff 虚报新增）
-    if kind == "encode":
-        res = corpus_net.encode_recent_items(project_root=root, limit=_AE_RECENT_LIMIT)
-        local_keys = _encode_local_accessions(path, _err=local_errs)
-        item_keys = lambda it: {str(it.get("accession") or "").strip()} - {""}  # noqa: E731
-    elif kind == "hca":
-        res = corpus_net.hca_recent_items(project_root=root, limit=_AE_RECENT_LIMIT)
-        local_keys = _hca_local_keys(path, _err=local_errs)
-        item_keys = lambda it: {str(it.get("accession") or "").strip().lower()} - {""}  # noqa: E731
-    elif kind == "geo":
-        res = corpus_net.geo_recent_items(project_root=root, limit=_AE_RECENT_LIMIT)
-        local_keys = _geo_local_accessions(path, _err=local_errs)
-        item_keys = lambda it: {str(it.get("accession") or "").strip().upper()} - {""}  # noqa: E731
-    elif kind == "zenodo":
-        res = corpus_net.zenodo_recent_items(project_root=root, limit=_AE_RECENT_LIMIT)
-        local_keys = _zenodo_local_accessions(path, _err=local_errs)
-        item_keys = lambda it: {str(it.get("accession") or "").strip()} - {""}  # noqa: E731
-    elif kind == "refinebio":
-        res = corpus_net.refinebio_recent_items(project_root=root, limit=_AE_RECENT_LIMIT)
-        local_keys = _refinebio_local_accessions(path, _err=local_errs)
-        item_keys = lambda it: {str(it.get("accession") or "").strip().upper()} - {""}  # noqa: E731
-    elif kind == "tenx":
-        res = corpus_net.tenx_dataset_items(project_root=root)
-        local_keys = _tenx_local_keys(path, _err=local_errs)
-        item_keys = _tenx_item_keys
-    else:
+    wiring = _ONLINE_CHECK_NET.get(kind)
+    if wiring is None:
         # G-13：未接线的 net_kind（拼错/新增源忘接线）不许静默按 10x 通道比对——
         # 差分结果会全错且无任何提示。如实降级并写明原因（不抛：check_updates 逐源容错契约）。
         _degrade_to_snapshot(entry, spec, local_count, path,
                              f"来源配置里的 net_kind={kind!r} 没有对应的在线比对通道（疑似新增源忘接线）")
         return
+    res = wiring["fetch"](root)
+    local_keys = wiring["local"](path, _err=local_errs)
+    item_keys = wiring["item_keys"]
     if not res.get("ok"):
         _degrade_to_snapshot(entry, spec, local_count, path,
                              str(res.get("note_zh") or res.get("error") or "未知原因"))
@@ -3936,9 +3849,7 @@ def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path
         recent.append(cand)
         if keys.isdisjoint(local_keys):
             new.append(cand)
-    scope_zh = {"encode": "官方源最近", "hca": "HCA 官方源最近", "geo": "GEO 官方源最近",
-                "zenodo": "Zenodo 官方源全领域最新",
-                "refinebio": "refine.bio 官方源全库最新"}.get(kind, "10x 官网当前清单")
+    scope_zh = str(wiring["scope_zh"])
     channel_note = ""
     if kind == "zenodo":
         # 通用仓储口径如实标注：比对的是全领域 type=dataset 最新条目（不限生物），

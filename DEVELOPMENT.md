@@ -149,7 +149,7 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 
 ## 6. HTTP API
 
-当前 Web API 版本为 `2.9.1`。FastAPI 会在 `/docs` 生成当前版本的请求和响应模型。以下表格用于快速定位（**与 `webapp.py` 的路由装饰器一一对应，共 64 个**；改路由时同步这张表）：
+当前 Web API 版本为 `3.0.0`。FastAPI 会在 `/docs` 生成当前版本的请求和响应模型。以下表格用于快速定位（**与 `webapp.py` 的路由装饰器一一对应，共 64 个**；改路由时同步这张表）：
 
 | 方法 | 路径 | 作用 | 是否写数据 |
 |---|---|---|---|
@@ -385,6 +385,8 @@ LLM 重排评测会产生非确定性结果，只在已配置测试凭据并允�
 - 数据来源、记录数和功能说明与当前提交包一致。
 
 候选包使用 `scripts\build_release.py` 的 allowlist 构建并逐文件写入 SHA-256 manifest；解包 smoke 必须在仓库外的全新临时目录执行。当前工作流只生成候选 ZIP 与验证证据，不创建 GitHub Release、也不部署生产环境；构建、验证和回滚证据步骤见[自动化质量门与候选发布](docs/AUTOMATION_AND_RELEASE.md)。
+
+若维护同源的 private/public 两仓，public 必须由 `scripts/build_public_mirror.py` 确定性生成，不得人工清洗。构建器会要求每个 tracked path 在 `packaging/public-mirror/files.txt` 或 `.deliveryignore` 中明确分类，并对公开树做精确路径与字节比较。完整操作合同见[确定性镜像](docs/AUTOMATION_AND_RELEASE.md#11-私库到公开仓的确定性镜像)。
 
 提交包不应包含个人汇报、开发过程记录或未发布材料。该规定由机制保证，不靠人工记忆：
 

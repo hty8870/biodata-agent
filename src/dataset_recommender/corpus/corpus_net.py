@@ -166,9 +166,16 @@ def _polite_wait(host: str, min_interval: float) -> None:
         _last_request_by_host[host] = time.monotonic()
 
 
-def _raw_get(url: str, *, timeout: int, min_interval: float, headers: dict[str, str],
-             attempts: list[int] | None = None) -> tuple[bytes, int]:
-    """GET → (body, status)。429/503 与瞬时错误指数退避 ≤3 次；其余 4xx 不重试；最终失败抛 _NetError。
+def _raw_request(url: str, *, timeout: int, min_interval: float, headers: dict[str, str],
+                 method: str = "GET", body: bytes | None = None,
+                 attempts: list[int] | None = None,
+                 opener: Any = None) -> tuple[bytes, int]:
+    """HTTP request → (body, status), with the shared rate/retry/size policy.
+
+    GET and idempotent read-only POST calls use this same primitive. 429/503 and
+    transient transport failures retry at most three times; deterministic body
+    and parsing failures do not retry.
+
     attempts：可选出参（单元素列表），回填实际请求次数——重试发生在函数内部，
     不带回尝试数的话账本只记最终一条，「刚才为什么卡了几秒/是不是多打了对方两次」无从回答。"""
     host = urllib.parse.urlparse(url).netloc
@@ -180,8 +187,10 @@ def _raw_get(url: str, *, timeout: int, min_interval: float, headers: dict[str, 
             attempts[0] = attempt + 1
         _polite_wait(host, min_interval)
         try:
-            req = urllib.request.Request(url, headers=merged_headers)
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            req = urllib.request.Request(url, data=body, headers=merged_headers,
+                                         method=str(method or "GET").upper())
+            open_fn = opener or urllib.request.urlopen
+            with open_fn(req, timeout=timeout) as resp:
                 data = resp.read(_MAX_RESPONSE_BYTES + 1)
                 if len(data) > _MAX_RESPONSE_BYTES:
                     # 确定性失败（对端异常），不走瞬时错误重试——与 fetch_json 的 ValueError 不重试同哲学。
@@ -203,18 +212,29 @@ def _raw_get(url: str, *, timeout: int, min_interval: float, headers: dict[str, 
     raise _NetError(str(last_exc))
 
 
+def _raw_get(url: str, *, timeout: int, min_interval: float, headers: dict[str, str],
+             attempts: list[int] | None = None) -> tuple[bytes, int]:
+    """Compatibility wrapper for existing GET-only adapters."""
+    return _raw_request(url, timeout=timeout, min_interval=min_interval,
+                        headers=headers, attempts=attempts)
+
+
 def fetch_text(
     url: str,
     *,
     timeout: int = _DEFAULT_TIMEOUT,
     min_interval: float = _DEFAULT_MIN_INTERVAL,
     headers: dict[str, str] | None = None,
+    method: str = "GET",
+    body: bytes | None = None,
     attempts: list[int] | None = None,
+    opener: Any = None,
 ) -> tuple[str, int]:
     """GET → (文本, status)。HTML 页面抓取入口。attempts：重试计数出参（透传 _raw_get）。"""
-    body, status = _raw_get(url, timeout=timeout, min_interval=min_interval,
-                            headers=headers or {}, attempts=attempts)
-    return body.decode("utf-8", errors="replace"), status
+    raw, status = _raw_request(url, timeout=timeout, min_interval=min_interval,
+                               headers=headers or {}, method=method, body=body,
+                               attempts=attempts, opener=opener)
+    return raw.decode("utf-8", errors="replace"), status
 
 
 def fetch_json(
@@ -223,7 +243,10 @@ def fetch_json(
     timeout: int = _DEFAULT_TIMEOUT,
     min_interval: float = _DEFAULT_MIN_INTERVAL,
     headers: dict[str, str] | None = None,
+    method: str = "GET",
+    body: bytes | None = None,
     attempts: list[int] | None = None,
+    opener: Any = None,
 ) -> tuple[Any, int]:
     """GET → (解析后的 JSON, status)。
 
@@ -231,7 +254,8 @@ def fetch_json(
     退避重试（白打两次），直接抛 _NetError 如实说明；网络层的 429/503/瞬时错误重试仍由
     _raw_get 负责，次数经 attempts 出参带回给账本。"""
     text, status = fetch_text(
-        url, timeout=timeout, min_interval=min_interval, headers=headers, attempts=attempts,
+        url, timeout=timeout, min_interval=min_interval, headers=headers,
+        method=method, body=body, attempts=attempts, opener=opener,
     )
     try:
         return json.loads(text), status
@@ -241,10 +265,15 @@ def fetch_json(
 
 def _count_payload(payload: Any) -> int:
     """账本条数口径：搜索响应取结果列表长度；其它非空响应记 1。"""
+    if isinstance(payload, list):
+        return len(payload)
     if isinstance(payload, dict):
         for key in ("hits", "@graph", "results"):  # results = 10x 官网接口形态（meta/results）
-            if isinstance(payload.get(key), list):
-                return len(payload[key])
+            value = payload.get(key)
+            if isinstance(value, list):
+                return len(value)
+            if key == "hits" and isinstance(value, dict) and isinstance(value.get("hits"), list):
+                return len(value["hits"])
     return 1 if payload else 0
 
 
@@ -257,14 +286,19 @@ def fetch_text_logged(
     timeout: int = _DEFAULT_TIMEOUT,
     min_interval: float = _DEFAULT_MIN_INTERVAL,
     headers: dict[str, str] | None = None,
+    method: str = "GET",
+    body: bytes | None = None,
+    opener: Any = None,
 ) -> str:
     """fetch_text 的账本包装：每次联网（含失败）追加一行 curate_net_ledger.jsonl。
     发生重试时条目带 attempts 计数（形状只增不减）。"""
-    entry: dict[str, Any] = {"ts": _now_iso(), "endpoint": endpoint, "query": query}
+    entry: dict[str, Any] = {"ts": _now_iso(), "endpoint": endpoint, "query": query,
+                             "method": str(method or "GET").upper()}
     tries = [1]
     try:
         text, status = fetch_text(url, timeout=timeout, min_interval=min_interval,
-                                  headers=headers, attempts=tries)
+                                  headers=headers, method=method, body=body,
+                                  attempts=tries, opener=opener)
     except _NetError as exc:
         entry.update({"http_status": None, "records": 0, "error": str(exc)})
         if tries[0] > 1:
@@ -287,24 +321,37 @@ def fetch_json_logged(
     timeout: int = _DEFAULT_TIMEOUT,
     min_interval: float = _DEFAULT_MIN_INTERVAL,
     headers: dict[str, str] | None = None,
+    method: str = "GET",
+    body: bytes | None = None,
+    opener: Any = None,
+    fetcher: Any = None,
+    ledger_append: Any = None,
+    ledger_path: Any = None,
 ) -> Any:
     """fetch_json 的账本包装（条数取 hits/@graph 长度）。
     发生重试时条目带 attempts 计数（形状只增不减）。"""
-    entry: dict[str, Any] = {"ts": _now_iso(), "endpoint": endpoint, "query": query}
+    entry: dict[str, Any] = {"ts": _now_iso(), "endpoint": endpoint, "query": query,
+                             "method": str(method or "GET").upper()}
     tries = [1]
+    append = ledger_append or _append_jsonl
+    path = (ledger_path or _net_ledger_path)(project_root)
     try:
-        payload, status = fetch_json(url, timeout=timeout, min_interval=min_interval,
-                                     headers=headers, attempts=tries)
-    except _NetError as exc:
+        if fetcher is None:
+            payload, status = fetch_json(url, timeout=timeout, min_interval=min_interval,
+                                         headers=headers, method=method, body=body,
+                                         attempts=tries, opener=opener)
+        else:
+            payload, status = fetcher(tries)
+    except Exception as exc:
         entry.update({"http_status": None, "records": 0, "error": str(exc)})
         if tries[0] > 1:
             entry["attempts"] = tries[0]
-        _append_jsonl(_net_ledger_path(project_root), entry)
+        append(path, entry)
         raise
     entry.update({"http_status": status, "records": _count_payload(payload)})
     if tries[0] > 1:
         entry["attempts"] = tries[0]
-    _append_jsonl(_net_ledger_path(project_root), entry)
+    append(path, entry)
     return payload
 
 

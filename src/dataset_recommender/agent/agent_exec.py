@@ -106,6 +106,7 @@ from pathlib import Path
 from typing import Annotated, Any, Callable, Iterator, TypedDict
 
 from . import action_plan as _ap
+from . import hybrid_policy as _hybrid_policy
 from ..retrieval import search_request as _sr
 from ..retrieval import vocabulary as _vocab
 #: `_alias_occurrences` 是检索侧别名匹配的唯一真源（ASCII 词边界 + 右侧复数 s 容忍）；
@@ -200,7 +201,6 @@ class _AgentState(TypedDict, total=False):
     checklist: list[dict]         #: 清单（覆写语义；complex+EXEC 首步由 understand 产出，immutable）
     checklist_unavailable: str    #: 清单产出失败原因（非空=降级回文本闸，trace/narrate 如实标注）
     checklist_dropped: int        #: 清单校验剔除 + 超上限截断的条目数（幻觉锚点/非法动词/超 8 截断——trace 可观测）
-    entry_mode: str               #: 入口模式：""=常规对话链 / "rescue"=检索救回（工具面收敛到 search.rerun/none）
     search_sources: Any           #: rescue 端点带入的来源范围（search.rerun 的 _prepare_context sources 入参；None=默认语料）
     # 2026-08-18：search.rerun 必须复用当前屏真实结构化条件；这些 key 与
     # webapp.UtteranceRequest/SearchRescueRequest 同名语义，缺省空保持旧调用逐位兼容。
@@ -209,7 +209,7 @@ class _AgentState(TypedDict, total=False):
     search_lenient_dims: Any
     search_date_from: str
     search_date_to: str
-    route_scope: str              #: scoped 路由：route_consensus 的共识结果 ""/"search"/"action"/"general"；route.request 步放行后由 execute 改写（覆写语义）
+    route_scope: str              #: scoped 路由：route_consensus 的共识结果 "search"/"action"/"general"，或端点预置的 "rescue"；route.request 步放行后由 execute 改写（覆写语义）
     required_capabilities: list[dict]  #: 混合诉求能力账（2026-08-22 覆写语义）：机械闸命中时由 route_consensus 产出（{capability, verbs, label_zh, anchor}），finish 机械核销逐项对账，缺项拒收回灌
     artifact_context: str        #: 课题上下文卡：独立字段，只进 route_consensus/understand 的 prompt 作结构化上下文块；缺省空串 = 与旧版逐位一致
     intent_checklist: list[dict]  #: 句内 EXEC 子意图清单 {verb, verb_zh, quoted, plane=inloop|frontend}；decide 逐项核销，frontend 项由前端接管
@@ -1177,7 +1177,7 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     """换一组查询词把本地库重新检索一遍（2026-08-16 检索工具化 Phase 1，机械择优闸）。
 
     跑的是与主检索**同一条管线**（`workflow._prepare_context` / `run_with_meta`，规则检索，
-    rerank_audit 关——防「审核改写→重搜→再审核」循环）。采纳与否由机械闸裁定，不靠 LLM 自评：
+    查询改写只在本工具环发生，不存在 workflow 审核→重搜的第二通道。采纳与否由机械闸裁定：
       ① 改写解析出的硬过滤与基准同集（`_same_hard_filter`，存活集不变）→ 拒
          （rewrite_no_change_kept_original）；
       ② 载荷弄丢已生效的结构化条件（分面/抑制/宽容/日期）→ 拒
@@ -1238,7 +1238,7 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     intent_base = None
     if base_query:
         bctx = flow._prepare_context(
-            query=base_query, sources=sources, auto_parse_sources=False, rerank_audit=False,
+            query=base_query, sources=sources, auto_parse_sources=False,
             **structured_kwargs)
         intent_base, candidates_base = bctx[0], bctx[1]
         n_before = len(candidates_base)
@@ -1247,10 +1247,10 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
         if sources is None:
             # 与主检索择优同口径：改写重搜的来源范围钉死为基准检索实际生效的来源
             # （resolution.sources）——不因改写句自身的措辞漂移换池子。
-            sources = bctx[7].sources
+            sources = bctx[6].sources
 
     rctx = flow._prepare_context(
-        query=query, sources=sources, auto_parse_sources=False, rerank_audit=False,
+        query=query, sources=sources, auto_parse_sources=False,
         **structured_kwargs)
     intent2, candidates2 = rctx[0], rctx[1]
     n_after = len(candidates2)
@@ -1276,7 +1276,7 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     meta = flow.run_with_meta(
         wf.RecommendParams(
             query=query, use_llm=False, sources=sources,
-            auto_parse_sources=False, rerank_audit=False,
+            auto_parse_sources=False,
             **structured_kwargs))
     payload = recommend_payload(meta)
     # /api/recommend 的三个应用态字段由 Web 层调用现场回显；agent 载荷没有接口层可补，
@@ -1476,7 +1476,7 @@ def _top_digest(rows: Any, n: int = 3) -> list[dict[str, Any]]:
 
 def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     """裸新检索：以 query 跑**标准 RAG 管线**（与
-    /api/recommend 同核心的确定性段——`run_with_meta` 规则检索，rerank_audit 关，
+    /api/recommend 同核心的确定性段——`run_with_meta` 规则检索，
     与 search.rerun 同口径），返回 {total, 生效条件, top digest}。
     与 search.rerun 的界限：不做机械择优、不与基准比对——只如实回报检索事实；
     display=true 时构造载荷（recommend 同形）并附批次原料（batch 键）推往前端
@@ -1501,7 +1501,7 @@ def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     meta = flow.run_with_meta(
         wf.RecommendParams(
             query=query, use_llm=False, sources=sources,
-            auto_parse_sources=False, rerank_audit=False, **structured_kwargs))
+            auto_parse_sources=False, **structured_kwargs))
     batch = None
     rows: Any = meta.retrieved_data
     if display:
@@ -1584,7 +1584,7 @@ def _loop_rerank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     meta = flow.run_with_meta(
         wf.RecommendParams(
             query=rewritten_query, use_llm=False, sources=sources,
-            auto_parse_sources=False, rerank_audit=False, **structured_kwargs))
+            auto_parse_sources=False, **structured_kwargs))
     batch = None
     rows: Any = meta.retrieved_data
     if display:
@@ -1699,7 +1699,7 @@ def _recent_result_records(ctx: dict, root: Path) -> tuple[list | None, Any]:
     meta = flow.run_with_meta(
         wf.RecommendParams(
             query=query, use_llm=False, sources=(ctx or {}).get("search_sources"),
-            auto_parse_sources=False, rerank_audit=False,
+            auto_parse_sources=False,
             **_loop_structured_kwargs(ctx)))
     return list(meta.retrieved_data or []), meta
 
@@ -2311,8 +2311,11 @@ LOOP_TOOLS["fair.check"] = {
 
 # ---------------------------------------------------------------- route.request
 
-#: 三条处理路线（route_consensus 的输出契约值；三方平票/无有效票 → 机械兜底 "general"）。
-_SCOPED_ROUTES: tuple[str, ...] = ("search", "action", "general")
+#: 四套完整工具面。route_consensus 只会产生前三种；rescue 由救回端点显式预置。
+_CONSENSUS_ROUTES: tuple[str, ...] = ("search", "action", "general")
+_SCOPED_ROUTES: tuple[str, ...] = (*_CONSENSUS_ROUTES, "rescue")
+#: route.request 是常规套件之间的单次逃生口，不得进入 rescue。
+_ROUTE_REQUEST_TARGETS: tuple[str, ...] = _CONSENSUS_ROUTES
 
 
 class _RouteRequestParamError(Exception):
@@ -2333,7 +2336,7 @@ def _loop_route_request(slots: dict, root: Path, ctx: dict | None = None) -> dic
     bad_param（预算闸/同线闸在 `_adjudicate_decide_obj`，本函数只管形状）。"""
     slots = slots or {}
     target = str(slots.get("target_route") or "").strip()
-    if target not in _SCOPED_ROUTES:
+    if target not in _ROUTE_REQUEST_TARGETS:
         raise _RouteRequestParamError()
     return {
         "requested_route": target, "switched": True,
@@ -3138,8 +3141,8 @@ def _decide_tool_table_zh(verbs: Any = None) -> str:
 
 
 #: decide prompt 的**通道输出指令壳**（2026-08-31 单锚点化）：规则本体唯一真源 =
-#: prompts/loop_core.md（scoped/rescue 两个面都从那一份锚点过滤装配，见
-#: `_SCOPED_DECIDE_RULES_BY_SUITE` / `_SCOPED_DECIDE_RULES_RESCUE`）；此处只保留两个
+#: prompts/loop_core.md（四个套件面都从那一份锚点装配，见
+#: `_SCOPED_DECIDE_RULES_BY_SUITE`）；此处只保留两个
 #: 通道专属的输出格式壳，规则本体不再内嵌第二份。此前内嵌的 INTRO/铁律头尾两份常量
 #: 与按它们拼装的 legacy 双壳（`_DECIDE_RULES_ZH` / `_DECIDE_TOOLS_RULES_ZH`）随 rescue
 #: 面迁入锚点同步退役——钉字门（tests/test_agent_schemas.py 双壳字节钉）同批退役。
@@ -3260,18 +3263,6 @@ def _build_decide_tool_specs() -> tuple[list[dict], dict[str, str]]:
 #: 模块加载期构建（理由见 `_build_decide_tool_specs` docstring 末段）。
 _DECIDE_TOOL_SPECS, _DECIDE_TOOL_NAME_TO_VERB = _build_decide_tool_specs()
 
-#: rescue 档 decide 工具面（2026-08-16 检索工具化 Phase 1）：检索救回回合只给
-#: search.rerun + finish——面收敛到「改写或放弃」；机械闸（`_adjudicate_decide_obj`
-#: 的 rescue 闸）双保险。从真表面**滤**出来，不建第二份拷贝。
-_DECIDE_TOOL_SPECS_RESCUE: list[dict] = [
-    t for t in _DECIDE_TOOL_SPECS
-    if str((t.get("function") or {}).get("name") or "") in ("search_rerun", _DECIDE_FINISH_TOOL)
-]
-_DECIDE_TOOL_NAME_TO_VERB_RESCUE: dict[str, str] = {
-    n: v for n, v in _DECIDE_TOOL_NAME_TO_VERB.items() if v == "search.rerun"
-}
-
-
 # ---------------------------------------------------------------- scoped 路由套件面
 #
 # 设计钉死点 3：提示词共享核心单源化（prompts/loop_core.md 唯一一份）+ 路线差异段；
@@ -3296,6 +3287,8 @@ _SUITE_LOOP_VERBS: dict[str, tuple[str, ...]] = {
                                 "compat.find", "fair.check")
                     if v in LOOP_TOOLS),
     "general": tuple(LOOP_TOOLS),
+    # 救回不是端点特判，而是正式第四套件：仅允许换词重检或诚实收尾。
+    "rescue": tuple(v for v in ("search.rerun",) if v in LOOP_TOOLS),
 }
 
 #: decide 套件面：从真面**滤**（不建第二份拷贝，rescue 先例）——套件 loop 工具
@@ -3303,11 +3296,14 @@ _SUITE_LOOP_VERBS: dict[str, tuple[str, ...]] = {
 _DECIDE_TOOL_SPECS_BY_SUITE: dict[str, list[dict]] = {}
 _DECIDE_TOOL_NAME_TO_VERB_BY_SUITE: dict[str, dict[str, str]] = {}
 for _suite, _suite_verbs in _SUITE_LOOP_VERBS.items():
-    _allowed = set(_suite_verbs) | {"route.request"}
+    _allowed = set(_suite_verbs)
+    if _suite != "rescue":
+        _allowed.add("route.request")
     _DECIDE_TOOL_SPECS_BY_SUITE[_suite] = [
         t for t in _DECIDE_TOOL_SPECS
         if str((t.get("function") or {}).get("name") or "")
-        in (_DECIDE_FINISH_TOOL, _DECIDE_UNSUPPORTED_TOOL)
+        in ((_DECIDE_FINISH_TOOL,) if _suite == "rescue"
+            else (_DECIDE_FINISH_TOOL, _DECIDE_UNSUPPORTED_TOOL))
         or _DECIDE_TOOL_NAME_TO_VERB.get(
             str((t.get("function") or {}).get("name") or "")) in _allowed
     ]
@@ -3330,6 +3326,8 @@ def _understand_suite_verbs(suite: str) -> tuple[str, ...]:
         verbs = list(_SUITE_LOOP_VERBS["action"]) + [
             s.verb for s in _ap.VERB_SPECS
             if s.kind == _ap.EXEC and s.verb not in LOOP_TOOLS]
+    elif suite == "rescue":
+        verbs = ["search.rerun"]
     else:
         # general = 全集（现状行为安全地板）：全部 EXEC（含 LOOP 全集与单步）。
         verbs = [s.verb for s in _ap.VERB_SPECS if s.kind == _ap.EXEC]
@@ -3344,7 +3342,9 @@ _SUITE_UNDERSTAND_VERBS: dict[str, tuple[str, ...]] = {
 _SCOPED_CORE_ZH: str = _prompt_md("loop_core.md", _LOOP_CORE_FALLBACK_ZH)
 _SCOPED_DECIDE_RULES_BY_SUITE: dict[str, dict[str, str]] = {}
 for _suite in _SCOPED_ROUTES:
-    _suite_set = set(_SUITE_LOOP_VERBS[_suite]) | {"route.request"}
+    _suite_set = set(_SUITE_LOOP_VERBS[_suite])
+    if _suite != "rescue":
+        _suite_set.add("route.request")
     _table = _decide_tool_table_zh(
         tuple(v for v in _DECIDE_VERB_ORDER if v in _suite_set))
     _base = (
@@ -3352,32 +3352,21 @@ for _suite in _SCOPED_ROUTES:
         + _prompt_md(f"loop_{_suite}.md", _LOOP_DELTA_FALLBACK_ZH)
         + "\n\n## 可用工具（verb 只能从这张表里选）\n" + _table + "\n\n## 输出方式\n"
     )
-    _SCOPED_DECIDE_RULES_BY_SUITE[_suite] = {
-        "tools": _base + _DECIDE_TOOLS_CHANNEL_BULLETS_ZH,
-        "json": _base + _DECIDE_JSON_BULLETS_ZH,
-    }
-
-#: rescue（检索救回）面的 decide 规则基座：与 scoped 同一份锚点（loop_core.md）
-#: **过滤装配**——面内只有 search.rerun + finish，「依赖占位」节教授的形状在面内没有
-#: 消费工具（compare/compat/fair/cite 均不在面），整节剔除；工具表收窄为 search.rerun
-#: 一行（规则与动词表不自相矛盾，与 scoped 收窄面同一哲学）。本回合限制段是动态段，
-#: 仍在 decide 运行时尾部注入（`_RESCUE_DECIDE_BLOCK_ZH`）。
-_CORE_SECTIONS: dict[str, str] = _md_sections(_SCOPED_CORE_ZH)
-_PLACEHOLDER_SECTION_KEYS: tuple[str, ...] = tuple(
-    k for k in _CORE_SECTIONS if k.startswith("依赖占位"))
-_RESCUE_CORE_ZH = "\n\n".join(
-    text for key, text in _CORE_SECTIONS.items()
-    if key not in _PLACEHOLDER_SECTION_KEYS)
-_RESCUE_DECIDE_BASE_ZH = (
-    _RESCUE_CORE_ZH
-    + "\n\n## 可用工具（verb 只能从这张表里选）\n"
-    + _decide_tool_table_zh(("search.rerun",))
-    + "\n\n## 输出方式\n"
-)
-_SCOPED_DECIDE_RULES_RESCUE: dict[str, str] = {
-    "tools": _RESCUE_DECIDE_BASE_ZH + _DECIDE_TOOLS_CHANNEL_BULLETS_ZH,
-    "json": _RESCUE_DECIDE_BASE_ZH + _DECIDE_JSON_BULLETS_ZH,
-}
+    if _suite == "rescue":
+        # rescue 无换线/不支持动作；输出面只有 search.rerun 与 finish/done。
+        _SCOPED_DECIDE_RULES_BY_SUITE[_suite] = {
+            "tools": _base + (
+                "- 需要换词重检 → 调用 search_rerun\n"
+                "- 不需要或无法再改写 → 调用 finish（必须附 completion_report）\n"),
+            "json": _base + (
+                "- 需要换词重检 → 只回 search.rerun 的 JSON 对象\n"
+                "- 不需要或无法再改写 → 只回 {\"done\": true}\n"),
+        }
+    else:
+        _SCOPED_DECIDE_RULES_BY_SUITE[_suite] = {
+            "tools": _base + _DECIDE_TOOLS_CHANNEL_BULLETS_ZH,
+            "json": _base + _DECIDE_JSON_BULLETS_ZH,
+        }
 
 #: scoped understand 的系统提示（为非 rescue 首步的**唯一**系统提示；rescue
 #: 回合仍用 `_TOOLS_SYSTEM_ZH`）：与 `_TOOLS_SYSTEM_ZH` 同一份 `_ap._RULES_ZH` 真源，
@@ -4476,37 +4465,31 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
         return None, (f"大模型提议的「{verb}」不在允许自动执行的范围内，按「已完成」收尾"
                       "（范围外的动作绝不会在这里执行）。"), (
                       f"你要的「{shown}」这一步没有做——它不在允许自动执行的范围内。"), ""
-    # rescue 面收敛闸（2026-08-16 检索工具化 Phase 1）：检索救回回合只允许 search.rerun——
-    # 其余提议（含 unsupported_next_step 的转述）机械拒绝，按 done 收尾 + 如实 note。
-    if str(state.get("entry_mode") or "") == "rescue" and verb != "search.rerun":
+    # scoped 路由套件闸：四套件共用同一份机械边界。rescue 的套件
+    # 本身只含 search.rerun，不再需要端点模式特判。route.request 仅常规三线可用。
+    scope = str(state.get("route_scope") or "general")
+    suite = set(_SUITE_LOOP_VERBS.get(scope) or _SUITE_LOOP_VERBS["general"])
+    if verb != "route.request" and verb not in suite:
         verb_spec = _ap.VERB_BY_NAME.get(verb)
         shown = verb_spec.zh if verb_spec else verb
-        return None, (f"本回合是检索救回回合，只允许换词重检——「{shown}」这一步本回合"
-                      "不允许，按「已完成」收尾。"), (
-                      f"你要的「{shown}」这一步没有做——检索救回回合只允许换词重检。"), ""
-    # scoped 路由套件闸（常驻；提示不是围栏——decide 的面收窄是
-    # 提示层，本闸是机械兜底）：续步提议必须在当前路线的套件 loop 面内；route.request 是
-    # 所有套件的公共逃生口，另过三道机械闸（预算 / 目标非法 / 同线空转）。
-    if str(state.get("entry_mode") or "") != "rescue":
-        scope = str(state.get("route_scope") or "")
-        suite = set(_SUITE_LOOP_VERBS.get(scope) or _SUITE_LOOP_VERBS["general"])
-        if verb != "route.request" and verb not in suite:
-            verb_spec = _ap.VERB_BY_NAME.get(verb)
-            shown = verb_spec.zh if verb_spec else verb
-            return None, (f"本回合走「{scope or 'general'}」路线——「{shown}」不在本路线的"
-                          "工具面内，按「已完成」收尾。"), (
-                          f"你要的「{shown}」这一步没有做——它不属于本回合的处理路线。"), ""
-        if verb == "route.request":
-            target = str(obj.get("target_route") or "").strip()
-            if _route_request_used(list(state.get("steps") or [])) >= MAX_ROUTE_REQUEST:
-                return None, ("本次请求已换过一次处理路线（每轮最多 1 次），这一步没有再"
-                              "执行，按「已完成」收尾。"), (
-                              "你要的「切换处理路线」这一步没有做——每轮最多换 1 次路线，"
-                              "机会已用完。"), ""
-            if target not in _SCOPED_ROUTES or target == scope:
-                return None, ("切换处理路线的目标不成立（目标不在 search/action/general 里，"
-                              "或与当前路线相同），这一步没有执行，按「已完成」收尾。"), (
-                              "你要的「切换处理路线」这一步没有做——目标路线不成立。"), ""
+        return None, (f"本回合走「{scope}」路线——「{shown}」不在本路线的"
+                      "工具面内，按「已完成」收尾。"), (
+                      f"你要的「{shown}」这一步没有做——它不属于本回合的处理路线。"), ""
+    if verb == "route.request":
+        target = str(obj.get("target_route") or "").strip()
+        if scope == "rescue":
+            return None, ("检索救回路线不允许换线，这一步没有执行，"
+                          "按「已完成」收尾。"), (
+                          "你要的「切换处理路线」这一步没有做——救回路线不开放换线。"), ""
+        if _route_request_used(list(state.get("steps") or [])) >= MAX_ROUTE_REQUEST:
+            return None, ("本次请求已换过一次处理路线（每轮最多 1 次），这一步没有再"
+                          "执行，按「已完成」收尾。"), (
+                          "你要的「切换处理路线」这一步没有做——每轮最多换 1 次路线，"
+                          "机会已用完。"), ""
+        if target not in _ROUTE_REQUEST_TARGETS or target == scope:
+            return None, ("切换处理路线的目标不成立（目标不在 search/action/general 里，"
+                          "或与当前路线相同），这一步没有执行，按「已完成」收尾。"), (
+                          "你要的「切换处理路线」这一步没有做——目标路线不成立。"), ""
     # 联网暂停：联网二连败（network_error）状态下，联网工具
     # 的提议机械拒绝——按 done 收尾、note 如实写「联网暂停中」；离线工具（db_status）照常放行。
     # 联网性按 （verb, 解析源) 判定——离线快照源的检查只读本地快照，不连坐。
@@ -6060,181 +6043,15 @@ def _trace_entry(node: str, label_zh: str, detail: str, ok: bool, started: float
 #: 动作信号 · 管护操作短语：**复用** `vocabulary.CURATE_OP_MARKERS`（其收录口径本就排除
 #: 检索句裸词）——不手抄第二份。其中「上传/导入」后随「的」是定语用法（「我上传的肺数据」
 #: 是检索句），过与 `action_plan._action_verb_noun_usage` 同口径的名词用法反向闸。
-_HYBRID_CURATE_NOUN_GATE: frozenset[str] = frozenset({"上传", "导入"})
-
-#: 动作信号 · 执行动作词：**复用** `vocabulary.ACTION_VERBS` 去掉两个**产物名词**（下载脚本/
-#: 下载链接——「有 FASTQ 下载链接的肺数据」是检索过滤条件，不是动作指令）；全量过名词用法
-#: 反向闸（「下载量大的数据集」「只保留能下载的」是检索句）。
-_HYBRID_ACTION_VERBS: tuple[str, ...] = tuple(
-    m for m in _vocab.ACTION_VERBS if m not in ("下载脚本", "下载链接"))
-
-#: 动作词的**复合名词尾随**排除：裸「下载」首次出现处紧跟这两个尾巴时是产物名词
-#: （下载链接/下载脚本），不是动作指令——与上去掉的两个产物词同根（子串穿透补丁）。
-_HYBRID_ACTION_VERB_TAIL_EXCL: dict[str, tuple[str, ...]] = {"下载": ("链接", "脚本")}
-
-#: 动作子句 → 能力族归族表（按序首中即归）：(capability, 判定正则, 核账动词面, 中文标签)。
-#: 核账动词面 = finish 机械核销时承认的 ok 步动词集合；generic 族为空——环面给不出
-#: 对应工具的诉求（如「导出引文」在本环无此动词），只能靠 declined_zh 如实交代核销。
-_HYBRID_ACTION_FAMILIES: tuple[tuple[str, re.Pattern, tuple[str, ...], str], ...] = (
-    ("action.check_updates",
-     re.compile(r"(?:检查|核查|清查|盘点).{0,8}?更新|有没有更新|是否有更新|有更新吗"),
-     ("curate.check_updates", "curate.sync_updates"), "检查库更新"),
-    ("action.import",
-     re.compile(  # 「的」-guards 挡定语用法（「已入库的/已收录的」是检索句，不归动作）
-         r"入库(?!的)|进库(?!的)|纳入(?!的)|收录(?!的)|同步(?!化)|更新一下|更新下"),
-     ("curate.sync_updates", "curate.search_online"), "同步/入库新数据"),
-    ("action.search_online",
-     re.compile(r"联网搜|在线搜|上网搜|网上搜"),
-     ("curate.search_online",), "联网检索外部源"),
-    ("action.db_status",
-     re.compile(r"数据库状态|库的状态|库容|库.{0,4}?有?(?:多少|几)条"),
-     ("curate.db_status",), "清点库容"),
-)
-
-#: 动作信号 · 短语/邻近正则（裸词容易撞检索语境的一律写成带锚点的形状）= 族表并集
-#: **程序派生**（族表是唯一手写清单，闸正则不手抄第二份，消除两份清单的漂移面）。
-#: EXTRA 只收「安装」——本地模型/依赖安装无能力族可归（generic 族设计如此），检索句不出现。
-_HYBRID_ACTION_RES_EXTRA: tuple[re.Pattern, ...] = tuple(re.compile(p) for p in (r"安装",))
-_HYBRID_ACTION_RES: tuple[re.Pattern, ...] = (
-    tuple(pat for _, pat, _, _ in _HYBRID_ACTION_FAMILIES) + _HYBRID_ACTION_RES_EXTRA)
-
-#: 检索信号 · 动词正则：「找/推荐/搜索/检索」+ 裸「搜」——「找回」是回滚动作（动作侧词表
-#: 已收）、「联网搜/在线搜/上网搜/网上搜 + 索/检索」与「搜来/搜回」是动作侧（联网搜库
-#: 入库链的检索动词），全部用环视排除。
-_HYBRID_SEARCH_VERB_RE: re.Pattern = re.compile(
-    r"找(?!回)|推荐|(?<!联网|在线|上网|网上)(?:搜索|检索)|"
-    r"(?<!联网|在线|上网|网上)搜(?!来|回|索)")
-
-#: 检索信号 · **入库链否决**：子句内出现入库/进库/纳入/收录时，其中的检索动词属于
-#: 「联网搜库→入库」动作链（curate.search_online/sync_updates 的口语说法），不再算检索
-#: 信号——「检查更新，有新的就搜来入库」是纯动作链，不许被误闸（2026-08-22 对抗扫描
-#: 既有 live 用例坐实：全部因此豁免）。
-#: v2：否决从全句级收窄为**子句级**——调用方逐子句调用，跨子句的独立
-#: 检索诉求不再被误赦（「…就入库，再帮我找乳腺癌数据」的找数半在干净子句里）。
-_HYBRID_IMPORT_CHAIN_RE: re.Pattern = re.compile(r"入库|进库|纳入|收录")
-
-#: 检索信号 · 存在性问句（「有没有人类肺的数据」）：gap 只含「新/新的/最新」或带「更新」时
-#: 不算——「有没有新数据/有没有更新的数据」是库更新问句，动作侧已有「有没有更新」短语收。
-_HYBRID_HAS_DATA_RE: re.Pattern = re.compile(r"有没有(.{0,12}?)数据(?!库)")
-_HYBRID_NEW_ONLY_RE: re.Pattern = re.compile(r"最?新(?:的)?")
-
-#: 混合闸词表版本（改动词表/切分规则时递增并记注释，便于回归定位）：
-#: v1-2026-08-21 = 初版，**全句级**判定（入库链否决也是全句级）
-#: v2-2026-08-22 = 子句级判定：动作/检索信号须落在**不同子句**才闸
-#: 入库链否决收窄为只对同子句生效（「检查更新，有新的就入库，再帮我找乳腺癌数据」
-#: 这类真混合句在 v1 下被全句级否决漏闸）；同子句双信号不闸（「帮我找可下载数据」
-#: 的裸「下载」与「找」同子句，是检索句的产物形容词，不是动作指令）。
-#: v3-2026-08-31 = `_HYBRID_ACTION_RES` 改由 `_HYBRID_ACTION_FAMILIES` 程序派生：
-#: 闸正则 = 族表并集 + EXTRA「安装」，族表为唯一手写清单。派生公式下登记拓宽：
-#: 「进库/纳入/收录」新成为闸触发词（此前任何闸词表均未收，族2正则同时补
-#: 「的」-guards 挡「已收录的」类定语）；「有没有更新」系、「联网搜」系无行为增量
-#: （CURATE_OP_MARKERS 早已命中）。
-_HYBRID_LEXICON_VERSION = "v3-2026-08-31"
-
-#: 子句切分（机械闸的最小语义单元）：中文连词「然后/顺便/接着/并且/再」+ 中英文标点。
-#: 「再」作切分点依赖其连接副词用法（「再帮我找…」）；「再问一遍」类动词用法会把一句
-#: 切成两句，但切多只会**放宽**闸（两侧信号须跨子句），不会误闸——方向安全。
-_HYBRID_CLAUSE_SPLIT_RE: re.Pattern = re.compile(r"然后|顺便|接着|并且|再|[，。；！？,.;!?]")
-
-
-def _split_hybrid_clauses(text: str) -> list[str]:
-    """混合闸的子句切分：按连词/标点切开、去空白、滤空段。保持确定性、零 LLM。"""
-    return [c.strip() for c in _HYBRID_CLAUSE_SPLIT_RE.split(str(text or "")) if c.strip()]
-
-
-def _hybrid_action_hit(text: str) -> bool:
-    """动作信号检出（机械闸的动作半）。名词用法反向闸复用 action_plan 的同一助手。"""
-    low = text.lower()
-    for m in _vocab.CURATE_OP_MARKERS:
-        if m in low:
-            if m in _HYBRID_CURATE_NOUN_GATE and _ap._action_verb_noun_usage(low, m):
-                continue
-            return True
-    for m in _HYBRID_ACTION_VERBS:
-        if m in low and not _ap._action_verb_noun_usage(low, m):
-            at = low.find(m)
-            if any(low[at + len(m):].startswith(t)
-                   for t in _HYBRID_ACTION_VERB_TAIL_EXCL.get(m, ())):
-                continue  # 复合名词（下载链接/下载脚本）里的裸动作词，不是动作指令
-            return True
-    return any(r.search(text) for r in _HYBRID_ACTION_RES)
-
-
-def _hybrid_search_hit(text: str) -> bool:
-    """检索信号检出（机械闸的检索半）：检索动词，或存在性问句（gap 是实质主题词才算）。
-    入库链（入库/进库/纳入/收录）在场时两类信号全部否决——此时**本调用单元**（v2 起为
-    单个子句）中的检索动词/存在性问句都属于「联网搜库→入库」动作链的口语说法
-    （l05 族坐实），不是独立检索诉求。"""
-    if _HYBRID_IMPORT_CHAIN_RE.search(text):
-        return False
-    if _HYBRID_SEARCH_VERB_RE.search(text):
-        return True
-    m = _HYBRID_HAS_DATA_RE.search(text)
-    if m:
-        gap = m.group(1).strip()
-        if gap and "更新" not in gap and not _HYBRID_NEW_ONLY_RE.fullmatch(gap):
-            return True
-    return False
-
-
-def _hybrid_intent_gate(text: str) -> bool:
-    """混合诉求机械闸（确定性预闸，独立可单测）：动作信号与检索信号落在**不同子句**
-    → True（route_consensus 据此跳过 LLM 投票直接走 general）。误伤率 0 优先：纯检索句、
-    纯动作句、动作链（检查→搜来入库）一律 False——拿不准不闸。
-    v2：全句级 → 子句级。同子句双信号不闸（「帮我找可下载数据」是检索句）
-    入库链否决随 `_hybrid_search_hit` 逐子句生效，不再误赦跨子句真混合句。"""
-    clauses = _split_hybrid_clauses(text)
-    if not clauses:
-        return False
-    action_idx = {i for i, c in enumerate(clauses) if _hybrid_action_hit(c)}
-    if not action_idx:
-        return False
-    search_idx = {i for i, c in enumerate(clauses) if _hybrid_search_hit(c)}
-    if not search_idx:
-        return False
-    return any(i != j for i in action_idx for j in search_idx)
-
-
-def _hybrid_required_capabilities(text: str) -> list[dict[str, Any]]:
-    """混合句的**能力账**（修复1）：闸命中时产出本句要求的能力清单
-    随 route_consensus 写 state/trace，finish 的机械核销据此逐项对账（缺项拒收）。
-
-    返回 list[dict]，每项：
-    - capability：能力标识（action.* / search）；
-    - verbs：核销承认的 ok 步动词面（空 = 本环无对应工具，靠 declined_zh 交代）；
-    - label_zh：给用户/否决文案看的中文标签；
-    - anchor：来源子句（截断 24 字，trace 可溯）。
-    动作半按 `_HYBRID_ACTION_FAMILIES` 归族（多动作子句可产多项，同族去重）；
-    检索半恒一项 search（rank/rerank/search.rerun 任一 ok 步即核销）。
-    """
-    caps: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for clause in _split_hybrid_clauses(text):
-        if _hybrid_action_hit(clause):
-            fam = None
-            for cap_id, pat, verbs, label in _HYBRID_ACTION_FAMILIES:
-                if pat.search(clause):
-                    fam = (cap_id, verbs, label)
-                    break
-            if fam is None:
-                fam = ("action.generic", (), f"完成「{clause[:12]}」的操作")
-            if fam[0] not in seen:
-                seen.add(fam[0])
-                caps.append({
-                    "capability": fam[0],
-                    "verbs": list(fam[1]),
-                    "label_zh": fam[2],
-                    "anchor": clause[:24],
-                })
-        if _hybrid_search_hit(clause) and "search" not in seen:
-            seen.add("search")
-            caps.append({
-                "capability": "search",
-                "verbs": ["rank", "rerank", "search.rerun"],
-                "label_zh": "在本地库检索数据",
-                "anchor": clause[:24],
-            })
-    return caps
+_HYBRID_ACTION_FAMILIES = _hybrid_policy.HYBRID_ACTION_FAMILIES
+_HYBRID_ACTION_RES_EXTRA = _hybrid_policy.HYBRID_ACTION_RES_EXTRA
+_HYBRID_ACTION_RES = _hybrid_policy.HYBRID_ACTION_RES
+_HYBRID_LEXICON_VERSION = _hybrid_policy.HYBRID_LEXICON_VERSION
+_split_hybrid_clauses = _hybrid_policy.split_clauses
+_hybrid_action_hit = _hybrid_policy.action_hit
+_hybrid_search_hit = _hybrid_policy.search_hit
+_hybrid_intent_gate = _hybrid_policy.hybrid_intent_gate
+_hybrid_required_capabilities = _hybrid_policy.required_capabilities
 
 
 def _parse_route_vote(content: str) -> tuple[str, str, bool]:
@@ -6243,7 +6060,7 @@ def _parse_route_vote(content: str) -> tuple[str, str, bool]:
     的一票——兜底是显式规则，不是暗箱加权）。"""
     obj = _ap.parse_action_response(str(content or ""))
     route = str(obj.get("route") or "").strip()
-    if route not in _SCOPED_ROUTES:
+    if route not in _CONSENSUS_ROUTES:
         return "", "", False
     return route, str(obj.get("reason") or "").strip()[:80], True
 
@@ -6329,17 +6146,18 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
     调用，只决定「装哪套工具 + 哪套系统提示词」——路由定义与示例在
     `prompts/route_consensus.md`（文件即真源）。输入 = 原话 + 会话短期上下文
     （与 understand 同上下文面）+ 初步检索概览（命中数/生效条件；**不含结果集**——
-    诚实不变量：模型永远不直接碰结果集内容）。rescue 回合短路：既有的救回收敛面
-    原样，不做分流（rescue 吸收进搜索环的评估是挂账后续项）。
+    诚实不变量：模型永远不直接碰结果集内容）。救回端点会把
+    `route_scope="rescue"` 作为第四套件预置；该套件无需投票，但与其它套件共用同一图。
     2026-08-22：**混合诉求机械预闸**——`_hybrid_intent_gate` 检出同句同时含
     动作与检索信号时，跳过 LLM 投票直接 general（确定性、零调用成本；单意图句不触发，
     误伤率 0 优先）。"""
     started = time.monotonic()
     ctx: _AgentContext = runtime.context
-    if str(state.get("entry_mode") or "") == "rescue":
-        return {"route_scope": "",
+    if str(state.get("route_scope") or "") == "rescue":
+        _notify_route_verdict(ctx, "rescue")
+        return {"route_scope": "rescue",
                 "trace": _trace_entry("route_consensus", "分流共识",
-                                      "检索救回回合不分流，走既有的救回收敛面。", True, started)}
+                                      "端点已预置「rescue」套件，不发起分流投票。", True, started)}
     if getattr(ctx, "on_progress", None) is not None:
         ctx.on_progress("tool_start", {"verb": "node", "label_zh": "分流共识", "detail": ""})
     # 混合诉求机械预闸：动作信号 ∧ 检索信号同句 → 跳过 LLM 投票
@@ -6407,10 +6225,9 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
 
 def _scoped_understand_face(state: "_AgentState"
                             ) -> tuple[list[dict] | None, dict[str, str] | None, list | None]:
-    """非 rescue 回合的 understand/repair 套件收窄面（常驻）：返回
-    (tools, name_to_verb, face_specs)；rescue 返回 (None, None, None)——调用方走 rescue 原面。"""
-    if str(state.get("entry_mode") or "") == "rescue":
-        return None, None, None
+    """按 state.route_scope 返回 understand/repair 套件收窄面。
+
+    search/action/general/rescue 均经过这一条装配路径。"""
     tools, name_to_verb = _get_tool_specs()
     scope = str(state.get("route_scope") or "")
     face = set(_SUITE_UNDERSTAND_VERBS.get(scope) or _SUITE_UNDERSTAND_VERBS["general"])
@@ -6436,20 +6253,10 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     # label_zh 与本节点 trace 行「理解意图」逐字一致（前端 pending 行按 label 匹配）。
     if getattr(ctx, "on_progress", None) is not None:
         ctx.on_progress("tool_start", {"verb": "node", "label_zh": "理解意图", "detail": ""})
-    tools, name_to_verb = _get_tool_specs()
-    # rescue 面收敛（2026-08-16 检索工具化 Phase 1）：检索救回回合首步只允许
-    # search.rerun / none——工具面机械收窄（decide 侧同型收窄；validate 的 rescue 闸兜底）。
-    rescue = str(state.get("entry_mode") or "") == "rescue"
-    if rescue:
-        tools = [t for t in tools
-                 if str((t.get("function") or {}).get("name") or "") in ("search_rerun", "none")]
-        name_to_verb = {n: v for n, v in name_to_verb.items()
-                        if v in ("search.rerun", "none")}
-    # scoped 路由（转正后常驻）：非 rescue 时按 state.route_scope 收窄
-    # 首步面（套件工具 + none；ROUTE 投影退役；route.request 不进首步面）；rescue 走原面。
+    # 四套件均按 state.route_scope 收窄首步面；route.request 不进首步面。
+    rescue = str(state.get("route_scope") or "") == "rescue"
     scoped_tools, scoped_names, face_specs = _scoped_understand_face(state)
-    if scoped_tools is not None:
-        tools, name_to_verb = scoped_tools, scoped_names
+    tools, name_to_verb = scoped_tools, scoped_names
     #（并发分流，r3 关键核查①）：局部 resolved = 本节点视图的检索摘要。
     # retrieval 是默认覆盖字段（非 reducer），provider 在场且非 action 时在**构造
     # call_kwargs 前**取 join/补跑结果——本节点的 _context_zh / rescue 分支全部用局部
@@ -6499,9 +6306,8 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
         context += block
         json_prompt += block
     usage_local: list = []
-    # scoped 路由（转正后常驻）：套件路径的系统提示为退役后口径
-    # （ROUTE 动词不再投影，检索需求指路 rank）；rescue 用既有常量。
-    system_zh = _SCOPED_TOOLS_SYSTEM_ZH if face_specs is not None else _TOOLS_SYSTEM_ZH
+    # 四套件共用同一系统提示真源，工具面已由注册表收窄。
+    system_zh = _SCOPED_TOOLS_SYSTEM_ZH
     answer, note, fb_reason, json_err = _invoke_tool_channel(
         ctx.chat_model, tools=tools,
         messages=[SystemMessage(content=system_zh), HumanMessage(content=context)],
@@ -6609,20 +6415,8 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
     autofilled = _autofill_named_source(str(raw.get("verb") or ""), raw, state["utterance"])
     violations = _validate_raw(
         raw, state["utterance"], steps=list(state.get("steps") or []))
-    # rescue 面收敛的机械闸（2026-08-16 检索工具化 Phase 1；提示不是围栏）：检索救回回合
-    # 首步只许 search.rerun / none——违规走既有 repair 一次 → 再败 fail → 调用方
-    # （/api/agent/search-rescue 端点）fail-open。续步由 decide 的 rescue 闸拦截，不到这里。
-    if (str(state.get("entry_mode") or "") == "rescue"
-            and not list(state.get("steps") or [])
-            and str(raw.get("verb") or "") not in ("", "search.rerun", "none")):
-        violations = list(violations) + [
-            "本回合是检索救回回合，只允许换词重检（search.rerun）或不做（none）"]
-    # scoped 路由的套件首步闸（常驻；提示不是围栏——
-    # understand/repair 的面收窄是提示层，本闸是机械兜底）：首步 verb 必须在当前路线的
-    # 套件面内（ROUTE 投影退役 + route.request 首步不许——它在任何套件的首步面里都不
-    # 存在）。续步由 decide 裁决层的套件闸拦截，不到这里。
-    if (str(state.get("entry_mode") or "") != "rescue"
-            and not list(state.get("steps") or [])):
+    # 四套件共用的首步闸：提示面不是围栏，所以仍用注册表投影机械复核。
+    if not list(state.get("steps") or []):
         verb_now = str(raw.get("verb") or "")
         if verb_now:
             scope = str(state.get("route_scope") or "")
@@ -6726,13 +6520,9 @@ def repair(state: _AgentState, *, runtime: Any) -> dict:
     ctx: _AgentContext = runtime.context
     model = ctx.decide_model or ctx.chat_model
     lane_note = "长链档｜" if ctx.decide_model is not None else ""
-    tools, name_to_verb = _get_tool_specs()
-    # scoped 路由（转正后常驻）：与 understand 同一收窄面——套件闸打回
-    # 的重问若给全表，模型只会再选一个面外动词；rescue 为 None 走原面（rescue 旧口径：
-    # repair 不收窄，靠 validate 的 rescue 闸兜底——先例不动）。
+    # 与 understand 同一套件面：重问也不得看到面外工具。
     scoped_tools, scoped_names, face_specs = _scoped_understand_face(state)
-    if scoped_tools is not None:
-        tools, name_to_verb = scoped_tools, scoped_names
+    tools, name_to_verb = scoped_tools, scoped_names
     feedback = "；".join(state.get("violations") or [])
     prompt_kwargs: dict[str, Any] = dict(
         has_results=state["has_results"], result_total=state["result_total"],
@@ -6938,7 +6728,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                     "search_lenient_dims": state.get("search_lenient_dims"),
                     "search_date_from": str(state.get("search_date_from") or ""),
                     "search_date_to": str(state.get("search_date_to") or ""),
-                    "replace_screen": str(state.get("entry_mode") or "") == "rescue",
+                    "replace_screen": str(state.get("route_scope") or "") == "rescue",
                     "unresolved_terms": list(
                         (state.get("retrieval") or {}).get("unresolved_terms") or []),
                     "chat_model": getattr(runtime.context, "chat_model", None),
@@ -7134,7 +6924,7 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
     for s in new_steps:
         if str(s.get("verb") or "") == "route.request" and s.get("ok"):
             target = str(((s.get("result") or {}).get("requested_route")) or "")
-            if target in _SCOPED_ROUTES:
+            if target in _ROUTE_REQUEST_TARGETS:
                 out["route_scope"] = target
     out["trace"] = new_trace
     return out
@@ -7243,34 +7033,24 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     moratorium = _network_moratorium(steps)
     ban_verbs = frozenset() if moratorium else _failed_tool_ban(steps)
     write_budget_out = _write_steps_used(steps) >= MAX_WRITE_STEPS
-    # rescue 面收敛（2026-08-16 检索工具化 Phase 1）：检索救回回合的 decide 工具面收窄为
-    # search.rerun + finish，prompt 尾部注入限制段；机械闸在 `_adjudicate_decide_obj`。
-    rescue = str(state.get("entry_mode") or "") == "rescue"
     rerun_budget_out = _search_rerun_used(steps) >= MAX_SEARCH_RERUN
-    # scoped 路由（转正后非 rescue 恒走套件面）：按 state.route_scope
+    # scoped 路由：按 state.route_scope
     # 装套件面（工具面 + 双壳规则基座）；逃生口机会用完后 route_request 从面上摘掉
-    # （提示层收窄，机械兜底在 `_adjudicate_decide_obj` 的预算闸）。rescue 走同一锚点的
-    # 过滤装配面（`_SCOPED_DECIDE_RULES_RESCUE`，2026-08-31 单锚点化——legacy 双壳退役）。
-    scope = str(state.get("route_scope") or "")
-    scoped = not rescue
+    # （提示层收窄，机械兜底在 `_adjudicate_decide_obj` 的预算闸）。
+    scope = str(state.get("route_scope") or "general")
     route_req_out = _route_request_used(steps) >= MAX_ROUTE_REQUEST
-    if rescue:
-        decide_specs, decide_names = _DECIDE_TOOL_SPECS_RESCUE, _DECIDE_TOOL_NAME_TO_VERB_RESCUE
-        tools_rules = _SCOPED_DECIDE_RULES_RESCUE["tools"]
-        json_rules = _SCOPED_DECIDE_RULES_RESCUE["json"]
-    else:
-        decide_specs = list(_DECIDE_TOOL_SPECS_BY_SUITE.get(scope)
-                            or _DECIDE_TOOL_SPECS_BY_SUITE["general"])
-        decide_names = dict(_DECIDE_TOOL_NAME_TO_VERB_BY_SUITE.get(scope)
-                            or _DECIDE_TOOL_NAME_TO_VERB_BY_SUITE["general"])
-        if route_req_out:
-            decide_specs = [t for t in decide_specs
-                            if str((t.get("function") or {}).get("name") or "")
-                            != "route_request"]
-            decide_names.pop("route_request", None)
-        rules_pair = (_SCOPED_DECIDE_RULES_BY_SUITE.get(scope)
-                      or _SCOPED_DECIDE_RULES_BY_SUITE["general"])
-        tools_rules, json_rules = rules_pair["tools"], rules_pair["json"]
+    decide_specs = list(_DECIDE_TOOL_SPECS_BY_SUITE.get(scope)
+                        or _DECIDE_TOOL_SPECS_BY_SUITE["general"])
+    decide_names = dict(_DECIDE_TOOL_NAME_TO_VERB_BY_SUITE.get(scope)
+                        or _DECIDE_TOOL_NAME_TO_VERB_BY_SUITE["general"])
+    if route_req_out:
+        decide_specs = [t for t in decide_specs
+                        if str((t.get("function") or {}).get("name") or "")
+                        != "route_request"]
+        decide_names.pop("route_request", None)
+    rules_pair = (_SCOPED_DECIDE_RULES_BY_SUITE.get(scope)
+                  or _SCOPED_DECIDE_RULES_BY_SUITE["general"])
+    tools_rules, json_rules = rules_pair["tools"], rules_pair["json"]
     # 重问写步台账 → 投影打标（B 方案：模型据此知道 finish 报告必须单独交代这些步）。
     reask_nos = {int(m.get("step_no")) for m in (state.get("reask_writes") or [])
                  if isinstance(m.get("step_no"), int) and not isinstance(m.get("step_no"), bool)}
@@ -7297,9 +7077,9 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     fair_block = _FAIR_BUDGET_BLOCK_ZH if _fair_used(steps) >= MAX_FAIR else ""
     # 逃生口机会用完注入段（2026-08-17 同口径；rescue/未用完恒空段）。
     route_req_block = (_ROUTE_REQUEST_BUDGET_BLOCK_ZH
-                       if scoped and route_req_out else "")
+                       if scope != "rescue" and route_req_out else "")
     # rescue 面收敛注入段（仅检索救回回合成段，两个壳同口径；2026-08-16）。
-    rescue_block = _RESCUE_DECIDE_BLOCK_ZH if rescue else ""
+    rescue_block = _RESCUE_DECIDE_BLOCK_ZH if scope == "rescue" else ""
     # 「先新后旧」注入段（仅存在失败步时成段，纯劝导；两个壳同口径）。
     failed_block = _FAILED_STEP_BLOCK_ZH if any(not s.get("ok") for s in steps) else ""
     # 未决事项机械提示段（提示不是闸，三条规则都无命中时整段不出现）。
@@ -7907,7 +7687,7 @@ def plan_with_agent_events(
     decide_model: Any | None = None,
     on_event: Callable[[str, dict], None] | None = None,
     principal: str = "",
-    entry_mode: str = "",
+    route_scope: str = "",
     search_sources: Any = None,
     search_facet_filters: Any = None,
     search_suppressed_constraints: Any = None,
@@ -7943,8 +7723,8 @@ def plan_with_agent_events(
     给了就用它（不再按 env 自建），不给且车道为 complex 且配置了 LLM_MODEL_COMPLEX 才自建。
     `principal`：成功经验库分区主体（会话账户 id；空 → anonymous）。
     与 config 派生的 endpoint_fp 一起，既打进 understand 注入过滤，也打进成功收尾的账本行标。
-    `entry_mode`（2026-08-16 检索工具化 Phase 1）："rescue" = 检索救回回合——understand/
-    decide 工具面收敛到 search.rerun（+none/finish），validate/裁决层各有一道机械闸兜底；
+    `route_scope="rescue"` = 检索救回回合——作为正式第四套件，understand/decide
+    工具面收敛到 search.rerun（+none/finish），validate/裁决层共用套件机械闸；
     `search_sources` 与五个 `search_*` 结构化条件是 search.rerun 的完整当前屏范围；
     rescue 与常规 /api/utterance 都从同一份检索参数透传，缺省全空保持旧调用兼容。
 三缝：`retrieval_provider` 在场时图 initial state 的 retrieval 取 None（并发
@@ -8020,7 +7800,7 @@ def plan_with_agent_events(
         "current_filters": current_filters,
         "has_results": bool(has_results),
         "result_total": total,
-        "entry_mode": str(entry_mode or ""),
+        "route_scope": (str(route_scope or "") if str(route_scope or "") in _SCOPED_ROUTES else ""),
         "search_sources": search_sources,
         "search_facet_filters": search_facet_filters,
         "search_suppressed_constraints": search_suppressed_constraints,
@@ -8121,6 +7901,7 @@ def plan_with_agent(
     chat_model: Any | None = None,
     decide_model: Any | None = None,
     principal: str = "",
+    route_scope: str = "",
     search_sources: Any = None,
     search_facet_filters: Any = None,
     search_suppressed_constraints: Any = None,
@@ -8145,6 +7926,7 @@ def plan_with_agent(
         current_query=current_query, current_filters=current_filters,
         chat_model=chat_model, decide_model=decide_model, on_event=None,
         principal=principal,
+        route_scope=route_scope,
         search_sources=search_sources,
         search_facet_filters=search_facet_filters,
         search_suppressed_constraints=search_suppressed_constraints,

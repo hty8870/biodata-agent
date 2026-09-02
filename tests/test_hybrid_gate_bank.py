@@ -391,17 +391,6 @@ class TestHybridAbstainFallback:
         assert "AI 执行" in out["echo_zh"]
         assert out["needs_agent"] is False and out["suggestions"] == []
 
-    def test_serial_path_abstains(self, monkeypatch):
-        monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
-        calls = _counting_plan_action(monkeypatch)
-        out = turn.route_turn(
-            _HYBRID_UTTERANCE, config=LLMConfig(enable_llm=True, api_key="sk-t"),
-            llm_call=lambda p: _NONE_REPLY)
-        assert calls == []
-        assert out["route"] == "none"
-        assert out["plan"]["hybrid_abstain"] is True
-        assert "什么都没有执行" in out["echo_zh"]
-
     def test_control_pure_action_still_plans(self, monkeypatch):
         """对照：纯动作句（无独立检索子句）不弃权——plan_action 照常分类。"""
         calls = _counting_plan_action(monkeypatch)
@@ -453,14 +442,4 @@ class TestHybridAbstainAgentDown:
         assert "什么都没有执行" in out["echo_zh"]
         assert "没能接得上" in out["echo_zh"]
         assert "是开着的，不用改设置" in out["echo_zh"]
-        assert "确认「AI 执行」已开启" not in out["echo_zh"]
-
-    def test_serial_agent_down_echo(self, monkeypatch):
-        monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
-        self._agent_boom(monkeypatch)
-        out = turn.route_turn(
-            _HYBRID_UTTERANCE, config=LLMConfig(enable_llm=True, api_key="sk-t"))
-        assert out["route"] == "none"
-        assert out["plan"]["hybrid_abstain"] is True
-        assert "没能接得上" in out["echo_zh"]
         assert "确认「AI 执行」已开启" not in out["echo_zh"]

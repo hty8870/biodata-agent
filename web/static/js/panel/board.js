@@ -28,6 +28,7 @@ import { benchfbAfterRender, benchfbOnChatEntry, benchfbSetAutoGrow, benchfbTurn
 import { autoGrow, getDateRange, openSrcPanel, openTimePanel } from "#interactions";
 import { agentExtMissing, getConfig, llmCapable, openSettings, revealSetting } from "#shell";
 import { compressFlow, flowVerbLabel, KIND_TOOL, renderableStages, shouldDiscardOutcome, stageFromEvent, upsertStage } from "#flow_trace";
+import { COPY, armTwoStepConfirm, resetTwoStepConfirm } from "../core/copy.js";
 
 /* ---------- 课题上下文卡反转钩子（2026-08-22 §3.3） ----------
    projects.js 经 setArtifactCtxProvider 注册「当前活动上下文卡的注入文本」取值器、
@@ -155,23 +156,6 @@ function cbLenientLabel(dim) {
     return (typeof n === "number" && n > 0) ? ("另有 " + n + " 条没标注，也算符合") : "没标注的也算符合";
 }
 
-const CB_ZONE_TITLE = {
-    query: "你这次要找的条件",
-    prefer: "只用来排先后",
-    facet: "在已筛出的结果里再缩小",
-    lenient: "已放宽",
-    suppressed: "这次没有用它筛",
-    prefer_off: "这次没有拿它排先后"
-};
-const CB_ZONE_NOTE = {
-    query: "这几条用来从全部数据集里挑。",
-    prefer: "这几项不筛数据，只把符合的排在前面；结果里仍会有不符合的。",
-    facet: "只在上面挑出来的那批里继续缩小，不会把新的数据集找回来。",
-    lenient: "没填这一项的，或来源只给了抽样、填得不全的，都算符合；只有填了、而且和你要的明显不一样的，才排除。",
-    suppressed: "这个条件我读出来了，但按你的要求没拿它筛。",
-    prefer_off: "「优先」本来只排先后、不筛数据；这次按你的要求停用了它，结果条数不变。"
-};
-
 export function renderCondBoard(data) {
     const board = $("condBoard");
     if (!board) return;
@@ -211,7 +195,7 @@ export function renderCondBoard(data) {
         const mine = rows.filter(function (r) { return r.zone === zone; });
         if (!mine.length) return;
         html += '<div class="cb-zone cb-zone-' + zone + '">';
-        html += '<div class="cb-zone-head">' + escapeHtml(CB_ZONE_TITLE[zone]) + '</div>';
+        html += '<div class="cb-zone-head">' + escapeHtml(COPY.boardZones[zone].title) + '</div>';
         mine.forEach(function (row) {
             const values = row.values.filter(Boolean).map(escapeHtml).join("、");
             html += '<div class="cb-row">'
@@ -221,7 +205,7 @@ export function renderCondBoard(data) {
                 + "</div>";
             if (row.values.length > 1) html += '<p class="cb-note">同一行里的几个值，满足其中一个就算符合。</p>';
         });
-        html += '<p class="cb-note">' + escapeHtml(CB_ZONE_NOTE[zone]) + "</p>";
+        html += '<p class="cb-note">' + escapeHtml(COPY.boardZones[zone].note) + "</p>";
         html += "</div>";
     });
     if (!html) html = '<p class="cb-empty">这次检索没有用上任何筛选条件，结果是按整句话的相关程度排的。</p>';
@@ -848,24 +832,16 @@ export function cbAdoptAsBranch() {
     cbLogPush("sys", "这是从原对话分出来的一支；原对话还在原标签页和历史记录里。");
 }
 
-let _cbRevertArmTimer = null;
 function cbRevertDisarm() {
     const b = $("cbRevertBtn");
-    if (b) { b.classList.remove("armed"); b.textContent = "回退至此"; }
-    if (_cbRevertArmTimer) { clearTimeout(_cbRevertArmTimer); _cbRevertArmTimer = null; }
+    resetTwoStepConfirm(b, "回退至此");
 }
 function cbRevertHere() {
     const cur = _cbStack[_cbCursor];
     if (!cur) return;
     const b = $("cbRevertBtn");
     // 不可撤销的破坏性操作：二段确认（与 histClear/hist-del 同一 armed 模式，3 秒不回就复位）。
-    if (b && !b.classList.contains("armed")) {
-        b.classList.add("armed");
-        b.textContent = "确认回退？不可撤销";
-        _cbRevertArmTimer = setTimeout(cbRevertDisarm, 3000);
-        return;
-    }
-    cbRevertDisarm();
+    if (!armTwoStepConfirm(b, { idleText: "回退至此", confirmText: "再点一次确认回退（不可撤销）" })) return;
     usageLog(USAGE_KINDS.undo, { frame: String(cur.id || ""), q: String(cur.query || "").slice(0, 80) });   // 回退是「上一步白干了」的直接信号（v2 起记）；补最小上下文（回到哪一帧/那句查询）
     cbRevertToFrame(cur.id);   // 剪掉该帧之后的所有帧与消息（不可撤销）+ 回放该帧
     cbLogPush("sys", "已回退到这一步：之后的对话与改动已舍弃，不可撤销。");

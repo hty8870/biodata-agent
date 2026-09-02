@@ -132,26 +132,10 @@ _HARD_SKIP_DIRS = {
 _HARD_SKIP_FILE_RE = re.compile(r"^\.env(\..+)?$")
 _ENV_TEMPLATE_RE = re.compile(r"^\.env(\..+)?\.example$")
 
-# 已人工审计的脱敏测试夹具豁免（白名单，精确到「相对路径:行号」）。
-# 这些行是**故意**放置形似 OpenAI key 的假串（sk- 前缀 + 纯字母数字体，非真实凭据）来验证
-# 值级遮蔽数据在遮蔽后不出现在产物/响应里（tests/test_telemetry_export.py /
-# test_telemetry_receiver.py 的还原测试夹具）。只豁免「精确 (文件, 行)」，
-# 绝不整文件、整行段落或整目录豁免；
-# 行号一旦漂移，--check 会重新翻红、强制人工重新审计（fail-closed 姿态，不静默失效）。
-# 新增豁免必须写清理由；任何一行若实为真凭据，不得加入、应立即上报。
-SECRET_SCAN_ALLOWLIST: "frozenset[tuple[str, int]]" = frozenset({
-    ("tests/test_telemetry_export.py", 613),
-    ("tests/test_telemetry_export.py", 628),
-    ("tests/test_telemetry_export.py", 659),
-    ("tests/test_telemetry_receiver.py", 953),
-    ("tests/test_telemetry_receiver.py", 971),
-    ("tests/test_telemetry_receiver.py", 972),
-    # feedback_core_spec.mjs：API Key 遮蔽行为门的故意夹具（明文/加密往返各置一枚假 key，
-    # 断言入库前被遮蔽成占位符），同为脱敏夹具、非真实凭据。
-    ("tests/js/feedback_core_spec.mjs", 66),
-    ("tests/js/feedback_core_spec.mjs", 72),
-    ("tests/js/feedback_core_spec.mjs", 148),
-})
+# 精确行号豁免机制保留为 fail-closed 逃生口，但默认必须为空。需要验证遮蔽行为的测试假 key
+# 一律在运行时由不命中扫描器的片段拼接，源码不再保存完整 secret 形状；这样测试既能覆盖真实
+# 值级遮蔽，又不需要让交付门为测试夹具开洞。若未来确需新增豁免，必须逐行审计并同步专项契约。
+SECRET_SCAN_ALLOWLIST: "frozenset[tuple[str, int]]" = frozenset()
 
 _GIT_TIMEOUT_S = 120
 

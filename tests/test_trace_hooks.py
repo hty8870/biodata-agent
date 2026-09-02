@@ -226,7 +226,7 @@ def test_write_verb_snapshot_and_rollback_roundtrip(monkeypatch, _tmp_root):
                                  "card_kind": "search_online", "readonly": False},
     })
     rec = TraceRecorder(_tmp_root, "test", "rb1", enabled=True)
-    state = {"utterance": "联网搜人类肺数据入库", "entry_mode": "",
+    state = {"utterance": "联网搜人类肺数据入库",
              "plan": {"verb": "curate.search_online",
                       "slots": {"quoted": "联网搜人类肺数据入库", "source": "ArrayExpress",
                                 "keywords": "人类肺", "species": "人类"}},

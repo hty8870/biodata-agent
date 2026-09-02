@@ -151,29 +151,6 @@ _EN_NEG_WORDS = re.compile(
 # 中文强调用直角引号；不写自夸词；不用内部术语。
 
 COPY: dict[str, str] = {
-    "zone_query": "你这次要找的条件",
-    "zone_query_note": "这几条用来从全部数据集里挑。",
-    "zone_facet": "在已筛出的结果里再缩小",
-    "zone_facet_note": "只在上面挑出来的那批里继续缩小，不会把新的数据集找回来。",
-    "zone_lenient": "已放宽",
-    "zone_lenient_note": (
-        # 与前端 board.js CB_ZONE_NOTE.lenient 同一句（文案统一批）：空值纳入/
-        # 抽样不全纳入/明确不同才排除，三层诚实语义一字不丢。
-        "没填这一项的，或来源只给了抽样、填得不全的，都算符合；"
-        "只有填了、而且和你要的明显不一样的，才排除。"
-    ),
-    "zone_suppressed": "这次没有用它筛",
-    "zone_suppressed_note": "这个条件我读出来了，但按你的要求没拿它筛。",
-    "zone_prefer": "只用来排先后",
-    "zone_prefer_note": (
-        "你写了「优先」的这几项没有筛掉任何数据，只是让符合的排在前面。"
-        "所以结果里仍然会有不符合这几项的数据集。"
-    ),
-    "zone_prefer_off": "这次没有拿它排先后",
-    "zone_prefer_off_note": (
-        "你写的「优先」我读出来了，但按你的要求这次没拿它排先后。"
-        "它本来也不筛数据，所以停用它之后结果条数不会变。"
-    ),
     "multi_value_note": "同一行里的几个值，满足其中一个就算符合。",
     # 「不用大模型」这句承诺**不在这里**：它写在界面上（web/static/index.html 与 onboarding.js），
     # 这里曾放过一份同义的 offline_note，但 board_view 从不把它放进任何响应，是个只被测试看见的
@@ -583,12 +560,8 @@ def board_view(
             "note": "",
         })
 
-    notes = [
-        {"zone": "query", "text": COPY["zone_query_note"]},
-        {"zone": "facet", "text": COPY["zone_facet_note"]},
-        {"zone": "lenient", "text": COPY["zone_lenient_note"]},
-        {"zone": "suppressed", "text": COPY["zone_suppressed_note"]},
-    ]
+    # 分区文案唯一真源在 web/static/js/core/copy.js；后端只回可用分区标识。
+    notes = [{"zone": zone} for zone in ("query", "facet", "lenient", "suppressed")]
     return {"rows": rows, "notes": notes}
 
 

@@ -37,6 +37,6 @@ If private vulnerability reporting is not enabled on this repository, open a min
 
 Release candidates are assembled from an allowlist and must include a file-level SHA-256 manifest. `.env`, `.git`, local models, virtual environments, caches, outputs, logs, collaboration notes, and personal work material are excluded.
 
-The current GitHub workflow only produces a verified release-candidate artifact. It does not publish a GitHub Release or deploy production. A real deployment must add protected environments, short-lived credentials, health observation, and rollback to a previously verified artifact.
+The public repository workflow only produces a verified release-candidate artifact. It does not publish a GitHub Release or deploy production. The private source repository may contain a separate operator deployment workflow; the deterministic public-mirror policy excludes that workflow. Any real deployment still requires an explicit release decision, a protected environment, TLS health observation, and rollback to a previously verified artifact.
 
 The bundled desktop and development launchers intentionally run exactly one Uvicorn worker. Download jobs, desktop-shell activity and selected caches are process-local; do not increase the worker count until those states are externalized and cross-process behavior is tested.

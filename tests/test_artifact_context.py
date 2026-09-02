@@ -325,7 +325,7 @@ def test_route_consensus_prompt_carries_card(monkeypatch):
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=None, decide_model=None, on_progress=None,
         on_route_verdict=None, route_extra_zh="", artifact_context=CARD))
-    state = {"utterance": "今天天气怎么样", "entry_mode": "", "has_results": False,
+    state = {"utterance": "今天天气怎么样", "has_results": False,
              "result_total": 0, "current_query": "", "current_filters": [],
              "retrieval": None, "artifact_context": CARD}
     out = agent_exec.route_consensus(state, runtime=runtime)
@@ -346,7 +346,7 @@ def test_route_consensus_without_card_unchanged(monkeypatch):
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=None, decide_model=None, on_progress=None,
         on_route_verdict=None, route_extra_zh="", artifact_context=""))
-    state = {"utterance": "今天天气怎么样", "entry_mode": "", "has_results": False,
+    state = {"utterance": "今天天气怎么样", "has_results": False,
              "result_total": 0, "current_query": "", "current_filters": [],
              "retrieval": None}
     agent_exec.route_consensus(state, runtime=runtime)

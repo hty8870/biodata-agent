@@ -7,12 +7,12 @@ import { LS, nsKey, readJSON, writeJSON, $, toast, escapeHtml, fmtTime } from "#
 import { memRankOrder, memRankEvict, memRankNormalize } from "#memory_rank";
 import { LAST_RECOMMEND_DATA } from "#search";
 import { renderExampleCandidates } from "#examples";
+import { COPY, armTwoStepConfirm, closeModal, openModal, trapModalFocus } from "../core/copy.js";
 
 const MEMORY_LIMIT = 40;
 /* 存储写失败（配额满）的提示：记住需求 / 手工加偏好两处共用，字面量只留一份。 */
 const MEMORY_FULL_COPY = "浏览器存储空间已满，保存不了。可先到「历史记录」清空旧记录，或删掉不用的记忆";
 let _memoryReturnFocus = null;
-let _memoryClearArmed = false;
 
 export function userMemoryEnabled() {
     // 默认开（缺失/异常均归 true）、键为机器级（刻意不 nsKey，见 test_frontend_namespacing.py）——
@@ -165,11 +165,7 @@ export function renderMemoryManager() {
         // 单条删除与「清空全部」同款二次确认：研究偏好属持久层、防挤出，误点即删不可恢复。
         row.querySelector(".memory-delete").addEventListener("click", (e) => {
             const btn = e.currentTarget;
-            if (!btn.dataset.armed) {
-                btn.dataset.armed = "1"; btn.textContent = "确认删除";
-                setTimeout(() => { if (btn.isConnected) { delete btn.dataset.armed; btn.textContent = "删除"; } }, 3000);
-                return;
-            }
+            if (!armTwoStepConfirm(btn, { idleText: COPY.common.delete })) return;
             saveUserMemories(getUserMemories().filter((x) => x.id !== item.id));
             renderMemoryManager(); renderMemorySuggestions(); toast("已删除记忆");
         });
@@ -179,14 +175,14 @@ export function renderMemoryManager() {
 
 export function openMemoryModal(trigger) {
     _memoryReturnFocus = trigger || document.activeElement;
-    const modal = $("memoryModal"); modal.hidden = false; document.body.classList.add("modal-lock");
-    renderMemoryManager(); renderExampleCandidates(); $("memoryNoteInput").value = ""; $("memoryNoteInput").focus();
+    const input = $("memoryNoteInput"); input.value = "";
+    openModal($("memoryModal"), { returnFocus: _memoryReturnFocus, initialFocus: input });
+    renderMemoryManager(); renderExampleCandidates();
 }
 
 export function closeMemoryModal() {
-    const modal = $("memoryModal"); if (!modal || modal.hidden) return;
-    modal.hidden = true; document.body.classList.remove("modal-lock"); _memoryClearArmed = false; $("memoryClearBtn").textContent = "清空全部";
-    if (_memoryReturnFocus && document.body.contains(_memoryReturnFocus)) _memoryReturnFocus.focus();
+    const modal = $("memoryModal"); if (!closeModal(modal)) return;
+    $("memoryClearBtn").textContent = "清空全部";
 }
 
 export function initUserMemory() {
@@ -212,22 +208,12 @@ export function initUserMemory() {
         input.value = ""; renderMemoryManager(); renderMemorySuggestions(); toast("已添加研究偏好");
     });
     $("memoryClearBtn").addEventListener("click", () => {
-        if (!_memoryClearArmed) { _memoryClearArmed = true; $("memoryClearBtn").textContent = "再次点击确认"; setTimeout(() => { _memoryClearArmed = false; if ($("memoryClearBtn")) $("memoryClearBtn").textContent = "清空全部"; }, 3000); return; }
-        saveUserMemories([]); _memoryClearArmed = false; $("memoryClearBtn").textContent = "清空全部"; renderMemoryManager(); renderMemorySuggestions(); toast("用户记忆已清空");
+        const btn = $("memoryClearBtn");
+        if (!armTwoStepConfirm(btn, { idleText: "清空全部", confirmText: COPY.common.confirmClear })) return;
+        saveUserMemories([]); renderMemoryManager(); renderMemorySuggestions(); toast("用户记忆已清空");
     });
     document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("memoryModal").hidden) closeMemoryModal(); });
     // 焦点陷阱：模态开着时 Tab / Shift+Tab 在模态内循环，不逃到背景控件（对齐 #settings 的隔离语义）。
-    $("memoryModal").addEventListener("keydown", (e) => {
-        if (e.key !== "Tab") return;
-        const modal = $("memoryModal");
-        if (modal.hidden) return;
-        const focusables = Array.from(modal.querySelectorAll(
-            'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )).filter((el) => el.offsetParent !== null || el === document.activeElement);
-        if (!focusables.length) return;
-        const first = focusables[0], last = focusables[focusables.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    });
+    $("memoryModal").addEventListener("keydown", (e) => trapModalFocus(e, $("memoryModal")));
     renderMemorySuggestions();
 }

@@ -25,7 +25,8 @@ def test_memory_is_explicit_local_transparent_and_manageable():
     assert "biodata_user_memory_v1" in core and "biodata_user_memory_enabled_v1" in core
     assert "localStorage" in memory and "fetch(" not in memory
     assert "rememberLatestSearch" in memory and "constraintSummary" in memory
-    assert "upsertMemory" in memory and "memory-delete" in memory and "再次点击确认" in memory
+    assert "upsertMemory" in memory and "memory-delete" in memory
+    assert "armTwoStepConfirm" in memory, "记忆删除/清空必须走通用二段确认核"
     # 召回=仅填入查询框、绝不自动提交（永不静默改硬过滤的载体）。
     assert "input.dispatchEvent" in memory and "runRecommend" not in memory
     assert "LAST_RECOMMEND_DATA = data" in search

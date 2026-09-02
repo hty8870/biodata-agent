@@ -16,6 +16,7 @@ from ..retrieval.query_parser import DIMENSIONS, QueryIntent, active_filters, de
 from ..retrieval.retriever import (FACET_LABELS, DatasetRetriever, RetrievedCandidate, _FACET_CASEFOLD,
                         _facet_source, passes_hard_filter)
 from ..retrieval.units import UNIT_EXPLANATIONS, explain_unit, format_sample_size
+from ..content.labels import RAW_FASTQ_NO, raw_fastq_status
 
 
 RAW_WARNING = (
@@ -95,20 +96,6 @@ class WorkflowResult:
     # {mode,tier,recall_backend,rerank_backend,reason,signals}。供 MCP meta / API 回显 / 前端观测，
     # 不参与检索、不影响确定性（分类器纯函数 + 现有后端降级合同）。
     strategy: dict | None = None
-    # rerank 关键词审核决策（只读投影，仅 rerank_audit=True 时非 None）：
-    # {triggered,verdict,rewritten_query,used,reason,mode,n_before,n_after,was_no_result}。
-    # 触发路径（mode）只余一条：存活集非空时 LLM 在重排那次调用里"顺带"审核（mode="rerank"）。
-    # 空池独立审核档（原 mode="empty"） 随「检索工具化」删除——空池救回改由
-    # search.rerun 工具承担（agent 显式调用 + 机械择优），不再脱离重排静默单发一次审核调用。
-    # 给出改写 → 重搜择优；used=True 表示已采纳。
-    # 供前端展示"我把问题理解成了 XX" + 开发者信息回显，不改确定性主路径（默认关，评测不传）。
-    audit: dict | None = None
-    # 执行侧（下载 / 打包 / 导出）关键词命中的 LLM 核对（只读投影，仅 action_audit=True 时非 None）：
-    # {triggered, llm_is_action, llm_markers, rule_markers, agree, missed_by_rule, reason}。
-    # LLM 独立判断这句话是不是在要求下载/打包/导出，与规则命中 action_markers 对照——规则漏认时
-    # llm_is_action=True 而 rule_markers 空（missed_by_rule=True），上层据此仍能指路到打包入口。
-    # **只核对 + 上报，绝不代劳**：产包/下载仍走既有预览→确认流程。fail-open（LLM 缺席→None）。默认关、评测不传。
-    action_audit: dict | None = None
     # Web / MCP 共用的请求解释与实际执行追踪。均为 additive 只读投影，不参与排序。
     interpretation: dict = field(default_factory=dict)
     search_trace: dict = field(default_factory=dict)
@@ -508,13 +495,7 @@ def _raw_false_is_guess(record: DatasetRecord) -> bool:
 
 
 def _raw_status(record: DatasetRecord) -> str:
-    if record.has_raw_data is True:
-        return "✅ 包含 FASTQ"
-    if record.has_raw_data is False:
-        if _raw_false_is_guess(record):
-            return "⚪ 未确认"   # 猜测的 False 不许印成「无 FASTQ」
-        return "❌ 无 FASTQ"
-    return "⚪ 未说明"
+    return raw_fastq_status(record.has_raw_data, guessed_false=_raw_false_is_guess(record))
 
 
 # FASTQ 目录级信号的机器可读注记：unknown≠不满足，且目录信号非权威结论。
@@ -538,6 +519,31 @@ def _raw_data_status(record: DatasetRecord) -> dict[str, object]:
         "authoritative": False,
         "note": _RAW_STATUS_NOTE,
     }
+
+
+def _same_hard_filter(a: QueryIntent, b: QueryIntent) -> bool:
+    """Whether two intents produce the same hard-filter survivor set.
+
+    This deterministic comparator belongs to the Agent's ``search.rerun``
+    adoption gate. It is not the retired LLM audit channel: free text and
+    ranking order deliberately do not participate.
+    """
+    if bool(a.abstain) != bool(b.abstain):
+        return False
+    if a.abstain and b.abstain:
+        return True
+
+    def _norm(constraints: dict) -> dict:
+        return {dim: frozenset(values or ())
+                for dim, values in (constraints or {}).items() if values}
+
+    return (
+        _norm(a.constraints) == _norm(b.constraints)
+        and _norm(a.excluded_constraints) == _norm(b.excluded_constraints)
+        and a.has_raw_data_required == b.has_raw_data_required
+        and (a.date_from or "") == (b.date_from or "")
+        and (a.date_to or "") == (b.date_to or "")
+    )
 
 
 def _build_unit_explanation(candidates: list[RetrievedCandidate]) -> str:
@@ -570,31 +576,6 @@ def _format_translated_keywords(intent: QueryIntent) -> str:
     return intent.original_query.strip()
 
 
-def _same_hard_filter(a: QueryIntent, b: QueryIntent) -> bool:
-    """两个 intent 是否产生**同一硬过滤存活集**（→ 检索结果集不变，改写对用户不可见）。
-
-    只比"决定有哪些数据"的硬过滤字段（正/负向约束、原始数据要求、时间范围）与弃权状态；
-    free_text 只影响**排序**、不影响存活集成员，故不比；rerank 顺序更是非确定、不算真实变化。
-    供 rerank_audit 择优：改写解析出的硬过滤与原句一致 → 判为"没改变任何可见结果"、不采纳。
-    """
-    if bool(a.abstain) != bool(b.abstain):
-        return False
-    if a.abstain and b.abstain:
-        return True
-    # 约束是 dict[dim -> list[target]]，但 target 是 **OR 匹配**、顺序无关（`_match_all_consuming`
-    # 按 alias 长度消费 → 同一实体集换不同 alias 会翻转多值列表顺序）。故按维度归一成 frozenset 再比，
-    # 否则「人和小鼠」vs「人类和小鼠」这类同存活集查询会被列表顺序绕过、误采纳空转改写（验证）。
-    def _norm(c: dict) -> dict:
-        return {dim: frozenset(vals or ()) for dim, vals in (c or {}).items() if vals}
-    return (
-        _norm(a.constraints) == _norm(b.constraints)
-        and _norm(a.excluded_constraints) == _norm(b.excluded_constraints)
-        and a.has_raw_data_required == b.has_raw_data_required
-        and (a.date_from or "") == (b.date_from or "")
-        and (a.date_to or "") == (b.date_to or "")
-    )
-
-
 def format_candidates_markdown(candidates: list[RetrievedCandidate]) -> str:
     header = [TABLE_HEADER, TABLE_SEPARATOR]
     rows: list[str] = []
@@ -603,7 +584,7 @@ def format_candidates_markdown(candidates: list[RetrievedCandidate]) -> str:
     for candidate in candidates:
         record = candidate.record
         raw_status = _raw_status(record)
-        if raw_status == "❌ 无 FASTQ":
+        if raw_status == RAW_FASTQ_NO:
             has_false_fastq = True
 
         # 阶段二：优先真实文件下载直链（按 dataset_uid join），查不到回退数据集页面 url。
@@ -954,8 +935,7 @@ class RecommendParams:
 
     背景：原 `run_with_meta` 是 24 个 kwargs 的平铺签名，仓内 13 个调用点各自手拼子集
     已在漂（task-pack 不传 strategy、feasibility 不传 rerank——刻意还是遗漏无从约束），
-    每加一个杠杆（rerank_audit → degrade_with_llm → action_audit → base_llm_config 的
-    追加史）都要改一串调用点。本对象把字段与默认值收进一处；调用方 `RecommendParams(**kwargs)`
+    每加一个杠杆都要改一串调用点。本对象把字段与默认值收进一处；调用方 `RecommendParams(**kwargs)`
     即可机械迁移，dict 也能直接解包构造（turn.py/agent_exec.py 的既有封装透传）。
     `run_with_meta` 同步提供 `**kwargs` 兼容通道承接存量测试调用（见其 docstring），
     但新调用一律走参数对象。
@@ -984,9 +964,6 @@ class RecommendParams:
     recall_available: "bool | None" = None
     llm_available: "bool | None" = None
     preferred_recall: str = "cross_encoder"
-    rerank_audit: bool = False
-    degrade_with_llm: bool = False
-    action_audit: bool = False
     base_llm_config: LLMConfig | None = None
 
 
@@ -1045,7 +1022,6 @@ class DatasetRecommendationWorkflow:
         recall_available: bool = False,
         llm_available: bool = False,
         preferred_recall: str = "cross_encoder",
-        rerank_audit: bool = False,
     ) -> tuple:
         # sources=None（官方评测/CLI 默认）→ 只装基础语料 → 确定性与历史逐位一致。
         from ..retrieval.search_request import resolve_search_request
@@ -1110,18 +1086,6 @@ class DatasetRecommendationWorkflow:
             )
             eff_recall_backend = decision.recall_backend
             eff_rerank_backend = decision.rerank_backend
-        # rerank 关键词审核（opt-in）：仅当 rerank_audit=True 时构造 in/out 载荷，透传给 retrieve →
-        # rerank_candidates 会在**同一次**重排 LLM 调用里附带审核、把 verdict/rewrite 写回该 dict。
-        # 载荷所需的 keywords（规则抽词投影）此刻可算（intent 已解析）、vocab_hint 取自 CATALOG 规范名。
-        # audit 只在 eff_rerank_backend=="llm" 时真正触发（retrieve 内 rerank 块的前置条件）——rerank!=llm
-        # 时 rerank_candidates 根本不被调、载荷保持默认（attempted=False）→ 无改写、不重搜。
-        audit_ctx: dict | None = None
-        if rerank_audit:
-            from ..retrieval.vocabulary import known_terms_hint
-            audit_ctx = {
-                "keywords": _format_translated_keywords(intent),
-                "vocab_hint": known_terms_hint(),
-            }
         # rerank_top_n / recall_alpha 为 None 时不传 → 沿用 retriever 签名里的唯一默认（避免默认值散落多处）。
         retrieve_kwargs: dict[str, object] = dict(
             top_k=top_k, rerank_backend=eff_rerank_backend, llm_config=rerank_llm_config,
@@ -1136,18 +1100,16 @@ class DatasetRecommendationWorkflow:
         # facet_filters 缺省 None → 不传给 retrieve（保持其默认）→ 官方评测路径 no-op。
         if facet_filters:
             retrieve_kwargs["facet_filters"] = facet_filters
-        if audit_ctx is not None:
-            retrieve_kwargs["rerank_audit_ctx"] = audit_ctx
         # fixed 模式 ranking_records is normalized（逐位不变）；auto 模式复用已过滤存活集（见上）。
         candidates = self.retriever.retrieve(ranking_records, intent, **retrieve_kwargs)
         retrieved_dataset_names, retrieved_urls = _collect_candidate_debug(candidates)
         return (
             intent, candidates, normalized, retrieved_dataset_names, retrieved_urls,
-            decision, audit_ctx, resolution, execution,
+            decision, resolution, execution,
         )
 
     def build_prompt_preview(self, query: str, top_k: int | None = None) -> str:
-        intent, candidates, _, _, _, _, _, _, _ = self._prepare_context(query=query, top_k=top_k)
+        intent, candidates, _, _, _, _, _, _ = self._prepare_context(query=query, top_k=top_k)
         retrieved_data_text, _ = _serialize_retrieved_data(candidates[:_LLM_PROMPT_CANDIDATE_CAP])
         translated_keywords = _format_translated_keywords(intent)
         return build_curator_prompt(
@@ -1174,7 +1136,6 @@ class DatasetRecommendationWorkflow:
         recall_available: "bool | None" = None,
         llm_available: "bool | None" = None,
         preferred_recall: str = "cross_encoder",
-        rerank_audit: bool = False,
     ) -> str:
         # kwargs 直通 run_with_meta 的兼容通道（见其 docstring）——run() 是历史便捷入口，保持旧签名。
         return self.run_with_meta(
@@ -1191,7 +1152,6 @@ class DatasetRecommendationWorkflow:
             recall_available=recall_available,
             llm_available=llm_available,
             preferred_recall=preferred_recall,
-            rerank_audit=rerank_audit,
         ).answer
 
     def run_with_meta(self, p: "RecommendParams | None" = None, **kwargs) -> WorkflowResult:
@@ -1224,16 +1184,12 @@ class DatasetRecommendationWorkflow:
         recall_available = p.recall_available
         llm_available = p.llm_available
         preferred_recall = p.preferred_recall
-        rerank_audit = p.rerank_audit
-        degrade_with_llm = p.degrade_with_llm
-        action_audit = p.action_audit
         base_llm_config = p.base_llm_config
         workflow_started_at = time.perf_counter()
         # 可选 LLM 重排与 use_llm(润色) 解耦：即使不润色也可重排存活集。
         # 只有 backend=="llm"（或 strategy=auto 可能选出 llm）时才构造带 key 的配置；缺 key → rerank 内部回退原序（不报错）。
         auto = str(strategy or "fixed").strip().lower() == "auto"
         rerank_llm_config: LLMConfig | None = None
-        # action_audit（执行侧关键词核对）也需要一份真实 LLM 配置——它是一次独立的 LLM 判断调用。
         # 并发分流：llm_available 显式为 False 时短路**不构造**——pre-loop
         # 确定性管线（rule_match_summary 恒 llm_available=False、rerank 恒 off）的 flight
         # 线程从此不读 os.environ；llm_available=True/None 路径行为逐位不变。
@@ -1241,8 +1197,7 @@ class DatasetRecommendationWorkflow:
         # 配置传入，锁外构造的派生配置不再读 env（不把 60s LLM 请求关在锁里）。缺省 None
         # → 逐位沿用旧行为（读 env 自解析）。
         if (llm_available is not False
-                and (auto or (rerank_backend and rerank_backend != "off")
-                     or degrade_with_llm or action_audit)):
+                and (auto or (rerank_backend and rerank_backend != "off"))):
             rerank_llm_config = self._effective_llm_config(
                 use_llm=True, mock_llm=False, provider=provider, base=base_llm_config,
             )
@@ -1280,73 +1235,9 @@ class DatasetRecommendationWorkflow:
             preferred_recall=preferred_recall,
         )
         (intent, candidates, normalized, retrieved_dataset_names,
-         retrieved_urls, decision, audit_ctx, resolution, execution) = self._prepare_context(
-            query=query, rerank_audit=rerank_audit, **ctx_kwargs
+         retrieved_urls, decision, resolution, execution) = self._prepare_context(
+            query=query, **ctx_kwargs
         )
-
-        # rerank 关键词审核（opt-in）。只余 ride-along 一条触发路径：
-        # 存活集**非空**时，审核已在上面那次重排 LLM 调用里顺带完成，结果落在 audit_ctx。
-        # 空池/弃权档的独立审核（原 rerank.audit_query_only） 删除——空池救回改由
-        # search.rerun 工具承担（agent 显式调用 + 机械择优闸），审核不再脱离重排单发。
-        # 锁 rerank=llm（rerank_llm_config 非空）——保持"审核是 LLM 重排子开关"的心智；
-        # clarification_required 不介入（尊重"请用户澄清"的显式流程，不擅自替用户改写）。
-        audit_meta: dict | None = None
-        if rerank_audit:
-            _actx = audit_ctx or {}
-            n_before = len(candidates)
-            attempted = bool(_actx.get("attempted"))
-            verdict = _actx.get("verdict")
-            rewrite = str(_actx.get("rewrite") or "").strip()
-            mode: str | None = "rerank" if attempted else None
-
-            if not attempted:
-                reason = "not_triggered"          # rerank!=llm / 无 key / LLM 失败 → 审核未真正发生
-            elif verdict is True:
-                reason = "keywords_ok"            # LLM 判关键词已正确完整
-            else:
-                reason = "incomplete_no_rewrite"  # 判不完整但没给可用改写（或空转改写被过滤）
-            audit_meta = {
-                "triggered": attempted,
-                "verdict": verdict,
-                "rewritten_query": "",
-                "used": False,
-                "reason": reason,
-                # 触发路径："rerank"=存活集非空顺带审 · None=未触发。
-                "mode": mode,
-                "n_before": n_before,
-                "n_after": n_before,
-                "was_no_result": n_before == 0,
-            }
-            # verdict is True 表示 LLM 判"关键词已正确完整、无需改写"；即便它自相矛盾地又给了改写，
-            # 也信 verdict、不采纳（保决策对象自洽：verdict=True 不该伴随 used=True/reason=rewritten）。
-            # verdict 为 False/None（判不完整或未表态）+ 非空改写 → 才走重搜。
-            if rewrite and verdict is not True:
-                audit_meta["rewritten_query"] = rewrite
-                rewrite_kwargs = dict(ctx_kwargs)
-                rewrite_kwargs["sources"] = resolution.sources
-                rewrite_kwargs["auto_parse_sources"] = False
-                (intent2, candidates2, normalized2, names2,
-                 urls2, decision2, _, resolution2, execution2) = self._prepare_context(
-                    query=rewrite, rerank_audit=False, **rewrite_kwargs
-                )
-                if not candidates2:
-                    # 改写把结果改空（或本就零结果、改写后仍零结果）→ 退回原句（只认改好的）。
-                    audit_meta["reason"] = "rewrite_empty_kept_original"
-                elif _same_hard_filter(intent, intent2):
-                    # 改写解析出**同一套硬过滤**（存活集不变，只是措辞/未建模词变化）→ 对用户不可见 →
-                    # 不采纳、不打横幅。这是发现A 的第二形态：LLM 改不进规则维度时，把"免疫细胞"这类未建模词
-                    # 一删了事，文本变了、硬过滤却没变。硬过滤才决定"有哪些数据"；rerank 顺序非确定、不算真实
-                    # 变化——故比 intent 硬过滤而非被 rerank 打乱的 top-k，杜绝"5→5·理解为XX"噪声。
-                    audit_meta["reason"] = "rewrite_no_change_kept_original"
-                else:
-                    # 改写产出**不同**的非空结果 → 采纳（含其 intent/语料/调试投影/分类器决策）。
-                    # 空池档下这正是"零结果被改写救回"：n_before=0 → n_after=len(candidates2)。
-                    intent, candidates, normalized = intent2, candidates2, normalized2
-                    retrieved_dataset_names, retrieved_urls, decision = names2, urls2, decision2
-                    resolution, execution = resolution2, execution2
-                    audit_meta["used"] = True
-                    audit_meta["reason"] = "rewritten"
-                    audit_meta["n_after"] = len(candidates2)
 
         # 结构化候选一次算好，挂到每条返回路径上（含无候选=空列表）。
         _, retrieved_data_payload = _serialize_retrieved_data(candidates)
@@ -1374,39 +1265,9 @@ class DatasetRecommendationWorkflow:
         interpretation["effective_sources"] = list(resolution.sources or ["10x Genomics"])
         interpretation["intent"] = intent_projection(intent)
         search_trace = _build_search_trace(resolution, intent, execution, decision, int(fac["total"]))
-        # 执行侧（下载/打包/导出）关键词命中：规则先认（确定性、恒算）；LLM 开且 action_audit=True 时
-        # 再让 LLM **独立核对一次**——规则是裸词匹配，换个说法就漏，LLM 能补上「这其实是下载诉求」。
-        # 只核对 + 上报，绝不代劳；fail-open（LLM 缺席/失败/解析不出 → triggered=False，规则命中原样保留）。
+        # 执行侧动作只做确定性标记；自然语言动作理解统一交给 turn/agent，检索 workflow
+        # 不再另起一条 LLM 审核旁路。
         rule_action_markers = detect_action_markers(query)
-        action_audit_meta: dict | None = None
-        # 只在**真实（非 mock）LLM + 有 key** 时才核对——这正是用户说的「LLM 开启时」（前端把 action_audit
-        # 绑在「真实 LLM 已开」上）。mock 会忽略 prompt、吐策展表，对执行侧判断毫无意义（同 intro_llm 排除 mock）；
-        # 无 key 时直接跳过、不发那次注定 401 的网络调用（这也让 no-network 门不会误触发）。
-        _action_audit_ready = (action_audit and not bool(mock_llm)
-                               and rerank_llm_config is not None
-                               and getattr(rerank_llm_config, "api_key", None))
-        if _action_audit_ready:
-            from ..retrieval import rerank as _rerank
-            _is_action, _llm_markers, _reason = _rerank.audit_action_markers(
-                query, rule_markers=rule_action_markers, config=rerank_llm_config,
-            )
-            if _is_action is not None or _llm_markers:
-                action_audit_meta = {
-                    "triggered": True,
-                    "llm_is_action": bool(_is_action),
-                    "llm_markers": list(_llm_markers),
-                    "rule_markers": list(rule_action_markers),
-                    # 规则漏认：LLM 判为执行诉求、但规则一个都没认到 → 上层仍应指路到打包入口。
-                    "missed_by_rule": bool(_is_action) and not rule_action_markers,
-                    "agree": bool(_is_action) == bool(rule_action_markers),
-                    "reason": _reason,
-                }
-            else:
-                action_audit_meta = {
-                    "triggered": False, "llm_is_action": None, "llm_markers": [],
-                    "rule_markers": list(rule_action_markers), "missed_by_rule": False,
-                    "agree": None, "reason": "",
-                }
         # active_filters 与 result_total/facets 一样，一次算好挂到每条返回路径（含弃权/无结果/澄清）。
         fac_fields: dict[str, object] = {
             "result_total": fac["total"], "facets": fac["groups"], "active_filters": active_filters(intent),
@@ -1417,13 +1278,9 @@ class DatasetRecommendationWorkflow:
             "or_handling": intent.or_handling,
             # 执行类说法（打包/下载脚本/导出引文…）：只指路、不代劳。空列表=用户没提。
             "action_markers": rule_action_markers,
-            # 执行侧关键词命中的 LLM 核对（仅 action_audit=True 非 None；只报不代劳）。
-            "action_audit": action_audit_meta,
             "resolution_status": res_status, "clarification": clar,
             # 分类器决策（仅 strategy="auto" 非 None）——挂进每条返回路径供观测，不影响检索。
             "strategy": decision.as_dict() if decision is not None else None,
-            # rerank 关键词审核决策（仅 rerank_audit=True 非 None）——同样挂进每条返回路径供回显。
-            "audit": audit_meta,
             "interpretation": interpretation,
             "search_trace": search_trace,
         }
@@ -1453,7 +1310,7 @@ class DatasetRecommendationWorkflow:
                                    rerank_llm_config=None, recall_backend="off")
 
             def _prepare_degraded(dq: str, _kw=_preview_kwargs):
-                ctx = self._prepare_context(query=dq, rerank_audit=False, **_kw)
+                ctx = self._prepare_context(query=dq, **_kw)
                 r_intent, r_cands, r_records = ctx[0], ctx[1], ctx[2]
                 if r_intent.abstain or r_intent.parse_status != "executable":
                     return None
@@ -1463,89 +1320,6 @@ class DatasetRecommendationWorkflow:
                 return r_intent, r_cands, total
 
             degraded_search = build_degraded_search(intent, _prepare_degraded)
-            # LLM 把关档（opt-in）：让 LLM 判断「这几个词能不能忽略」，判可以才真降级。
-            # 默认关；LLM 缺席 / 调用失败 / 输出解析不出来 → 保持弃权（fail-closed，见 rerank.judge_drop_terms）。
-            if degrade_with_llm and degraded_search and rerank_llm_config is not None:
-                from ..retrieval import rerank as _rerank
-                _surviving = "、".join(
-                    f"{f.get('label')}={'/'.join(str(v) for v in f.get('values', []))}"
-                    for f in degraded_search.get("active_filters", [])
-                )
-                drop_ok, drop_reason = _rerank.judge_drop_terms(
-                    query,
-                    ignored_terms=list(degraded_search.get("ignored_terms", [])),
-                    surviving=_surviving,
-                    count=int(degraded_search.get("count", 0)),
-                    config=rerank_llm_config,
-                )
-                degraded_search = dict(degraded_search)
-                degraded_search["llm_verdict"] = drop_ok
-                degraded_search["llm_reason"] = drop_reason
-                degraded_search["applied"] = drop_ok is True
-                if drop_ok is True:
-                    # 批准降级：把降级结果**真的**当成本次结果返回，状态单列 "degraded"
-                    # ——绝不混进 "results"，否则界面会把「忽略了你写的某个词」的结果说成正常命中。
-                    #
-                    # 这里必须走 `_prepare_context`（与正常检索同一入口），不能自己 parse + retrieve：
-                    # 手写那版丢掉了**用户在界面上设的时间范围、分面、已忽略条件、宽容维度**，
-                    # 于是芯片上还挂着「来源=ArrayExpress」「2020–2021」，返回的卡片却全在窗外、
-                    # 全是别的来源——这是本项目定义的最危险形态（静默错筛），而且是 LLM 批准之后
-                    # 才发生，用户更没有理由怀疑。回归验证两条独立发现都指向这里。
-                    _ctx = self._prepare_context(
-                        query=str(degraded_search.get("query") or ""),
-                        rerank_audit=rerank_audit, **ctx_kwargs,
-                    )
-                    _relaxed_intent, candidates, _norm2 = _ctx[0], _ctx[1], _ctx[2]
-                    _resolution2, _decision2 = _ctx[7], _ctx[5]
-                    if candidates:
-                        intent = _relaxed_intent
-                        normalized = _norm2
-                        retrieved_dataset_names, retrieved_urls = _collect_candidate_debug(candidates)
-                        _, retrieved_data_payload = _serialize_retrieved_data(candidates)
-                        fac = self.retriever.facets(normalized, intent, facet_filters)
-                        # interpretation / search_trace 也必须刷新：不刷的话同一份响应里
-                        # 一边返回 N 条结果，一边白纸黑字写着「已弃权、硬过滤 skipped、命中 0 条」。
-                        _interp = _resolution2.as_dict()
-                        _interp["effective_sources"] = list(_resolution2.sources or ["10x Genomics"])
-                        _interp["intent"] = intent_projection(intent)
-                        _trace2 = _build_search_trace(_resolution2, intent, _ctx[8], _decision2,
-                                                      int(fac["total"]))
-                        _update_trace_step(_trace2, "llm_polish", "skipped", "降级档不做说明润色。")
-                        fac_fields.update({
-                            "result_total": fac["total"], "facets": fac["groups"],
-                            "active_filters": active_filters(intent),
-                            "coverage_caveats": self.retriever.coverage_caveats(normalized, intent, facet_filters),
-                            "unused_query_terms": intent.unused_query_terms,
-                            "or_handling": intent.or_handling,
-                            "resolution_status": "degraded",
-                            "clarification": None,
-                            "interpretation": _interp,
-                            "search_trace": _trace2,
-                        })
-                        search_trace = _trace2
-                        _finalize_search_trace(search_trace, workflow_started_at)
-                        return WorkflowResult(
-                            answer=format_candidates_markdown(candidates),
-                            pipeline=FALLBACK_PIPELINE,
-                            llm_mode="disabled",
-                            # 这一档**真的联网问过 LLM**（judge_drop_terms 决定了要不要降级），
-                            # 所以 llm_attempted / llm_called 必须是 True。此前写死 False，
-                            # MCP 的 meta 于是对外报 deterministic=true / offline=true / llm_used=false
-                            # ——结果是 LLM 决定的，却告诉调用方「本次没用 LLM、完全离线」。
-                            # llm_succeeded / llm_response_used 仍为 False：LLM 只做了把关判断，
-                            # **没有**参与生成这段文案（文案仍是确定性渲染）。
-                            llm_attempted=True, llm_succeeded=False, llm_response_used=False,
-                            llm_called=True,
-                            fallback="rule-based formatting",
-                            fallback_reason=("degraded: 已按 LLM 判断忽略未收录词 "
-                                             + "、".join(degraded_search.get("ignored_terms", []))),
-                            retrieved_dataset_names=retrieved_dataset_names,
-                            retrieved_urls=retrieved_urls,
-                            retrieved_data=retrieved_data_payload,
-                            relaxation_options=[],
-                            degraded_search=degraded_search,
-                            **fac_fields,
-                        )
             relaxation_options: list[dict[str, object]] = []
             if not facet_filters:
                 relax_raw = self.retriever.relaxation_options(normalized, intent, top_k=top_k)

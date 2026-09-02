@@ -294,7 +294,7 @@ Without the extension or an LLM, the system falls back to the built-in planner a
 
 ## Development & testing
 
-Environment, architecture, HTTP endpoints, extension points, and the verification matrix for developers: see [DEVELOPMENT.md](DEVELOPMENT.md). The current Web API version is `2.9.1`. Manifest-driven unified quality gates are the preferred path for development and delivery:
+Environment, architecture, HTTP endpoints, extension points, and the verification matrix for developers: see [DEVELOPMENT.md](DEVELOPMENT.md). The current Web API version is `3.0.0`. Manifest-driven unified quality gates are the preferred path for development and delivery:
 
 ```powershell
 $Python = '.\.venv\Scripts\python.exe'
