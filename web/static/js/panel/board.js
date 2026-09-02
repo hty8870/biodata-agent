@@ -5,7 +5,7 @@
    （活绑定只读）、results 的 enterResultsLayout/setFacetState/resetFacetState/toggleLenient 与四个
    分面状态（活绑定只读）、facets 的 toggleQueryHit/facetStageSubmit/facetStageCancel/placeFacetBar、
    progress 的 resetSubmitButton、usage_log/usage_core、shell 的 getConfig、interactions 的
-   autoGrow/getDateRange 经 import 取；act（actEnabled/actDispatchPlan）与
+   autoGrow/getDateRange 经 import 取；act（actEnabled/actDispatchPlanChain）与
    task_pack（previewTaskPack/tpCountFromUtterance）同批互转走 import（board↔act 成环，
    但绑定都只在函数体内使用，ESM 允许）。
    core/search/results/facets/interactions/browse/accounts 同样经 import 取本文件导出
@@ -19,7 +19,7 @@ import { _facetFilters, _lenientDims, _queryHits, _suppressed,
 import { deriveRescueOptions, isZeroHitBatch, latestActiveBatchId, selectDisplayBatch } from "#batch_select";
 import { facetStageCancel, facetStageSubmit, placeFacetBar, toggleQueryHit } from "#facets";
 import { estimateDuration, finishProgress, progressActive, resetSubmitButton, startProgress } from "#progress";
-import { actDispatchPlan, actDispatchPlanList, actEnabled } from "#act";
+import { actDispatchPlanChain, actEnabled } from "#act";
 import { arxActive, arxFinish, arxTailHtml, arxVisible } from "#act_run";
 import { previewTaskPack, tpCountFromUtterance } from "#task_pack";
 import { usageLog, usageEnabled, usageSetEnabled, usageConsentGiven, requestUsageConsent, usageScope } from "#usage_log";
@@ -2797,11 +2797,9 @@ function ubDispatchAction(said, plan, fromChat, wasChat) {
         resetSubmitButton();
         return;
     }
-    /* 「不少于我」多意图（2026-09-01）：枚举探测的 bypass plan 带 additive intents 全清单
-       ——取消项**只回音**（与单 plan 取消档同一文案真源），执行项收集进 _activeIntents，
-       下方各档（先检索后派发 / 指路 / 就地派发）原样复用，只在最终派发点换成清单版
-       actDispatchPlanList；无 intents 字段（旧 plan 形状 / 单次探测兜底 / 图内产出）
-       则 _activeIntents 恒空、行为逐位不变。 */
+    /* 兼容旧 plan.intents 清单：取消项**只回音**（与单 plan 取消档同一文案真源），
+       执行项只用于先检索 requires_results 闸和全取消收尾；最终派发清单由 act.js 统一规范化。
+       Wave 3 后端不再生产 intents，此段在现行 plan 上自然为空。 */
     const _intents = Array.isArray(plan.intents)
         ? plan.intents.filter(function (p) { return p && p.kind === "exec"; })
         : null;
@@ -2826,8 +2824,8 @@ function ubDispatchAction(said, plan, fromChat, wasChat) {
             _activeIntents.some(function (p) { return !!p.requires_results; }))) {
         // 执行对象是**当前这批结果**（打包/引文/可行性…），屏上还没有：先按原话检索——
         // 动作词由检索侧剥离（queryForRetrieval）。开了「AI 执行」：检索落地后直接派发
-        // 这份已拿到的 plan（actAfterSearch 的 actPlan 档；多意图时顶层 plan 携带
-        // intents 全清单，actAfterSearch 依次派发）；没开就只检索不代劳。
+        // 这份已拿到的 plan（actAfterSearch 的 actPlan 档；共享规范链会接续
+        // pending_frontend 并去掉与顶层 plan 重复的动作）；没开就只检索不代劳。
         // keepConv 与 search 档同判据（A1：fromChat || wasChat）——chat-in-main 主框来的
         // 工具句也不许清掉前段对话。say 的存续分两态（owner 疑点 B）：keepConv 时 ubSubmit
         // 那句 say 还在（sayPushed 防双泡）；新时间线（hero 首句）会被 runRecommend 清场，
@@ -2876,27 +2874,14 @@ function ubDispatchAction(said, plan, fromChat, wasChat) {
     // （的 enterResultsLayout 块随 #curatePanel/#actReceipt 一起退役）。
     resetSubmitButton();   // 派发不检索（下载/写盘由行动流自报进度）——收表
     const pending = cbPendingMessage();
-    /* 「不少于我」直派尾巴（2026-09-01）：plan.pending_frontend = 图跑完后留给前端的
-       直派面动作（additive；绝不进 plan.steps——steps 非空是「后端已执行」所有权令牌）。
-       顶层 plan 派发完后依次接力；取消项不可能出现（turn 只放非取消项），防御性滤掉。 */
-    const _tails = (Array.isArray(plan.pending_frontend) ? plan.pending_frontend : [])
-        .filter(function (p) { return p && p.kind === "exec" && !p.cancelled; });
-    // 枚举清单在场则逐项串行派发（取消项已在上面回音过）；否则单 plan 档逐位不变。
-    const _dispatching = _activeIntents.length
-        ? actDispatchPlanList(_activeIntents, said)
-        : actDispatchPlan(plan, said);
+    /* 顶层 plan/兼容 intents 与 pending_frontend 只交给 act.js 的规范链拼接、去重、串行派发；
+       board 不再先派顶层 plan、再自行跑尾巴，避免同一动作执行两次。 */
+    const _dispatching = actDispatchPlanChain(plan, said);
     _dispatching.then(function (mark) {
         // 返回值契约：true=行动流全程呈现（标 action 不挂注记）；字符串=以注记挂上（取消/忙碌）；
         // false=不属执行（理论不可达：这里派发的必是 exec plan）。
         if (mark === true) cbMarkMessageAsAction(pending, "");
         else if (mark) cbMarkMessageAsAction(pending, mark);
-        if (_tails.length) {
-            actDispatchPlanList(_tails, said).then(function (tmark) {
-                if (tmark !== true && tmark) cbMarkLastAsAction(String(tmark));
-            }).catch(function (err) {
-                cbMarkLastAsAction("后续动作没有执行：" + String((err && err.message) || err));
-            });
-        }
     }).catch(function (err) {
         cbMarkMessageAsAction(pending, "这一步没有执行：" + String((err && err.message) || err));
     });
