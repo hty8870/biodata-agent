@@ -229,8 +229,8 @@ def test_decide_prompt_carries_the_checklist_discipline():
     诚实不变量第 4 条 + finish 契约），经同一装配进 scoped 各面双壳与 rescue 面双壳。"""
     faces = [p for rules in agent_exec._SCOPED_DECIDE_RULES_BY_SUITE.values()
              for p in rules.values()]
-    faces += [agent_exec._SCOPED_DECIDE_RULES_RESCUE["tools"],
-              agent_exec._SCOPED_DECIDE_RULES_RESCUE["json"]]
+    faces += [agent_exec._SCOPED_DECIDE_RULES_BY_SUITE["rescue"]["tools"],
+              agent_exec._SCOPED_DECIDE_RULES_BY_SUITE["rescue"]["json"]]
     for prompt in faces:
         assert "「已做 / 没做 / 条件不成立」" in prompt
         assert "做完一件不许就收工" in prompt
@@ -238,7 +238,8 @@ def test_decide_prompt_carries_the_checklist_discipline():
     # tools 壳的 finish 指令必须带 completion_report 必填（JSON 壳没有 finish 概念，不过此钉）。
     for rules in agent_exec._SCOPED_DECIDE_RULES_BY_SUITE.values():
         assert "completion_report" in rules["tools"]
-    assert "completion_report" in agent_exec._SCOPED_DECIDE_RULES_RESCUE["tools"]
+    assert "completion_report" in \
+        agent_exec._SCOPED_DECIDE_RULES_BY_SUITE["rescue"]["tools"]
 
 
 def test_finish_tool_requires_completion_report():

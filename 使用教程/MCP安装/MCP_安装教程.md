@@ -21,7 +21,7 @@
 - **项目应保持完整**：`mcp_server.py` 必须和同项目的 `src/`、数据与下载索引放在一起，不能只复制单个脚本。
 - **不会污染系统 Python**：下文把依赖装进项目外的专用虚拟环境。
 - **运行要求**：Python 3.10+。项目脚本安装固定版本的 MCP Python SDK；Codex 或 Claude Code 请使用各自当前可用的版本，具体命令以 `codex mcp --help` / `claude mcp --help` 的输出为准。
-- **版本口径（别混）**：本文里的 `mcp==1.28.1` 指 MCP **SDK**（Python `mcp` 包）的钉版；BioData MCP **服务**自身的版本是 **1.35.0**（`--version` 会打印 `biodata-mcp 1.35.0 | MCP SDK …`）。两者是两个不同的数——安装/升级 SDK 用 1.28.1，看服务版本用 1.35.0。
+- **版本口径（别混）**：本文里的 `mcp==1.28.1` 指 MCP **SDK**（Python `mcp` 包）的钉版；BioData MCP **服务**自身的版本是 **1.36.0**（`--version` 会打印 `biodata-mcp 1.36.0 | MCP SDK …`）。两者是两个不同的数——安装/升级 SDK 用 1.28.1，看服务版本用 1.36.0。
 
 安装只需要记住两个绝对路径：
 
@@ -56,7 +56,7 @@
 & "$env:LOCALAPPDATA\Programs\BioData Agent\BioDataAgentMCP.exe" --selfcheck
 ```
 
-末行出现 `SELFCHECK_OK tools=19 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；`--version` 可打印 `biodata-mcp 1.35.0 | MCP SDK …`。
+末行出现 `SELFCHECK_OK tools=19 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；`--version` 可打印 `biodata-mcp 1.36.0 | MCP SDK …`。
 
 ### 3. 注册到客户端（命令直接指向 exe）
 
@@ -413,7 +413,7 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 |---|---|---|
 | `biodata_status` | 健康自检、数据来源计数、下载索引状态与链接快照 | 无 |
 | `parse_constraints` | 只解析查询，展示来源、时间、硬约束和弃权状态 | `query`，可选 `sources`、`auto_parse` |
-| `recommend_datasets` | 自然语言查询 → 硬过滤、排序后的数据集候选 | `query`，可选 `sources`、`auto_parse`、`top_k`、`recall`、`use_llm`、`rerank`、`rerank_top_n`、`rerank_audit`、`strategy`、`auto_allow_llm`，以及**分面细化 / 忽略已识别的查询条件 / 把未标注的也纳入 / 发表时间范围**：`facet_filters`、`suppressed_constraints`、`lenient_dims`、`date_from`、`date_to`（见 5.1、5.2） |
+| `recommend_datasets` | 自然语言查询 → 硬过滤、排序后的数据集候选 | `query`，可选 `sources`、`auto_parse`、`top_k`、`recall`、`use_llm`、`rerank`、`rerank_top_n`、`strategy`、`auto_allow_llm`，以及**分面细化 / 忽略已识别的查询条件 / 把未标注的也纳入 / 发表时间范围**：`facet_filters`、`suppressed_constraints`、`lenient_dims`、`date_from`、`date_to`（见 5.1、5.2） |
 | `browse_datasets` | **全库浏览**（对齐网页目录页）：所有来源并列的数据集 + 物种/平台/来源/年份分面，按维度轻过滤 + 分页。无需 query | 可选 `species`、`platform`、`source`、`year`、`limit`、`offset` |
 | `get_dataset_introduction` | **单数据集确定性介绍**（只整理现有元数据、不调用 LLM） | `uid`（首选）/ `url` / `name`（可配 `source` 消歧） |
 | `assess_dataset_fair` | **单数据集 FAIR 元数据自检 + 投稿数据可用性说明（DAS）**（确定性、离线、不调用 LLM） | `uid`（首选）/ `url` / `name`（可配 `source` 消歧） |
@@ -453,7 +453,6 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 | `use_llm` | `false`(默认) / `true` | 让服务器端 LLM 把结果润色成自然语言 | **需 API key + 联网、结果非确定** |
 | `rerank` | `off`(默认) / `llm` | 用 LLM 对候选池重排 | **需 API key + 联网、结果非确定** |
 | `rerank_top_n` | 整数 / 省略 | 重排池大小 | — |
-| `rerank_audit` | `false`(默认) / `true` | **仅 `rerank="llm"` 时生效**：审核规则抽取的关键词是否正确完整，不完整则把原句改写成规则更易解析的句式、**重走一次检索**并择优（改写更差则退回原句）。存活集**非空**时在那次重排 LLM 调用里顺带审核；存活集**为空**（无匹配/规则弃权）时脱离重排、独立审核一次尝试改写救回 | **需 API key + 联网、结果非确定**；缺 key 时重排本身回退原序 → 审核不触发。决策 + 改写回显见 `meta.audit`（`mode` = `rerank` 顺带 / `empty` 独立） |
 | `strategy` | `fixed`(默认) / `auto` | `auto` 同时看候选压力与自由语义量：紧查询走规则；普通宽查询本地优先；复杂查询在授权后可走本地语义→LLM 精排 | MCP 本地后端仍须启动预热；默认不自动用 LLM |
 | `auto_allow_llm` | `false`(默认) / `true` | 只为 `strategy=auto` 授权复杂查询自动使用已配置 LLM | `true` 仍需有效 API 配置与网络；与只控制文字润色的 `use_llm` 不同 |
 | `auto_parse` | `true`(默认) / `false` | 自动识别查询里的高辨识度数据来源专名；时间与实体始终走共享规则解析 | 来源排除语义会安全跳过自动收窄，避免意图反转 |
@@ -581,7 +580,7 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 
 ## 6. 更新、项目移动与重复安装
 
-重复运行环境安装块会复用同一个虚拟环境。升级 MCP **SDK**（Python `mcp` 包）前应先查看项目的已验证版本；本教程当前固定 SDK 为 `mcp==1.28.1`（BioData MCP **服务**版本是 1.35.0，见「安装前先知道」的版本口径）。
+重复运行环境安装块会复用同一个虚拟环境。升级 MCP **SDK**（Python `mcp` 包）前应先查看项目的已验证版本；本教程当前固定 SDK 为 `mcp==1.28.1`（BioData MCP **服务**版本是 1.36.0，见「安装前先知道」的版本口径）。
 
 如果项目移动了位置，客户端中保存的绝对路径会失效。先重新运行第 1 节的变量与环境安装块，使 `$Python` 和 `$Server` 指向当前真实路径；再查看旧配置，确认后移除并重新添加：
 

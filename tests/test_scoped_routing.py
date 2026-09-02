@@ -2,9 +2,8 @@
 """scoped 路由（2026-08-17 过夜批）的常驻钉。
 
 scoped 路由成为**唯一路径**——route.request 常驻动词表
-route_consensus 恒为环首、三套件面常驻装配；原环境开关与 OFF 逐位一致负向钉
-随代码一并摘除（开关全名与快照归档于
-`docs/归档/旧逻辑_scoped路由替代_2026-08-17/`）。
+route_consensus 恒为环首、三套件面常驻装配；原环境开关与 OFF 负向钉
+随代码一并摘除，退役实现只保留在 private Git 历史中。
 
 本文件钉：route.request 登记齐、三套件面、分流共识（并行 2 票一致即定 / 分歧加投 /
 多数决 / 平票与无有效票机械兜底 general）、adjudicate 三道闸（套件外动词 / 逃生口
@@ -56,7 +55,7 @@ def test_route_request_registered():
 
 
 def test_suites_and_faces():
-    """三套件常驻装配（rank/rerank 同在注册表）。
+    """四套件常驻装配（rank/rerank 同在注册表）。
     2026-08-18 四工具批：结果处理四工具（compare/cite/compat/fair）同时入 search 与
     action 套件——检索后追问（「对比前两条」「找兼容的」「FAIR 自检」）实测分流到两条线
     都可能，只有一条线装它们会让另一线的追问无工具可选而误跑 rank。"""
@@ -69,13 +68,17 @@ def test_suites_and_faces():
         "compare.datasets", "cite.export", "compat.find", "fair.check",
     )
     assert set(AX._SUITE_LOOP_VERBS["general"]) == set(AX.LOOP_TOOLS)
-    # decide 套件面：套件工具 + route.request + finish + unsupported。
+    assert AX._SUITE_LOOP_VERBS["rescue"] == ("search.rerun",)
+    # decide 套件面：常规套件有换线与 unsupported；rescue 只有重检+收尾。
     for suite, verbs in AX._SUITE_LOOP_VERBS.items():
         names = [t["function"]["name"] for t in AX._DECIDE_TOOL_SPECS_BY_SUITE[suite]]
         for v in verbs:
             assert v.replace(".", "_") in names, (suite, v)
-        assert "route_request" in names and "finish" in names
-        assert "unsupported_next_step" in names
+        assert "finish" in names
+        if suite == "rescue":
+            assert names == ["search_rerun", "finish"]
+        else:
+            assert "route_request" in names and "unsupported_next_step" in names
     search_names = [t["function"]["name"] for t in AX._DECIDE_TOOL_SPECS_BY_SUITE["search"]]
     assert "curate_search_online" not in search_names  # 套件外工具不进面
     # understand 首步面：ROUTE 投影退役（search.new/refine.conditions/lookup.identifier
@@ -109,11 +112,10 @@ def test_suites_and_faces():
     for suite in AX._SCOPED_ROUTES:
         tools_rules = AX._SCOPED_DECIDE_RULES_BY_SUITE[suite]["tools"]
         assert tools_rules.count("有一件没交代系统会拒收收尾并重问一次") == 1, suite
-        assert tools_rules.count("$<N>.top[<i>]") == 2, suite
-    for shell in AX._SCOPED_DECIDE_RULES_RESCUE.values():
-        assert "$<N>.top[<i>]" not in shell
+        assert tools_rules.count("$<N>.top[<i>]") == (1 if suite == "rescue" else 2), suite
+    for shell in AX._SCOPED_DECIDE_RULES_BY_SUITE["rescue"].values():
         assert "诚实不变量" in shell and "finish 契约" in shell
-    rescue_tools = AX._SCOPED_DECIDE_RULES_RESCUE["tools"]
+    rescue_tools = AX._SCOPED_DECIDE_RULES_BY_SUITE["rescue"]["tools"]
     assert "search.rerun" in rescue_tools
     for off_face in ("compare.datasets", "cite.export", "compat.find", "fair.check",
                      "curate.check_updates", "curate.search_online", "curate.sync_updates"):
@@ -211,7 +213,7 @@ def test_route_consensus_node_records_votes():
     model = _RouteFakeModel([_rt("search", "找数据"), _rt("search", "找数据")])
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=model, decide_model=None, on_progress=None))
-    state = {"utterance": "找找人类肺癌数据", "entry_mode": "", "has_results": True,
+    state = {"utterance": "找找人类肺癌数据", "has_results": True,
              "result_total": 12, "current_query": "人类肺癌", "current_filters": [],
              "retrieval": None}
     out = AX.route_consensus(state, runtime=runtime)
@@ -225,8 +227,8 @@ def test_route_consensus_node_records_votes():
 def test_route_consensus_node_rescue_shortcircuit():
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=None, decide_model=None, on_progress=None))
-    out = AX.route_consensus({"entry_mode": "rescue", "utterance": "x"}, runtime=runtime)
-    assert out["route_scope"] == "" and "不分流" in out["trace"][0]["detail"]
+    out = AX.route_consensus({"route_scope": "rescue", "utterance": "x"}, runtime=runtime)
+    assert out["route_scope"] == "rescue" and "不发起分流投票" in out["trace"][0]["detail"]
 
 
 # ---------------------------------------------------------------- 混合诉求机械预闸
@@ -279,7 +281,7 @@ def test_route_consensus_node_hybrid_gate_shortcircuit():
     model = _RouteFakeModel([_rt("search"), _rt("search")])
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=model, decide_model=None, on_progress=None))
-    state = {"utterance": "检查10x更新，然后帮我找人类肺数据集", "entry_mode": "",
+    state = {"utterance": "检查10x更新，然后帮我找人类肺数据集",
              "has_results": False, "result_total": 0, "current_query": "",
              "current_filters": [], "retrieval": None}
     out = AX.route_consensus(state, runtime=runtime)
@@ -320,7 +322,7 @@ def test_route_consensus_never_sees_result_titles():
     model = _PromptSpyModel([_rt("search"), _rt("search")])
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=model, decide_model=None, on_progress=None))
-    state = {"utterance": "找找人类肺癌数据", "entry_mode": "", "has_results": False,
+    state = {"utterance": "找找人类肺癌数据", "has_results": False,
              "result_total": 0, "current_query": "", "current_filters": [],
              "retrieval": {"status": "results", "total": 5,
                            "top_titles": ["SENTINEL_TITLE_肺癌甲", "SENTINEL_TITLE_肺癌乙"]}}
@@ -341,7 +343,7 @@ def test_route_consensus_records_llm_usage():
     model = _PromptSpyModel([_rt("search"), _rt("search")], usage=usage)
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=model, decide_model=None, on_progress=None))
-    state = {"utterance": "找找人类肺癌数据", "entry_mode": "", "has_results": False,
+    state = {"utterance": "找找人类肺癌数据", "has_results": False,
              "result_total": 0, "current_query": "", "current_filters": [],
              "retrieval": None}
     out = AX.route_consensus(state, runtime=runtime)
@@ -360,7 +362,7 @@ def test_route_consensus_records_llm_usage():
 # ---------------------------------------------------------------- adjudicate 三道闸
 
 def _scoped_state(scope, steps_verbs=()):
-    return {"utterance": "找找人类肺癌的数据", "entry_mode": "", "route_scope": scope,
+    return {"utterance": "找找人类肺癌的数据", "route_scope": scope,
             "steps": [{"verb": v, "ok": True} for v in steps_verbs]}
 
 
@@ -402,7 +404,7 @@ def test_adjudicate_route_request_gates():
 def test_execute_writes_route_scope(monkeypatch):
     monkeypatch.setattr(AX, "_audit_loop_tool", lambda *a, **k: None)
     runtime = SimpleNamespace(context=SimpleNamespace(on_progress=None, chat_model=None))
-    state = {"utterance": "找找数据然后打包", "entry_mode": "", "route_scope": "search",
+    state = {"utterance": "找找数据然后打包", "route_scope": "search",
              "plan": {"verb": "none"}, "steps": [],
              "loop_plan": {"verb": "route.request",
                            "slots": {"target_route": "action", "reason": "要打包"}}}
@@ -426,7 +428,7 @@ def test_validate_suite_first_step_gate():
     runtime = SimpleNamespace(context=SimpleNamespace(on_progress=None, chat_model=None))
     # search 路线首步提议打包 → 套件闸违规（走 repair 一次）。
     out = AX.validate({
-        "utterance": "找找人类肺癌的数据，打包前5条", "entry_mode": "",
+        "utterance": "找找人类肺癌的数据，打包前5条",
         "route_scope": "search", "steps": [],
         "raw": {"verb": "pack.download", "quoted": "打包前5条"},
         "has_results": True, "result_total": 3,
@@ -434,7 +436,7 @@ def test_validate_suite_first_step_gate():
     assert out["violations"] and "不在本路线面内" in out["violations"][0]
     # search 路线首步 search.rerun → 过闸。
     out = AX.validate({
-        "utterance": "找找人类肺癌的数据", "entry_mode": "",
+        "utterance": "找找人类肺癌的数据",
         "route_scope": "search", "steps": [],
         "raw": {"verb": "search.rerun", "quoted": "找找人类肺癌的数据",
                 "query": "human lung cancer"},
@@ -444,8 +446,7 @@ def test_validate_suite_first_step_gate():
 
 
 def test_scoped_understand_face_helper():
-    tools, names, specs = AX._scoped_understand_face(
-        {"entry_mode": "", "route_scope": "search"})
+    tools, names, specs = AX._scoped_understand_face({"route_scope": "search"})
     verbs = set(names.values())
     # 2026-08-18 四工具批：结果处理四工具入检索首步面（检索后追问「对比/兼容/FAIR」）。
     assert verbs == {"rank", "rerank", "search.rerun", "curate.db_status", "none",
@@ -453,8 +454,10 @@ def test_scoped_understand_face_helper():
     assert {s.verb for s in specs} == {
         "rank", "rerank", "curate.db_status", "search.rerun", "none",
         "compare.datasets", "cite.export", "compat.find", "fair.check"}
-    # rescue → 不收窄（走 rescue 自己的面）。
-    assert AX._scoped_understand_face({"entry_mode": "rescue"}) == (None, None, None)
+    # rescue 也是正式套件：首步面只有 search.rerun / none。
+    _tools, rescue_names, rescue_specs = AX._scoped_understand_face({"route_scope": "rescue"})
+    assert set(rescue_names.values()) == {"search.rerun", "none"}
+    assert {s.verb for s in rescue_specs} == {"search.rerun", "none"}
 
 
 def test_parse_route_vote():

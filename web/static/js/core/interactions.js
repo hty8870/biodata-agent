@@ -18,6 +18,7 @@ import { cbChatInMain, cbLogPush, ubSubmit } from "#board";
 import { runRecommend, setLastRecommendData } from "#search";
 import { buildReusePack, setReuseScope } from "#reuse_pack";
 import { toggleFavFolderManage } from "#fav_folders";
+import { COPY, armTwoStepConfirm, resetTwoStepConfirm } from "./copy.js";
 
 export let LAST_INTERPRETATION = null;   // 最近一次后端真源；输入变化即失效，避免拿旧解析解释新句子
 /* 属主写口（约定 #4）：search.js applyRecommendResult 落地时写它（原裸赋值在 getter 桥上会 TypeError）。 */
@@ -168,11 +169,9 @@ function trapDialogFocus(event) {
 }
 
 /* 历史「清空」二段确认态的复位——按钮回原文案、摘 armed、清超时。renderHistory 每次渲染也会调它。 */
-let _histClearTimer = null;
 export function resetHistClear() {
     const b = $("histClear"); if (!b) return;
-    b.classList.remove("armed"); b.textContent = "清空";
-    if (_histClearTimer) { clearTimeout(_histClearTimer); _histClearTimer = null; }
+    resetTwoStepConfirm(b, COPY.common.clear);
 }
 
 /* 「复制接入提示词」单一真源（2026-08-22 帮助页首落地；后提为 export 供教程内
@@ -480,11 +479,8 @@ export function bind() {
     // 二段确认——第一次点进入确认态（3 秒内再点才执行，超时自动复位），空历史时禁用（renderHistory 同步）。
     $("histClear").addEventListener("click", () => {
         const b = $("histClear");
-        if (!b.classList.contains("armed")) {
-            b.classList.add("armed"); b.textContent = "再点一次确认清空";
-            _histClearTimer = setTimeout(resetHistClear, 3000);
-            return;
-        }
+        if (!armTwoStepConfirm(b, { idleText: COPY.common.clear,
+                                   confirmText: COPY.common.confirmClear })) return;
         resetHistClear();
         writeJSON(nsKey(LS.hist), []); renderHistory(); toast("历史已清空");
     });

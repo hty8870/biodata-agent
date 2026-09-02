@@ -35,11 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="启用重排时喂给 LLM 的候选池大小（默认 12；仅在 --rerank llm 下生效）",
     )
     parser.add_argument(
-        "--rerank-audit", action="store_true",
-        help="重排时顺带让 LLM 审核规则抽词是否正确完整，不完整则改写原句、重走一次检索并择优"
-             "（仅在 --rerank llm 下生效；默认关）",
-    )
-    parser.add_argument(
         "--recall", choices=["off", "dense", "cross_encoder"], default="off",
         help="可选本地语义重排（默认 off；只调整已通过条件筛选的候选顺序，模型没装好则保持原顺序）。"
              "cross_encoder=本地重排模型 bge-reranker-v2-m3（推荐）；dense=本地稠密嵌入。"
@@ -201,7 +196,6 @@ def main() -> int:
             provider=provider,
             rerank_backend=args.rerank,
             rerank_top_n=args.rerank_top_n,
-            rerank_audit=args.rerank_audit,
             recall_backend=args.recall,
             recall_alpha=args.recall_alpha,
             strategy=args.strategy,
@@ -235,14 +229,6 @@ def main() -> int:
             lines.append(
                 f"Strategy(auto): tier={d.get('tier')} → recall={d.get('recall_backend')} "
                 f"rerank={d.get('rerank_backend')}（通过筛选的候选 {d.get('signals', {}).get('n_survivors')} 条）"
-            )
-        if workflow_result.audit:
-            a = workflow_result.audit
-            rw = a.get("rewritten_query") or ""
-            lines.append(
-                f"Audit: triggered={'true' if a.get('triggered') else 'false'} "
-                f"used={'true' if a.get('used') else 'false'} reason={a.get('reason')}"
-                + (f" 改写→「{rw}」（{a.get('n_before')}→{a.get('n_after')} 条）" if rw else "")
             )
         prefix = "\n".join(lines) + "\n\n"
 

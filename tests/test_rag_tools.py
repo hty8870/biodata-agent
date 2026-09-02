@@ -218,7 +218,8 @@ def test_loop_rank_no_display_skips_payload(fake_pipeline):
     assert len(out["top"]) == 3 and out["top"][0]["dataset_name"] == "DS0"
     assert out["displayed"] is False and out["batch"] is None
     assert calls and calls[0]["query"] == "human lung cancer"
-    assert calls[0]["use_llm"] is False and calls[0]["rerank_audit"] is False
+    assert calls[0]["use_llm"] is False
+    assert "rerank_audit" not in calls[0]
 
 
 def test_loop_rank_display_produces_batch(fake_pipeline):
@@ -360,7 +361,7 @@ def test_loop_rerank_fail_closed_when_date_lost(fake_pipeline, monkeypatch):
 # ---------------------------------------------------------------- 预算机械闸
 
 def _state_with_steps(verbs):
-    return {"utterance": "找找人类肺癌的数据", "entry_mode": "",
+    return {"utterance": "找找人类肺癌的数据",
             "steps": [{"verb": v, "ok": True} for v in verbs]}
 
 
@@ -403,7 +404,7 @@ def test_batch_extras_count_against_rag_budget():
     """decide 侧：同批只读消费的第 2..N 个调用必须
     对「已执行 + 首步 + 已采纳同批步」的合成 steps 增量裁决——对原始 state 裁决时
     一枚 decide 回 3 个 rerank 会全过（MAX_RERANK=1 形同虚设）。"""
-    state = {"utterance": "找找人类肺癌的数据", "entry_mode": "", "steps": []}
+    state = {"utterance": "找找人类肺癌的数据", "steps": []}
     calls = [{"name": "rank", "args": {"query": q, "quoted": "找找人类肺癌的数据"}}
              for q in ("a", "b", "c")]
     accepted, dropped = AX._batch_readonly_extras(
@@ -428,7 +429,7 @@ def test_execute_batch_fuse_rechecks_rag_budget(monkeypatch):
                             "query": str((slots or {}).get("query") or ""), "total": 1})
     runtime = SimpleNamespace(context=SimpleNamespace(on_progress=None, chat_model=None))
     state = {
-        "utterance": "找找人类肺癌的数据", "entry_mode": "", "plan": {"verb": "none"},
+        "utterance": "找找人类肺癌的数据", "plan": {"verb": "none"},
         "steps": [{"verb": "rank", "ok": True, "slots": {"query": "old"}}],
         "loop_plan": {"verb": "rank", "slots": {"query": "a"}},
         "loop_batch": [{"verb": "rank", "slots": {"query": "b"}}],

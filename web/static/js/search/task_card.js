@@ -22,6 +22,7 @@ import { $, escapeHtml } from "#core";
 import { USAGE_KINDS } from "#usage_core";
 import { usageLog } from "#usage_log";
 import { ladderTaskCardState, ladderTemplateOriginated } from "./ladder_core.js";
+import { closeModal, openModal, trapModalFocus } from "../core/copy.js";
 
 /* 当前会话：{recipe, original, onSubmit}。数据真源在发起方（ladder.js 的 chip 描述），
    本模块只持「这份弹窗正在对哪个模板/回调查事」的 UI 态。 */
@@ -46,19 +47,15 @@ function _open(chip, onSubmit) {
     if (fail) fail.hidden = true;
     const status = $("taskCardStatus");
     if (status) status.hidden = true;
-    modal.hidden = false;
-    document.body.classList.add("modal-lock");
     _returnFocus = document.activeElement;
-    if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    openModal(modal, { returnFocus: _returnFocus, initialFocus: ta });
+    if (ta) ta.setSelectionRange(ta.value.length, ta.value.length);
 }
 
 function _close() {
     const modal = $("taskCardModal");
-    if (!modal || modal.hidden) return;
-    modal.hidden = true;
-    document.body.classList.remove("modal-lock");
+    if (!closeModal(modal)) return;
     _state = null;
-    if (_returnFocus && document.body.contains(_returnFocus)) _returnFocus.focus();
 }
 
 function _submit() {
@@ -106,14 +103,7 @@ function _init() {
         const m = $("taskCardModal");
         if (!m || m.hidden) return;
         if (e.key === "Escape") { _close(); return; }
-        if (e.key !== "Tab") return;
-        const focusable = Array.prototype.filter.call(
-            m.querySelectorAll('button:not([disabled]), textarea, [href], [tabindex]:not([tabindex="-1"])'),
-            function (el) { return !el.hidden && el.getClientRects().length; });
-        if (!focusable.length) return;
-        const first = focusable[0], last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        trapModalFocus(e, m);
     });
 }
 

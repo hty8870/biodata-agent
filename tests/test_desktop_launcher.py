@@ -1228,10 +1228,10 @@ def test_redact_basic_auth_and_url_userinfo():
 
 def test_redact_url_userinfo_keeps_host_path():
     """URL userinfo 只掩 userinfo 段，保留主机与路径（邮件地址不误伤）。"""
-    line = "请访问 https://example.com/data 或发邮件给 a@b.com"
+    line = "请访问 https://example.com/data 或发邮件给 person@example.com"
     out = redact(line)
     assert "example.com/data" in out
-    assert "a@b.com" in out
+    assert "person@example.com" in out
 
 
 # ===========================================================================

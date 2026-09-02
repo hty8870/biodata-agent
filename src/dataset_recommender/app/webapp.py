@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import hmac
+import html as _html
 import io
 import ipaddress
 import json
@@ -108,7 +109,7 @@ DATA_DIR = PATHS.shipped_base_dir
 
 ENV_LOCK = threading.Lock()
 
-WEB_API_VERSION = "2.9.1"
+WEB_API_VERSION = "3.0.0"
 
 app = FastAPI(title="BioData Agent Web UI", version=WEB_API_VERSION)
 # 大列表/API JSON 在回环上也会占用显著的序列化与 WebView 传输时间。仅压缩 >=1KiB
@@ -214,14 +215,11 @@ class RecommendRequest(_ExperimentContract):
     provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False, description="大模型总开关：门控润色与一切请求级 LLM 能力")
     mock_llm: bool = Field(default=False)
-    polish: bool = Field(default=True, description="AI 润色推荐说明（只改说明文字，不动结果与排序）。总开关 use_llm 之下的独立子开关：use_llm=true 且 polish=false 时润色不启用，其余 LLM 能力（重排/审核）不受影响")
+    polish: bool = Field(default=True, description="AI 润色推荐说明（只改说明文字，不动结果与排序）。总开关 use_llm 之下的独立子开关")
     api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
     top_k: int | None = Field(default=None, ge=1, le=50, description="返回结果最大数量（默认 10，最大 50）")
     rerank: str = Field(default="off", description="可选 LLM 重排：off / llm")
     rerank_top_n: int | None = Field(default=None, ge=1, le=50, description="启用重排时喂给 LLM 的候选池大小")
-    rerank_audit: bool = Field(default=False, description="重排时顺带让 LLM 审核规则抽词是否正确完整，不完整则改写原句、重走一次检索并择优（仅 rerank=llm 时生效）。默认关；响应 meta.audit 回显决策")
-    degrade_with_llm: bool = Field(default=False, description="规则因未收录词弃权时，让 LLM 判断「这几个词能不能忽略」，判可以才真降级（resolution_status=degraded）。默认关；LLM 缺席/失败/输出解析不出来 → 保持弃权（fail-closed）。响应 degraded_search.llm_verdict/llm_reason/applied 回显决策")
-    action_audit: bool = Field(default=False, description="开了 LLM 时，让 LLM 核对「执行侧（下载/打包/导出）关键词的命中」：独立判断这句话是不是在要求下载/打包/导出，与规则命中 action_markers 对照，规则漏认时指路到打包入口。只核对+上报、绝不代劳（产包/下载仍走预览→确认）。默认关；仅真实（非 mock）LLM 开启时生效；LLM 缺席/失败 → fail-open。响应 meta.action_audit 回显决策")
     recall: str = Field(default="off", description="可选向量召回：off / dense（稠密嵌入） / cross_encoder（本地重排器，推荐）")
     strategy: str = Field(default="fixed", description="检索策略：fixed=使用显式 recall/rerank；auto=综合候选数量、语义信息量和可用后端，选择纯规则、本地语义、LLM 或两层组合。auto 会覆盖 recall/rerank 的显式取值")
     auto_allow_llm: bool = Field(default=False, description="strategy=auto 时是否允许在复杂查询中自动使用已配置 LLM；默认 false 避免意外联网")
@@ -1338,13 +1336,32 @@ def _json_utf8(payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
                         media_type="application/json; charset=utf-8")
 
 
+# 遥测 meta 默认只是公开占位符。部署环境通过进程环境注入，源码因而无需
+# 为 private/public 各维护一份 HTML，也不会把真端点/令牌提交进 git。
+_TELEMETRY_META_ENV = {
+    "http://<server-ip>:8471/v1/ingest": "BIODATA_TELEMETRY_ENDPOINT",
+    "<your-ingest-token>": "BIODATA_TELEMETRY_TOKEN",
+    "<server-ip>": "BIODATA_TELEMETRY_ALLOW_INSECURE",
+}
+
+
+def _index_html() -> str:
+    text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    for placeholder, env_name in _TELEMETRY_META_ENV.items():
+        value = str(os.environ.get(env_name) or "").strip()
+        if value:
+            text = text.replace(placeholder, _html.escape(value, quote=True))
+    return text
+
+
 # GET+HEAD：健康检查/预取工具会对 `/` 发 HEAD，裸 @app.get 会回 405；显式允许 HEAD 保持幂等。
 # Cache-Control: no-cache——HTML 骨架必须每次回源再验证（FileResponse 自带 ETag，未变则 304，成本一次往返）。
 # 缺了它浏览器会启发式缓存旧 HTML：旧骨架（没有新挂点）+ 新 JS（查询串被 StaticFiles 忽略、照样给新内容）
 # 混跑 = 新功能静默退回旧样式（2026-08-03 p10 后真机踩到「过时的侧边栏样式」正是这一族）。
 @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+def index() -> Response:
+    return Response(_index_html(), media_type="text/html; charset=utf-8",
+                    headers={"Cache-Control": "no-cache"})
 
 
 # 数据集介绍详情页（从模态弹窗改为**独立浏览器标签页**）。查询参数 uid/url/name/source 由页面 JS
@@ -2009,26 +2026,23 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         project_root=get_settings().project_root, within=_attach_workflow)
     workflow = _workflow_box["workflow"]
     auto_llm_available = _workflow_box["auto_llm_available"]
-    # T3 配额闸：润色/AI 重排/动作审核意图为真且将走服务端 key 时计数（BYOK 不计）。
+    # 配额闸：润色或 AI 重排将走服务端 key 时计数（BYOK 不计）。
     # cfg 已物化（request_llm_config），流式无涉——本端点非流式。
     _gate_llm_quota(
         request, cfg=request_llm_config, provider=provider,
-        use_llm=bool(use_llm or rerank_backend == "llm" or payload.degrade_with_llm),
+        use_llm=bool(use_llm or rerank_backend == "llm"),
         mock_llm=mock_llm, api_key=payload.api_key)
     meta = workflow.run_with_meta(
         RecommendParams(
             query=query,
             top_k=payload.top_k,
             # 润色是总开关（use_llm）之下的独立子开关（polish，2026-08-03 设置重构）：
-            # workflow 的 use_llm 只门控说明润色（重排/审核各有独立参数），两开关相与后传入。
+            # workflow 的 use_llm 只门控说明润色；重排由 rerank_backend 独立选择。
             use_llm=use_llm and bool(payload.polish),
             mock_llm=mock_llm,
             provider=provider,
             rerank_backend=rerank_backend,
             rerank_top_n=payload.rerank_top_n,
-            rerank_audit=bool(payload.rerank_audit),
-            degrade_with_llm=bool(payload.degrade_with_llm),
-            action_audit=bool(payload.action_audit),
             recall_backend=recall_backend,
             date_from=date_from,
             date_to=date_to,
@@ -2103,10 +2117,6 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
             "count": _deg.get("count", 0),
             "results": _rows_from_retrieved(_deg.get("results", [])),
             "active_filters": _deg.get("active_filters", []),
-            # LLM 把关档（degrade_with_llm=true 时非 None）：判断结果 + 一句理由 + 是否真的降级了。
-            "llm_verdict": _deg.get("llm_verdict"),
-            "llm_reason": _deg.get("llm_reason", ""),
-            "applied": bool(_deg.get("applied")),
         }
 
     return _json_utf8(
@@ -2159,14 +2169,6 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         # Web / MCP 共用的请求解释与实际执行步骤。前端据此展示“本次检索用了什么”，不再猜后端行为。
         "interpretation": getattr(meta, "interpretation", {}),
         "search_trace": getattr(meta, "search_trace", {}),
-        # rerank 关键词审核决策（additive；仅 rerank_audit=true 非 None）：
-        # {triggered,verdict,rewritten_query,used,reason,n_before,n_after,was_no_result}。
-        # 供前端展示"我把问题理解成了 XX" + 开发者信息回显。
-        "audit": getattr(meta, "audit", None),
-        # 执行侧（下载/打包/导出）关键词命中的 LLM 核对（additive；仅 action_audit=true 非 None）：
-        # {triggered,llm_is_action,llm_markers,rule_markers,missed_by_rule,agree,reason}。
-        # 只核对+上报，绝不代劳；前端据 missed_by_rule 在规则漏认时也指路到打包入口。
-        "action_audit": getattr(meta, "action_audit", None),
         # （additive）：本次检索配置指纹（语料快照/来源/排序/模型/版本），前端随遥测回传。
         # 组装失败（如语料装载异常）降级为 None，绝不掀翻检索。
         **_policy_response_fields(_policy_id_or_none(
@@ -3205,7 +3207,7 @@ def api_agent_search_rescue(payload: SearchRescueRequest, request: Request) -> J
                 retrieval=retrieval_summary,
                 current_query=payload.query,
                 current_filters=payload.current_filters,
-                entry_mode="rescue",
+                route_scope="rescue",
                 search_sources=payload.sources,
                 search_facet_filters=rescue_facets,
                 search_suppressed_constraints=rescue_suppressed,

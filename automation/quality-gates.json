@@ -85,7 +85,7 @@
       "id": "automation-contracts",
       "description": "Lock the manifest runner, workflow security posture, pinned actions, and dependency-lock contract.",
       "commands": [
-        ["{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_quality_gate.py", "tests/test_ci_contract.py", "tests/test_deploy_security_contract.py", "tests/test_metadata_distribution_contract.py", "tests/test_public_mirror_contract.py", "tests/test_release_workflow_contract.py", "tests/test_release_builder.py", "tests/test_project_skill.py", "tests/test_release_version_contract.py"]
+        ["{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_quality_gate.py", "tests/test_ci_contract.py", "tests/test_deploy_security_contract.py", "tests/test_metadata_distribution_contract.py", "tests/test_public_mirror_builder.py", "tests/test_public_mirror_contract.py", "tests/test_release_workflow_contract.py", "tests/test_release_builder.py", "tests/test_project_skill.py", "tests/test_release_version_contract.py", "tests/test_wave3_consolidation.py"]
       ],
       "required_tools": ["python"],
       "timeout_seconds": 120,

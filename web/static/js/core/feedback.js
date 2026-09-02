@@ -34,6 +34,7 @@ import { $, toast, cacheGeneration, copyTextAny, currentAccountScope } from "#co
 import { usageEnabledForScope, usageEventsForScope } from "#usage_log";
 import { feedbackClipboardText, feedbackDiagBuild, feedbackEntryBuild, feedbackNewId, feedbackTextState } from "./feedback_dialog_core.js";
 import { feedbackEnqueue, feedbackRemoveForScope, hasSendChannel as feedbackHasSendChannel } from "./feedback_core.js";
+import { closeModal, openModal, trapModalFocus } from "./copy.js";
 
 /* ---------- 模块内状态（仅 UI 态；数据真源在 feedback_core 队列） ---------- */
 
@@ -131,13 +132,12 @@ function _openDialog() {
     _renderDiagSummary();
     _renderCount();
     _setStatus("");
-    modal.hidden = false;
-    if (ta) ta.focus();
+    openModal(modal, { initialFocus: ta });
 }
 
 function _closeDialog() {
     const modal = $("feedbackModal");
-    if (modal) modal.hidden = true;
+    closeModal(modal);
     _dialog = null;
 }
 
@@ -235,14 +235,7 @@ function _init() {
         const m = $("feedbackModal");
         if (!m || m.hidden) return;
         if (e.key === "Escape") { _closeDialog(); return; }
-        if (e.key !== "Tab") return;
-        const focusable = Array.prototype.filter.call(
-            m.querySelectorAll('button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'),
-            function (el) { return !el.hidden && el.getClientRects().length; });
-        if (!focusable.length) return;
-        const first = focusable[0], last = focusable[focusable.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        trapModalFocus(e, m);
     });
 }
 

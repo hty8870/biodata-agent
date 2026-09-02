@@ -41,6 +41,7 @@ import { projectsContextSerialize, projectsDraftFromSearch, projectsLastCheckedT
     projectsSpecFromRequest, projectsStatusCounts } from "#projects_core";
 import { p4DetailMount, runProjectCheck, pendingDeltaCount, checkFailed,
     setWatchesRefreshedHook } from "#project_updates";   // 更新检查交互（探测式降级，见挂载点）
+import { COPY, armTwoStepConfirm } from "./copy.js";
 
 /* ---------- 模块内状态（本文件唯一有状态区；其余函数每次从 DB 现读现渲） ---------- */
 let _detailId = null;          // 详情视图打开的追踪 id（null = 列表视图）
@@ -252,16 +253,9 @@ async function projectsRenderList() {
         if (useBtn) useBtn.addEventListener("click", (e) => { e.stopPropagation(); const p = projects.find((x) => x.project_id === id); if (p) projectsUseInChat(p); });
         const delBtn = el.querySelector("[data-prj-del]");
         if (delBtn) {
-            let delTimer = null;
-            const reset = () => { delBtn.classList.remove("armed"); delBtn.innerHTML = _TRASH_SVG; if (delTimer) { clearTimeout(delTimer); delTimer = null; } };
             delBtn.addEventListener("click", (e) => {
                 e.stopPropagation();
-                if (!delBtn.classList.contains("armed")) {
-                    delBtn.classList.add("armed"); delBtn.textContent = "再点确认";
-                    delTimer = setTimeout(reset, 3000);
-                    return;
-                }
-                clearTimeout(delTimer);
+                if (!armTwoStepConfirm(delBtn, { idleHtml: _TRASH_SVG, confirmText: "再点一次确认删除" })) return;
                 artifactsDeleteProject(_scope(), id).then(() => {
                     if (_ctxCard && _ctxCard.id === id) { _ctxCard = null; _renderCtxCard(); }
                     if (_detailId === id) _detailId = null;
@@ -358,8 +352,8 @@ function renderProjectDetail(p) {
         + checkHtml   // 检查条件卡靠前（追踪的可检查规格是复查/更新的入口，先于研究目标）
         + '<div class="prj-sec"><div class="prj-sec-title">研究目标<span class="prj-sec-note">候选 ' + (p.candidates || []).length + " · 待核验 " + counts["待核验"] + " · 已核验 " + counts["已核验"] + " · 已排除 " + counts["已排除"] + "</span></div>"
         + goalHtml + "</div>"
-        + condList("纳入条件", p.include_conditions, "include")
-        + condList("排除条件", p.exclude_conditions, "exclude")
+        + condList(COPY.conditions.include, p.include_conditions, "include")
+        + condList(COPY.conditions.exclude, p.exclude_conditions, "exclude")
         + '<section class="prj-sec"><div class="prj-sec-title">候选</div>'
         + '<div class="prj-cand-list">' + (candNodes.length ? "" : '<div class="prj-muted-text">还没有候选。</div>') + "</div></section>"
         + "</div>";
@@ -413,14 +407,8 @@ function bindProjectDetailEvents(body, p) {
 
     /* 删除追踪（二段确认：armed 模式，3 秒内再点才执行） */
     const delBtn = body.querySelector("[data-prj-del]");
-    let delTimer = null;
     if (delBtn) delBtn.addEventListener("click", () => {
-        if (!delBtn.classList.contains("armed")) {
-            delBtn.classList.add("armed"); delBtn.textContent = "确认删除？";
-            delTimer = setTimeout(() => { delBtn.classList.remove("armed"); delBtn.textContent = "删除追踪"; }, 3000);
-            return;
-        }
-        clearTimeout(delTimer);
+        if (!armTwoStepConfirm(delBtn, { idleText: "删除追踪" })) return;
         artifactsDeleteProject(_scope(), p.project_id).then(() => {
             if (_ctxCard && _ctxCard.id === p.project_id) { _ctxCard = null; _renderCtxCard(); }
             if (_detailId === p.project_id) _detailId = null;

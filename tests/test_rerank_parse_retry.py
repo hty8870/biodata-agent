@@ -1,8 +1,7 @@
 """解析失败的错误回灌专项钉。
 
 纪律（验证）：
-- 只重试「非空输出且机械结构无效」；空输出 / 异常 / partial（缺号排列、rewrite-only、
-  markers-only）绝不重试；
+- 只重试「非空输出且机械结构无效」；空输出 / 异常 / partial（缺号排列）绝不重试；
 - 「10x」型字母粘连不算数字（standalone 判定）；
 - 重试结局是 trace 的附加字段 parse_retry，不覆盖既有 reason；
 - 仍败照旧走既有 fail-open/fail-closed，行为与历史一致。
@@ -56,16 +55,6 @@ def test_grade_order_text_levels():
     assert rerank._grade_order_text("", 3) == "invalid"
 
 
-def test_grade_audit_and_json_paths():
-    assert rerank._grade_audit_text('{"order": [2, 1], "keywords_ok": true, "rewrite": ""}', 2) == "valid"
-    assert rerank._grade_audit_text('{"keywords_ok": true, "rewrite": ""}', 2) == "partial"
-    assert rerank._grade_audit_text("没排出来", 2) == "invalid"
-    assert rerank._grade_action_audit_text('{"is_action": true, "markers": [], "reason": "x"}') == "valid"
-    assert rerank._grade_action_audit_text('{"markers": ["打包"]}') == "partial"
-    assert rerank._grade_drop_terms_text('{"drop_ok": false, "reason": "x"}') == "valid"
-    assert rerank._grade_drop_terms_text('{"reason": "x"}') == "invalid"
-
-
 # ---------- rerank_candidates ----------
 def test_rerank_retry_recovers_on_invalid_first():
     caller = _ScriptedCaller(["（一段没有任何数字的散文）", "[3, 1, 2]"])
@@ -112,57 +101,6 @@ def test_rerank_empty_output_no_retry():
     assert "parse_retry" not in trace
 
 
-def test_rerank_audit_retry_recovers():
-    caller = _ScriptedCaller(["散文", '{"order": [2, 1, 3], "keywords_ok": true, "rewrite": ""}'])
-    audit_ctx = {"keywords": "human breast", "vocab_hint": ""}
-    out = rerank.rerank_candidates("q", _cands(3), backend="llm", llm_call=caller, audit_ctx=audit_ctx)
-    assert len(caller.calls) == 2
-    assert _names(out)[0] == "D1"
-    assert audit_ctx["verdict"] is True and audit_ctx["attempted"] is True
-
-
-# ---------- audit_query_only ----------
-# 空池独立审核档（audit_query_only / _grade_query_audit_text）
-# 随 search.rerun 工具化删除——原三个专项钉（回灌成功 / rewrite-only 不重试 / 双败 fail-open）
-# 一并移除；其余渠道（rerank/action/drop_terms）的回灌纪律不变。
-
-
-# ---------- audit_action_markers ----------
-def test_action_audit_retry_recovers():
-    caller = _ScriptedCaller(["是打包", '{"is_action": true, "markers": ["打包"], "reason": "要文件"}'])
-    is_action, markers, reason = rerank.audit_action_markers("帮我打包这些结果", llm_call=caller)
-    assert len(caller.calls) == 2
-    assert is_action is True and markers == ["打包"]
-
-
-def test_action_audit_markers_only_is_partial_no_retry():
-    caller = _ScriptedCaller(['{"markers": ["打包"]}'])
-    is_action, markers, _r = rerank.audit_action_markers("帮我打包这些结果", llm_call=caller)
-    assert len(caller.calls) == 1
-    assert is_action is None and markers == ["打包"]
-
-
-# ---------- judge_drop_terms（fail-closed）----------
-def test_drop_terms_retry_recovers():
-    caller = _ScriptedCaller(["可以忽略吧大概", '{"drop_ok": false, "reason": "核心限定"}'])
-    drop_ok, reason = rerank.judge_drop_terms("斑马鱼乳腺癌数据", ignored_terms=["斑马鱼"], llm_call=caller)
-    assert len(caller.calls) == 2
-    assert drop_ok is False and reason == "核心限定"
-
-
-def test_drop_terms_double_failure_stays_fail_closed():
-    caller = _ScriptedCaller(["散文", "还是散文"])
-    drop_ok, reason = rerank.judge_drop_terms("斑马鱼乳腺癌数据", ignored_terms=["斑马鱼"], llm_call=caller)
-    assert len(caller.calls) == 2
-    assert drop_ok is None and reason == ""            # fail-closed 语义不变
-
-
-def test_drop_terms_non_string_caller_output_no_crash():
-    caller = _ScriptedCaller([{"not": "a string"}])    # 敌对替身：返回非字符串
-    drop_ok, reason = rerank.judge_drop_terms("斑马鱼乳腺癌数据", ignored_terms=["斑马鱼"], llm_call=caller)
-    assert drop_ok is None and reason == ""            # 不炸、不重试、fail-closed
-
-
 # ---------- _LAST_PARSE_RETRY 并发隔离 + 无跨请求残留 ----------
 def test_parse_retry_outcome_isolated_under_concurrency():
     """模块级 dict 时代，两线程交错写同一 channel 会互踩（A pop 到 B 的结局）。
@@ -189,16 +127,15 @@ def test_parse_retry_outcome_isolated_under_concurrency():
 
 
 def test_parse_retry_residue_does_not_cross_contexts():
-    """query_audit/action_audit/drop_terms 三渠道写入后无人消费——模块级时代残留会活到
-    下一次同渠道 valid 首答才被顺手清掉（跨请求的死状态）。ContextVar 后新上下文恒为空。"""
+    """重排重试状态不得跨请求残留。"""
     import contextvars
 
     rerank._maybe_retry_parse("（散文）", "p", caller=lambda _p: "[1, 2]",
                               validate=lambda t: "valid" if t == "[1, 2]" else "invalid",
-                              contract_zh="x", channel="query_audit")
-    assert rerank._parse_retry_take("query_audit") == "recovered"   # 本上下文里读得到
+                              contract_zh="x", channel="rerank")
+    assert rerank._parse_retry_take("rerank") == "recovered"   # 本上下文里读得到
     fresh = contextvars.Context()                                   # 新上下文 = 新请求
-    assert fresh.run(rerank._parse_retry_take, "query_audit") is None
+    assert fresh.run(rerank._parse_retry_take, "rerank") is None
 
 
 # ---------- 宽 except 回退必须留下异常本体 ----------

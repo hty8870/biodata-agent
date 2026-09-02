@@ -30,6 +30,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
+FAKE_API_KEY = "sk-" + "abcdefghijklmnopqrstuvwxyz0123"
+
 ROOT = Path(__file__).resolve().parents[1]
 _SERVICE_DIR = ROOT / "services" / "telemetry-receiver"
 if str(_SERVICE_DIR) not in sys.path:
@@ -610,7 +612,7 @@ def test_export_feedback_jsonl(db, tmp_path):
         "feedback_records": [
             {"feedback_id": "fb-a1", "identity": "profile-fb-0001", "with_diag": True,
              "authorized_at": "2026-08-22T07:00:00Z",
-             "text": "建议结果页加导出按钮，key 是 sk-abcdefghijklmnopqrstuvwxyz0123 别外传",
+             "text": f"建议结果页加导出按钮，key 是 {FAKE_API_KEY} 别外传",
              "diag": {"available": True, "errors": 1, "features": {"search": 3}}},
             {"feedback_id": "fb-a2", "identity": "profile-fb-0001", "with_diag": False,
              "authorized_at": "2026-08-22T07:30:00Z", "text": "没有诊断信息的意见", "diag": None},
@@ -625,7 +627,7 @@ def test_export_feedback_jsonl(db, tmp_path):
         "feedback_records": [
             {"feedback_id": "fb-a1", "identity": "profile-fb-0001", "with_diag": True,
              "authorized_at": "2026-08-22T07:00:00Z",
-             "text": "建议结果页加导出按钮，key 是 sk-abcdefghijklmnopqrstuvwxyz0123 别外传",
+             "text": f"建议结果页加导出按钮，key 是 {FAKE_API_KEY} 别外传",
              "diag": {"available": True, "errors": 1, "features": {"search": 3}}},
         ],
     })
@@ -656,7 +658,7 @@ def test_export_feedback_jsonl(db, tmp_path):
     # 原始 API Key 不出现在任何产物
     for fname in ("feedback.jsonl", "quality_report.md", "review.html"):
         text = (out / fname).read_text(encoding="utf-8")
-        assert "sk-abcdefghijklmnopqrstuvwxyz0123" not in text, f"{fname} 泄漏原始 API Key"
+        assert FAKE_API_KEY not in text, f"{fname} 泄漏原始 API Key"
 
     # report 计数（处理条数口径，与 mcp_total 一致：含跨包重传行）与 schema 漂移
     summary = export._export(export._make_engine(str(path)), tmp_path / "export2",

@@ -12,10 +12,18 @@
   4. 每个动词声明的槽位都有**专职**描述（`_SLOT_DESCRIPTIONS_ZH`；limit 为内置槽豁免）——
      回退泛模板是「问题温床」时期的兜底（问题：泛泛模板让 LLM 随手填
      唯一眼熟的源），新槽位没写专职描述 = 构建期就红。
+  5. 非流式前端 fallback 的 `FLOW_VERB_LABEL` 与后端注册表中文名逐项相等；
+     `route.request` 是路由元事件，不渲染工具行，故唯一排除。
 """
+import re
+from pathlib import Path
+
 from dataset_recommender.agent import action_plan as AP
 from dataset_recommender.agent import agent_exec
 from dataset_recommender.agent import agent_schemas
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_loop_tools_and_result_models_are_in_lockstep():
@@ -55,3 +63,16 @@ def test_every_declared_slot_has_a_dedicated_description():
             assert slot in agent_schemas._SLOT_DESCRIPTIONS_ZH, (
                 f"{spec.verb} 的槽位 {slot} 没有专职描述——会回退泛模板（2026-08-03 的病灶温床）"
             )
+
+
+def test_flow_trace_fallback_labels_match_loop_registry():
+    text = (ROOT / "web/static/js/core/flow_trace.js").read_text(encoding="utf-8")
+    match = re.search(r"const FLOW_VERB_LABEL = \{(.*?)\};", text, re.DOTALL)
+    assert match, "flow_trace.js 缺少 FLOW_VERB_LABEL fallback 表"
+    actual = dict(re.findall(r'"([^"]+)"\s*:\s*"([^"]+)"', match.group(1)))
+    expected = {
+        verb: entry["label_zh"]
+        for verb, entry in agent_exec.LOOP_TOOLS.items()
+        if verb != "route.request"
+    }
+    assert actual == expected

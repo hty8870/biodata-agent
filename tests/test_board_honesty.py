@@ -128,11 +128,15 @@ def test_lenient_footnote_states_the_third_case():
     这不是措辞偏好——检索侧的宽容判定调的是「这一项填全了没有」，
     来源标注不完整的数据集即便写着别的取值也会被纳入。少说这一句，用户会以为只纳入了空白的那些。
     """
-    note = board.COPY["zone_lenient_note"]
+    root = Path(board.__file__).resolve().parents[3]
+    copy_js = (root / "web/static/js/core/copy.js").read_text(encoding="utf-8")
+    assert 'lenient: Object.freeze' in copy_js
+    note = copy_js.split('lenient: Object.freeze', 1)[1].split('suppressed:', 1)[0]
     assert "没填" in note
     assert "填得不全" in note or "抽样" in note
     # 反过来，绝不能承诺一句代码并不成立的话。
     assert "已经标注成别的值的仍然排除" not in note
+    assert "zone_lenient_note" not in board.COPY
 
 
 def test_suppressed_rows_never_show_stale_values():

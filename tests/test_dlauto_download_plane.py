@@ -1,16 +1,12 @@
 # -*- coding: utf-8 -*-
-"""混合句「检索+下载」单句 → 前端直派 pack.download plan 的 turn 级门。
+"""混合句「检索+下载」单句 → Agent 图内 plan-only 终态的 turn 级契约。
 
 背景：agent 图把「打包下载」这类**前端直派 exec 动词**（有 act.js runner、不在 LOOP_TOOLS 环内
-注册表）当「环外 generic」处理——decide 的 LOOP_TOOLS 闸拦下并丢弃，混合句「检索+下载」被裁成
-rank（下载子意图丢失）。修复在 turn 的 agent_path 分支加一道探测：含动作标记的句子先做一次
-plan_action 单次分类，命中 `_FRONTEND_EXEC_PLANE`（pack.download / reuse.pack）→ 采用该 plan
-（不走 agent 图），requires_results 由前端「先检索后派发」自动先检索再执行。
+注册表）过去被 turn 直接绕过图派发，导致规划、追踪、核销断链。现在子意图枚举只生成
+`intent_checklist` 与 `pending_frontend`；所有非取消动作都进 Agent 图，前端动词作为 plan-only
+正式终态，图后再由同一 act dispatcher 接力。
 
-本组测试全离线：stub `_default_llm_call`（探测 plan_action 的 LLM 出口）返回确定 plan；
-agent 图函数 stub 抛错，确保「命中直派」是唯一产 pack.download plan 的路（探测未命中的话
-会走到 stub 的 agent 图而抛 AgentUnavailable，进而走保底 plan_action——两者都产 pack.download
-时用 `agent_bypassed` 区分命中直派）。
+本组测试全离线：stub 枚举 LLM 出口与 Agent 图，同时检查图实际收到清单。
 """
 import json
 
@@ -27,31 +23,37 @@ _LLM_PACK_DOWNLOAD = json.dumps(
      "target": "results", "confidence": "high"}, ensure_ascii=False)
 
 
-def _agent_graph_boom(*a, **k):
-    raise agent_exec.AgentUnavailable("测试注入：agent 图失败（应被前端直派绕过）")
-
-
 @pytest.fixture(autouse=True)
 def _stub_agent_off(monkeypatch):
-    """每测试：agent 图函数 stub 抛错 + agent_available True，锁定「只有前端直派能产 plan」。
-    `_default_llm_call` 由各用例自行 stub（不同用例要不同最终动词）。"""
+    """每测试给 Agent 图一个可观测的 plan-only 替身。"""
     monkeypatch.setattr(agent_exec, "agent_available", lambda: True)
-    monkeypatch.setattr(agent_exec, "plan_with_agent_events", _agent_graph_boom)
-    monkeypatch.setattr(agent_exec, "plan_with_agent", _agent_graph_boom)
+    def fake_graph(text, **kw):
+        checklist = list(kw.get("intent_checklist") or [])
+        frontend = next((x for x in checklist if x.get("plane") == "frontend"), None)
+        if frontend:
+            plan = _mk_plan(frontend["verb"], frontend.get("quoted") or "")
+            plan.update(source="agent", llm_status="ok")
+        else:
+            plan = {"verb": "none", "verb_zh": "无操作", "kind": AP.NONE,
+                    "source": "agent", "llm_status": "ok", "slots": {}}
+        return plan, []
+    monkeypatch.setattr(agent_exec, "plan_with_agent_events", fake_graph)
+    monkeypatch.setattr(agent_exec, "plan_with_agent", fake_graph)
 
 
 def test_mixed_search_download_produces_frontend_download_plan(monkeypatch):
     """「检索+下载」混合句 → turn 探测命中前端直派面 → route=tool、plan=pack.download{limit:2}、
-    requires_results=True、agent_bypassed=True（未走 agent 图）。"""
+    requires_results=True，并且有图后 pending_frontend 接力记录。"""
     monkeypatch.setattr(AP, "_default_llm_call", lambda prompt, config: _LLM_PACK_DOWNLOAD)
     out = turn.route_turn("小鼠空间转录组，并下载top2", has_results=False, config=CFG)
     assert out["route"] == "tool"
     p = out["plan"]
     assert p["verb"] == "pack.download" and p["kind"] == AP.EXEC
     assert p["requires_results"] is True
-    assert p["slots"]["limit"] == 2
-    assert p["source"] == "llm"
-    assert p["agent_bypassed"] is True, "应走前端直派（探测命中），而非 agent 图"
+    assert p["pending_frontend"][0]["slots"]["limit"] == 2
+    assert p["source"] == "agent"
+    assert [x["verb"] for x in p["pending_frontend"]] == ["pack.download"]
+    assert "agent_bypassed" not in p
 
 
 def test_negative_download_marks_cancelled_not_executed(monkeypatch):
@@ -101,17 +103,15 @@ def test_partition_intents_empty_or_all_cancelled_goes_to_graph():
     assert turn._partition_intents(only_cancelled) == (None, None, None)
 
 
-def test_partition_intents_all_frontend_bypasses_with_full_list():
-    """非 cancelled 全在直派面 → bypass：顶层=首个非取消项、agent_bypassed=True、
-    intents 带**全清单**（含 cancelled 项，前端只回音不执行）。"""
+def test_partition_intents_all_frontend_still_goes_to_graph():
+    """非 cancelled 全在前端面也不绕过图；清单进图，非取消项进接力队列。"""
     intents = [_mk_plan("pack.download", "下载"),
                _mk_plan("reuse.pack", "复用打包", cancelled=True)]
     top, checklist, pending = turn._partition_intents(intents)
-    assert top is not None and top["verb"] == "pack.download"
-    assert top["agent_bypassed"] is True
-    assert [i["verb"] for i in top["intents"]] == ["pack.download", "reuse.pack"]
-    assert top["intents"][1]["cancelled"] is True
-    assert checklist is None and pending is None
+    assert top is None
+    assert [(x["verb"], x["plane"]) for x in checklist] == [
+        ("pack.download", "frontend")]
+    assert [x["verb"] for x in pending] == ["pack.download"]
 
 
 def test_partition_intents_inloop_splits_checklist_and_pending_frontend():
@@ -133,15 +133,14 @@ _LLM_TWO_FRONTEND = json.dumps([
 ], ensure_ascii=False)
 
 
-def test_enumeration_multi_frontend_intents_bypass_with_intents(monkeypatch):
-    """枚举出两件直派面动作 → bypass（agent 图 stub 抛错未被调用即证）且
-    plan.intents 带全两件——「做一个勾一个」的前端派发素材。"""
+def test_enumeration_multi_frontend_intents_goes_through_graph(monkeypatch):
+    """枚举出两件前端动作仍进图，两件都保留在图后接力队列。"""
     monkeypatch.setattr(AP, "_default_llm_call", lambda prompt, config: _LLM_TWO_FRONTEND)
     out = turn.route_turn("小鼠空间转录组，下载top2再打包复用", has_results=False, config=CFG)
     p = out["plan"]
-    assert out["route"] == "tool" and p["agent_bypassed"] is True
+    assert out["route"] == "tool" and "agent_bypassed" not in p
     assert p["verb"] == "pack.download"
-    assert [i["verb"] for i in p["intents"]] == ["pack.download", "reuse.pack"]
+    assert [i["verb"] for i in p["pending_frontend"]] == ["pack.download", "reuse.pack"]
 
 
 def test_enumeration_inloop_routes_to_graph_with_checklist_and_pending(monkeypatch):
@@ -177,7 +176,7 @@ def test_enumeration_inloop_routes_to_graph_with_checklist_and_pending(monkeypat
 
 def test_enumeration_failure_falls_back_to_single_probe(monkeypatch):
     """枚举通道失败（整单垃圾：quoted 非原文 → 逐项降 none）→ 回落单次探测，行为与
-    引入枚举前逐位一致（单次探测通道的 pack.download 仍命中直派）。"""
+    引入枚举前的分类能力一致，但单次探测产物也必须进图。"""
     def flaky(prompt, config):
         # 枚举调用（prompt 含「清单」特征）回垃圾；单次探测调用回合法单对象
         if "JSON 数组" in prompt:
@@ -187,5 +186,5 @@ def test_enumeration_failure_falls_back_to_single_probe(monkeypatch):
     monkeypatch.setattr(AP, "_default_llm_call", flaky)
     out = turn.route_turn("小鼠空间转录组，并下载top2", has_results=False, config=CFG)
     p = out["plan"]
-    assert p["verb"] == "pack.download" and p["agent_bypassed"] is True
-    assert "intents" not in p        # 单次探测兜底路径：无枚举清单字段
+    assert p["verb"] == "pack.download" and "agent_bypassed" not in p
+    assert [x["verb"] for x in p["pending_frontend"]] == ["pack.download"]

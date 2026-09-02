@@ -34,6 +34,8 @@
 """
 from __future__ import annotations
 
+from .labels import UNNAMED_DATASET
+
 from collections import Counter, OrderedDict
 from datetime import date
 from typing import Any
@@ -120,7 +122,7 @@ def _row(item: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "dataset_uid": str(item.get("dataset_uid") or ""),
-        "dataset_name": meaningful_metadata_text(item.get("dataset_name")) or "（未命名）",
+        "dataset_name": meaningful_metadata_text(item.get("dataset_name")) or UNNAMED_DATASET,
         "source": source,
         "identifier": ident["value"],
         "identifier_kind": ident["kind"],
