@@ -37,7 +37,7 @@ def test_anchored_patterns_match_real_secret_shapes() -> None:
     assert "jwt" in SP.find_secret_patterns(f"Authorization: Bearer {FAKE_JWT}")
 
 
-def test_round23_new_patterns_match_zhipu_hf_pem() -> None:
+def test_new_patterns_match_zhipu_hf_pem() -> None:
     """zhipu / huggingface / PEM 私钥三个新模式的正样本钉（拼接构造，源码不落完整字面）。"""
     assert "zhipu-api-key" in SP.find_secret_patterns(f"ZHIPU_API_KEY={FAKE_ZHIPU}")
     assert "huggingface-token" in SP.find_secret_patterns(f"token: {FAKE_HF}")
@@ -55,7 +55,7 @@ def test_no_false_positive_on_repo_native_shapes() -> None:
         "60f3ebd51da42c9c5a799619b75d0236e5a25aa974fcafc058e7d034428b22fe",  # sha256
         "https://open.bigmodel.cn/api/paas/v4/",      # 正常 URL
         "your_api_key_here",                          # 模板占位
-        # round23 新模式的良性探针：短 hf_ 标识、公钥/证书 PEM 头、md5 摘要带扩展名
+        # 2026-08 新模式的良性探针：短 hf_ 标识、公钥/证书 PEM 头、md5 摘要带扩展名
         "hf_" + "tooshort",
         "hf_model_download",
         "-----BEGIN PUBLIC KEY-----",

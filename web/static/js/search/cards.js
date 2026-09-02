@@ -8,6 +8,7 @@ import { USAGE_KINDS } from "#usage_core";
 import { usageCardRank, usageLog, usageLogCardAction } from "#usage_log";
 import { downloadTextBlob } from "#reuse_pack";
 import { openFavPopover } from "#fav_folders";
+import { COPY, closeModal, openModal } from "../core/copy.js";
 
 /* 国内可达性徽章的唯一构造点（结果卡与数据集详情页头共用同一粒徽章）：
    按下载 host 推断（非实测速度）；未识别的 host 返回空串，不臆造。 */
@@ -123,11 +124,12 @@ let _filesReturnFocus = null;
 const _introCache = new Map();
 
 export function fallbackIntroduction(it) {
-    const facts = [
-        ["数据来源", it.source], ["物种", it.species], ["组织", it.tissue], ["疾病", it.disease],
-        ["技术与平台", [it.platform, it.assay, it.chemistry].filter(Boolean).join(" / ")],
-        ["样本量", it.sample_size], ["发表时间", it.published_date], ["原始数据", it.raw_data_status],
-    ].map(([label, value]) => ({ label, value: value || "未说明" }));
+    const values = [it.source, it.species, it.tissue, it.disease,
+        [it.platform, it.assay, it.chemistry].filter(Boolean).join(" / "),
+        it.sample_size, it.published_date, it.raw_data_status];
+    const facts = COPY.introductionFacts.map((label, index) => ({
+        label: label, value: values[index] || "未说明",
+    }));
     // 检测基因数（10x 平台信息补充）：与后端 introduction 同口径——有才追加，无补充不加「未说明」行。
     if (it.gene_count) facts.push({ label: "检测基因数", value: it.gene_count });
     const pieces = [];
@@ -493,8 +495,7 @@ export function openFilesModal(it, trigger) {
     $("filesModalTitle").textContent = it.dataset_name || "数据集文件";
     $("filesModalSub").textContent = `共 ${it.n_files || 0} 个文件 · 点每行右侧「下载 ↓」保存到本地`;
     const body = $("filesModalBody"); body.scrollTop = 0;
-    back.hidden = false;
-    document.body.classList.add("modal-lock");
+    openModal(back, { returnFocus: _filesReturnFocus, initialFocus: $("filesModalClose") });
     if (MOTION) {
         gsap.set(back, { autoAlpha: 0 });
         gsap.to(back, { autoAlpha: 1, duration: 0.2, ease: "power2.out" });
@@ -502,7 +503,6 @@ export function openFilesModal(it, trigger) {
             { y: 0, scale: 1, autoAlpha: 1, duration: 0.42, ease: "power3.out" });
     }
     const loading = loadFilesInto(body, it);
-    $("filesModalClose").focus();
     return loading;
 }
 
@@ -512,9 +512,7 @@ export function closeFilesModal() {
     let doneRan = false;
     const done = () => {
         if (doneRan) return; doneRan = true;   // 幂等：onComplete 与兜底 timer 谁先到谁执行
-        back.hidden = true;
-        document.body.classList.remove("modal-lock");
-        if (_filesReturnFocus && document.body.contains(_filesReturnFocus)) _filesReturnFocus.focus();
+        closeModal(back);
     };
     if (MOTION) {
         gsap.to(back.querySelector(".modal"), { y: 10, scale: 0.98, autoAlpha: 0, duration: 0.2, ease: "power2.in" });

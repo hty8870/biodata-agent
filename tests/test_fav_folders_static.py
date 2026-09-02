@@ -81,8 +81,9 @@ def test_favorites_view_tabs_and_manage_panel() -> None:
         assert token in html, f"index.html 收藏视图缺骨架：{token}"
     ff = _read("web/static/js/panel/fav_folders.js")
     assert '"全部"' in ff or ">全部<" in ff or 'name: "全部"' in ff, "缺「全部」tab"
-    # 删除二段确认（仿 histClear 的 armed 模式）
-    assert "armed" in ff and "再点一次确认删除" in ff, "删夹缺二段确认"
+    # 删除二段确认必须走通用核，文案不在功能模块里再抄一份。
+    assert "armTwoStepConfirm" in ff, "删夹缺通用二段确认"
+    assert "confirmDelete" in _read("web/static/js/core/copy.js")
     assert "已归到默认收藏夹" in ff, "删夹后未提示条目归默认夹"
     # tab 选中态不持久化：存在复位函数，且 shell/accounts 都接入
     assert "function resetFavFolderState()" in ff

@@ -1851,12 +1851,11 @@
     .strategy-inline-field label { color: var(--text); font-size: 12px; font-weight: 600; }
     .strategy-inline-field label small { color: var(--muted); font-size: 10.5px; font-weight: 500; }
 
-    /* 设置三维度：B（自动选择）开 → 隐藏 A 的手动项与「自动补全关键词」行；
+    /* 设置三维度：B（自动选择）开 → 隐藏 A 的手动项；
        B 关 → 隐藏「允许自动使用 AI」行。显隐唯一收口在 .auto-owned，不再逐个 disabled。
        2026-08-04（用户）：自动模式下「AI 重排候选数」保留可调——后端 auto 分支本就消费 rerank_top_n
        （只覆盖 recall/rerank 的后端选择，不碰候选数），藏它只是 UI 层误伤。 */
-    .ranking-control.auto-owned .strategy-choice-grid,
-    .ranking-control.auto-owned .strategy-rerank-audit { display: none; }
+    .ranking-control.auto-owned .strategy-choice-grid { display: none; }
     .ranking-control:not(.auto-owned) .strategy-auto-ai { display: none; }
     /* AI 门控标注：LLM 依赖开关的统一「需 API / 已暂停」小标（未配 key 禁点的视觉语言）。 */
     .gate-tag { display: inline-block; margin-left: 5px; padding: 1px 6px; border-radius: 999px;

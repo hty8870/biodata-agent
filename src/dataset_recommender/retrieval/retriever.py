@@ -456,7 +456,6 @@ class DatasetRetriever:
         embedder: object | None = None,
         cross_scorer: object | None = None,
         facet_filters: list[dict] | None = None,
-        rerank_audit_ctx: dict | None = None,
         execution_trace: dict | None = None,
     ) -> list[RetrievedCandidate]:
         """rerank_backend / recall_backend 均为**显式参数**（默认 "off"），刻意不在此读环境变量：
@@ -464,10 +463,6 @@ class DatasetRetriever:
 
         facet_filters（默认 None）：分面细化的精确等值后置过滤，只在硬过滤后收窄存活集，
         官方评测不传 → 整段 no-op、确定性零影响。
-
-        rerank_audit_ctx（默认 None）：rerank 关键词审核的 in/out 载荷；仅在 rerank_backend=="llm"
-        且非 None 时生效——直透传给 rerank_candidates 的 audit_ctx，把关键词审核/改写结果写回该 dict
-        供 workflow 读取。官方评测不传（且 rerank=off）→ 整段 no-op、确定性零影响。
 
         recall_fusion（默认 "linear"）：dense 召回的融合法（"linear"=min-max+α / "rrf"=名次融合 k=60），
         仅 recall_backend=="dense" 时有效；官方评测不传 → 历史行为字节等价。"""
@@ -535,7 +530,6 @@ class DatasetRetriever:
                 backend=rerank_backend,
                 top_k=None,
                 config=llm_config,
-                audit_ctx=rerank_audit_ctx,
                 trace=(execution_trace.setdefault("rerank", {}) if execution_trace is not None else None),
             )
             candidates = reranked_pool + tail

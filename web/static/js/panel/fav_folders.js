@@ -24,6 +24,7 @@
  */
 import { DEFAULT_FAV_FOLDER_NAME, MOTION, $, addFavFolder, deleteFavFolder, escapeHtml, favFolderIdOrDefault, favFolderNameById, favFolderOf, fastqInfo, getFavFolders, getFavs, isFav, itemKey, moveFavToFolder, renameFavFolder, setFavs, toast, toggleFav, normalizeItem } from "#core";
 import { buildCard } from "#cards";
+import { COPY, armTwoStepConfirm } from "../core/copy.js";
 
 /* 收藏视图重渲钩子（browse.js 模块求值期经 setFavRerender 注册它的 renderFavorites）。 */
 let _rerenderFavs = null;
@@ -266,12 +267,7 @@ function renderFavFolderManage() {
         // 删除二段确认（仿 histClear 的 armed 模式）：3 秒内再点才执行，超时自动复位
         const del = row.querySelector(".fav-mng-del");
         del.addEventListener("click", () => {
-            if (!del.classList.contains("armed")) {
-                del.classList.add("armed"); del.textContent = "再点一次确认删除";
-                del._armedTimer = setTimeout(() => { del.classList.remove("armed"); del.textContent = "删除"; del._armedTimer = null; }, 3000);
-                return;
-            }
-            if (del._armedTimer) { clearTimeout(del._armedTimer); del._armedTimer = null; }
+            if (!armTwoStepConfirm(del, { idleText: COPY.common.delete })) return;
             const name = favFolderNameById(id);
             deleteFavFolder(id);
             if (_favViewTab === id) _favViewTab = null;
@@ -367,12 +363,7 @@ function _favUse(it) {
 }
 /* 删除收藏：二段确认（armed），取消收藏 + 重渲分组。 */
 function _favDel(it, btn) {
-    if (!btn.classList.contains("armed")) {
-        btn.classList.add("armed"); btn.textContent = "再点确认";
-        btn._armedTimer = setTimeout(() => { btn.classList.remove("armed"); btn.textContent = "删除"; btn._armedTimer = null; }, 3000);
-        return;
-    }
-    if (btn._armedTimer) { clearTimeout(btn._armedTimer); btn._armedTimer = null; }
+    if (!armTwoStepConfirm(btn, { idleText: COPY.common.delete })) return;
     toggleFav(it);   // 取消收藏（返回 false 表示移除；这里只需动作，不依赖返回值）
     toast(FAV_UNFAVED_COPY);
     if (_inLibFavs()) _fireFavRerender();

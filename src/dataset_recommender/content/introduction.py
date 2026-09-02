@@ -13,6 +13,7 @@ from typing import Any
 from ..retrieval.normalizer import MISSING_VALUE_TOKENS
 from ..retrieval.units import format_sample_size, sample_size_note
 from ..corpus.corpus import raw_data_false_is_guess
+from .labels import INTRO_FACT_LABELS, raw_fastq_status
 
 
 # 缺失哨兵的单一真源在 normalizer（见其 MISSING_VALUE_TOKENS 的注释：同一概念曾有三套定义，
@@ -72,13 +73,8 @@ def _raw_status(item: dict[str, Any]) -> str:
     shown = meaningful_metadata_text(item.get("raw_data_status"))
     if shown:
         return shown
-    if item.get("has_raw_data") is True:
-        return "✅ 包含 FASTQ"
-    if item.get("has_raw_data") is False:
-        if raw_data_false_is_guess(item):
-            return "⚪ 未确认"   # 猜测的 False 不许印成「无 FASTQ」
-        return "❌ 无 FASTQ"
-    return "⚪ 未说明"
+    return raw_fastq_status(
+        item.get("has_raw_data"), guessed_false=raw_data_false_is_guess(item))
 
 
 def build_dataset_introduction(item: dict[str, Any]) -> dict[str, Any]:
@@ -102,16 +98,11 @@ def build_dataset_introduction(item: dict[str, Any]) -> dict[str, Any]:
 
     technology = " / ".join(v for v in (platform, assay, chemistry) if v)
     gene_count = meaningful_metadata_text(item.get("gene_count"))
-    facts = [
-        {"label": "数据来源", "value": source},
-        {"label": "物种", "value": species or "未说明"},
-        {"label": "组织", "value": tissue or "未说明"},
-        {"label": "疾病", "value": disease or "未说明"},
-        {"label": "技术与平台", "value": technology or "未说明"},
-        {"label": "样本量", "value": sample_size or "未说明"},
-        {"label": "发表时间", "value": published or "未说明"},
-        {"label": "原始数据", "value": raw_status},
-    ]
+    values = (source, species or "未说明", tissue or "未说明",
+              disease or "未说明", technology or "未说明",
+              sample_size or "未说明", published or "未说明", raw_status)
+    facts = [{"label": label, "value": value}
+             for label, value in zip(INTRO_FACT_LABELS, values)]
     # 检测基因数（10x 平台信息补充旁挂表）：使用者最关注的两个指标之一，紧随样本量。
     # 仅在有补充时追加——无补充的记录保持原样（不加「未说明」行，避免整页噪音）。
     if gene_count:

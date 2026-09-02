@@ -192,7 +192,7 @@ def test_rollback_has_separate_budget_from_forward_writes():
         {"verb": "curate.search_online", "ok": True, "result": {"record_count": 1}},
         {"verb": "curate.sync_updates", "ok": True, "result": {"imported_total": 1}},
     ]
-    state = {"entry_mode": "", "route_scope": "general", "utterance": "回滚",
+    state = {"route_scope": "general", "utterance": "回滚",
              "steps": forward_steps}
     raw, _note, _declined, violation = AX._adjudicate_decide_obj(
         {"verb": "curate.rollback", "quoted": "回滚"}, state)
@@ -220,7 +220,7 @@ def _runtime():
 
 
 def _state(verb, steps, slots=None):
-    return {"utterance": "撤销刚才那步", "entry_mode": "",
+    return {"utterance": "撤销刚才那步",
             "plan": {"verb": verb, "slots": slots or {"quoted": "撤销刚才那步"}},
             "loop_plan": None, "steps": steps, "pending_reask_write": False}
 

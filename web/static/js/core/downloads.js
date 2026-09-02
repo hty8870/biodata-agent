@@ -47,6 +47,7 @@ import { $, API, downloadBlobAs, escapeHtml, isHttp, toast } from "#core";
 import { tpBytes } from "#act_core";
 import { USAGE_KINDS } from "#usage_core";
 import { usageLog } from "#usage_log";
+import { COPY } from "./copy.js";
 
 /* 队列条目的类别。kind 决定面板上的小签与（数据类之外的）来源区分；
    新类别只许加在这里——面板/遥测都按这张表取文案。 */
@@ -82,7 +83,7 @@ function _mkItem(raw) {
     return {
         id: "dlq" + _seq,
         kind: DLQ_KINDS[raw.kind] ? raw.kind : "other",
-        name: String(raw.name || raw.title || "（未命名）"),
+        name: String(raw.name || raw.title || COPY.common.unnamedDataset),
         url: String(raw.url || ""),
         bytes: Number(raw.bytes) || 0,
         uid: String(raw.uid || ""),

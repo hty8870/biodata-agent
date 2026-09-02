@@ -5,6 +5,7 @@
 import { LS, cacheGeneration, currentAccountScope, nsKey, nsKeyFor, readJSON, $ } from "#core";
 import { USAGE_KINDS, USAGE_AI_LABELS, usageActiveImpressionId, usageActiveTurnId,
     telemetryExperimentAssign, usageBeginTurn, usageFnv1a, usagePolicyRef, usageRandomId, usageSessionId } from "#usage_core";
+import { queueMigrateLegacyArray, queueRead, queueRemoveIds, queueWrite } from "./storage_queue.js";
 
 /* 使用反馈 · 记录层（开关 + 本机存储 + 触发上传）
  *
@@ -124,41 +125,27 @@ function _usagePrefix(scope) { return _usageBase(scope) + USAGE_EVENT_MARK; }
 
 function _migrateLegacyUsage(scope) {
     const oldKey = _usageBase(scope);
-    let legacy = [];
-    try { legacy = readJSON(oldKey, []); } catch (_e) { legacy = []; }
-    if (!Array.isArray(legacy) || !legacy.length) return;
-    const prefix = _usagePrefix(scope);
-    let complete = true;
-    legacy.forEach(function (raw, index) {
-        const event = (raw && typeof raw === "object") ? Object.assign({}, raw) : { t: 0, k: "err" };
-        event.event_id = String(event.event_id || _legacyEventId(event, index));
-        try { localStorage.setItem(prefix + event.event_id, JSON.stringify(event)); } catch (_e) { complete = false; }
+    queueMigrateLegacyArray(localStorage, {
+        legacyKey: oldKey, prefix: _usagePrefix(scope),
+        normalize: function (raw, index) {
+            const event = (raw && typeof raw === "object") ? Object.assign({}, raw) : { t: 0, k: "err" };
+            event.event_id = String(event.event_id || _legacyEventId(event, index));
+            return event;
+        },
+        id: function (event) { return event.event_id; },
     });
-    if (complete) { try { localStorage.removeItem(oldKey); } catch (_e) {} }
 }
 
 function _readUsage(scope) {
     _migrateLegacyUsage(scope);
-    const prefix = _usagePrefix(scope);
-    const out = [];
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith(prefix)) continue;
-            const event = JSON.parse(localStorage.getItem(key));
-            if (event && typeof event === "object") out.push(event);
-        }
-    } catch (_e) {}
-    out.sort(function (a, b) {
+    return queueRead(localStorage, _usagePrefix(scope), function (a, b) {
         const dt = (Number(a.t) || 0) - (Number(b.t) || 0);
         return dt || String(a.event_id || "").localeCompare(String(b.event_id || ""));
     });
-    return out;
 }
 
 function _dropUsageKeys(scope, ids) {
-    const prefix = _usagePrefix(scope);
-    (ids || []).forEach(function (id) { try { localStorage.removeItem(prefix + String(id)); } catch (_e) {} });
+    queueRemoveIds(localStorage, _usagePrefix(scope), ids);
     _usageCache.delete(scope);
 }
 
@@ -278,7 +265,7 @@ export function usagePersist(list, scope) {
         (Array.isArray(list) ? list : []).forEach(function (raw) {
             const event = Object.assign({}, raw || {});
             event.event_id = String(event.event_id || usageRandomId("u", Date.now()));
-            localStorage.setItem(prefix + event.event_id, JSON.stringify(event));
+            if (!queueWrite(localStorage, prefix, event.event_id, event)) throw new Error("storage_full");
         });
         _usageCache.delete(scope);
         return true;
@@ -419,7 +406,7 @@ export function usageLog(kind, payload, scopeOverride) {
     const entry = Object.assign({ event_id: usageRandomId("u", Date.now()), t: Date.now(), k: kind,
         sid: usageSessionId(), tid: usageActiveTurnId(), iid: usageActiveImpressionId() }, payload || {});
     const list = usageEventsForScope(scope);
-    try { localStorage.setItem(_usagePrefix(scope) + entry.event_id, JSON.stringify(entry)); }
+    try { if (!queueWrite(localStorage, _usagePrefix(scope), entry.event_id, entry)) throw new Error("storage_full"); }
     catch (_e) { usageNoteDropsForScope(scope, "storage_error", 1); return false; }
     list.push(entry);
     _usageCache.set(scope, list);

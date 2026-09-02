@@ -21,6 +21,7 @@ import { cbAdoptAsBranch, cbRestoreConversation, renderCondBoard, swSync } from 
 import { ACCOUNTS_READY } from "#accounts";
 import { renderFavFolderBar, renderFavFolderGroups, setFavRerender, setCatalogLookup, setCatalogEnsure } from "#fav_folders";
 import { syncReuseBar } from "#reuse_pack";
+import { COPY, armTwoStepConfirm } from "../core/copy.js";
 
 /* 注册反转：把 renderFavorites 注册给 fav_folders（它不再 import 本文件，沿 core.js
    setHistHooks 同一范式）。函数声明提升使模块求值期即可注册；fav_folders 侧全部调用点都在
@@ -396,14 +397,8 @@ export function renderHistory() {
         if (rr) rr.addEventListener("click", () => { $("queryInput").value = h.query; closeHistWin(); showView("query"); runRecommend(); });
         // 删除：二段确认（仿 histClear 的 armed 模式）——3 秒内再点才执行，超时自动复位
         const del = row.querySelector(".hist-del");
-        let delTimer = null;
         del.addEventListener("click", () => {
-            if (!del.classList.contains("armed")) {
-                del.classList.add("armed"); del.textContent = "确认删除";
-                delTimer = setTimeout(() => { del.classList.remove("armed"); del.textContent = "删除"; }, 3000);
-                return;
-            }
-            clearTimeout(delTimer);
+            if (!armTwoStepConfirm(del, { idleText: COPY.common.delete })) return;
             deleteHistoryGroup(g);
             toast("已删除这条对话");
         });

@@ -24,22 +24,11 @@ def test_non_positive_rerank_top_n_raises():
         M.recommend_datasets("人类肺癌", rerank_top_n=-3)
 
 
-def test_rerank_audit_accepted_and_echoed():
-    """rerank_audit=True 被接受（合法参数）；rerank 默认 off → 审核 self-gating 不触发，
-    meta.audit 非 None 且 triggered=False（离线确定性，不需 key）。
-     空池独立审核档已删，audit.mode 枚举只余 "rerank"/None
-    （本用例 rerank=off，mode 恒为 None）。"""
-    res = M.recommend_datasets("人类肺癌", rerank_audit=True)
-    assert isinstance(res, dict) and res.get("ok") is True
-    audit = res["meta"]["audit"]
-    assert audit is not None and audit["triggered"] is False
-    assert audit["mode"] is None
-
-
-def test_rerank_audit_default_meta_none():
-    """默认不传 rerank_audit → meta.audit 为 None（回显与旧行为一致）。"""
-    res = M.recommend_datasets("人类肺癌")
-    assert res["meta"]["audit"] is None
+def test_retired_llm_bypass_parameters_are_rejected():
+    """查询改写/动作判断只走 Agent；MCP 不再接受三条环外 LLM 旁路参数。"""
+    for name in ("rerank_audit", "degrade_with_llm", "action_audit"):
+        with pytest.raises(TypeError, match=name):
+            M.recommend_datasets("人类肺癌", **{name: True})
 
 
 def test_unknown_source_raises_bad_source():

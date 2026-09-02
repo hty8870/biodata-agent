@@ -14,6 +14,7 @@ from typing import Any
 from . import prompts
 from .config import load_env_candidates, _parse_bool
 from ..retrieval.units import format_sample_size
+from ..content.labels import RAW_FASTQ_NO, raw_fastq_status
 
 
 TABLE_HEADER = prompts.CURATOR_TABLE_HEADER
@@ -321,11 +322,7 @@ def _sample_size(count: str, unit: str) -> str:
 
 
 def _raw_status(value: bool | None) -> str:
-    if value is True:
-        return "✅ 包含 FASTQ"
-    if value is False:
-        return "❌ 无 FASTQ"
-    return "⚪ 未说明"
+    return raw_fastq_status(value)
 
 
 def _unit_explanation(units: set[str]) -> str:
@@ -366,7 +363,7 @@ def _rows_from_retrieved_records(retrieved_records: list[dict[str, Any]]) -> tup
             else:
                 raw_state = None
         raw_text = _raw_status(raw_state if isinstance(raw_state, bool) else None)
-        if raw_text == "❌ 无 FASTQ":
+        if raw_text == RAW_FASTQ_NO:
             has_false_fastq = True
 
         url = str(item.get("url") or "").strip()

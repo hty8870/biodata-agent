@@ -26,7 +26,7 @@ set -euo pipefail
 # 检测漂移；tests/test_release_version_contract.py 钉住 fallback 与 WEB_API_VERSION 同步）。
 # ---------------------------------------------------------------------------
 EXPECTED_SERVICE='dataset-recommender-web'
-EXPECTED_VERSION_FALLBACK='2.9.1'
+EXPECTED_VERSION_FALLBACK='3.0.0'
 EXPECTED_VERSION="$EXPECTED_VERSION_FALLBACK"
 
 # 复用的「哪份安装」由健康检查 /api/health 回填（同版本多份安装并存时绝不静默吸附）。

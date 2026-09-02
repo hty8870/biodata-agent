@@ -874,20 +874,12 @@ function renderActionHint(data) {
     const box = $("actionHint");
     if (!box) return;
     const ruleMarks = (data && data.action_markers) || [];
-    // LLM 核对（action_audit=true 时非 null）：规则是裸词匹配、换个说法就漏；LLM 判为下载/打包诉求但
-    // 规则一个都没认到（missed_by_rule）时，用 LLM 认出的说法也指路到打包入口——这正是「LLM 核对执行侧关键词命中」的价值。
-    const audit = data && data.action_audit;
-    const llmMissed = !!(audit && audit.triggered && audit.missed_by_rule && (audit.llm_markers || []).length);
-    const marks = ruleMarks.length ? ruleMarks : (llmMissed ? audit.llm_markers : []);
+    const marks = ruleMarks;
     const hasResults = data && Array.isArray(data.results) && data.results.length;
     if (!marks.length || !hasResults) { box.hidden = true; box.innerHTML = ""; return; }
     box.hidden = false;
     const chips = marks.map((t) => `<span class="uqt-term">${escapeHtml(String(t))}</span>`).join("");
-    // 规则没认到、靠 LLM 补认时点明「是 AI 核对认出来的」并附一句理由，别让用户以为规则也认到了。
-    const llmNote = (llmMissed && !ruleMarks.length)
-        ? `（AI 核对时认出这是下载/打包诉求：${escapeHtml(String(audit.reason || ""))}）`
-        : "";
-    box.innerHTML = `<span class="uqt-txt">你提到了 ${chips}${llmNote}——检索本身<b>不包含</b>这一步。`
+    box.innerHTML = `<span class="uqt-txt">你提到了 ${chips}——检索本身<b>不包含</b>这一步。`
         + `结果上方的「📦 下载这批数据」可以直接下载真实文件，也可一次生成清单、下载脚本、FAIR 自检与引文。</span>`;
 }
 

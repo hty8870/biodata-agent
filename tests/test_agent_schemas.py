@@ -597,7 +597,8 @@ def test_decide_rules_carry_reverse_condition_and_suspected_new_sentences():
         for prompt in rules.values():
             assert "反向条件" in prompt and "A 没有时 B 反而必须做" in prompt, \
                 "反向条件句必须随锚点进每个 scoped 面"
-    assert "A 没有时 B 反而必须做" in agent_exec._SCOPED_DECIDE_RULES_RESCUE["tools"]
+    assert "A 没有时 B 反而必须做" in \
+        agent_exec._SCOPED_DECIDE_RULES_BY_SUITE["rescue"]["tools"]
     assert "不许拿「新增里已经有了」提前替系统放弃" in \
         agent_exec.LOOP_TOOLS["curate.search_online"]["decide_zh"]
 

@@ -37,7 +37,6 @@
 """
 from __future__ import annotations
 
-import os
 import threading
 import hashlib
 import json
@@ -64,14 +63,12 @@ ROUTE_NONE = "none"
 
 _SUMMARY_TOP_TITLES = 3
 
-#: dl-auto-1 任务A/C：前端直派 exec 动词面。这些动词有前端 ACT_RUNNERS runner（act.js）、
-#: **不在** agent 图 LOOP_TOOLS 环内注册表（图内做不了）、且 requires_results 的「产出用户
-#: 下载/打包产物并**自动执行**」动词。agent 图把这类动词当「环外 generic」处理——decide 的
-#: LOOP_TOOLS 闸会拦下并**丢弃**（混合句「检索+下载」被裁成 rank，下载子意图丢失；无结果时
-#: 也不会空投）。turn 对含动作标记的句子先做一次 `plan_action` 单次分类（已验证能正确产出
-#: 本面的 plan），命中本面则采用、不走 agent 图，检索前置由前端「先检索后派发」自动完成。
+#: 前端执行 exec 动词面。这些动词有前端 ACT_RUNNERS runner（act.js）、**不在** agent 图
+#: LOOP_TOOLS 环内注册表（图内做不了）、且 requires_results；turn 的子意图枚举把它们记入
+#: `pending_frontend`，同时把其余事项送进同一个 agent 图，图结束后再交给统一 act dispatcher
+#: 接力。这样混合句「检索+下载」既不丢下载子意图，也不靠旁路跳过图。
 #: 刻意**不含** pack.preview（「先看清单」是预览、不自动下载——规则兜底档常把「打包」判成它，
-#: 放进平面会让预览句绕过 agent 图）；也不含 cite.export（那是环内 LOOP_TOOLS，图内就自动落盘）。
+#: 放进平面会误当真执行）；也不含 cite.export（那是环内 LOOP_TOOLS，图内就自动落盘）。
 #: 词表派生：名单唯一真源 = VerbSpec.frontend_dispatch 属性位
 #: （action_plan.py），此处不再私藏第二份 frozenset；tests/test_action_plan.py 有对拍钉。
 _FRONTEND_EXEC_PLANE: frozenset[str] = frozenset(
@@ -92,14 +89,16 @@ _LLM_ABSENT_REASON_ZH = {
 def _partition_intents(intents: list[dict[str, Any]]
                        ) -> tuple[dict[str, Any] | None, list[dict[str, Any]] | None,
                                   list[dict[str, Any]] | None]:
-    """子意图枚举清单 → ``(bypass_plan, intent_checklist, pending_frontend)`` 三元组。
+    """子意图枚举清单 → ``(None, intent_checklist, pending_frontend)``。
 
     「不少于我」下限合同的分流器（2026-09-01）：
     - 空清单 / 全 cancelled → ``(None, None, None)``：无 EXEC 待办，走 agent 图（现状）。
-    - 非 cancelled 项**全部** ∈ 前端直派面 → ``(首项, None, None)``：bypass agent 图，
-      顶层 plan = 首个非 cancelled 项（形状/回执与单次探测逐位兼容），additive
-      ``plan["intents"]`` 带**全清单**（含 cancelled 项——前端只回音不执行）。
-    - 含环内 EXEC → ``(None, checklist, pending_frontend)``：checklist 注入图初始
+    - 所有 active 项都进入 checklist 并注入图初始 state；图是唯一规划终态通道。
+    - 环内 EXEC 标 ``plane="inloop"`` 待核销；前端执行项标 ``plane="frontend"``，
+      同时进入 ``pending_frontend``，图结束后交给同一 act dispatcher。
+    - 返回三元组首项恒 None，保留调用形状只为兼容；不再存在 agent bypass。
+
+    checklist 注入图初始
       state（环内项 ``plane="inloop"`` 待核销；直派面项 ``plane="frontend"`` 如实告知
       decide「已交前端」、环内免核销），直派面项图跑完后经 additive
       ``plan["pending_frontend"]`` 挂回响应让前端接力——**绝不进 plan.steps**
@@ -110,11 +109,6 @@ def _partition_intents(intents: list[dict[str, Any]]
         return None, None, None
     frontend = [p for p in active if p.get("verb") in _FRONTEND_EXEC_PLANE]
     inloop = [p for p in active if p.get("verb") not in _FRONTEND_EXEC_PLANE]
-    if not inloop:
-        top = active[0]
-        top["agent_bypassed"] = True        # additive 留痕：走前端直派，agent 图未执行
-        top["intents"] = intents            # additive：全清单（含 cancelled，前端只回音）
-        return top, None, None
     checklist = [
         {"verb": p.get("verb") or "", "verb_zh": p.get("verb_zh") or "",
          "quoted": p.get("quoted") or "", "plane": "inloop"}
@@ -124,7 +118,7 @@ def _partition_intents(intents: list[dict[str, Any]]
          "quoted": p.get("quoted") or "", "plane": "frontend"}
         for p in frontend
     ]
-    return None, checklist, frontend
+    return None, checklist, (frontend or None)
 
 
 def _norm_scope_list(value: Any) -> list[str]:
@@ -513,12 +507,6 @@ def _make_retrieval_provider(holder: dict, *, agent_path: bool,
     return provider
 
 
-def _rag_concurrent_enabled() -> bool:
-    """回退开关（设计 v3.1 §7 迭代杠杆③）：`BIODATA_RAG_CONCURRENT=off` → 整体回旧
-    串行行为；缺省/on/其他值 → 开。读取点唯一（本模块），大小写/空白宽容。"""
-    return str(os.environ.get("BIODATA_RAG_CONCURRENT", "on") or "on").strip().lower() != "off"
-
-
 def _keyword_count_summary(text: str, *, sources: Any = None,
                            search_params: dict | None = None) -> dict:
     """杠杆②（设计 v3.2 §4.3）：图起跑前的**同步关键词快速计数段** → 摘要 dict。
@@ -582,345 +570,6 @@ def _recipe_narrow_plan(plan: dict | None, recipe_verbs: "frozenset[str] | None"
         narrowed["recipe_narrowed"] = verb   # additive：收窄证据，响应 recipe_note 据此生成
         return narrowed
     return plan
-
-
-def _route_turn_serial(
-    text: str,
-    *,
-    has_results: bool = False,
-    result_total: int = 0,
-    current_query: str = "",
-    current_filters: Any = None,
-    sources: Any = None,
-    config: LLMConfig | None = None,
-    llm_call: Callable[[str], str | None] | None = None,
-    keyword_mapping: dict | None = None,
-    use_agent: bool = True,
-    on_event: Callable[[str, dict], None] | None = None,
-    principal: str = "",
-    search_params: dict | None = None,
-    artifact_context: str = "",
-    suggested_recipe: str = "",
-) -> dict[str, Any]:
-    """回退开关的旧串行路径（`BIODATA_RAG_CONCURRENT=off`，设计 v3.1 §7）。
-
-    **逐位复刻 HEAD 版 `_route_turn_impl`**（并发施工前）：同步
-    pre-loop `rule_match_summary`（meta_out 接 WorkflowResult）→ **图前机械闸**发射
-    preliminary（on_event 在场 ∧ status==results ∧ total>0 ∧ **无动作标记**，标记句
-    绝对不发——旧闸语义）→ retrieval 摘要 dict 直接进图（initial state，无
-    provider/hook/route_extra_zh 三缝，图内逐位等于前）→ plan_action 保底
-    （retrieval 同源同步）；返回形状与 HEAD 版一致：`retrieval` 恒为摘要 dict（tool
-    路线亦然）、**无** `retrieval_note`、**无** `_preliminary_trace`。不发 flight、
-    不读 `BIODATA_RAG_CONCURRENT`（调用方已分流）。
-
-    调用方（`_route_turn_impl`）已完成编号快速道 / 「AI 执行」关的早退（两路径共享），
-    本函数从「AI 执行」开的规则匹配段开始，等价于 HEAD 版同段的原文照搬。
-    """
-    # 「AI 执行」开：规则匹配概览 + 原始查询一起进 LLM 分流（100%，无短路）。
-    # meta_out 接住本次 pre-loop 的 WorkflowResult（preliminary 载荷与闸判定用）。
-    prelim_meta_holder: list = []
-    retrieval = rule_match_summary(
-        text, sources=sources, search_params=search_params, meta_out=prelim_meta_holder)
-
-    # suggested_recipe 收窄面——allowlist 校验在 action_plan 单一真源；
-    # 非法 → None 并按普通路由处理（「忽略」注记由 route_turn 薄壳统一附到响应，这里只收窄）。
-    recipe_verbs = _ap.resolve_suggested_recipe(suggested_recipe)
-
-    plan: dict[str, Any] | None = None
-    agent_used = False
-    agent_fell_back = False
-    preliminary_sent = False
-    # preliminary 载荷复用——发屏与批次组卷用同一份，不重跑 recommend_payload。
-    prelim_payload: dict[str, Any] | None = None
-    if use_agent and llm_call is None and _agent.agent_available():
-        try:
-            agent_cfg = config or load_llm_config()
-        except Exception:
-            agent_cfg = None
-        # 与 plan_action 同一把闸（enable_llm ∧ 非 mock ∧ 有 key）：闸口不一致会出现
-        # 「单次分类路径说没接上、agent 路径却在调 LLM」的双重口径。
-        if agent_cfg is not None and _ap.should_use_llm(agent_cfg)[0]:
-            #初步结果先行（机械闸，**全与**才发；单调用点天然最多一次）：
-            # 流式回调在场 ∧ 确定走 agent 图路径（本分支即该条件的具身）∧ pre-loop 真实
-            # 管线有命中（零命中 → 现有救回链负责，互不越界）∧ 无规则动作标记（动作句由
-            # 工具环承接，不先摆检索结果）；clarify/abstain 被 status=="results" 天然覆盖。
-            # 闸不过 = 现状行为，不少发、不假发。
-            prelim_meta = prelim_meta_holder[0] if prelim_meta_holder else None
-            if (on_event is not None and prelim_meta is not None
-                    and str(getattr(prelim_meta, "resolution_status", "") or "") == "results"
-                    and int(getattr(prelim_meta, "result_total", 0) or 0) > 0
-                    and not detect_action_markers(text)):
-                from ..app.recommend_rows import recommend_payload
-                prelim_payload = recommend_payload(prelim_meta)
-                on_event("preliminary", prelim_payload)
-                preliminary_sent = True
-            try:
-                # 2026-08-18：search.rerun 与 pre-loop 必须吃同一份结构化检索现场。
-                # search_params 已由 Web 入口净化；None/直调缺省回空，保持旧测试与调用兼容。
-                _sp = search_params or {}
-                _agent_search_kwargs = {
-                    "search_sources": sources,
-                    "search_facet_filters": _sp.get("facet_filters"),
-                    "search_suppressed_constraints": _sp.get("suppressed_constraints"),
-                    "search_lenient_dims": _sp.get("lenient_dims"),
-                    "search_date_from": str(_sp.get("date_from") or ""),
-                    "search_date_to": str(_sp.get("date_to") or ""),
-                }
-                if on_event is not None:
-                    plan, _trace = _agent.plan_with_agent_events(
-                        text,
-                        has_results=has_results, result_total=result_total,
-                        config=agent_cfg, retrieval=retrieval,
-                        current_query=current_query, current_filters=current_filters,
-                        on_event=on_event, principal=principal,
-                        artifact_context=artifact_context,
-                        **_agent_search_kwargs,
-                    )
-                else:
-                    # 无回调时走 plan_with_agent 薄封装：行为与原实现逐位一致
-                    # 也保住既有测试打在 plan_with_agent 上的 monkeypatch seam。
-                    plan, _trace = _agent.plan_with_agent(
-                        text,
-                        has_results=has_results, result_total=result_total,
-                        config=agent_cfg, retrieval=retrieval,
-                        current_query=current_query, current_filters=current_filters,
-                        principal=principal,
-                        artifact_context=artifact_context,
-                        **_agent_search_kwargs,
-                    )
-                agent_used = True
-            except _agent.AgentError:
-                plan = None  # 预期内失败（协议/通道类）——安静降级，行为契约不变
-                agent_fell_back = True
-            except Exception as exc:
-                # 预期外异常（导入错误/代码 bug）不该和模型故障
-                # 吞成同一种静默降级——长期故障会完全不可见。保底路径照走（「agent 路径绝不
-                # 成为新的单点」契约不变），但留一行脱敏审计（类型+截断消息，不含密钥/正文）。
-                plan = None
-                agent_fell_back = True
-                try:
-                    _agent._audit_fallback(
-                        _agent._agent_project_root(), "turn",
-                        f"unhandled:{type(exc).__name__}:{str(exc)[:160]}", text, "")
-                except Exception as audit_exc:
-                    # 移交：审计落盘失败的调用方外层
-                    # 不再静默 pass——warn-once 留一行（脱敏只带异常类型，绝不掀翻路由）。
-                    _agent._warn_once(
-                        f"turn_audit_fallback::{type(audit_exc).__name__}",
-                        "turn 的降级审计落盘失败（仅记异常类型，不含正文/密钥）。")
-    hybrid_abstain = False
-    if plan is None:
-        # 修复2:混合句（操作+检索串联)在单次单动词保底通道上必只做一半,
-        # 明确弃权——不调用 plan_action(省一次 LLM 调用)、不执行任何半步,
-        # 由下方弃权分支给如实回音。判定用机械闸(纯规则,确定性)。
-        hybrid_abstain = _agent._hybrid_intent_gate(text)
-        if hybrid_abstain:
-            plan = _ap._blank_plan(
-                source="rule",
-                llm_status="hybrid_abstain",
-                reason_zh="混合诉求(操作+检索串联):单次单动词保底通道做不全,机械弃权。",
-            )
-            plan["hybrid_abstain"] = True
-        else:
-            plan = _ap.plan_action(
-                text,
-                has_results=has_results, result_total=result_total,
-                config=config, llm_call=llm_call,
-                retrieval=retrieval, current_query=current_query, current_filters=current_filters,
-                allowed_verbs=recipe_verbs,   # suggested_recipe 收窄动词面
-            )
-        if agent_fell_back:
-            # 2026-08-15 agent 路径失败过这件事本身在 plan 上留痕（additive 字段，
-            # 不改任何既有键）——否则一次请求付了 2~3 次 LLM 调用，via="llm" 却看不出
-            # agent 刚才失败过，线上排查「为什么这么慢/这么贵」无据可查。
-            plan["agent_fallback"] = True
-            # agent 跌保底这一事实进 trace 收尾账（fail-soft）。
-            _te.emit_finish_reason(kind="agent_fallback")
-
-    # agent 路径产出的 plan 同样机械收窄——EXEC 动词不在 recipe
-    # 允许集 → 降 none 如实回音（hint 只缩小不扩权，绝不执行用户没点的能力）。
-    plan = _recipe_narrow_plan(plan, recipe_verbs)
-
-    #环内 search.rerun 采纳档的 recommend_payload（多个采纳步取
-    # 最后一个）——数据本就在 plan.steps 实录里，扫出来挂 final 即可，不碰 state、不改图。
-    # （2026-08-17 RAG 工具组）：rank/rerank 的 display 批次 payload 同样汇入环内上屏
-    # 哨兵 loop_payload（display=true 语义即上屏，**不受**批次机制限制）。
-    # 轮内累积批次（preliminary 在前、环内批次在后），
-    # 补 batch_id/seq/created_at/turn_id 后挂响应；无批时两键不出现。
-    result_payload: dict[str, Any] | None = None
-    # 环内上屏批哨兵：b 档判定的「无环内采纳/上屏」改用它
-    # 不再拿 result_payload is None 充当——legacy 要镜像 active 批（含仅
-    # preliminary 批），两个语义必须分开。
-    loop_payload: dict[str, Any] | None = None
-    batches: list[dict[str, Any]] = []
-    if prelim_payload is not None:
-        batches.append({
-            "kind": "preliminary",
-            # 溯源：pre-loop 管线实际跑的是本轮原话 text
-            # （rule_match_summary(text, …)）——label/query_effective 记旧 current_query
-            # 会让批次元数据说的是旧查询、载荷来自新话，张冠李戴。
-            "label": text[:20],
-            "query_raw": text,
-            "query_effective": text,
-            "payload": prelim_payload,
-        })
-    for _step in list(plan.get("steps") or []):
-        _res = _step.get("result") if isinstance(_step, dict) else None
-        if (isinstance(_res, dict) and _step.get("ok")
-                and str(_step.get("verb") or "") == "search.rerun"
-                and _res.get("adopted") and isinstance(_res.get("payload"), dict)):
-            loop_payload = _res["payload"]
-            _rerun_batch = {
-                # rescue 端点链下（replace_screen=True）的重搜是「救回批」，否则是「重搜批」。
-                "kind": "rescue" if _res.get("replace_screen") else "search_rerun",
-                "label": str(_res.get("query") or "")[:20],
-                # query_raw = 本轮用户原话（契约；曾填 current_query 旧查询）。
-                "query_raw": text,
-                "query_effective": str(_res.get("query") or ""),
-                "payload": _res["payload"],
-            }
-            # r2p：采纳档的确定性披露句随批下发（additive，无披露句不出现）
-            # ——final a 档换屏的 sys 留痕优先用它；没有披露句时前端保持既有通用句。
-            _rerun_disc = str(_res.get("disclosure_zh") or "").strip()
-            if _rerun_disc:
-                _rerun_batch["disclosure_zh"] = _rerun_disc
-            batches.append(_rerun_batch)
-        elif (isinstance(_res, dict) and _step.get("ok")
-                and str(_step.get("verb") or "") in ("rank", "rerank")
-                and isinstance(_res.get("batch"), dict)
-                and isinstance(_res["batch"].get("payload"), dict)):
-            loop_payload = _res["batch"]["payload"]
-            # rank/rerank 的 kind/label/query_raw/query_effective 由环内工具按 § 规则
-            # 生成（rank=rank.query、rerank=rewritten_query），这里原样透传不另造口径。
-            batches.append({
-                "kind": str(_res["batch"].get("kind") or _step.get("verb")),
-                "label": str(_res["batch"].get("label") or "")[:20],
-                "query_raw": str(_res["batch"].get("query_raw") or ""),
-                "query_effective": str(_res["batch"].get("query_effective") or ""),
-                "payload": _res["batch"]["payload"],
-            })
-    # 组卷收尾：批次齐了才补稳定序号与时间戳/轮次 id；active 默认最后一批。
-    # legacy result_payload = 环内上屏批；无环内批时**镜像 active 批**（= 最后
-    # 一批，仅 preliminary 批也镜像——「既有字段镜像 active batch（过渡期回退
-    # 兼容）」，2026-08-17 评审）；preliminary_final 的 b 档判定改用独立哨兵
-    # loop_payload，不再依赖 result_payload is None。
-    result_payload = loop_payload
-    if result_payload is None and batches:
-        result_payload = batches[-1]["payload"]
-    extra: dict[str, Any] = {}
-    if batches:
-        _turn_id = uuid4().hex
-        _now = datetime.now(timezone.utc).isoformat()
-        for _i, _b in enumerate(batches):
-            _b["batch_id"] = f"b{_i + 1}"
-            _b["seq"] = _i + 1
-            _b["created_at"] = _now
-            _b["turn_id"] = _turn_id
-            # 每批补规范化检索范围指纹（契约级身份键）。
-            _b["scope_fingerprint"] = _batch_scope_fingerprint(
-                str(_b.get("query_effective") or ""), sources, search_params)
-        extra = {"result_batches": batches, "active_batch": batches[-1]["batch_id"]}
-
-    if plan.get("kind") == _ap.EXEC:
-        return {
-            "route": ROUTE_TOOL, "query": "", "plan": plan,
-            "echo_zh": "", "retrieval": retrieval,
-            "via": str(plan.get("source") or ""), "needs_agent": False,
-            "suggestions": [],
-            "result_payload": result_payload, "preliminary_final": False,
-            **extra,
-        }
-    if str(plan.get("verb") or "") in _ap.ROUTE_QUERY_VERBS:
-        # LLM 判的检索指令：effective_query 为空 → 按用户原话检索（fail-open 不丢句）。
-        final_query = str(plan.get("effective_query") or "").strip() or text
-        #§2.1 b 档判定（**全与**，保守）：本请求真发过 preliminary（安全闸——
-        # 没发过却 true 会让前端跳过 /api/recommend 导致白屏，此条是设计清单外的结构性
-        # 强化）∧ 无环内采纳 ∧ 查询无改写 ∧ 收敛后 rerank=off ∧ **润色不会跑**。
-        # 「润色不会跑」显式判定（2026-08-16 收尾，ubRouteBody 第 10 参 polish 落地后
-        # 解锁 b 档）：与 /api/recommend 的 `use_llm = use_llm and polish` 同口径——
-        # polish 实际会跑 = LLM 武装 ∧ polish 子开关开。polish 缺省 true（recommend
-        # 同口径）：缺省+武装 → 会跑 → False；polish=false 显式关闭 → 恒不会跑
-        # （与 LLM 状态无关）。LLM 武装判不明（异常）按「会跑」保守处理，宁可重检不跳检。
-        polish_flag = bool((search_params or {}).get("polish", True))
-        llm_armed = True  # 判不明的保守默认
-        try:
-            llm_armed = bool(_ap.should_use_llm(config or load_llm_config())[0])
-        except Exception:
-            llm_armed = True
-        polish_will_run = polish_flag and llm_armed
-        preliminary_final = bool(
-            preliminary_sent and loop_payload is None and final_query == text
-            and str((search_params or {}).get("rerank") or "off") == "off"
-            and not polish_will_run)
-        return {
-            "route": ROUTE_SEARCH,
-            "query": final_query,
-            "plan": plan, "echo_zh": "", "retrieval": retrieval,
-            "via": "agent" if agent_used else "llm", "needs_agent": False,
-            "suggestions": [],
-            "result_payload": result_payload,
-            "preliminary_final": preliminary_final,
-            **extra,
-        }
-    # 修复2:混合句弃权分支——必须先于「规则 none 看检索脸」分支,
-    # 否则带操作 marker 的混合句会落进「大模型没接上」的通用诚实回音,说错原因;
-    # 不带 marker 的混合子句组合也不许 fail-open 成检索(只做检索半=静默一半)。
-    if hybrid_abstain:
-        return {
-            "route": ROUTE_NONE, "query": "", "plan": plan,
-            # 2026-08-30 bug3：agent 当轮已跌保底 → 说真实原因（大模型没接上），
-            # 不误导用户去设置里开已开着的「AI 执行」。
-            "echo_zh": _HYBRID_ABSTAIN_AGENT_DOWN_ZH if agent_fell_back else _HYBRID_ABSTAIN_ZH,
-            "retrieval": retrieval, "via": str(plan.get("source") or ""),
-            "needs_agent": False, "suggestions": [],
-            "result_payload": result_payload, "preliminary_final": False,
-            **extra,
-        }
-    # LLM 真判的 none 照判，不翻案；**规则**兜底回的 none 才看「长不长一张检索的脸」
-    # （弃权诚实卡比「没听懂」信息多；零信号歧义句与真否定句不许 fail-open 成检索）。
-    # 2026-08-15 search_shaped 的反向闸不查管护词表——「联网搜一下有没有新的
-    # 人类肺数据」长检索脸，会被静默降级成本地关键词检索、零提示。规则检出操作意图
-    # （含管护短语）的句子留在下面的诚实回音档，绝不 fail-open 成检索。
-    if str(plan.get("verb") or "") == "none" and str(plan.get("source") or "") == "rule":
-        if search_shaped(text, keyword_mapping=keyword_mapping) and not _ap.rule_operation_marker(text):
-            return {
-                "route": ROUTE_SEARCH, "query": text, "plan": plan,
-                "echo_zh": "", "retrieval": retrieval, "via": "rule_fallback",
-                "needs_agent": False, "suggestions": [],
-                "result_payload": result_payload, "preliminary_final": False,
-                **extra,
-            }
-        return {
-            "route": ROUTE_NONE, "query": "", "plan": plan,
-            "echo_zh": (
-                "大模型这次没有接上（" + _llm_absent_zh(plan.get("llm_status")) + "），"
-                "这句我只能按关键词猜，没有认出能直接帮你做的事。"
-                "检查更新、删除、联网搜这类操作必须大模型在场才能判断——"
-                "可以再发一次试试，或到「设置」里检查大模型连接。"
-            ),
-            "retrieval": retrieval, "via": str(plan.get("source") or ""),
-            # LLM 缺席时管护动词结构性够不到，给候选也是死路——不带 chips。
-            "needs_agent": False, "suggestions": [],
-            "result_payload": result_payload, "preliminary_final": False,
-            **extra,
-        }
-    # 2026-08-15 EXEC 缺 quoted 被机械降成的 none（downgraded_from 非空）不是
-    # 「没听懂」——系统明明读懂了（verb 都判出来了），如实说出 plan.reason_zh 里的真实原因；
-    # 只有 LLM 真判的 none 才回「没听懂」死胡同（带候选 chips）。
-    downgraded_reason = (
-        str(plan.get("reason_zh") or "").strip() if plan.get("downgraded_from") else ""
-    )
-    return {
-        "route": ROUTE_NONE, "query": "", "plan": plan,
-        "echo_zh": downgraded_reason or "这句话我没有听懂，什么都没有做。",
-        "retrieval": retrieval, "via": str(plan.get("source") or ""),
-        "needs_agent": False,
-        # LLM 真判的 none（「没听懂」死胡同）：附机械候选 chips，分流代替硬拒。
-        "suggestions": _none_route_suggestions(has_results=bool(has_results)),
-        "result_payload": result_payload, "preliminary_final": False,
-        **extra,
-    }
-
 
 def _route_turn_impl(
     utterance: str,
@@ -988,17 +637,12 @@ def _route_turn_impl(
     （preliminary 在前、环内上屏批在后，各补 batch_id/seq/created_at/turn_id）与
     `active_batch`（默认最后一批）；无批时两键均不出现。
 
-回退开关（设计 v3.1 §7）：`BIODATA_RAG_CONCURRENT=off` 时在早退之后整体走旧
-    串行路径 `_route_turn_serial`（HEAD 版逐位复刻：同步 pre-loop、图前机械闸发射、
-    无 flight/无三缝、tool 路线 retrieval 仍为摘要 dict、无 retrieval_note）；缺省 on
-    走本函数 v3.1 并发路径。
-
 迭代杠杆②（设计 v3.2 §4.3/§5）：并发路径在**图起跑前**同步跑关键词快速计数段
     （`_consensus_extra_zh`，strategy 强制 fixed + recall 强制 off = 纯关键词热态毫秒级），
     把「状态/命中数」信号以**逐字复刻今天串行路径共识检索概览段**的文案注入
     `route_extra_zh`（`**这句话**过规则匹配（关键词检索第一段）的结果：规则匹配…`）
     ——补共识盲跑丢失的检索信号，共识输入与今天逐位同构（§0 盲跑实测 u03/u04 真
-    回归的根因补偿；盲跑裁定追加式机械行格式有偏置，§5 记录）。off 串行路径不注入。
+    回归的根因补偿；盲跑裁定追加式机械行格式有偏置，§5 记录）。
     """
     text = _ap.normalize_utterance(utterance)
 
@@ -1040,23 +684,6 @@ def _route_turn_impl(
             "result_payload": None, "preliminary_final": False,
         }
 
-    #回退开关（设计 v3.1 §7）：BIODATA_RAG_CONCURRENT=off → 整体回旧串行——RAG
-    # 同步 pre-loop、图前机械闸发射 preliminary、无 flight/无三缝、tool 路线 retrieval
-    # 仍为摘要 dict（HEAD 版形状）；缺省 on → 下面 v3.1 并发路径。旧行为真源 = HEAD 版
-    # `_route_turn_impl`（复刻于 `_route_turn_serial`，逐位一致，无第三套变体）。早退
-    # 路径（编号快速道 / 「AI 执行」关）两模式共享，故分流点放在它们之后。
-    if not _rag_concurrent_enabled():
-        return _route_turn_serial(
-            text,
-            has_results=has_results, result_total=result_total,
-            current_query=current_query, current_filters=current_filters,
-            sources=sources, config=config, llm_call=llm_call,
-            keyword_mapping=keyword_mapping, use_agent=use_agent,
-            on_event=on_event, principal=principal, search_params=search_params,
-            artifact_context=artifact_context,
-            suggested_recipe=suggested_recipe,
-        )
-
     # 「AI 执行」开：规则匹配概览 + 原始查询一起进 LLM 分流（100%，无短路）。
     #（并发分流）：agent 分支条件**先求值定型 agent_path**（跑与发射
     # 闸都含它，无竞态）；再按 marker 分层起跑——有标记 → 不起 RAG flight 直接进图
@@ -1087,7 +714,7 @@ def _route_turn_impl(
     # 共识输入与今天逐位同构（盲跑实测裁定：追加式机械行格式有偏置，见 §5）。
     # 无标记分支**先起 flight 再同步计数**：flight 获得最大提前量，计数段藏在起跑
     # 与进图之间；有标记分支 RAG 仍零起跑（320s 收益不变），计数只消费关键词段、
-    # 不影响 auto 全量行为。off 串行路径（_route_turn_serial）不在此列，逐位不动。
+    # 不影响 auto 全量行为。
     route_extra_zh = ""
     if agent_path:
         if not markers:
@@ -1107,20 +734,10 @@ def _route_turn_impl(
     agent_used = False
     agent_fell_back = False
     if agent_path:
-        # dl-auto-1 任务A：含动作标记的句子先探测一次 plan_action 单次分类——agent 图的
-        # LOOP_TOOLS 闸把「打包下载」这类前端直派动词当环外动作拦下并丢弃（混合句「检索+下载」
-        # 被裁成 rank，下载子意图丢失）。plan_action 能正确产出前端直派面
-        # （_FRONTEND_EXEC_PLANE）的 plan，requires_results 由前端「先检索后派发」处理。
-        # 命中本面 → 采用探测 plan（不走 agent 图，agent_used 保持 False）；未命中（cite.export/
-        # compare 等环内多步 / 非执行）→ 丢弃探测，走 agent 图。plan_action 纯规划无副作用，
-        # 一次额外 LLM 探测换来前端直派动作不再被环内丢弃。
-        #
-        # 2026-09-01「不少于我」下限合同：单次分类升级为**子意图枚举**
+        # 「不少于我」下限合同：含动作标记的句子先做**子意图枚举**
         # （`plan_action_intents`，同为一次额外调用）——「列出所有要做的事」比「选一个
         # 意图」结构性难漏；枚举失败（None）→ 回落现状单次探测兜底（逐位保留）。
-        # 枚举成功由 `_partition_intents` 分流：全直派面 → bypass（intents 全清单挂
-        # plan 让前端依次执行）；含环内 EXEC → 走图 + intent_checklist 注入核销，
-        # 直派尾巴图后挂 pending_frontend 由前端接力。
+        # 枚举成功统一注入图；前端动作只作为图后的 pending_frontend 接力，不绕过图。
         _intent_checklist: list[dict[str, Any]] | None = None
         _pending_frontend: list[dict[str, Any]] | None = None
         if markers:
@@ -1145,12 +762,8 @@ def _route_turn_impl(
                 except Exception:                   # 探测失败不阻断：按未知处理走 agent 图
                     _fe_probe = None
                 if (_fe_probe is not None
-                        and str(_fe_probe.get("kind") or "") == _ap.EXEC
-                        and _fe_probe.get("verb") in _FRONTEND_EXEC_PLANE):
-                    plan = _fe_probe
-                    plan["agent_bypassed"] = True   # additive 留痕：走前端直派，agent 图未执行
-                else:
-                    plan = None                     # 丢弃探测，走 agent 图
+                        and str(_fe_probe.get("kind") or "") == _ap.EXEC):
+                    _, _intent_checklist, _pending_frontend = _partition_intents([_fe_probe])
             else:
                 plan, _intent_checklist, _pending_frontend = _partition_intents(_intents)
         if plan is None:
@@ -1511,7 +1124,7 @@ def route_turn(
     响应带 additive `recipe_note` 如实记录；合法 → 只缩小动词选择面（plan_action
     allowed_verbs + agent 路径产出的 plan 机械收窄），绝不扩权/不绕执行开关/安全闸。
 
-    
+
     入口建 `TraceRecorder` 并经 contextvars 绑进本线程 context（webapp 的 SSE worker
     线程内天然隔离；既有函数零签名变更），图内各挂钩点（llm_call/tool_call/…）据此
     落盘；impl 返回后统一发一次 route_decision（含 understand/route_consensus 原始

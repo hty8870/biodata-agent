@@ -149,6 +149,7 @@ FIXED_ZIP_TIME = (1980, 1, 1, 0, 0, 0)
 # 路径组织；本表把「包内相对路径 → 仓库源相对路径」钉死，与 make_delivery 的
 # LEGACY_DELIVERY_PATHS（反向）覆盖同一批文件。
 SOURCE_PATH_OVERRIDES = {
+    "eval/evaluation-manifest.json": "eval/evaluation-manifest.public.json",
     "mcp_server.py": "src/dataset_recommender/app/mcp_server.py",
     "requirements-embeddings.txt": "requirements/requirements-embeddings.txt",
     "requirements-ci.lock": "requirements/requirements-ci.lock",

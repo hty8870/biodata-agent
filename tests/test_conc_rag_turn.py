@@ -5,7 +5,7 @@
   （编号快速道 / AI 执行关）不起飞；llm_call 注入路径不变（agent_path=False）。
 - verdict-gated 发射：understand 入口恰好一次；action 永不发射；保底分支「非 EXEC 才
   发射 / EXEC 抑制」；非流式不发；emitted 回填 preliminary_sent（b 档）。
-- 标记误伤 lazy 补起（marker 假阳性从此有早首屏，设计约定有意改进）。
+- 标记误伤 lany 补起（marker 假阳性从此有早首屏，设计约定有意改进）。
 - tool 路线 retrieval=None + retrieval_note（breaking 契约，设计约定）。
 - 杠杆②（设计 v3.2 设计约定/设计约定）：图起跑前同步关键词快速计数段注入 route_extra_zh——
   有标记复合行 / 无标记关键词段行、按 status 如实写（命中/零命中/弃权/error）、
@@ -45,7 +45,6 @@ def _fresh_pool(monkeypatch):
     """每测试干净准入信号量（不串槽）；rule_match_summary 默认替换为确定性验证
     （**按真函数契约填 meta_out**——flight.meta 是发射闸与载荷的数据源）；
     默认清掉回退开关环境变量（既有用例钉 v3.1 并发路径，off 用例自己 setenv）。"""
-    monkeypatch.delenv("BIODATA_RAG_CONCURRENT", raising=False)
     monkeypatch.setattr(turn, "_RAG_SEMAPHORE", threading.Semaphore(turn._RAG_MAX_CONCURRENT))
     monkeypatch.setattr(turn, "rule_match_summary", _fake_rule_match_summary)
     yield
@@ -344,7 +343,7 @@ def test_route_extra_zh_only_with_markers(monkeypatch):
         return "search", [{"ok": True, "route": "search"}, {"ok": True, "route": "search"}]
 
     monkeypatch.setattr(agent_exec, "_run_route_consensus", spy)
-    base = {"utterance": "下载top5", "entry_mode": "", "has_results": False,
+    base = {"utterance": "下载top5", "has_results": False,
             "result_total": 0, "current_query": "", "current_filters": []}
     # 有标记：机械标记事实行拼进上下文尾部。
     runtime = SimpleNamespace(context=SimpleNamespace(
@@ -375,7 +374,7 @@ def test_route_consensus_calls_verdict_hook_but_emits_nothing(monkeypatch):
         chat_model=None, decide_model=None, on_progress=None,
         on_route_verdict=lambda route: calls.append(route),
         route_extra_zh=""))
-    state = {"utterance": "下载top5", "entry_mode": "", "has_results": False,
+    state = {"utterance": "下载top5", "has_results": False,
              "result_total": 0, "current_query": "", "current_filters": [],
              "retrieval": None}
     out = agent_exec.route_consensus(state, runtime=runtime)
@@ -441,9 +440,9 @@ def test_understand_rescue_block_uses_resolved(monkeypatch):
         chat_model=fake, retrieval_provider=provider,
         on_route_verdict=None, route_extra_zh="")
     runtime = SimpleNamespace(context=ctx)
-    state = {"utterance": "去掉神经", "entry_mode": "rescue",
+    state = {"utterance": "去掉神经", "route_scope": "rescue",
              "has_results": True, "result_total": 0,
-             "retrieval": None, "route_scope": "",
+             "retrieval": None,
              "current_query": "小鼠神经胶质瘤", "current_filters": None,
              "raw": {}, "steps": []}
     out = agent_exec.understand(state, runtime=runtime)
@@ -663,107 +662,3 @@ def _tool_call(verb, **args):
         content="",
         tool_calls=[{"name": verb.replace(".", "_"), "args": args, "id": "t1"}],
     )
-
-
-# ---------------------------------------------------------------- 回退开关：BIODATA_RAG_CONCURRENT=off（设计约定）
-
-def test_off_marker_sync_rag_no_seams_no_flight(monkeypatch):
-    """off 回退：有标记句**同步**跑 RAG（pre-loop 真跑、meta_out 接住）且**不注入三缝**
-    （plan_with_agent_events 无 retrieval_provider/on_route_verdict/route_extra_zh）；
-    marker 句 preliminary 绝对不发；不起 flight。"""
-    monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
-    calls: list = []
-    real_summary = turn.rule_match_summary
-
-    def spy_summary(*a, **k):
-        calls.append(k)
-        return real_summary(*a, **k)
-
-    monkeypatch.setattr(turn, "rule_match_summary", spy_summary)
-    saw: list = []
-
-    def fake_events(*a, **k):
-        saw.append(k)
-        return (dict(_EXEC_PLAN), [])
-
-    monkeypatch.setattr(agent_exec, "agent_available", lambda: True)
-    monkeypatch.setattr(agent_exec, "plan_with_agent_events", fake_events)
-    monkeypatch.setattr(agent_exec, "plan_with_agent",
-                        lambda *a, **k: (dict(_EXEC_PLAN), []))
-    made = _spy_flight(monkeypatch)
-    events: list = []
-    out = turn.route_turn(
-        "human blood 帮我打包", config=CFG,
-        on_event=lambda k, e: events.append((k, e)), search_params=_SP)
-    assert len(calls) == 1, "off 模式必须同步跑一次 pre-loop RAG（有标记句也跑）"
-    assert "meta_out" in calls[0], "meta_out 接住 WorkflowResult（preliminary 载荷/闸数据源）"
-    assert made == [], "off 模式不起 flight"
-    assert saw and "retrieval_provider" not in saw[0] and "on_route_verdict" not in saw[0] \
-        and "route_extra_zh" not in saw[0], "off 模式不注入三缝（图内行为逐位不变）"
-    assert isinstance(saw[0].get("retrieval"), dict), "off 模式 retrieval 直接进图（摘要 dict）"
-    assert [k for k, _ in events] == [], "marker 句 absolute 不发 preliminary"
-    assert out["route"] == "tool"
-    assert out["retrieval"] is not None and out["retrieval"]["status"] == "results"
-    assert "retrieval_note" not in out, "off 模式返回形状与 HEAD 版一致（无 retrieval_note）"
-
-
-def test_off_preliminary_emitted_before_graph(monkeypatch):
-    """off 回退：preliminary **图前发射**（恢复旧机械闸语义）——事件序 = preliminary →
-    进图（plan_with_agent_events 之前）；b 档（preliminary_final）同 HEAD 判定成立。"""
-    monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
-    order: list = []
-
-    def fake_events(*a, **k):
-        order.append("graph")
-        return (dict(_SEARCH_PLAN), [])
-
-    monkeypatch.setattr(agent_exec, "agent_available", lambda: True)
-    monkeypatch.setattr(agent_exec, "plan_with_agent_events", fake_events)
-    monkeypatch.setattr(agent_exec, "plan_with_agent",
-                        lambda *a, **k: (dict(_SEARCH_PLAN), []))
-    made = _spy_flight(monkeypatch)
-    events: list = []
-    out = turn.route_turn(
-        "human blood", config=CFG,
-        on_event=lambda k, e: (order.append("preliminary"), events.append((k, e))),
-        search_params={**_SP, "polish": False})
-    assert [k for k, _ in events].count("preliminary") == 1
-    assert order == ["preliminary", "graph"], "preliminary 必须在进图之前发射"
-    assert out["route"] == "search" and out["via"] == "agent"
-    assert out["result_batches"][-1]["kind"] == "preliminary"
-    assert out["preliminary_final"] is True, "发射回填 preliminary_sent → b 档成立（HEAD 同款）"
-    assert made == [], "off 模式不起 flight"
-
-
-def test_off_tool_route_retrieval_is_summary_dict(monkeypatch):
-    """off 回退：tool 路线 retrieval 恢复为**摘要 dict**（HEAD 版形状），无 retrieval_note /
-    无 _preliminary_trace（返回形状与 HEAD 版逐位一致）。"""
-    monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
-    monkeypatch.setattr(agent_exec, "agent_available", lambda: True)
-    monkeypatch.setattr(agent_exec, "plan_with_agent_events",
-                        lambda *a, **k: (dict(_EXEC_PLAN), []))
-    monkeypatch.setattr(agent_exec, "plan_with_agent",
-                        lambda *a, **k: (dict(_EXEC_PLAN), []))
-    out = turn.route_turn("human blood 帮我打包", config=CFG, search_params=_SP)
-    assert out["route"] == "tool"
-    assert out["retrieval"] is not None and out["retrieval"]["status"] == "results"
-    assert "retrieval_note" not in out
-    assert "_preliminary_trace" not in out
-
-
-def test_off_marker_never_emits_preliminary(monkeypatch):
-    """off 回退·既有闸语义补钉：有标记句同步跑 RAG 但 preliminary 绝对不发（与 on 模式
-    marker 分支零 RAG 不同——off 是「跑但不发」，on 是「不跑」）。"""
-    monkeypatch.setenv("BIODATA_RAG_CONCURRENT", "off")
-    monkeypatch.setattr(agent_exec, "agent_available", lambda: True)
-    monkeypatch.setattr(agent_exec, "plan_with_agent_events",
-                        lambda *a, **k: (dict(_SEARCH_PLAN), []))
-    monkeypatch.setattr(agent_exec, "plan_with_agent",
-                        lambda *a, **k: (dict(_SEARCH_PLAN), []))
-    events: list = []
-    out = turn.route_turn(
-        "human blood 帮我打包", config=CFG,
-        on_event=lambda k, e: events.append((k, e)), search_params=_SP)
-    assert [k for k, _ in events] == [], "marker 句 off 模式绝不发 preliminary（旧机械闸语义）"
-    assert out["route"] == "search"  # agent 判 search（检索句被 marker 误伤）
-    assert out["retrieval"] is not None, "同步 pre-loop 的摘要 dict 照常进返回"
