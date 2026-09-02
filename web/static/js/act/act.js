@@ -1503,6 +1503,53 @@ export async function actDispatchPlanList(plans, said) {
     return firstMark;
 }
 
+function _canonicalPlanSlotValue(value) {
+    if (Array.isArray(value)) return value.map(_canonicalPlanSlotValue);
+    if (value && typeof value === "object") {
+        const out = {};
+        Object.keys(value).sort().forEach(function (key) {
+            if (value[key] !== undefined) out[key] = _canonicalPlanSlotValue(value[key]);
+        });
+        return out;
+    }
+    return value;
+}
+
+function _actPlanDispatchFingerprint(plan) {
+    const verb = String((plan && plan.verb) || "").trim();
+    const rawSlots = plan && plan.slots;
+    const slots = (rawSlots && typeof rawSlots === "object" && !Array.isArray(rawSlots))
+        ? rawSlots : {};
+    return JSON.stringify([verb, _canonicalPlanSlotValue(slots)]);
+}
+
+export function actCanonicalDispatchPlans(plan) {
+    /* 唯一规范清单：兼容旧 intents 时用它作头部，否则用顶层 plan；再接图后
+       pending_frontend。只保留非取消 EXEC，按 verb + canonical slots 首见去重。
+       requires_results/reason/trace 属执行元数据，不改变「是不是同一动作」的身份。 */
+    if (!plan || typeof plan !== "object") return [];
+    const intents = Array.isArray(plan.intents) && plan.intents.length ? plan.intents : [plan];
+    const tails = Array.isArray(plan.pending_frontend) ? plan.pending_frontend : [];
+    const seen = new Set();
+    const out = [];
+    intents.concat(tails).forEach(function (item) {
+        if (!item || item.kind !== "exec" || item.cancelled) return;
+        const fingerprint = _actPlanDispatchFingerprint(item);
+        if (seen.has(fingerprint)) return;
+        seen.add(fingerprint);
+        out.push(item);
+    });
+    return out;
+}
+
+export async function actDispatchPlanChain(plan, said) {
+    /* board 的有结果直派与 actAfterSearch 的检索后接力共用这一条执行链；
+       不让任一消费者再自行拼 pending_frontend 或另跑第二段派发。 */
+    const plans = actCanonicalDispatchPlans(plan);
+    if (!plans.length) return false;
+    return actDispatchPlanList(plans, said);
+}
+
 export function actAfterSearch(query, opts) {
     const stashed = opts && opts.actPlan;
     if (!stashed) return;
@@ -1524,14 +1571,9 @@ export function actAfterSearch(query, opts) {
         _receiptWithLlm(cbProgressDone(_actSearchReceiptText(f) + note), note);
         return;
     }
-    /* 「不少于我」（2026-09-01）：stashed.intents 非空 = 枚举探测的全清单——依次派发
-       各非取消项（取消项在 ubDispatchAction 的清单预处理段已回音）；无清单 = 旧单 plan 档逐位不变。 */
-    const _intents = (Array.isArray(stashed.intents))
-        ? stashed.intents.filter(function (p) { return p && p.kind === "exec" && !p.cancelled; })
-        : null;
-    const _dispatching = (_intents && _intents.length)
-        ? actDispatchPlanList(_intents, said)
-        : actDispatchPlan(stashed, said);
+    /* 顶层 plan/兼容 intents + pending_frontend 统一经共享规范链派发；既补齐检索后尾巴，
+       又与 board 有结果档共用同一套指纹去重和 mark 聚合。 */
+    const _dispatching = actDispatchPlanChain(stashed, said);
     _dispatching.then(function (mark) {
         if (mark === true) {   // 接住且全程由行动流 + 总结泡呈现（actFinish 已消费检索事实）
             // 执行注记挂到那句原话上（cbMarkLastSayAsAction 按 kind==="say" 定位——

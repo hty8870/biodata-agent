@@ -187,7 +187,7 @@ def test_the_summary_factual_line_comes_from_the_same_template():
     bcode = _strip_comments(BOARD)
     assert "已按你说的执行" not in bcode, "board.js 又在自己写死一句「已…」注记"
     assert 'cbMarkMessageAsAction(pending, "")' in bcode, "行动流全程呈现时调用方只标 action、不挂文案"
-    assert "actDispatchPlan(plan, said)" in bcode, "统一路由的 tool 档必须经 actDispatchPlan 派发"
+    assert "actDispatchPlanChain(plan, said)" in bcode, "统一路由的 tool 档必须经共享规范链派发"
 
 
 def test_busy_and_blocked_paths_never_claim_the_step_was_done():
@@ -361,7 +361,7 @@ def test_board_and_search_both_route_through_the_execution_layer():
     """统一路由（turn pipeline）下两个落地点：对话窗 tool 档直接派发、
     「先检索后派发」经 actAfterSearch 的 actPlan 档——只接一个就又变成
     「同一个人在同一个页面上换个输入框说同样的话就不 work」。"""
-    assert "actDispatchPlan(" in BOARD, "对话窗 tool 档没有接执行层"
+    assert "actDispatchPlanChain(" in BOARD, "对话窗 tool 档没有接共享执行链"
     assert "actAfterSearch(" in SEARCH, "主检索路径没有接执行层"
     assert re.search(r"\bfunction\s+actAfterSearch\b", ACT)
     assert re.search(r"\bfunction\s+actDispatchPlan\b", ACT)
