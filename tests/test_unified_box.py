@@ -4,7 +4,7 @@
 钉的是这条链路：首屏 #queryInput / 结果态侧栏 #chatInput（微信式、发送即清空）→ ubSubmit 问 `/api/utterance`
 （turn pipeline：「AI 执行」闸 → 规则检索直达 / LLM 分流，唯一路由脑）→ 按 route 三档分发：
 search→runRecommend 既有流（effective_query 改写如实回显；对话窗来的 keepConv 保对话、
-sayPushed 不重复推泡）；tool→直接派发返回的 EXEC plan（不再二次调 /api/action/plan；
+sayPushed 不重复推泡）；tool→经共享规范链派发返回的 EXEC plan 与 pending_frontend（不再二次调 /api/action/plan；
 curate.* 不需结果、直派——起全自动化：runner 链式 plan（零写盘）→ apply
 回传 confirm_token 直接执行，审计账本 + 回收站可回退兜底）；
 none→如实回音（needs_agent 档渲染成降级气泡、带「去开启 AI 执行」指路按钮），
@@ -233,12 +233,51 @@ def test_search_first_dispatch_reuses_the_plan_without_a_second_plan_call():
     """action + 屏上没结果 → 先按原话检索，落地后派发**这份已拿到的** plan（actPlan 档）。"""
     body = re.search(r"function actAfterSearch\([^)]*\)\s*\{(.*?)\n\}", ACT, re.S)
     assert body, "找不到 actAfterSearch"
-    assert "actPlan" in body.group(1) and "actDispatchPlan(" in body.group(1)
+    assert "actPlan" in body.group(1) and "actDispatchPlanChain(stashed, said)" in body.group(1)
     # 派发时结果闸按屏上真实状态复算，不照抄规划时的 blocked_reason（检索落地后旧态已失效）
     dispatch = re.search(r"async function actDispatchPlan\([^)]*\)\s*\{(.*?)\n\}", ACT, re.S)
     assert dispatch, "找不到 actDispatchPlan"
     assert "blocked_reason" not in dispatch.group(1), "结果闸必须复算（requires_results + 实时 hasResults）"
     assert "requires_results" in dispatch.group(1)
+
+
+def test_canonical_dispatch_chain_deduplicates_root_from_pending_frontend():
+    """P1 回归：顶层动作与 pending_frontend 同 verb+slots 时只派一次，异参尾巴保留。"""
+    payload = {
+        "verb": "pack.download", "kind": "exec", "slots": {"limit": 2, "uids": ["u1", "u2"]},
+        "pending_frontend": [
+            {"verb": "pack.download", "kind": "exec", "slots": {"uids": ["u1", "u2"], "limit": 2}},
+            {"verb": "reuse.pack", "kind": "exec", "slots": {"format": "full"}},
+            {"verb": "pack.download", "kind": "exec", "slots": {"limit": 3, "uids": ["u1", "u2"]}},
+            {"verb": "reuse.pack", "kind": "exec", "cancelled": True, "slots": {"format": "full"}},
+        ],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => ({ verb: x.verb, slots: x.slots }))));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == [
+        {"verb": "pack.download", "slots": {"limit": 2, "uids": ["u1", "u2"]}},
+        {"verb": "reuse.pack", "slots": {"format": "full"}},
+        {"verb": "pack.download", "slots": {"limit": 3, "uids": ["u1", "u2"]}},
+    ]
+
+
+def test_act_after_search_dispatches_pending_frontend_through_shared_chain():
+    """P1 回归：检索落地后把 stashed 的顶层动作与 pending_frontend 一并交给共享链。"""
+    after = _strip_comments(
+        re.search(r"function actAfterSearch\([^)]*\)\s*\{(.*?)\n\}", ACT, re.S).group(1))
+    assert "actDispatchPlanChain(stashed, said)" in after
+    assert "stashed.intents" not in after and "stashed.pending_frontend" not in after, (
+        "actAfterSearch 不得再自行拼清单；共享链才是 pending_frontend 的唯一消费机制")
+    board = _strip_comments(
+        re.search(r"function ubDispatchAction\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S).group(1))
+    assert board.count("actDispatchPlanChain(plan, said)") == 1
+    assert "const _tails" not in board and "actDispatchPlanList(" not in board
 
 
 # ---------------------------------------------------------------- cancelled：只回音，不打开任何面板
@@ -546,7 +585,7 @@ def test_dispatch_realigns_the_live_response_with_the_frame_before_acting():
     i_frame = code.index("cbFrameData(")
     # LAST_RECOMMEND_DATA 归 search.js 所有（ESM 可变 let），board 的对齐写必经 setter（语义不变）
     i_align = code.index("setLastRecommendData(data)")
-    i_dispatch = code.index("actDispatchPlan(")
+    i_dispatch = code.index("actDispatchPlanChain(")
     assert i_frame < i_align < i_dispatch, "对齐必须发生在派发之前"
 
 
@@ -734,7 +773,7 @@ def test_action_sentence_never_becomes_the_query_source():
     # 恢复必须发生在两条执行路径之前（指路 cbRouteAsFirstBox / 直派 actDispatchPlan 都读框）
     i_restore = code.index("cbFrameQuery()")
     assert i_restore < code.index("cbRouteAsFirstBox("), "指路档之前必须先恢复框"
-    assert i_restore < code.index("actDispatchPlan("), "直派档之前必须先恢复框"
+    assert i_restore < code.index("actDispatchPlanChain("), "直派档之前必须先恢复框"
 
 
 def test_search_then_dispatch_keeps_the_say_and_marks_the_right_bubble():
