@@ -289,6 +289,86 @@ def test_canonical_dispatch_chain_mixed_turn_steps_do_not_mask_exec_verb():
     assert out == [{"verb": "pack.download", "slots": {"limit": 5}}]
 
 
+def test_canonical_dispatch_chain_real_mixed_turn_filters_graph_done_rank():
+    """真实混合轮形态钉（2026-09-03 真机 route_turn 核实）：route=tool 收尾时顶层 plan
+    就是环内已执行的 rank（steps 记 ok:true），真身动作排在 pending_frontend。
+    规范清单必须只输出 [pack.download]——rank 若被派发，会经「图内已执行渲染通道」
+    再产一颗 actFinish 泡，与 pack.download 的总结泡构成双泡（用户截图投诉的真根因）。"""
+    payload = {
+        "verb": "rank", "kind": "exec",
+        "steps": [{"verb": "rank", "ok": True}],
+        "pending_frontend": [
+            {"verb": "pack.download", "kind": "exec", "slots": {"limit": 5, "target": "results"}},
+        ],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => ({ verb: x.verb, slots: x.slots }))));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == [{"verb": "pack.download", "slots": {"limit": 5, "target": "results"}}]
+
+
+def test_canonical_dispatch_chain_pure_search_turn_dispatches_nothing():
+    """纯检索轮（route=tool、plan=rank 且图内已执行、无 pending）→ 规范清单为空：
+    检索回执由 board 批次落地通道负责（唯一气泡），act 层不派发、无 actFinish。"""
+    payload = {
+        "verb": "rank", "kind": "exec",
+        "steps": [{"verb": "rank", "ok": True}, {"verb": "rerank", "ok": True}],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => x.verb)));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == []
+
+
+def test_canonical_dispatch_chain_keeps_graph_done_non_retrieval_verb():
+    """守护钉：图内已执行的**非检索**动作（compare 等）不被过滤——它的卡片与总结
+    只能靠 actDispatchPlan 的「图内已执行渲染通道」上屏，过滤了就是整个总结消失。"""
+    payload = {
+        "verb": "compare", "kind": "exec",
+        "steps": [{"verb": "compare", "ok": True, "card_kind": "compare"}],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => x.verb)));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == ["compare"]
+
+
+def test_canonical_dispatch_chain_keeps_failed_retrieval_step():
+    """守护钉：图内检索**失败**（ok 非 true）不过滤——失败步要走渲染通道如实汇报，
+    只有 ok:true 的成功检索才视作「已落地、回执归批次通道」。"""
+    payload = {
+        "verb": "rank", "kind": "exec",
+        "steps": [{"verb": "rank", "ok": False}],
+        "pending_frontend": [
+            {"verb": "pack.download", "kind": "exec", "slots": {"limit": 5}},
+        ],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => x.verb)));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == ["rank", "pack.download"]
+
+
 def test_act_after_search_dispatches_pending_frontend_through_shared_chain():
     """P1 回归：检索落地后把 stashed 的顶层动作与 pending_frontend 一并交给共享链。"""
     after = _strip_comments(

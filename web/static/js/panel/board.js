@@ -2397,7 +2397,8 @@ function _applyBatchDecision(text, reply, decision, opts) {
     /* 唯一气泡规则——纯检索计划：检索回执是唯一气泡（actFinish 由 _execReceiptCovered 抑制）；
        混合计划：actFinish 是唯一气泡（本函数不推检索回执泡）。无计划（plan 空）照旧推检索回执。
        判定看规范派发清单（actCanonicalDispatchPlans）——plan.steps 是「后端已在图内执行」的
-       记录（混合计划 steps 全是 rank/rerank 而真身是 pack.download），拿它判会误当纯检索。 */
+       记录，拿它判会误当纯检索；清单内部已滤除「图内已执行的检索」头部项（真实混合轮顶层
+       plan 就是已跑完的 rank，真身动作在 pending_frontend），这里拿到的即是真实待派发动作。 */
     const _execPlans = actCanonicalDispatchPlans(reply && reply.plan);
     const _actWillReceipt = !!dispatchAction && plansNeedActReceipt(_execPlans);
     if (_execPlans.length && !_actWillReceipt && dispatchAction) _execReceiptCovered = true;

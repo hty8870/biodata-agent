@@ -13,7 +13,7 @@
    runRecommend/syncAiGates 随之不再引用。 */
 import { API, $, escapeHtml, isHttp, toast } from "#core";
 import { ACT_BUSY_NOTE, actExcludedFilesNote, actReceiptFrom, actSecondOrderGaps, actWhatHappened, tpBytes } from "#act_core";
-import { planIsRetrievalOnly, PLAN_CANCELLED_FALLBACK_ZH, searchFactsReceiptText } from "#board_core";
+import { planIsRetrievalOnly, planHeadIsGraphDoneRetrieval, PLAN_CANCELLED_FALLBACK_ZH, searchFactsReceiptText } from "#board_core";
 import { arxActive, arxBegin, arxDecision, arxDecisionDone, arxFail, arxFinish, arxOnChange, arxStep } from "#act_run";
 import { flowVerbLabel } from "#flow_trace";
 import { previewTaskPack, buildTaskPack, _tpPlan, _tpChosen } from "#task_pack";
@@ -1536,19 +1536,30 @@ function _actPlanDispatchFingerprint(plan) {
 export function actCanonicalDispatchPlans(plan) {
     /* 唯一规范清单：兼容旧 intents 时用它作头部，否则用顶层 plan；再接图后
        pending_frontend。只保留非取消 EXEC，按 verb + canonical slots 首见去重。
-       requires_results/reason/trace 属执行元数据，不改变「是不是同一动作」的身份。 */
+       requires_results/reason/trace 属执行元数据，不改变「是不是同一动作」的身份。
+       图内已执行的检索不进清单（2026-09-03 真机核实）：route=tool 混合轮的顶层 plan 是
+       环内已跑完的 rank（steps 记 ok:true），真身动作排在 pending_frontend——头部里
+       命中 planHeadIsGraphDoneRetrieval 的项不是待派发动作，派发它只会经
+       「图内已执行渲染通道」把已落地的检索再渲染一颗 actFinish 泡（双泡真根因）。
+       两处保留：非检索动词（compare 等图内执行的动作）靠渲染通道上卡与总结，不动；
+       pending_frontend 尾巴是图显式排队的图后接力，信任不过滤。 */
     if (!plan || typeof plan !== "object") return [];
     const intents = Array.isArray(plan.intents) && plan.intents.length ? plan.intents : [plan];
     const tails = Array.isArray(plan.pending_frontend) ? plan.pending_frontend : [];
     const seen = new Set();
     const out = [];
-    intents.concat(tails).forEach(function (item) {
+    const _push = function (item) {
         if (!item || item.kind !== "exec" || item.cancelled) return;
         const fingerprint = _actPlanDispatchFingerprint(item);
         if (seen.has(fingerprint)) return;
         seen.add(fingerprint);
         out.push(item);
+    };
+    intents.forEach(function (item) {
+        if (planHeadIsGraphDoneRetrieval(item, plan)) return;
+        _push(item);
     });
+    tails.forEach(_push);
     return out;
 }
 

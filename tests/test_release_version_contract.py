@@ -349,8 +349,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260903-web3"  # 混合轮双泡修复：board_core.plansNeedActReceipt / act.actPrimeTurnSearchFacts / board 判定改读规范派发清单。
-STATIC_ASSETS_SHA256 = "0f0145197ca116b47a31a9007431acd1d10dce18f8ebe4521b24cea81311ba10"
+CACHE_GENERATION = "20260903-web4"  # 混合轮双泡真根因修复：actCanonicalDispatchPlans 滤除图内已执行的检索头部项（真实混合轮顶层=已执行的 rank）。
+STATIC_ASSETS_SHA256 = "bcb32ce97561ceaa75ed7f9c48c2fc25811192f45c283e20f0bb980b99f6087c"
 
 
 def _static_assets_digest() -> str:
