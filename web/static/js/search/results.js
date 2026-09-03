@@ -379,7 +379,7 @@ export function enterResultsLayout() {
        console 仅在它将被隐藏时播（侧栏展开桌面档）；侧栏收起/移动端留任不播。 */
     const sideOpen = !document.body.classList.contains("side-closed") && window.innerWidth > 780;
     hero.querySelectorAll(".hero-rot, .chips, .memory-suggestions").forEach((el) => ghostExit(el, { y: -12, duration: 0.32 }));
-    if (sideOpen) ghostExit(hero.querySelector(".console"), { y: 22, duration: 0.34, ease: "power3.inOut" });
+    if (sideOpen) ghostExit(hero.querySelector(".console"), { y: 22, duration: 0.34, ease: "power3.inOut", keepIds: true });
     const from = hero.getBoundingClientRect().top;
     v.classList.add("has-results");
     const dy = from - hero.getBoundingClientRect().top;
