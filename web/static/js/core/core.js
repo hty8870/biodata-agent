@@ -78,17 +78,25 @@ export function countUp(el, to) {
    MOTION 关 / reduced-motion / 元素本就不可见时整体跳过，零 DOM 残留。 */
 export function ghostExit(el, opts) {
     if (!MOTION || !el || !el.getClientRects().length) return;
+    opts = opts || {};
     const r = el.getBoundingClientRect();
     const g = el.cloneNode(true);
-    g.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
-    g.removeAttribute("id");
+    /* keepIds（2026-09-03）：默认剥光克隆树 id（防重复 id 污染 $() 查询）。但 .console 子树的
+       圆形发送键整套 pill 造型锚在 #submitBtn id 上——剥 id 后幽灵失配回落 .btn 基态（方角）
+       与 .btn:disabled（灰底），肉眼即「点击发送后按钮短暂变方」。该真身在幽灵存活期（~0.34s）
+       始终留在 DOM 前序位置（display:none 而非移除），getElementById/querySelector 恒定先命中
+       真身；幽灵又 aria-hidden + pointer-events:none + 挂在 body 末尾——短暂共存无查询污染，
+       故对它保留 id，幽灵与真身分毫不差。 */
+    if (!opts.keepIds) {
+        g.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+        g.removeAttribute("id");
+    }
     g.setAttribute("aria-hidden", "true");
     const st = g.style;
     st.position = "fixed"; st.left = r.left + "px"; st.top = r.top + "px";
     st.width = r.width + "px"; st.height = r.height + "px";
     st.margin = "0"; st.pointerEvents = "none"; st.zIndex = "30";
     document.body.appendChild(g);
-    opts = opts || {};
     const dur = opts.duration || 0.3;
     gsap.to(g, {
         autoAlpha: 0, y: opts.y != null ? opts.y : -10,
