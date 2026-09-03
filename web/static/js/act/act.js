@@ -1484,6 +1484,16 @@ export async function actDispatchPlan(plan, said) {
      收尾成诚实文字（检索回执 + 注记原文）；
    - 「AI 执行」在在途窗口被关掉（stashed 但 actEnabled() 为假）：同上，如实说明没有代劳。 */
 let _actTurnSearchFacts = null;   // 本轮前置检索的事实 {total, shown}（一次性：actFinish 消费即清）
+/* 检索事实的唯一写口：混合轮（先检索后派发）把刚落地那批的命中/展示条数 stash 起来，
+   actFinish 一次性消费（取走即清）。actAfterSearch 与 board 的真派发点都经本函数写——
+   构造形状只有这一份，别处不得手拼 {total, shown}。 */
+export function actPrimeTurnSearchFacts(data) {
+    const d = (data && typeof data === "object") ? data : {};
+    _actTurnSearchFacts = {
+        total: Number(d.result_total) || ((d.results || []).length),
+        shown: (d.results || []).length,
+    };
+}
 function _actSearchReceiptText(f) {
     // 被抑制回执的补场句（边缘路径专用；主模板在 board.js cbPushCurrent，
     // 事实句真源在 board_core.searchFactsReceiptText）。
@@ -1554,10 +1564,7 @@ export function actAfterSearch(query, opts) {
     const stashed = opts && opts.actPlan;
     if (!stashed) return;
     const _d = LAST_RECOMMEND_DATA || {};
-    _actTurnSearchFacts = {
-        total: Number(_d.result_total) || ((_d.results || []).length),
-        shown: (_d.results || []).length,
-    };
+    actPrimeTurnSearchFacts(_d);
     const said = String(opts.actSaid || query || "");
     /* 补网：三条边界收尾（AI 执行中途关 / 取消·busy·未接住 / 派发抛错）的诚实文字同样
        接 LLM 原位改写——_d 是刚落地的那次前置检索响应（事实真源），note 把「没有执行」的
