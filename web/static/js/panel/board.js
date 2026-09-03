@@ -1509,7 +1509,7 @@ function placeChatLog() {
     // 余部向上飘走、大框向下沉去（输入权交给即将落位的 #chatComposer），切换不再硬跳。
     if (heroFlip) {
         heroFlip.querySelectorAll(".hero-rot, .chips, .memory-suggestions").forEach(function (el) { ghostExit(el, { y: -12, duration: 0.32 }); });
-        if (composerInHero()) ghostExit(heroFlip.querySelector(".console"), { y: 22, duration: 0.34, ease: "power3.inOut" });
+        if (composerInHero()) ghostExit(heroFlip.querySelector(".console"), { y: 22, duration: 0.34, ease: "power3.inOut", keepIds: true });
     }
     // 交换翻转帧（viewSwapEffective 与 view-swapped 类尚未一致）对话记录的搬家延到
     // placeChatSuite 的「淡出 → 搬家 → 淡入」里做——否则侧栏旧内容在淡出开始前就已瞬移（先闪后淡）。
