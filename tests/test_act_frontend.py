@@ -1672,17 +1672,21 @@ def test_search_facts_receipt_wording_lives_only_in_board_core():
         assert "searchFactsReceiptText(" in body, f"{name} 应调用 searchFactsReceiptText"
 
 
-def test_plan_is_retrieval_only_single_verdict_in_board_core():
-    """纯检索计划判定唯一真源是 board_core.planIsRetrievalOnly（动词表 PLAN_RETRIEVAL_VERBS）；
-    act.js 的 _ACT_RETRIEVAL_VERBS 与 board.js 的 _RETRIEVAL_VERBS 两份手抄表已退役，
-    两侧只许调判定函数（board.js 保留 _planVerbs 取动词数，不含动词表）。"""
+def test_single_bubble_verdicts_live_only_in_board_core():
+    """唯一气泡规则的两个判定件唯一真源都在 board_core：act.js 逐项抑制用
+    planIsRetrievalOnly；board.js 批次决策用 plansNeedActReceipt（喂 act.js 规范派发清单
+    actCanonicalDispatchPlans 的输出——plan.steps 是「后端已执行」记录，不得作判定输入）。
+    两侧都不许再自带检索动词表或 _planVerbs 取词函数。"""
     src = _strip_comments(_read("panel/board_core.js"))
     assert "export function planIsRetrievalOnly" in src
+    assert "export function plansNeedActReceipt" in src
     assert "PLAN_RETRIEVAL_VERBS" in src
-    for name in ("act/act.js", "panel/board.js"):
-        body = _strip_comments(_read(name))
-        assert "_RETRIEVAL_VERBS" not in body, f"{name} 又自带了检索动词表"
-        assert "planIsRetrievalOnly(" in body, f"{name} 应调用 planIsRetrievalOnly"
+    act = _strip_comments(_read("act/act.js"))
+    assert "_RETRIEVAL_VERBS" not in act and "planIsRetrievalOnly(" in act
+    board = _strip_comments(_read("panel/board.js"))
+    assert "_RETRIEVAL_VERBS" not in board and "_planVerbs" not in board
+    assert "plansNeedActReceipt(" in board, "board.js 应以 plansNeedActReceipt 判唯一气泡归属"
+    assert "actCanonicalDispatchPlans(" in board, "board.js 判定输入必须是规范派发清单"
 
 
 def test_plan_is_retrieval_only_behavior_in_node():
@@ -1704,6 +1708,27 @@ def test_plan_is_retrieval_only_behavior_in_node():
     )
     out = _run_node(script, plans, suffix=".mjs")
     assert out == [True, True, False, False, False, False]
+
+
+def test_plans_need_act_receipt_behavior_in_node():
+    """真行为门（node 里跑真 board_core）：规范派发清单任一动作自身 verb 在检索族外 → true
+    （混合形态：动作 steps 里记着 rank/rerank 但真身 pack.download，只看自身 verb）；
+    全检索动词清单 → false；空清单 / None → false（没有执行，谈不上执行回执）。"""
+    plans = [
+        [{"verb": "pack.download", "kind": "exec", "steps": [{"verb": "rank"}, {"verb": "rerank"}]}],
+        [{"verb": "rank"}, {"verb": "rerank"}],
+        [{"verb": "cite.export"}],
+        [],
+        None,
+    ]
+    script = (
+        f'import * as ns from "{(STATIC / "js" / "panel" / "board_core.js").as_uri()}";\n'
+        'import { readFileSync } from "node:fs";\n'
+        "const _in = JSON.parse(readFileSync(0, \"utf-8\"));\n"
+        "console.log(JSON.stringify(_in.map((p) => ns.plansNeedActReceipt(p))));\n"
+    )
+    out = _run_node(script, plans, suffix=".mjs")
+    assert out == [True, False, True, False, False]
 
 
 def test_content_disposition_filename_parsing_lives_only_in_downloads():

@@ -11,7 +11,7 @@
    core/search/results/facets/interactions/browse/accounts 同样经 import 取本文件导出
    （绞杀桥全退役）。 */
 import { API, $, escapeHtml, MOTION, ghostExit, nsKey, pushHistChatOnly, setHistHooks, toast, currentAccountScope } from "#core";
-import { cbPushFrame, cbRowsFrom, cbSummary, CB_MAX_FRAMES, cbMsgFbNext, cbMsgCommentText, cbMsgForkable, searchFactsReceiptText, planIsRetrievalOnly, PLAN_CANCELLED_FALLBACK_ZH } from "#board_core";
+import { cbPushFrame, cbRowsFrom, cbSummary, CB_MAX_FRAMES, cbMsgFbNext, cbMsgCommentText, cbMsgForkable, searchFactsReceiptText, plansNeedActReceipt, PLAN_CANCELLED_FALLBACK_ZH } from "#board_core";
 import { applyRecommendResult, bumpRecSeq, LAST_RECOMMEND_DATA, landRecommendResult,
     recSeqNow, runRecommend, searchParamSnapshot, setLastRecommendData, setPrelimBadge } from "#search";
 import { _facetFilters, _lenientDims, _queryHits, _suppressed,
@@ -19,7 +19,7 @@ import { _facetFilters, _lenientDims, _queryHits, _suppressed,
 import { deriveRescueOptions, isZeroHitBatch, latestActiveBatchId, selectDisplayBatch } from "#batch_select";
 import { facetStageCancel, facetStageSubmit, placeFacetBar, toggleQueryHit } from "#facets";
 import { estimateDuration, finishProgress, progressActive, resetSubmitButton, startProgress } from "#progress";
-import { actDispatchPlanChain, actEnabled } from "#act";
+import { actCanonicalDispatchPlans, actDispatchPlanChain, actEnabled, actPrimeTurnSearchFacts } from "#act";
 import { arxActive, arxFinish, arxTailHtml, arxVisible } from "#act_run";
 import { previewTaskPack, tpCountFromUtterance } from "#task_pack";
 import { usageLog, usageEnabled, usageSetEnabled, usageConsentGiven, requestUsageConsent, usageScope } from "#usage_log";
@@ -2340,15 +2340,6 @@ function ubFillQuery(input, value, sentText) {
      runRecommend 推出最终帧后再 push（同步 push 会挂到 preliminary 先行帧、帧 id 错位）。
    - dedupe / alternate：不重渲结果区（保持当前屏）——摘徽标、撤进度、如实回执；弱批直接丢弃
      （不作任何形式展示），不再刷新 batchBar（结果头部件整体退役）。 */
-/* 唯一气泡规则的判定件：检索族动词表在 board_core.PLAN_RETRIEVAL_VERBS。 */
-function _planVerbs(plan) {
-    if (!plan || typeof plan !== "object") return [];
-    if (Array.isArray(plan.steps) && plan.steps.length) {
-        return plan.steps.map(function (s) { return String((s && s.verb) || "").trim(); }).filter(Boolean);
-    }
-    const v = String(plan.verb || "").trim();
-    return v ? [v] : [];
-}
 /* 结果 pill 文案 = 实际命中/生效的关键词——把 query_constraints（同 _queryHits 的
    {dim,label,values} 形状）里「生效」的取值用顿号连起来（如「FASTQ、乳腺癌」），太长截断；
    取不到 → 空串，调用方回退原 query（现状）。只用 include（正向硬条件）：排除/优先/被忽略的
@@ -2404,11 +2395,12 @@ function _applyBatchDecision(text, reply, decision, opts) {
     // 不用 typeof x === "function"（board 静态门禁禁它：会把打错的函数名静默短路）；用 instanceof Function 同义。
     const dispatchAction = (opts.dispatchAction instanceof Function) ? opts.dispatchAction : null;
     /* 唯一气泡规则——纯检索计划：检索回执是唯一气泡（actFinish 由 _execReceiptCovered 抑制）；
-       混合计划：actFinish 是唯一气泡（本函数不推检索回执泡）。无计划（plan 空）照旧推检索回执。 */
-    const _verbs = _planVerbs(reply && reply.plan);
-    const _retrievalOnly = planIsRetrievalOnly(reply && reply.plan);
-    const _actWillReceipt = _verbs.length > 0 && !_retrievalOnly;
-    if (_retrievalOnly && dispatchAction) _execReceiptCovered = true;
+       混合计划：actFinish 是唯一气泡（本函数不推检索回执泡）。无计划（plan 空）照旧推检索回执。
+       判定看规范派发清单（actCanonicalDispatchPlans）——plan.steps 是「后端已在图内执行」的
+       记录（混合计划 steps 全是 rank/rerank 而真身是 pack.download），拿它判会误当纯检索。 */
+    const _execPlans = actCanonicalDispatchPlans(reply && reply.plan);
+    const _actWillReceipt = !!dispatchAction && plansNeedActReceipt(_execPlans);
+    if (_execPlans.length && !_actWillReceipt && dispatchAction) _execReceiptCovered = true;
     if (decision && decision.mode === "display" && decision.view) {
         // supersede 即丢弃：落地前先把被胜者 supersede 的批从视图里剔掉——只展示一份最终结果，
         // 被覆盖批从数据（result_batches）到渲染（pill/切换器）整个不存在。
@@ -2452,7 +2444,7 @@ function _applyBatchDecision(text, reply, decision, opts) {
             }
             return runRecommend(Object.assign(_a, rewritten ? { sayText: text } : {})).then(_aNote);
         };
-        if (dispatchAction) { _run().then(dispatchAction); } else { _run(); }
+        if (dispatchAction) { _run().then(function () { dispatchAction(_actWillReceipt ? LAST_RECOMMEND_DATA : null); }); } else { _run(); }
         return;
     }
     // dedupe / alternate：结果区不重渲（保持当前屏），只摘徽标、撤进度、如实回执。
@@ -2478,7 +2470,7 @@ function _applyBatchDecision(text, reply, decision, opts) {
     }
     // alternate（换词/未知 trace 的弱批）不再作「备选 pill」——弱批直接丢弃（不展示也不存储），
     //   保持当前屏 + 如实回执（ALTERNATE_SYS_TEXT 已改不含「上方切换」）。不再刷新 batchBar。
-    if (dispatchAction) { dispatchAction(); } else { ubStreamRunSettle(); }
+    if (dispatchAction) { dispatchAction(_actWillReceipt ? LAST_RECOMMEND_DATA : null); } else { ubStreamRunSettle(); }
 }
 
 /* supersede 即丢弃：剔除被胜者（activeBatchId 那批）覆盖的批。胜者保留；其余若被
@@ -2718,7 +2710,7 @@ function ubDispatch(text, reply, fromChat, wasChat) {
         // 落地又推了新帧 → sys.frameId ≠ 当前帧 → 误显示「查看历史回复」（实测复现：纯检索
         // 走环内 rank 的 route=tool 路径，sys「检索数据集完成。」下方出链接）。故把派发延后到
         // runRecommend 落地（promise resolve）后执行；摘徽标/去重/备选分支不推新帧，直接同步派发。
-        const _dispatchAction = function () { ubDispatchAction(text, reply.plan || null, fromChat, wasChat); };
+        const _dispatchAction = function (searchData) { ubDispatchAction(text, reply.plan || null, fromChat, wasChat, searchData); };
         if (_tpay && _tpay.ok === true) {
             // 覆盖策略：与 search a 档共用同一选择函数——严格更高级才
             // 自动换屏；同 scope 去重不追加；换词批作备选（轻量刷新 batchBar 加非活动 pill）；
@@ -2778,7 +2770,7 @@ function ubStreamRunSettle() {
     if (arxActive()) arxFinish();
 }
 
-function ubDispatchAction(said, plan, fromChat, wasChat) {
+function ubDispatchAction(said, plan, fromChat, wasChat, searchData) {
     // 后端 tool 路由只发 EXEC plan；词表与派发表漂移时如实回音，不瞎做。
     if (!plan || plan.kind !== "exec") {
         ubStreamRunSettle();   // 流式规划档：这里已是终点，规划流就地折叠
@@ -2876,6 +2868,9 @@ function ubDispatchAction(said, plan, fromChat, wasChat) {
     const pending = cbPendingMessage();
     /* 顶层 plan/兼容 intents 与 pending_frontend 只交给 act.js 的规范链拼接、去重、串行派发；
        board 不再先派顶层 plan、再自行跑尾巴，避免同一动作执行两次。 */
+    /* 混合轮（先检索后派发）：检索事实只在这个真派发点灌注（actFinish 一次性消费并进
+       唯一气泡）——上方 act 关闭的指路分支提前 return 灌不到，杜绝陈旧事实漏进下一轮。 */
+    if (searchData) actPrimeTurnSearchFacts(searchData);
     const _dispatching = actDispatchPlanChain(plan, said);
     _dispatching.then(function (mark) {
         // 返回值契约：true=行动流全程呈现（标 action 不挂注记）；字符串=以注记挂上（取消/忙碌）；

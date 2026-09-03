@@ -267,6 +267,28 @@ def test_canonical_dispatch_chain_deduplicates_root_from_pending_frontend():
     ]
 
 
+def test_canonical_dispatch_chain_mixed_turn_steps_do_not_mask_exec_verb():
+    """混合轮（检索+执行）形态钉：顶层 verb=pack.download、steps 只记环内 rank/rerank、
+    pending_frontend 与顶层同动作 → 规范清单输出单个 pack.download。
+    steps 是「后端已在图内执行」的记录，绝不能把它当派发清单（双泡 bug 的根因形态）。"""
+    payload = {
+        "verb": "pack.download", "kind": "exec", "slots": {"limit": 5},
+        "steps": [{"verb": "rank"}, {"verb": "rerank"}],
+        "pending_frontend": [
+            {"verb": "pack.download", "kind": "exec", "slots": {"limit": 5}},
+        ],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => ({ verb: x.verb, slots: x.slots }))));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == [{"verb": "pack.download", "slots": {"limit": 5}}]
+
+
 def test_act_after_search_dispatches_pending_frontend_through_shared_chain():
     """P1 回归：检索落地后把 stashed 的顶层动作与 pending_frontend 一并交给共享链。"""
     after = _strip_comments(
@@ -789,8 +811,9 @@ def test_search_then_dispatch_keeps_the_say_and_marks_the_right_bubble():
     assert "keepConv: !!(fromChat || wasChat)" in code, "keepConv 必须含 wasChat（chat-in-main 同待遇）"
     assert 'sayText: said' in code, "新时间线档必须给 sayText 重推原话（否则 say 被清场吃掉）"
     assert 'sayPushed: true' in code, "keepConv 档必须 sayPushed（say 已在屏，防双泡）"
-    # ubDispatchAction 要能拿到 wasChat：ubDispatch 调用处必须传
-    assert "ubDispatchAction(text, reply.plan || null, fromChat, wasChat)" in _strip_comments(BOARD)
+    # ubDispatchAction 要能拿到 wasChat：ubDispatch 调用处必须传（第 5 参 searchData 是
+    # 混合轮检索事实，可空——纯派发路径不灌注）
+    assert "ubDispatchAction(text, reply.plan || null, fromChat, wasChat, searchData)" in _strip_comments(BOARD)
     mark = re.search(r"export function cbMarkLastSayAsAction\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
     assert mark, "找不到 cbMarkLastSayAsAction"
     mcode = _strip_comments(mark.group(1))

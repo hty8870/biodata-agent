@@ -247,6 +247,20 @@ export function planIsRetrievalOnly(plan) {
     return verbs.length > 0 && verbs.every(function (v) { return !!PLAN_RETRIEVAL_VERBS[v]; });
 }
 
+/* 规范派发清单是否会产生执行回执：任一动作的自身 verb 落在检索族之外即 true。
+   唯一气泡规则的另一半判定件——判定输入必须是 act.js 规范链的真实派发清单
+   （actCanonicalDispatchPlans：顶层 plan/兼容 intents + pending_frontend 去重后），
+   不是 plan.steps：steps 只是「后端已在图内执行」的记录（混合计划 steps 全是
+   rank/rerank 而真身是 pack.download），拿它判会把混合轮误当纯检索。
+   动词身份只看 item.verb（本动作要做什么），与该动作 steps 里记过的检索工具无关。
+   空清单/非数组 → false（没有执行，谈不上执行回执）。 */
+export function plansNeedActReceipt(plans) {
+    if (!Array.isArray(plans)) return false;
+    return plans.some(function (p) {
+        return !!p && !PLAN_RETRIEVAL_VERBS[String(p.verb || "").trim()];
+    });
+}
+
 /* ==================== 取消态回音（条件板/执行层共用锚点） ==================== */
 
 /* 取消态 reason_zh 缺省时的前端兜底句——与后端 action_plan.py 极性门的
