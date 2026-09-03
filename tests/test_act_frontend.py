@@ -1731,6 +1731,30 @@ def test_plans_need_act_receipt_behavior_in_node():
     assert out == [True, False, True, False, False]
 
 
+def test_plan_head_is_graph_done_retrieval_behavior_in_node():
+    """真行为门（node 里跑真 board_core）：规范派发清单的头部过滤判据——
+    检索族 verb 且同一 verb 在 plan.steps 以 ok:true 执行 → true（真实混合轮顶层 rank）；
+    非检索动词 / 失败步 / steps 无此 verb / 无 steps / 空输入 → false（守护渲染通道与失败渲染）。"""
+    cases = [
+        [{"verb": "rank"}, {"steps": [{"verb": "rank", "ok": True}]}],
+        [{"verb": "compare"}, {"steps": [{"verb": "compare", "ok": True}]}],
+        [{"verb": "rank"}, {"steps": [{"verb": "rank", "ok": False}]}],
+        [{"verb": "rank"}, {"steps": [{"verb": "rerank", "ok": True}]}],
+        [{"verb": "rank"}, {}],
+        [{"verb": "pack.download"}, {"steps": [{"verb": "rank", "ok": True}]}],
+        [None, None],
+    ]
+    script = (
+        f'import * as ns from "{(STATIC / "js" / "panel" / "board_core.js").as_uri()}";\n'
+        'import { readFileSync } from "node:fs";\n'
+        "const _in = JSON.parse(readFileSync(0, \"utf-8\"));\n"
+        "console.log(JSON.stringify(_in.map((c) => ns.planHeadIsGraphDoneRetrieval(c[0], c[1]))));\n"
+    )
+    out = _run_node(script, cases, suffix=".mjs")
+    assert out == [True, False, False, False, False, False, False]
+
+
+
 def test_content_disposition_filename_parsing_lives_only_in_downloads():
     """Content-Disposition 文件名解析唯一真源是 downloads.dlqFilenameFrom；
     task_pack / project_exports 只许 import 调用，不再各带一份 filename=" 正则。"""

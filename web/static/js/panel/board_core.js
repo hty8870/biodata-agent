@@ -249,15 +249,32 @@ export function planIsRetrievalOnly(plan) {
 
 /* 规范派发清单是否会产生执行回执：任一动作的自身 verb 落在检索族之外即 true。
    唯一气泡规则的另一半判定件——判定输入必须是 act.js 规范链的真实派发清单
-   （actCanonicalDispatchPlans：顶层 plan/兼容 intents + pending_frontend 去重后），
-   不是 plan.steps：steps 只是「后端已在图内执行」的记录（混合计划 steps 全是
-   rank/rerank 而真身是 pack.download），拿它判会把混合轮误当纯检索。
+   （actCanonicalDispatchPlans：顶层 plan/兼容 intents + pending_frontend 去重、
+   并滤除图内已执行的检索头部项后），不是 plan.steps：steps 只是「后端已在图内执行」
+   的记录，拿它判会把混合轮误当纯检索。
    动词身份只看 item.verb（本动作要做什么），与该动作 steps 里记过的检索工具无关。
    空清单/非数组 → false（没有执行，谈不上执行回执）。 */
 export function plansNeedActReceipt(plans) {
     if (!Array.isArray(plans)) return false;
     return plans.some(function (p) {
         return !!p && !PLAN_RETRIEVAL_VERBS[String(p.verb || "").trim()];
+    });
+}
+
+/* 规范派发清单的头部过滤判据（2026-09-03 真机核实）：route=tool 混合轮的顶层 plan 是
+   环内已跑完的 rank（steps 记 ok:true），真身动作排在 pending_frontend——「自身 verb
+   属检索族且同一 verb 已在 plan.steps 以 ok:true 执行」的头部项不是待派发动作，
+   派发它只会经「图内已执行渲染通道」把已落地的检索再渲染一颗 actFinish 泡（双泡真根因）。
+   两类 false：非检索动词（compare 等图内执行动作——卡片与总结只靠渲染通道上屏）；
+   检索步 ok 非 true（失败步留着如实渲染）。pending_frontend 尾巴不经本判据——
+   那是图显式排队的图后接力，信任它。 */
+export function planHeadIsGraphDoneRetrieval(item, plan) {
+    if (!item || !plan) return false;
+    var v = String(item.verb || "").trim();
+    if (!PLAN_RETRIEVAL_VERBS[v]) return false;
+    var steps = Array.isArray(plan.steps) ? plan.steps : [];
+    return steps.some(function (s) {
+        return s && s.ok === true && String(s.verb || "").trim() === v;
     });
 }
 
