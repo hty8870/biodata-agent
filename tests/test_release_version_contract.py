@@ -349,8 +349,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260903-web1"  # Wave 3 P1：顶层 plan 与 pending_frontend 统一去重派发。
-STATIC_ASSETS_SHA256 = "894e06f9caf10f64d0fbe7b49267b25033330d4abbf69dd4bf12157688b7f869"
+CACHE_GENERATION = "20260903-web2"  # 指路条核销态跨重渲存续（results.js _actionHintSettled / resetActionHint，search.js 新时间线复位）。
+STATIC_ASSETS_SHA256 = "c0f4c0d779d7da015788be2a14dc6c38ab13f3e2be1931050c0caec3317a9dc2"
 
 
 def _static_assets_digest() -> str:

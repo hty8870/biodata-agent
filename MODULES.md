@@ -514,7 +514,7 @@
 | `result_total` | `results.js`(renderResultSummary 方法句里「库中共 N 条匹配」) | 计数提示（并入结果摘要卡的一段自然语言，不再单独渲染 #resultsTotal） |
 | `relaxation_options[]` | `results.js`(0 结果一键放宽：`buildRelaxBlock` 按 `kind` 分组 + 「更多放宽方式」展开；`applyRelaxation` 按 `kind` 选横幅措辞) | 引导式放宽。`kind` = `"drop"`（去掉一个条件，其余都在）/ `"only"`（只按一个条件搜，其余全放开——第一档全军覆没时唯一还救得回来的一档）。**措辞不可混用**：「去掉 X」与「只按 X 搜」是相反的两件事 |
 | `degraded_search`（`{ignored_terms,query,count,results,active_filters}` 或 `null`） | `results.js`(未收录词弃权态的「忽略这几个词再搜」芯片 + `applyRelaxation(data,"degraded")`；`resolution_status="degraded"` 时结果区顶部的「这批结果忽略了 X」横幅) | 确定性降级**建议**，永不在 workflow 内自动应用。需要 LLM 换词救回时只走 Agent `rescue/search.rerun` 套件，由工具内机械择优闸决定是否换屏 |
-| `action_markers[]` | `results.js`(renderActionHint → `#actionHint`) | 用户在查询里说出的执行类诉求（打包/下载脚本/导出引文）。这些词此前会让**整句检索弃权**；现在不再阻断检索，但也不静默吞掉——只指路到「下载这批数据」，**不代劳** |
+| `action_markers[]` | `results.js`(renderActionHint → `#actionHint`) | 用户在查询里说出的执行类诉求（打包/下载脚本/导出引文）。这些词此前会让**整句检索弃权**；现在不再阻断检索，但也不静默吞掉——只指路到「下载这批数据」，**不代劳**。该动作真执行成后由 actFinish 调 `clearActionHint` 摘除并置时间线级核销态（换批/分面重跑/历史回看不再复活；新查询时间线经 `resetActionHint` 复位） |
 | `markdown` | `results.js`(诊断/原始输出) | 无结果/原始文案 |
 | `llm_response_used` · `provider` | `results.js`(来源标签)·`search.js`(缓存决策) | LLM 状态 |
 | `interpretation` | `/api/recommend`：`search.js`→`interactions.js`；`/api/interpret`：`interactions.js` 输入防抖预览（来源/时间摘要均采用后端真源） | 原句、送入规则解析的清洗句、实际来源与完整 intent 投影；轻量预览不装载语料、不执行检索排序 |
