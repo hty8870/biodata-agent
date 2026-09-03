@@ -870,13 +870,19 @@ function renderOrHandling(data) {
 // （unresolved_term 弃权，连人类肺数据都查不到）。现在它们不再阻断检索，但也不能就这么吞掉——
 // 用户明确说了要打包，界面得告诉他功能在哪儿。只指路、不代劳：产包仍走原来的预览→确认流程。
 // 复用 #unusedQueryTerms 那套样式类，不新增 DOM 结构。
+/* 核销态跨重渲存续（2026-09-03）：只摘当前 DOM 不够——换批（switchBatch/_batchView 继承落地时的
+   action_markers）、分面重跑、历史回看都会重新走本渲染口，把已摘掉的指路条复活（明明执行了，
+   却又说「检索本身不包含这一步」）。核销因此记为「这条对话时间线」的状态：一旦动作执行成，
+   本时间线内任何重渲都不再出指路条；新时间线由 resetActionHint 复位（search.js runRecommend
+   新查询分支调用），那句若也提到执行类说法则照常指路。 */
+let _actionHintSettled = false;
 function renderActionHint(data) {
     const box = $("actionHint");
     if (!box) return;
     const ruleMarks = (data && data.action_markers) || [];
     const marks = ruleMarks;
     const hasResults = data && Array.isArray(data.results) && data.results.length;
-    if (!marks.length || !hasResults) { box.hidden = true; box.innerHTML = ""; return; }
+    if (_actionHintSettled || !marks.length || !hasResults) { box.hidden = true; box.innerHTML = ""; return; }
     box.hidden = false;
     const chips = marks.map((t) => `<span class="uqt-term">${escapeHtml(String(t))}</span>`).join("");
     box.innerHTML = `<span class="uqt-txt">你提到了 ${chips}——检索本身<b>不包含</b>这一步。`
@@ -887,11 +893,16 @@ function renderActionHint(data) {
    同轮把动作真执行成了（act.js 执行层成功收尾时调本函数），它就自相矛盾，必须摘掉；
    失败/取消不摘（手动入口恰好是那时的正确退路）。 */
 export function clearActionHint() {
+    _actionHintSettled = true;
     const box = $("actionHint");
     if (!box) return;
     box.hidden = true;
     box.innerHTML = "";
 }
+
+/* 新对话时间线的复位口：换查询词重起一段对话时，上一段的核销态随之失效——
+   那句若也提到执行类说法，指路条照常指路（调用点：search.js runRecommend 的 !keep 新查询分支）。 */
+export function resetActionHint() { _actionHintSettled = false; }
 
 // 标识符精确反查回显：query 本身是标识符时。indexed 且命中 → 直达该数据集卡片；
 // GEO/SRA 等本目录不索引的 → 诚实 fail-closed：说清不在本目录、给来源库直达链接，绝不静默返回 0。

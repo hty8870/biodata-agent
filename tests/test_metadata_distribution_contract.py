@@ -13,11 +13,17 @@ import sanitize_metadata_contacts as contacts  # noqa: E402
 
 
 def _snapshots(root: Path = ROOT) -> set[str]:
-    return {
-        path.relative_to(root).as_posix()
-        for folder in (root / "database" / "base", root / "database" / "external")
-        for path in folder.glob("*.json")
-    }
+    """tracked 快照清单（git ls-files）：权利清单只管**随仓库分发**的快照。
+    filesystem glob 会把本机运行产物（gitignored 的 database/external/upload_*.json
+    用户上传落盘）也算进来——那些文件从不进仓库、从不出门，不该要求权利条目，
+    否则任何真用过本产品的机器都过不了门。"""
+    import subprocess
+
+    out = subprocess.run(
+        ["git", "ls-files", "database/base", "database/external"],
+        cwd=root, capture_output=True, text=True, check=True,
+    ).stdout
+    return {ln.strip() for ln in out.splitlines() if ln.strip().endswith(".json")}
 
 
 def test_every_snapshot_has_a_rights_manifest_entry() -> None:

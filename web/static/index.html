@@ -18,7 +18,7 @@
 <!-- 可选单包多臂：arm|weight|strategy|rerank|recall;...；权重须合计 1，空值=禁用。 -->
 <meta name="biodata-experiment-arms" content="">
 <title>BioData Agent · 生物数据集检索</title>
-<link rel="stylesheet" href="/static/css/app.css?v=20260903-web1">
+<link rel="stylesheet" href="/static/css/app.css?v=20260903-web2">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 <!-- C4（2026-08-03 Phase）：C1 九文件（core/usage_core/usage_log/board_core/memory_rank/dream_core/
      act_core/memory/accounts）+ C2 五文件（cards/shell/results/facets/progress）+ C3 七文件
@@ -32,53 +32,53 @@
      不碰，parity 门只查**被使用**的 specifier，故本包不红；后续收口时如需补齐 dataset.html 键即可。 -->
 <script type="importmap">
 {"imports": {
-    "#core": "/static/js/core/core.js?v=20260903-web1",
-    "#usage_core": "/static/js/core/usage_core.js?v=20260903-web1",
-    "#usage_log": "/static/js/core/usage_log.js?v=20260903-web1",
-    "#benchfb_core": "/static/js/core/benchfb_core.js?v=20260903-web1",
-    "#benchfb": "/static/js/core/benchfb.js?v=20260903-web1",
-    "#board_core": "/static/js/panel/board_core.js?v=20260903-web1",
-    "#memory_rank": "/static/js/panel/memory_rank.js?v=20260903-web1",
-    "#dream_core": "/static/js/panel/dream_core.js?v=20260903-web1",
-    "#act_core": "/static/js/act/act_core.js?v=20260903-web1",
-    "#downloads": "/static/js/core/downloads.js?v=20260903-web1",
-    "#memory": "/static/js/panel/memory.js?v=20260903-web1",
-    "#examples": "/static/js/panel/examples.js?v=20260903-web1",
-    "#accounts": "/static/js/panel/accounts.js?v=20260903-web1",
-    "#cards": "/static/js/search/cards.js?v=20260903-web1",
-    "#shell": "/static/js/core/shell.js?v=20260903-web1",
-    "#results": "/static/js/search/results.js?v=20260903-web1",
-    "#facets": "/static/js/search/facets.js?v=20260903-web1",
-    "#progress": "/static/js/core/progress.js?v=20260903-web1",
-    "#search": "/static/js/search/search.js?v=20260903-web1",
-    "#browse": "/static/js/search/browse.js?v=20260903-web1",
-    "#reuse_pack": "/static/js/act/reuse_pack.js?v=20260903-web1",
-    "#fav_folders": "/static/js/panel/fav_folders.js?v=20260903-web1",
-    "#interactions": "/static/js/core/interactions.js?v=20260903-web1",
-    "#onboarding": "/static/js/core/onboarding.js?v=20260903-web1",
-    "#dataset_page": "/static/js/search/dataset_page.js?v=20260903-web1",
-    "#sync_button_core": "/static/js/search/sync_button_core.js?v=20260903-web1",
-    "#sync_button": "/static/js/search/sync_button.js?v=20260903-web1",
-    "#board": "/static/js/panel/board.js?v=20260903-web1",
-    "#task_pack": "/static/js/act/task_pack.js?v=20260903-web1",
-    "#act": "/static/js/act/act.js?v=20260903-web1",
-    "#act_run": "/static/js/act/act_run.js?v=20260903-web1",
-    "#dream": "/static/js/panel/dream.js?v=20260903-web1",
-    "#artifacts": "/static/js/core/artifacts.js?v=20260903-web1",
-    "#projects_core": "/static/js/core/projects_core.js?v=20260903-web1",
-    "#projects": "/static/js/core/projects.js?v=20260903-web1",
-    "#feedback_dialog_core": "/static/js/core/feedback_dialog_core.js?v=20260903-web1",
-    "#feedback": "/static/js/core/feedback.js?v=20260903-web1",
-    "#ladder_core": "/static/js/search/ladder_core.js?v=20260903-web1",
-    "#ladder": "/static/js/search/ladder.js?v=20260903-web1",
-    "#task_card": "/static/js/search/task_card.js?v=20260903-web1",
-    "#project_updates_core": "/static/js/core/project_updates_core.js?v=20260903-web1",
-    "#project_updates": "/static/js/core/project_updates.js?v=20260903-web1",
-    "#project_exports_core": "/static/js/core/project_exports_core.js?v=20260903-web1",
-    "#project_exports": "/static/js/panel/project_exports.js?v=20260903-web1",
-    "#batch_select": "/static/js/core/batch_select.js?v=20260903-web1",
-    "#flow_trace": "/static/js/core/flow_trace.js?v=20260903-web1",
-    "#boot": "/static/js/core/boot.js?v=20260903-web1"
+    "#core": "/static/js/core/core.js?v=20260903-web2",
+    "#usage_core": "/static/js/core/usage_core.js?v=20260903-web2",
+    "#usage_log": "/static/js/core/usage_log.js?v=20260903-web2",
+    "#benchfb_core": "/static/js/core/benchfb_core.js?v=20260903-web2",
+    "#benchfb": "/static/js/core/benchfb.js?v=20260903-web2",
+    "#board_core": "/static/js/panel/board_core.js?v=20260903-web2",
+    "#memory_rank": "/static/js/panel/memory_rank.js?v=20260903-web2",
+    "#dream_core": "/static/js/panel/dream_core.js?v=20260903-web2",
+    "#act_core": "/static/js/act/act_core.js?v=20260903-web2",
+    "#downloads": "/static/js/core/downloads.js?v=20260903-web2",
+    "#memory": "/static/js/panel/memory.js?v=20260903-web2",
+    "#examples": "/static/js/panel/examples.js?v=20260903-web2",
+    "#accounts": "/static/js/panel/accounts.js?v=20260903-web2",
+    "#cards": "/static/js/search/cards.js?v=20260903-web2",
+    "#shell": "/static/js/core/shell.js?v=20260903-web2",
+    "#results": "/static/js/search/results.js?v=20260903-web2",
+    "#facets": "/static/js/search/facets.js?v=20260903-web2",
+    "#progress": "/static/js/core/progress.js?v=20260903-web2",
+    "#search": "/static/js/search/search.js?v=20260903-web2",
+    "#browse": "/static/js/search/browse.js?v=20260903-web2",
+    "#reuse_pack": "/static/js/act/reuse_pack.js?v=20260903-web2",
+    "#fav_folders": "/static/js/panel/fav_folders.js?v=20260903-web2",
+    "#interactions": "/static/js/core/interactions.js?v=20260903-web2",
+    "#onboarding": "/static/js/core/onboarding.js?v=20260903-web2",
+    "#dataset_page": "/static/js/search/dataset_page.js?v=20260903-web2",
+    "#sync_button_core": "/static/js/search/sync_button_core.js?v=20260903-web2",
+    "#sync_button": "/static/js/search/sync_button.js?v=20260903-web2",
+    "#board": "/static/js/panel/board.js?v=20260903-web2",
+    "#task_pack": "/static/js/act/task_pack.js?v=20260903-web2",
+    "#act": "/static/js/act/act.js?v=20260903-web2",
+    "#act_run": "/static/js/act/act_run.js?v=20260903-web2",
+    "#dream": "/static/js/panel/dream.js?v=20260903-web2",
+    "#artifacts": "/static/js/core/artifacts.js?v=20260903-web2",
+    "#projects_core": "/static/js/core/projects_core.js?v=20260903-web2",
+    "#projects": "/static/js/core/projects.js?v=20260903-web2",
+    "#feedback_dialog_core": "/static/js/core/feedback_dialog_core.js?v=20260903-web2",
+    "#feedback": "/static/js/core/feedback.js?v=20260903-web2",
+    "#ladder_core": "/static/js/search/ladder_core.js?v=20260903-web2",
+    "#ladder": "/static/js/search/ladder.js?v=20260903-web2",
+    "#task_card": "/static/js/search/task_card.js?v=20260903-web2",
+    "#project_updates_core": "/static/js/core/project_updates_core.js?v=20260903-web2",
+    "#project_updates": "/static/js/core/project_updates.js?v=20260903-web2",
+    "#project_exports_core": "/static/js/core/project_exports_core.js?v=20260903-web2",
+    "#project_exports": "/static/js/panel/project_exports.js?v=20260903-web2",
+    "#batch_select": "/static/js/core/batch_select.js?v=20260903-web2",
+    "#flow_trace": "/static/js/core/flow_trace.js?v=20260903-web2",
+    "#boot": "/static/js/core/boot.js?v=20260903-web2"
 }}
 </script>
 
@@ -867,7 +867,7 @@
                 </div>
                 <!-- 详情页步骤用真界面实拍（随包 /static/assets/，同源、离线可用），不再是手绘示意图。 -->
                 <div class="tour-visual tour-detail" data-onboarding-visual="detail" hidden>
-                    <img src="/static/assets/onboarding-dataset-detail.png?v=20260903-web1" alt="数据集详情页实拍：页头有数据集标题、徽章与「打开数据集页 / 下载数据」按钮；下方依次是介绍、全部文件、元数据兼容的数据集、投稿可用性与 FAIR 自检、导出引文、数据集对比六个子标签，当前打开的是介绍。" loading="lazy">
+                    <img src="/static/assets/onboarding-dataset-detail.png?v=20260903-web2" alt="数据集详情页实拍：页头有数据集标题、徽章与「打开数据集页 / 下载数据」按钮；下方依次是介绍、全部文件、元数据兼容的数据集、投稿可用性与 FAIR 自检、导出引文、数据集对比六个子标签，当前打开的是介绍。" loading="lazy">
                     <div class="tour-detail-fallback" hidden>这是「数据集详情」页的实拍截图：页头为数据集标题、徽章与「打开数据集页 / 下载数据」按钮，下方依次是六个子标签——介绍 · 全部文件 · 元数据兼容 · FAIR 自检 · 导出引文 · 数据集对比。</div>
                 </div>
                 <div class="tour-visual tour-board" data-onboarding-visual="board" hidden>
@@ -1210,81 +1210,81 @@
      标签全是 ES Module（type=module，全 deferred、先于 DOMContentLoaded 就绪）；C1-C3 文件里
      尚未改写的裸引用经各自目标的 window 绞杀桥读取（统一删桥）。
      加载序契约不变：core 最先、boot 最后。 -->
-<script type="module" src="/static/js/core/core.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/core.js?v=20260903-web2"></script>
 <!-- usage_core 紧跟 core：使用反馈的纯聚合核（无 DOM/存储/墙钟/网络，node 可单测，C1 已转 ESM）。
      usage_log 紧随其后（已转 ESM）：usageLog 经绞杀桥挂 window，后面每个经典模块照原样裸调
      core.js 则经 import 取它。两者都不发任何网络请求，见 usage_log.js 文件头。 -->
-<script type="module" src="/static/js/core/usage_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/usage_log.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/benchfb_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/benchfb.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/panel/board_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/panel/memory_rank.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/usage_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/usage_log.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/benchfb_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/benchfb.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/panel/board_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/panel/memory_rank.js?v=20260903-web2"></script>
 <!-- dream_core 紧跟 memory_rank：dream 记忆的纯核（素材组织/裁剪/去重，node 可单测，C1 已转 ESM），dream.js 经 import 调它。 -->
-<script type="module" src="/static/js/panel/dream_core.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/panel/dream_core.js?v=20260903-web2"></script>
 <!-- act_core 执行层纯核（回执/注记构造 + tpBytes，node 可单测，C1 已转 ESM）：act.js 与 task_pack.js
      （同为 ESM）经 import 共用；module 天然 deferred，仍先于 DOMContentLoaded（act.js 的 initAct 在 boot 里）就绪。 -->
-<script type="module" src="/static/js/act/act_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/panel/memory.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/act/act_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/panel/memory.js?v=20260903-web2"></script>
 <!-- examples 操作样例库（2026-08-13 用户挑选入库）：候选池→勾选→正式库；memory.js 开弹窗时调它的 renderExampleCandidates。 -->
-<script type="module" src="/static/js/panel/examples.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/cards.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/shell.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/results.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/facets.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/progress.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/search.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/browse.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/panel/examples.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/cards.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/shell.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/results.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/facets.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/progress.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/search.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/browse.js?v=20260903-web2"></script>
 <!-- reuse_pack 紧跟 browse：同属收藏视图；只消费 core.js 的 getFavs/$/toast/escapeHtml。 -->
-<script type="module" src="/static/js/act/reuse_pack.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/act/reuse_pack.js?v=20260903-web2"></script>
 <!-- fav_folders 在 reuse_pack 之后、interactions 之前：心形 popover / 收藏夹 tab / 管理面板；
      只调 core.js 的存储 CRUD 与 buildCard，顶层不引用未声明绑定。 -->
-<script type="module" src="/static/js/panel/fav_folders.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/interactions.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/onboarding.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/panel/board.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/act/task_pack.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/panel/fav_folders.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/interactions.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/onboarding.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/panel/board.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/act/task_pack.js?v=20260903-web2"></script>
 <!-- act 紧跟 task_pack：一句话执行层派发的就是 task_pack / reuse_pack / results / cards 里那几件既有能力
      （三者同为 ESM，同批互转走 import；board↔act 成环但绑定都只在函数体内使用）。 -->
-<script type="module" src="/static/js/act/act.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/act/act.js?v=20260903-web2"></script>
 <!-- 执行行动流（act_run）；被 act.js/board.js 经 importmap 引用。 -->
-<script type="module" src="/static/js/act/act_run.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/panel/accounts.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/act/act_run.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/panel/accounts.js?v=20260903-web2"></script>
 <!-- dream.js 是**第一个 ES Module**（Phase C 模块化重写的试点）：type=module 天然 deferred、
      先于 DOMContentLoaded 执行完；C4 起 window 绞杀桥已退役，boot 经 import { initDream } from "#dream" 直接取。 -->
-<script type="module" src="/static/js/panel/dream.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/panel/dream.js?v=20260903-web2"></script>
 <!-- 课题：artifacts（数据层）+ projects_core（纯逻辑核）+ projects（UI 壳）。
      projects.js 由 boot 经 #projects import 取 initProjects；三文件都在 importmap 登记。 -->
-<script type="module" src="/static/js/core/artifacts.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/projects_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/projects.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/artifacts.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/projects_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/projects.js?v=20260903-web2"></script>
 <!-- 意见反馈对话框：feedback_dialog_core（纯逻辑核，node 可单测）
      + feedback（UI 壳，自接线不进 boot——boot 的 # import 会牵动两页 importmap，而 dataset.html
      归 F2 并行包；与 usage_upload/feedback_core「不进静态图」同哲学，两键仅在本页 importmap 登记）。 -->
-<script type="module" src="/static/js/core/feedback_dialog_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/feedback.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/feedback_dialog_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/feedback.js?v=20260903-web2"></script>
 <!-- 下一步行动：ladder_core（纯逻辑核，node 可单测）+
      ladder（结果区壳，经 results.js 渲染钩子驱动）+ task_card（任务卡弹窗，自接线不进 boot——
      与 feedback.js 同哲学：模块内互引走相对 import、不进静态 # 图，避免牵动 dataset.html；
      三键仅在本页 importmap 登记，后续收口时决定 dataset.html 是否补键）。 -->
-<script type="module" src="/static/js/search/ladder_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/ladder.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/search/task_card.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/search/ladder_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/ladder.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/search/task_card.js?v=20260903-web2"></script>
 <!-- 课题更新检查（2026-08-22；2026-08-26 改版）：
      project_updates_core（纯逻辑核，node 可单测）+ project_updates（UI 壳，自接线不进 boot，
      仅本页加载——F2 数据集页联动已随全体批量按钮退役）。projects.js 经 #project_updates
      import 取详情区挂载/行检查/自动刷新完成钩子；壳层 import #core/#shell/#accounts 等，
      浏览器自动补取。 -->
-<script type="module" src="/static/js/core/project_updates_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/core/project_updates.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/project_updates_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/core/project_updates.js?v=20260903-web2"></script>
 <!-- 导出中心：project_exports_core（纯逻辑核，node 可单测）
      + project_exports（UI 壳，自接线不进 boot——经 MutationObserver 发现 projects.js 的
      ENG-P5-MOUNT 挂点渲染导出区；project_exports.js 只相对 import 纯逻辑核、不引入新的
      # specifier，两键仅在本页 importmap 登记，dataset.html 不碰）。 -->
-<script type="module" src="/static/js/core/project_exports_core.js?v=20260903-web1"></script>
-<script type="module" src="/static/js/panel/project_exports.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/project_exports_core.js?v=20260903-web2"></script>
+<script type="module" src="/static/js/panel/project_exports.js?v=20260903-web2"></script>
 <!-- boot 是全应用唯一入口（起 ESM）：init 里每个名字都从属主模块 import，DOMContentLoaded 平铺串调。 -->
-<script type="module" src="/static/js/core/boot.js?v=20260903-web1"></script>
+<script type="module" src="/static/js/core/boot.js?v=20260903-web2"></script>
 
 </body>
 </html>

@@ -1360,12 +1360,42 @@ def test_action_hint_cleared_when_action_executed():
     fin = _strip_comments(_fn_body(ACT, "function actFinish(plan, outcome, said, opts)"))
     assert "actCoversActionHint(plan)" in fin and "clearActionHint()" in fin, (
         "actFinish 必须在动作执行成功时摘掉指路条")
-    assert "outcome.ok && !outcome.cancelled && actCoversActionHint(plan)" in fin.replace("  ", " ") or (
-        "outcome.ok" in fin and "cancelled" in fin), "只在成功时摘——失败/取消保留指路条"
+    # 摘除必须只挂在成功守卫这一处：守卫写死「成功且非取消且动词覆盖」，别处不许再摘
+    # （失败/取消时指路条保留，正是那时的手动退路）。整行压平空白后精确钉守卫条件。
+    fin_flat = " ".join(fin.split())
+    assert "outcome.ok && !outcome.cancelled && actCoversActionHint(plan)" in fin_flat, (
+        "只在成功时摘——失败/取消保留指路条")
+    assert fin.count("clearActionHint()") == 1, "指路条摘除在 actFinish 里必须只有成功守卫这一处调用"
     helper = _strip_comments(_fn_body(ACT, "function actCoversActionHint(plan)"))
-    for v in ('"pack.download"', '"cite.export"', '"reuse.pack"'):
-        assert v in _strip_comments(ACT), f"指路条核销动词表必须含 {v}"
+    # 动词表是 helper 外的模块级常量，钉它必须取表体本身（此前钉整份 ACT 源码，
+    # 表里删掉动词测试照绿）；表内四个动词一个不许漏（pack.preview 也在——预览即产包交付）。
+    m = re.search(r"ACTION_HINT_COVERED_VERBS\s*=\s*\{([^}]*)\}", act)
+    assert m, "act.js 必须有 ACTION_HINT_COVERED_VERBS 指路条核销动词表"
+    verbs = m.group(1)
+    for v in ('"pack.download"', '"pack.preview"', '"cite.export"', '"reuse.pack"'):
+        assert v in verbs, f"指路条核销动词表必须含 {v}"
+    assert "ACTION_HINT_COVERED_VERBS" in helper, "helper 必须查动词表，不许另写一份动词清单"
     assert "plan.steps" in helper, "环内 steps 里的 cite.export 也算执行成"
+
+
+def test_action_hint_settled_survives_rerender():
+    """指路条核销必须跨重渲存续：换批（switchBatch/_batchView 继承落地时的 action_markers）、
+    分面重跑、历史回看都会重新走 renderActionHint，只摘 DOM 会把「检索本身不包含这一步」复活
+    （明明执行了）。results.js 用时间线级核销态 _actionHintSettled 按住渲染口；新查询时间线
+    （runRecommend 非 keep 分支）经 resetActionHint 复位，那句若也提到执行类说法则照常指路。"""
+    res = _strip_comments(RESULTS)
+    assert "export function resetActionHint()" in res, "results.js 必须导出 resetActionHint（新时间线复位口）"
+    hint = _strip_comments(_fn_body(RESULTS, "function renderActionHint(data)"))
+    assert "_actionHintSettled" in hint, (
+        "renderActionHint 必须先判核销态——否则换批/历史回看会把已摘的指路条复活")
+    clr = _strip_comments(_fn_body(RESULTS, "export function clearActionHint()"))
+    assert "_actionHintSettled = true" in clr, "clearActionHint 必须同时置核销态，不能只摘 DOM"
+    sea = _strip_comments(SEARCH)
+    imp = [ln for ln in sea.splitlines() if "#results" in ln]
+    assert any("resetActionHint" in ln for ln in imp), "search.js 必须从 #results import resetActionHint"
+    branch = sea.split("if (!keep)", 1)
+    assert len(branch) == 2 and "resetActionHint" in branch[1][:400], (
+        "新查询时间线分支（!keep）必须复位指路条核销态——否则上一段对话执行过后，新查询的指路条不再出现")
 
 
 # -------------------------------------- dl-browser-queue：统一下载队列引擎契约

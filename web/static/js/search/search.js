@@ -10,7 +10,7 @@
 import { API, $, MOTION, cacheGeneration, pushHist, toast } from "#core";
 import { placeFacetBar, renderFacets } from "#facets";
 import { QCACHE_MAX, _queryCache, estimateDuration, finishProgress, resetSubmitButton, startProgress } from "#progress";
-import { _facetFilters, _lenientDims, _queryHits, _suppressed, renderResults, resetFacetState } from "#results";
+import { _facetFilters, _lenientDims, _queryHits, _suppressed, renderResults, resetActionHint, resetFacetState } from "#results";
 import { getConfig, renderStatus } from "#shell";
 import { USAGE_KINDS, usageActiveTurnId, usagePolicyRef } from "#usage_core";
 import { usageExperimentContext, usageLog, usageLogSearch, usageEnabled, usageSetEnabled, usageConsentGiven, requestUsageConsent, usageScope } from "#usage_log";
@@ -197,6 +197,7 @@ export async function runRecommend(opts) {
     // 接线方在 board 路径（原回执 chip「按原话重新检索」已于 2026-08-16 退役，机制保留）。
     if (!keep) {
         resetFacetState();   // 四个分面状态的属主是 results.js（ESM）：重赋值必经属主 setter
+        resetActionHint();   // 新时间线：上一段对话的指路条核销态一并失效（属主同为 results.js）
         // 2026-08-04：清对话前先归档「仅对话」——纯工具对话从未走过 pushHist，
         // 这里不清仓补一行就永久丢失（hero 首句自己那句 say 会被 cbArchiveChatOnly 识别跳过）。
         // 排除串必须是**那句 say 本身**（opts.sayText=用户原话）：hero 首句被 LLM 改写时
