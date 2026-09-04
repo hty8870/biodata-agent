@@ -177,4 +177,4 @@ def test_manual_strategy_reason_also_reports_actual_fallback():
         None,
         25,
     )
-    assert trace["strategy_reason"] == "使用手动选择的排序设置；本地语义排序发生回退，最终采用规则排序。"
+    assert trace["strategy_reason"] == "使用手动选择的排序设置；语义排序发生回退，最终采用规则排序。"

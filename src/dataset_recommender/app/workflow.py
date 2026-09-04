@@ -158,7 +158,7 @@ def _update_trace_step(
 
 _TRACE_REASON_LABELS = {
     "model_or_dependency_unavailable": "本地模型或运行依赖不可用",
-    "runtime_error": "本地语义排序运行异常",
+    "runtime_error": "语义排序运行异常",
     "invalid_scores": "本地模型返回了无效分数",
     "invalid_vectors": "本地模型返回了无效向量",
     "llm_not_configured": "服务端还没有配置可用的 AI 接口",
@@ -245,12 +245,12 @@ def _build_search_trace(resolution, intent: QueryIntent, execution: dict, decisi
     rerank_status = rerank.get("status", "skipped")
     fallback_layers = []
     if recall_status == "fallback":
-        fallback_layers.append("本地语义排序")
+        fallback_layers.append("语义排序")
     if rerank_status == "fallback":
         fallback_layers.append("AI 候选排序")
     actual_layers = []
     if recall_status == "used":
-        actual_layers.append("本地语义排序")
+        actual_layers.append("语义排序")
     if rerank_status == "used":
         actual_layers.append("AI 候选排序")
     final_method = " + ".join(actual_layers) if actual_layers else "规则排序"
@@ -264,7 +264,7 @@ def _build_search_trace(resolution, intent: QueryIntent, execution: dict, decisi
         if fallback_layers:
             planned_layers = []
             if decision.recall_backend != "off":
-                planned_layers.append("本地语义排序")
+                planned_layers.append("语义排序")
             if decision.rerank_backend == "llm":
                 planned_layers.append("AI 候选排序")
             strategy_detail = (
@@ -274,9 +274,9 @@ def _build_search_trace(resolution, intent: QueryIntent, execution: dict, decisi
         elif decision.tier == "precise":
             strategy_detail = f"筛选后只有 {n} 条候选，规则顺序已经足够，不额外重排。"
         elif recall_status == "used" and rerank_status == "used":
-            strategy_detail = f"候选较多且语义偏好丰富，先做本地语义排序，再用 AI 精排有限候选。"
+            strategy_detail = f"候选较多且语义偏好丰富，先做语义排序，再用 AI 精排有限候选。"
         elif recall_status == "used":
-            strategy_detail = f"筛选后有 {n} 条候选，使用本地语义排序提高相关性。"
+            strategy_detail = f"筛选后有 {n} 条候选，使用语义排序提高相关性。"
         elif rerank_status == "used":
             strategy_detail = "本地语义模型未采用，实际使用获准的 AI 对候选重新排序。"
         else:
@@ -294,7 +294,7 @@ def _build_search_trace(resolution, intent: QueryIntent, execution: dict, decisi
             "detail": "按词面相关性、完整度、新鲜度和样本量生成确定性基础顺序。" if result_total else "没有候选可排序。",
         },
         {
-            "id": "local_semantic", "label": "本地语义排序",
+            "id": "local_semantic", "label": "语义排序",
             "status": recall.get("status", "skipped"),
             "detail": (
                 f"已对候选完成本地语义重排{_trace_duration_suffix(recall)}。" if recall.get("status") == "used"
@@ -1203,7 +1203,7 @@ class DatasetRecommendationWorkflow:
             )
         # 能力旗标（仅 auto 用；分类器据此决定能否叠加语义后端）。调用方未显式传 → 保守默认：
         #   · recall_available 缺省 = recall_backend_ready（仅「已预热」，piped-stdio 安全，MCP 语义）；
-        #     Web/CLI（有真 TTY）应显式传 recall_backend_available（「可加载」）以启用本地 cross_encoder。
+        #     Web/CLI 应显式传 recall_backend_available（「可执行」：本地可加载或 API 数据源就绪）以启用 cross_encoder。
         #   · llm_available 缺省 = 该 provider 是否配了 key。
         eff_recall_available = recall_available
         eff_llm_available = llm_available

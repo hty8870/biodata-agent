@@ -41,7 +41,7 @@ def spy(monkeypatch):
                 raise warm_ret
             return warm_ret
 
-        monkeypatch.setattr(VR, "recall_backend_available", _available)
+        monkeypatch.setattr(VR, "recall_backend_local_available", _available)
         monkeypatch.setattr(VR, "warm_recall_backend", _warm)
         return calls
 

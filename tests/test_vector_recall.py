@@ -499,3 +499,94 @@ def test_cross_encoder_uses_isolated_runtime_when_main_process_has_no_heavy_depe
         assert vector_recall._CROSS_CACHE[key] is scorer
     finally:
         vector_recall._CROSS_CACHE.pop(key, None)
+
+
+# ---------- vector 后端：语料级向量召回（2026-09-04 进 auto，缺省 RRF）----------
+def test_vector_backend_registered():
+    assert "vector" in vector_recall.RECALL_BACKENDS
+
+
+def test_vector_ready_is_false_for_mcp():
+    # MCP v1 不开放 vector：索引首用构建是重 IO，piped-stdio 下不预热 → ready 恒 False。
+    assert vector_recall.recall_backend_ready("vector") is False
+
+
+def test_vector_injected_reorders_and_is_permutation():
+    c = _cands(3)
+    out = vector_recall.recall_rerank("QRY", c, backend="vector", embedder=_mock_embedder)
+    assert _is_permutation(out, c)
+    # 缺省 rrf：与 dense+rrf 同一融合算法、同输入 → 同名次。
+    out_dense_rrf = vector_recall.recall_rerank("QRY", _cands(3), backend="dense",
+                                                fusion="rrf", embedder=_mock_embedder)
+    assert _names(out) == _names(out_dense_rrf)
+
+
+def test_vector_default_fusion_is_rrf():
+    trace: dict = {}
+    vector_recall.recall_rerank("QRY", _cands(3), backend="vector",
+                                embedder=_mock_embedder, trace=trace)
+    assert trace.get("fusion") == "rrf"
+    assert trace.get("status") == "used"
+
+
+def test_vector_explicit_linear_matches_dense():
+    out_v = vector_recall.recall_rerank("QRY", _cands(4), backend="vector",
+                                        fusion="linear", embedder=_mock_embedder)
+    out_d = vector_recall.recall_rerank("QRY", _cands(4), backend="dense",
+                                        fusion="linear", embedder=_mock_embedder)
+    assert _names(out_v) == _names(out_d)
+
+
+def test_vector_malformed_vectors_fall_back():
+    c = _cands(3)
+    trace: dict = {}
+    out = vector_recall.recall_rerank("QRY", c, backend="vector",
+                                      embedder=lambda ts: [[1.0]], trace=trace)
+    assert _names(out) == ["D0", "D1", "D2"]
+    assert trace.get("status") == "fallback" and trace.get("reason") == "invalid_vectors"
+
+
+def test_vector_api_path_used(monkeypatch):
+    from dataset_recommender.retrieval import recall_api
+    monkeypatch.setattr(recall_api, "api_embed_enabled", lambda: True)
+    vecs = _mock_embedder(["QRY", "D0", "D1", "D2"])
+    monkeypatch.setattr(recall_api, "api_dense_vectors", lambda q, items: vecs)
+    c = _cands(3)
+    trace: dict = {}
+    out = vector_recall.recall_rerank("QRY", c, backend="vector", trace=trace)
+    assert trace.get("status") == "used"
+    assert _is_permutation(out, c)
+
+
+def test_vector_api_unavailable_falls_back(monkeypatch):
+    from dataset_recommender.retrieval import recall_api
+    monkeypatch.setattr(recall_api, "api_embed_enabled", lambda: True)
+    monkeypatch.setattr(recall_api, "api_dense_vectors", lambda q, items: None)
+    c = _cands(3)
+    trace: dict = {}
+    out = vector_recall.recall_rerank("QRY", c, backend="vector", trace=trace)
+    assert _names(out) == ["D0", "D1", "D2"]
+    assert trace.get("status") == "fallback" and trace.get("reason") == "api_unavailable"
+
+
+def test_vector_index_path_used(monkeypatch):
+    from dataset_recommender.retrieval import recall_api, vector_index
+    monkeypatch.setattr(recall_api, "api_embed_enabled", lambda: False)
+    vecs = _mock_embedder(["QRY", "D0", "D1", "D2"])
+    monkeypatch.setattr(vector_index, "index_dense_vectors", lambda q, items: vecs)
+    c = _cands(3)
+    trace: dict = {}
+    out = vector_recall.recall_rerank("QRY", c, backend="vector", trace=trace)
+    assert trace.get("status") == "used"
+    assert _is_permutation(out, c)
+
+
+def test_vector_index_unavailable_falls_back(monkeypatch):
+    from dataset_recommender.retrieval import recall_api, vector_index
+    monkeypatch.setattr(recall_api, "api_embed_enabled", lambda: False)
+    monkeypatch.setattr(vector_index, "index_dense_vectors", lambda q, items: None)
+    c = _cands(3)
+    trace: dict = {}
+    out = vector_recall.recall_rerank("QRY", c, backend="vector", trace=trace)
+    assert _names(out) == ["D0", "D1", "D2"]
+    assert trace.get("status") == "fallback" and trace.get("reason") == "index_unavailable"

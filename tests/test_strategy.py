@@ -147,6 +147,26 @@ def test_recall_backend_helpers():
     assert isinstance(recall_backend_available("cross_encoder"), bool)
 
 
+def test_recall_backend_available_counts_api_gate(monkeypatch):
+    """本地模型不可加载、但 API 闸就绪（env 启用 + key 在位）→ cross_encoder 计为可执行。
+    钉住「available = 本地可加载 OR API 就绪」的网页形态语义（服务器无本地模型，全靠此闸）。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    monkeypatch.setattr(vr, "recall_backend_local_available", lambda backend: False)
+    monkeypatch.setenv("BIODATA_RERANK_API", "zhipu")
+    monkeypatch.setenv("BIODATA_EMBED_API_KEY", "dummy")
+    assert vr.recall_backend_available("cross_encoder") is True
+
+
+def test_recall_backend_available_off_without_local_or_api(monkeypatch):
+    """本地不可加载且 API 闸未就绪（env 未启用/无 key）→ 两种语义后端均不可执行。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    monkeypatch.setattr(vr, "recall_backend_local_available", lambda backend: False)
+    for name in ("BIODATA_RERANK_API", "BIODATA_EMBED_API", "BIODATA_EMBED_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    assert vr.recall_backend_available("cross_encoder") is False
+    assert vr.recall_backend_available("dense") is False
+
+
 # ---------- workflow 集成：fixed 逐位不变 + auto 安全降级 ----------
 def test_workflow_fixed_default_has_no_strategy():
     wf = DatasetRecommendationWorkflow()
@@ -169,6 +189,30 @@ def test_workflow_auto_without_capabilities_equals_fixed():
     assert r_auto.strategy["tier"] == "broad"     # 单细胞数据 存活集大
 
 
+def test_workflow_auto_with_api_ready_selects_cross_encoder(monkeypatch):
+    """auto + 本地模型不可用但 API 闸就绪 → 分类器仍选 cross_encoder（网页形态接通证明）；
+    API 打分失败 fail-closed → 结果与 fixed 逐位一致（安全降级不破）。
+    与本机有无装本地模型无关：API 分支在 recall_rerank 里先于本地路径短路。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    from dataset_recommender.retrieval import recall_api
+    monkeypatch.setattr(vr, "recall_backend_local_available", lambda backend: False)
+    monkeypatch.setenv("BIODATA_RERANK_API", "zhipu")
+    monkeypatch.setenv("BIODATA_EMBED_API_KEY", "dummy")
+    monkeypatch.setattr(recall_api, "api_rerank_scores", lambda q, texts: None)  # 防真调 API
+    wf = DatasetRecommendationWorkflow()
+    q = "单细胞数据"
+    r_fixed = wf.run_with_meta(query=q, use_llm=False)
+    recall_avail = vr.recall_backend_available("cross_encoder")  # Web/CLI 的显式传参方式
+    assert recall_avail is True
+    r_auto = wf.run_with_meta(query=q, use_llm=False, strategy="auto",
+                              recall_available=recall_avail, llm_available=False)
+    names_fixed = [c["dataset_name"] for c in r_fixed.retrieved_data]
+    names_auto = [c["dataset_name"] for c in r_auto.retrieved_data]
+    assert r_auto.strategy is not None
+    assert r_auto.strategy["recall_backend"] == "cross_encoder"
+    assert names_auto == names_fixed              # fail-closed → 逐位回退规则序
+
+
 def test_workflow_auto_precise_query_stays_off():
     wf = DatasetRecommendationWorkflow()
     r = wf.run_with_meta(query="Atera 平台数据", use_llm=False, strategy="auto",
@@ -176,3 +220,68 @@ def test_workflow_auto_precise_query_stays_off():
     # 紧查询：即便能力全可用，分类器仍 off（不引非确定性重排）。
     assert r.strategy is not None and r.strategy["tier"] == "precise"
     assert r.strategy["recall_backend"] == "off" and r.strategy["rerank_backend"] == "off"
+
+
+# ---------- auto 偏好解析（resolve_auto_recall_preference，2026-09-04 vector 进 auto）----------
+def test_resolve_auto_recall_preference_prefers_vector(monkeypatch):
+    """vector 可执行 → 偏好 vector（每查询只补嵌 1 条查询，成本低于 cross_encoder 全池打分）。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    monkeypatch.setattr(vr, "recall_backend_available", lambda b: b == "vector")
+    assert vr.resolve_auto_recall_preference() == ("vector", True)
+
+
+def test_resolve_auto_recall_preference_falls_back_to_cross_encoder(monkeypatch):
+    """vector 不可用、cross_encoder 可用 → 回退 cross_encoder（保留 Batch 1 网页形态通路）。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    monkeypatch.setattr(vr, "recall_backend_available", lambda b: b == "cross_encoder")
+    assert vr.resolve_auto_recall_preference() == ("cross_encoder", True)
+
+
+def test_resolve_auto_recall_preference_none_available(monkeypatch):
+    """两者皆无 → ("cross_encoder", False)：调用方按「无语义后端」走确定性词面序。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    monkeypatch.setattr(vr, "recall_backend_available", lambda b: False)
+    assert vr.resolve_auto_recall_preference() == ("cross_encoder", False)
+
+
+def test_broad_with_vector_preferred_picks_vector():
+    d = classify_strategy(_exec(), [], recall_available=True, llm_available=False,
+                          preferred_recall="vector", n_survivors=BROAD_MIN)
+    assert d.tier == "broad" and d.recall_backend == "vector" and d.rerank_backend == "off"
+
+
+def test_complex_with_vector_and_llm_uses_vector_then_llm():
+    d = classify_strategy(_exec(free_text_terms=["immune", "tumor"]), [],
+                          recall_available=True, llm_available=True,
+                          preferred_recall="vector", n_survivors=500)
+    assert d.tier == "complex" and d.recall_backend == "vector" and d.rerank_backend == "llm"
+
+
+def test_vector_available_counts_api_gate(monkeypatch):
+    """vector：本地不可加载但 embed API 就绪 → 可执行；双闸皆无 → 不可执行（与 dense 同闸）。"""
+    from dataset_recommender.retrieval import vector_recall as vr
+    from dataset_recommender.retrieval import recall_api
+    monkeypatch.setattr(vr, "recall_backend_local_available", lambda backend: False)
+    monkeypatch.setattr(recall_api, "embed_api_ready", lambda: True)
+    assert vr.recall_backend_available("vector") is True
+    monkeypatch.setattr(recall_api, "embed_api_ready", lambda: False)
+    assert vr.recall_backend_available("vector") is False
+
+
+def test_workflow_auto_with_vector_available_selects_vector(monkeypatch):
+    """auto + preferred_recall=vector 且可执行 → 分类器选 vector；索引不可用 fail-closed
+    → 结果与 fixed 逐位一致（安全降级不破）。"""
+    from dataset_recommender.retrieval import recall_api, vector_index
+    monkeypatch.setattr(recall_api, "api_embed_enabled", lambda: False)
+    monkeypatch.setattr(vector_index, "index_dense_vectors", lambda q, items: None)
+    wf = DatasetRecommendationWorkflow()
+    q = "单细胞数据"
+    r_fixed = wf.run_with_meta(query=q, use_llm=False)
+    r_auto = wf.run_with_meta(query=q, use_llm=False, strategy="auto",
+                              recall_available=True, llm_available=False,
+                              preferred_recall="vector")
+    names_fixed = [c["dataset_name"] for c in r_fixed.retrieved_data]
+    names_auto = [c["dataset_name"] for c in r_auto.retrieved_data]
+    assert r_auto.strategy is not None
+    assert r_auto.strategy["recall_backend"] == "vector"
+    assert names_auto == names_fixed              # fail-closed → 逐位回退规则序

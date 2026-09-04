@@ -34,7 +34,7 @@ BROAD_MIN = 30
 class StrategyDecision:
     """一次分类结果（只读投影，供 workflow 挂进 WorkflowResult / MCP meta / 前端回显）。"""
     tier: str            # abstain | empty | precise | medium | broad | complex
-    recall_backend: str  # off | cross_encoder | dense
+    recall_backend: str  # off | cross_encoder | dense | vector
     rerank_backend: str  # off | llm
     reason: str          # 人类可读：为什么这么选
     signals: dict        # 可观测信号：n_survivors / n_pos_constraints / parse_status / 能力旗标
@@ -71,11 +71,12 @@ def classify_strategy(
     """确定性策略分类。纯函数：无 I/O、无副作用、给定同输入恒定。
 
     参数：
-      recall_available   —— 本地语义重排后端是否可用（调用方按环境语义传：MCP 传「已预热」、
-                            Web/CLI 传「可加载」——见 vector_recall.recall_backend_ready / _available）。
+      recall_available   —— 语义重排后端是否可执行，调用方按环境语义传：MCP 传「已预热」
+                            （recall_backend_ready）、Web/CLI 传「可执行」（recall_backend_available——
+                            本地可加载或 API 数据源就绪）。
       llm_available      —— 是否同时具备可用 LLM 配置与调用方联网授权。MCP 默认传 False，只有显式
                             auto_allow_llm 才可传 True，避免 strategy=auto 意外联网。
-      preferred_recall   —— 首选本地后端（默认 cross_encoder）。
+      preferred_recall   —— 首选语义重排后端（默认 cross_encoder；可选 dense/vector）。
       top_k / n_survivors—— top_k 参与 precise 上界；n_survivors 可外部注入（避免重复扫描）。
     """
     n_pos = sum(1 for d in DIMENSIONS if intent.constraints.get(d))
@@ -127,30 +128,30 @@ def classify_strategy(
     is_complex = n_survivors >= BROAD_MIN and len(semantic_terms) >= 2
     tier = "complex" if is_complex else ("broad" if n_survivors >= BROAD_MIN else "medium")
 
-    # 最复杂：本地模型先稳定重排全存活集，LLM 再处理去重后的有限池。两层都只重排存活集，
+    # 最复杂：确定性语义重排先排全存活集，LLM 再处理去重后的有限池。两层都只重排存活集，
     # 不扩大候选集合；任一后端失败仍由各自 fail-open 合同回退。
     if is_complex and prefer_hybrid and recall_available and llm_available \
-            and preferred_recall in ("cross_encoder", "dense"):
+            and preferred_recall in ("cross_encoder", "dense", "vector"):
         return StrategyDecision(
             tier, preferred_recall, "llm",
             f"候选压力高（{n_survivors}/{effective_top_k}）且包含 {len(semantic_terms)} 个自由语义词："
-            f"先用本地 {preferred_recall} 排全池，再用 LLM 精排有限候选池。",
+            f"先用 {preferred_recall} 语义重排排全池，再用 LLM 精排有限候选池。",
             signals,
         )
 
-    # 其次：有本地后端时优先确定性 cross_encoder（本地、可复现）。
-    if recall_available and preferred_recall in ("cross_encoder", "dense"):
+    # 其次：有可用语义后端时用确定性语义重排（确定性、可复现）。
+    if recall_available and preferred_recall in ("cross_encoder", "dense", "vector"):
         return StrategyDecision(
             tier, preferred_recall, "off",
-            f"存活集较大（{n_survivors}），确定性词面序信号弱 → 叠加本地 {preferred_recall} "
-            "语义重排（确定性、可复现、离线）。",
+            f"存活集较大（{n_survivors}），确定性词面序信号弱 → 叠加 {preferred_recall} "
+            "语义重排（确定性、可复现）。",
             signals,
         )
-    # 本地不可用 + 有明确自由语义 + 已授权 LLM → 用 LLM 单层重排。纯结构化宽查询不调用 LLM。
+    # 语义重排后端不可用 + 有明确自由语义 + 已授权 LLM → 用 LLM 单层重排。纯结构化宽查询不调用 LLM。
     if llm_available and semantic_terms and tier in ("medium", "broad", "complex"):
         return StrategyDecision(
             tier, "off", "llm",
-            f"存在 {len(semantic_terms)} 个自由语义词且本地语义模型不可用 → 使用已授权的 LLM 重排"
+            f"存在 {len(semantic_terms)} 个自由语义词且语义重排后端不可用 → 使用已授权的 LLM 重排"
             "（需联网、非确定性）。",
             signals,
         )

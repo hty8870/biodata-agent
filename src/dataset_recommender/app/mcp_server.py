@@ -730,7 +730,7 @@ def recommend_datasets(
                紧查询保持确定性序不动。auto **覆盖** recall/rerank
                的显式取值。⚠️ MCP 下 auto 只用**已预热**的本地后端（需在服务器 env 设 BIODATA_MCP_RECALL 并重启，
                否则回退确定性词面序）。默认不引 LLM 路径；只有同时传 auto_allow_llm=true、检测到 API 配置，
-               且查询确属高候选压力+丰富自由语义时，才可能选「本地语义排序→LLM 精排」。决策见 meta.strategy。
+               且查询确属高候选压力+丰富自由语义时，才可能选「语义排序→LLM 精排」。决策见 meta.strategy。
       auto_parse: True（默认）= 自动从 query 识别高辨识度数据来源专名，并与时间/实体规则一起返回解释；
                来源排除语义会触发安全守卫、不自动反选。False = query 原样交给规则解析器。
       auto_allow_llm: False（默认）= strategy=auto 保持离线；True 才授权自动策略在已配置 API 时选择

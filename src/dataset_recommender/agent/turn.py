@@ -221,10 +221,11 @@ def rule_match_summary(text: str, *, sources: Any = None,
             sp = dict(search_params)
             strategy = "auto" if str(sp.get("strategy") or "") == "auto" else "fixed"
             recall_available = None
+            preferred_recall = "cross_encoder"
             if strategy == "auto":
-                # 与 /api/recommend 同口径：Web 有真 TTY，传「可加载」语义。
-                from ..retrieval.vector_recall import recall_backend_available
-                recall_available = recall_backend_available("cross_encoder")
+                # 与 /api/recommend 同口径：auto 偏好解析唯一真源（vector > cross_encoder）。
+                from ..retrieval.vector_recall import resolve_auto_recall_preference
+                preferred_recall, recall_available = resolve_auto_recall_preference()
             # 真实参数全管线：top_k None = workflow 默认（与 recommend 缺省一致）；
             # rerank 恒 off、llm_available 恒 False——确定性管线不付 LLM。
             run_kwargs.update({
@@ -239,6 +240,7 @@ def rule_match_summary(text: str, *, sources: Any = None,
                 "strategy": strategy,
                 "recall_available": recall_available,
                 "llm_available": False,
+                "preferred_recall": preferred_recall,
             })
         meta = DatasetRecommendationWorkflow().run_with_meta(RecommendParams(**run_kwargs))
     except Exception as exc:  # 路由层的规则段不许炸掉整句分流——LLM 拿不到概览也照判
@@ -437,7 +439,7 @@ def _warmup_rag_environment(search_params: dict | None) -> None:
         sp = search_params or {}
         if str(sp.get("strategy") or "").strip().lower() == "auto":
             backend = str(sp.get("recall") or "off").strip().lower()
-            if backend in ("cross_encoder", "dense") and _vr.recall_backend_available(backend):
+            if backend in ("cross_encoder", "dense") and _vr.recall_backend_local_available(backend):
                 _vr.warm_recall_backend(backend)
     except Exception:
         pass
