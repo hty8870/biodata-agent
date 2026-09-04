@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .recall_api import candidate_text_sha
+from .model_worker import MAX_TEXTS
 from .retriever import RetrievedCandidate
 from .vector_recall import (
     DEFAULT_EMBEDDING_MODEL,
@@ -44,6 +45,10 @@ MAX_TEXT_CHARS = 12000
 _INDEX_LOCK = threading.Lock()
 #: 进程内索引缓存：path → ((mtime_ns, size) | None, vectors)。文件被外部改写 → 指纹变 → 重读。
 _INDEX_CACHE: "dict[str, tuple[tuple[int, int] | None, dict]]" = {}
+#: 进程内本地嵌入器缓存（单例）：frozen 形态 external_embedder() 每次新建常驻模型子进程
+#（model_runtime._WORKERS 持有到进程退出），不缓存会在连续 vector 检索间累积子进程耗尽内存。
+#None 不缓存：用户稍后装好模型即可生效，无需重启进程。
+_EMBEDDER_CACHE: "list[Embedder]" = []
 
 
 def _warn_once(key: str, message: str) -> None:
@@ -97,17 +102,23 @@ def _record_text(record) -> str:
 
 def _local_embedder() -> "Embedder | None":
     """本地嵌入器：source/portable 走主进程 load_embedder()；frozen 主进程无重依赖时走
-    model-runtime 隔离 venv 的外部嵌入器（与 cross_encoder 的外部运行时同族接口）。"""
+    model-runtime 隔离 venv 的外部嵌入器（与 cross_encoder 的外部运行时同族接口）。
+    进程内单例缓存（竞态下至多多建一个，append 原子可接受）。"""
+    if _EMBEDDER_CACHE:
+        return _EMBEDDER_CACHE[0]
     try:
         enc = load_embedder()
         if enc is not None:
+            _EMBEDDER_CACHE.append(enc)
             return enc
     except Exception:
         pass
     try:
         from .model_runtime import external_embed_ready, external_embedder
         if external_embed_ready():
-            return external_embedder()
+            enc = external_embedder()
+            _EMBEDDER_CACHE.append(enc)
+            return enc
     except Exception:
         pass
     return None
@@ -175,10 +186,16 @@ def ensure_index(records=None, *, embedder: "Embedder | None" = None, paths=None
                 else:
                     stale.append(uid)
             if stale:
-                fresh = enc([texts[u] for u in stale])
-                if not fresh or len(fresh) != len(stale):
-                    _warn_once("build_shape", "语料索引嵌入结果畸形 —— vector 召回回退规则序。")
-                    return None
+                # 外部嵌入 worker 对单次请求有 MAX_TEXTS 上限（model_worker），整档重建必须分批
+                # 喂入；进程内注入式嵌入器同样按批工作（顺序拼接，语义不变）。
+                fresh: list = []
+                for start in range(0, len(stale), MAX_TEXTS):
+                    chunk = stale[start : start + MAX_TEXTS]
+                    part = enc([texts[u] for u in chunk])
+                    if not part or len(part) != len(chunk):
+                        _warn_once("build_shape", "语料索引嵌入结果畸形 —— vector 召回回退规则序。")
+                        return None
+                    fresh.extend(part)
                 for uid, vec in zip(stale, fresh):
                     v = [float(x) for x in vec]
                     if len(v) != EMBED_DIMENSIONS:
@@ -257,3 +274,4 @@ def reset_caches_for_test() -> None:
     """测试专用：清空进程内索引缓存（生产代码绝不调用）。"""
     with _INDEX_LOCK:
         _INDEX_CACHE.clear()
+    _EMBEDDER_CACHE.clear()

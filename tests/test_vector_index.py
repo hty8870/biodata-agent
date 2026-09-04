@@ -197,3 +197,48 @@ def test_embedder_unavailable_returns_none(idx_file, monkeypatch):
     monkeypatch.setattr(vi, "_local_embedder", lambda: None)
     assert vi.ensure_index([_rec("A", "uid-a")]) is None
     assert vi.index_dense_vectors("Q", [_cand(_rec("A", "uid-a"))]) is None
+
+
+def test_ensure_index_batches_stale_embeds_within_worker_limit(idx_file):
+    """整档重建必须分批（≤ model_worker.MAX_TEXTS）：frozen 形态外部 worker 超批即拒，
+    不分批则首建永远失败、vector 召回恒回退规则序。"""
+    sizes: "list[int]" = []
+
+    class _BatchedStub(_StubEmbedder):
+        def __call__(self, texts):
+            texts = list(texts)
+            sizes.append(len(texts))
+            assert len(texts) <= vi.MAX_TEXTS, f"单批 {len(texts)} 超过 worker 上限"
+            return super().__call__(texts)
+
+    records = [_rec(f"d{i}", uid=f"u{i}") for i in range(vi.MAX_TEXTS + 60)]
+    store = vi.ensure_index(records, embedder=_BatchedStub())
+    assert store is not None and len(store) == vi.MAX_TEXTS + 60
+    assert sizes == [vi.MAX_TEXTS, 60]  # 分批喂入且顺序拼接
+
+
+def test_local_embedder_cached_across_calls(monkeypatch):
+    """frozen 形态本地嵌入器必须进程内单例：external_embedder() 每次新建常驻模型子进程
+    （持有到进程退出），不缓存会在连续 vector 检索间累积子进程耗尽内存。"""
+    import dataset_recommender.retrieval.model_runtime as mr
+
+    created: "list[object]" = []
+
+    class _Enc:
+        def __call__(self, texts):  # pragma: no cover - 本测试不触嵌入
+            return []
+
+    def fake_factory(*_args, **_kw):
+        created.append(_Enc())
+        return created[-1]
+
+    vi._EMBEDDER_CACHE.clear()
+    monkeypatch.setattr(vi, "load_embedder", lambda: None)
+    monkeypatch.setattr(mr, "external_embed_ready", lambda *a, **k: True)
+    monkeypatch.setattr(mr, "external_embedder", fake_factory)
+    try:
+        e1 = vi._local_embedder()
+        e2 = vi._local_embedder()
+        assert e1 is e2 and len(created) == 1
+    finally:
+        vi._EMBEDDER_CACHE.clear()
