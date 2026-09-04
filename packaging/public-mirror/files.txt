@@ -301,6 +301,7 @@ src/dataset_recommender/retrieval/search_request.py
 src/dataset_recommender/retrieval/strategy.py
 src/dataset_recommender/retrieval/synonyms.py
 src/dataset_recommender/retrieval/units.py
+src/dataset_recommender/retrieval/vector_index.py
 src/dataset_recommender/retrieval/vector_recall.py
 src/dataset_recommender/retrieval/vocabulary.py
 src/dataset_recommender/secret_patterns.py
@@ -473,6 +474,7 @@ tests/test_migrate_from.py
 tests/test_modality.py
 tests/test_model_installer.py
 tests/test_model_integrity.py
+tests/test_model_runtime.py
 tests/test_model_worker.py
 tests/test_multi_batch.py
 tests/test_multisource_eval.py
@@ -560,6 +562,7 @@ tests/test_usage_telemetry_contract.py
 tests/test_user_memory_contract.py
 tests/test_utterance_idempotency.py
 tests/test_utterance_router.py
+tests/test_vector_index.py
 tests/test_vector_recall.py
 tests/test_vector_recall_lock.py
 tests/test_vocabulary_alias_expansion.py

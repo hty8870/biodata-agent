@@ -35,19 +35,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="启用重排时喂给 LLM 的候选池大小（默认 12；仅在 --rerank llm 下生效）",
     )
     parser.add_argument(
-        "--recall", choices=["off", "dense", "cross_encoder"], default="off",
-        help="可选本地语义重排（默认 off；只调整已通过条件筛选的候选顺序，模型没装好则保持原顺序）。"
-             "cross_encoder=本地重排模型 bge-reranker-v2-m3（推荐）；dense=本地稠密嵌入。"
-             "需先装 requirements-embeddings.txt + 跑 scripts/fetch_embedding_model.py",
+        "--recall", choices=["off", "dense", "cross_encoder", "vector"], default="off",
+        help="可选语义重排（默认 off；只调整已通过条件筛选的候选顺序，后端不可用则保持原顺序）。"
+             "cross_encoder=本地重排模型 bge-reranker-v2-m3（推荐）；dense=本地稠密嵌入；"
+             "vector=语料级向量索引召回（本地索引或 API 向量文件，缺省 RRF 融合）。"
+             "本地模型需先装 requirements-embeddings.txt + 跑 scripts/fetch_embedding_model.py",
     )
     parser.add_argument(
         "--recall-alpha", type=float, default=None,
-        help="仅 dense 后端：稠密分权重 ∈ [0,1]（默认 0.5 词面/稠密融合；1=纯稠密，0=纯词面）",
+        help="dense/vector 的 linear 融合：稠密分权重 ∈ [0,1]（默认 0.5 词面/稠密融合；1=纯稠密，0=纯词面）",
     )
     parser.add_argument(
         "--strategy", choices=["fixed", "auto"], default="fixed",
         help="排序策略（默认 fixed=按上面显式给的 --recall/--rerank 执行）。auto=按查询宽泛程度（通过筛选的候选条数）自动决定："
-             "候选多时叠加本地 cross_encoder 语义重排，候选少时保持规则顺序（auto 会覆盖显式给的 --recall/--rerank）",
+             "候选多时按可用性叠加语义重排（偏好 vector > cross_encoder），候选少时保持规则顺序（auto 会覆盖显式给的 --recall/--rerank）",
     )
     parser.add_argument("--output-file", help="将结果写入文件，例如 outputs/result.md")
     return parser
@@ -181,11 +182,12 @@ def main() -> int:
             output_path.write_text(prompt, encoding="utf-8")
         return 0
 
-    # 策略 auto：CLI 有真 TTY，可请求内加载本地重排模型 → 传「可加载」语义（recall_backend_available）。
+    # 策略 auto：偏好解析唯一真源（vector > cross_encoder），传「可执行」语义——本地可加载或 API 就绪均计可用。
     recall_available = None
+    preferred_recall = "cross_encoder"
     if args.strategy == "auto":
-        from dataset_recommender.retrieval.vector_recall import recall_backend_available
-        recall_available = recall_backend_available("cross_encoder")
+        from dataset_recommender.retrieval.vector_recall import resolve_auto_recall_preference
+        preferred_recall, recall_available = resolve_auto_recall_preference()
 
     workflow_result = workflow.run_with_meta(
         RecommendParams(
@@ -200,7 +202,7 @@ def main() -> int:
             recall_alpha=args.recall_alpha,
             strategy=args.strategy,
             recall_available=recall_available,
-            preferred_recall="cross_encoder",
+            preferred_recall=preferred_recall,
         )
     )
     answer = workflow_result.answer

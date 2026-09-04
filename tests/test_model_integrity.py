@@ -102,3 +102,46 @@ def test_manifest_file_size_mismatch_makes_runtime_not_ready(tmp_path):
     # 权重被替换成不同内容（非空但大小与 manifest 不符）→ 完整性核对必须拒绝。
     (mr.model_dir(paths) / "model.safetensors").write_bytes(b"different-weight")
     assert not mr.external_runtime_ready(paths)
+
+
+# ---------- 嵌入侧就绪闸（external_embed_ready）：与重排侧同族、互不拖累 ----------
+
+def _embed_ready(paths: AppPaths) -> dict:
+    target = mr.embed_model_dir(paths)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "config.json").write_text("{}", encoding="utf-8")
+    (target / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (target / "model.safetensors").write_bytes(b"weights")
+    return {"config.json": 2, "tokenizer.json": 2, "model.safetensors": 7}
+
+
+def test_embed_ready_with_dual_model_manifest(tmp_path):
+    paths = _paths(tmp_path)
+    _runtime_and_worker(paths)
+    _write_manifest(paths, embed_files=_embed_ready(paths))
+    assert mr.external_embed_ready(paths)
+
+
+def test_embed_not_ready_when_manifest_lacks_embed_files(tmp_path):
+    """双模型同批安装之前的旧 manifest 没有 embed_files → 嵌入侧不就绪，重排侧不受影响。"""
+    paths = _paths(tmp_path)
+    _runtime_and_worker(paths)
+    _write_manifest(paths)
+    _embed_ready(paths)  # 文件在、manifest 无清单 → fail-closed
+    assert not mr.external_embed_ready(paths)
+    assert mr.external_runtime_ready(paths)
+
+
+def test_embed_size_mismatch_makes_embed_not_ready(tmp_path):
+    paths = _paths(tmp_path)
+    _runtime_and_worker(paths)
+    _write_manifest(paths, embed_files=_embed_ready(paths))
+    (mr.embed_model_dir(paths) / "model.safetensors").write_bytes(b"different-weight")
+    assert not mr.external_embed_ready(paths)
+
+
+def test_embed_missing_dir_makes_embed_not_ready(tmp_path):
+    paths = _paths(tmp_path)
+    _runtime_and_worker(paths)
+    _write_manifest(paths, embed_files={"config.json": 2, "tokenizer.json": 2, "model.safetensors": 7})
+    assert not mr.external_embed_ready(paths)  # 清单在、实物缺 → 不就绪

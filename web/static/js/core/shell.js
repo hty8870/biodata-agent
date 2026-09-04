@@ -722,12 +722,12 @@ function _renderLocalModelStatus(state) {
         install.textContent = "安装中";
     } else if (kind === "error" || kind === "cancelled") {
         title.textContent = kind === "cancelled" ? "本地模型安装已取消" : "本地模型暂未装好";
-        note.textContent = (_localModelState.message || "可以稍后重试；基础检索不受影响。") + " 约下载 3 GB，安装后约占 5 GB。";
+        note.textContent = (_localModelState.message || "可以稍后重试；基础检索不受影响。") + " 约下载 3.5 GB，安装后约占 4.5 GB。";
         install.hidden = false;
         install.textContent = "重试安装";
     } else {
         title.textContent = "本地模型未安装";
-        note.textContent = "可在线安装；约下载 3 GB，安装后约占 5 GB。不装也能正常检索。";
+        note.textContent = "可在线安装；约下载 3.5 GB，安装后约占 4.5 GB。不装也能正常检索。";
         install.hidden = false;
         install.textContent = "在线安装";
     }
@@ -762,7 +762,7 @@ export async function refreshLocalModelStatus() {
 }
 
 async function _startLocalModelInstall() {
-    if (!window.confirm("将联网下载约 3 GB（模型权重约 2.2 GB + 运行组件约 1 GB）。下载失败不影响基础检索，是否继续？")) return;
+    if (!window.confirm("将联网下载约 3.5 GB（模型权重约 2.7 GB + 运行组件约 1 GB）。下载失败不影响基础检索，是否继续？")) return;
     _renderLocalModelStatus({ state: "running", message: "正在启动本地模型安装…", can_cancel: true });
     try {
         const response = await fetch(API.localModelInstall, { method: "POST" });

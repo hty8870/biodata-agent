@@ -452,7 +452,7 @@ class DatasetRetriever:
         llm_config: object | None = None,
         recall_backend: str = "off",
         recall_alpha: float = 0.5,
-        recall_fusion: str = "linear",
+        recall_fusion: "str | None" = None,
         embedder: object | None = None,
         cross_scorer: object | None = None,
         facet_filters: list[dict] | None = None,
@@ -464,8 +464,9 @@ class DatasetRetriever:
         facet_filters（默认 None）：分面细化的精确等值后置过滤，只在硬过滤后收窄存活集，
         官方评测不传 → 整段 no-op、确定性零影响。
 
-        recall_fusion（默认 "linear"）：dense 召回的融合法（"linear"=min-max+α / "rrf"=名次融合 k=60），
-        仅 recall_backend=="dense" 时有效；官方评测不传 → 历史行为字节等价。"""
+        recall_fusion（缺省 None → 按后端取默认）：dense/vector 召回的融合法（"linear"=min-max+α /
+        "rrf"=名次融合 k=60）；dense 缺省 "linear"（历史行为字节等价）、vector 缺省 "rrf"。
+        官方评测不传 → 历史行为字节等价。"""
         limit = max(1, top_k if top_k is not None else self.top_k)
         # 弃权 → 无结果（由 workflow 渲染诊断）
         if intent.abstain:
@@ -496,6 +497,9 @@ class DatasetRetriever:
         # 2.4) 可选向量召回（默认关）：本地稠密嵌入对存活集按语义相关性重排（可与词面分融合）。
         #      顺序遵循既定方向「规则过滤 → 向量召回 → llm 重排」。同样只作用于存活集、
         #      输出恒为其排列 → 不引入违规记录；第 4 步终检再兜底一次。
+        # recall_fusion 解析（唯一默认在此）：缺省按后端取（dense=linear 历史默认逐位不变；
+        # vector=rrf）；显式值原样下传。off 后端记录 "linear"（与历史遥测同值，无行为差）。
+        eff_recall_fusion = str(recall_fusion or "").strip().lower() or ("rrf" if recall_backend == "vector" else "linear")
         if recall_backend and recall_backend != "off":
             from .vector_recall import recall_rerank  # 惰性导入：避免循环依赖 + 不装可选依赖也能导入本模块
 
@@ -504,7 +508,7 @@ class DatasetRetriever:
                 candidates=candidates,
                 backend=recall_backend,
                 alpha=recall_alpha,
-                fusion=recall_fusion,
+                fusion=eff_recall_fusion,
                 embedder=embedder,
                 cross_scorer=cross_scorer,
                 intent=intent,
@@ -547,7 +551,7 @@ class DatasetRetriever:
                     "top_k": limit, "rerank_top_n": int(rerank_top_n),
                     "rerank_backend": str(rerank_backend or "off"),
                     "recall_backend": str(recall_backend or "off"),
-                    "recall_alpha": float(recall_alpha), "recall_fusion": str(recall_fusion),
+                    "recall_alpha": float(recall_alpha), "recall_fusion": eff_recall_fusion,
                     "family_cap_primary": 1, "family_cap_fallback": 2,
                     "weights": {"preference": PREFERENCE_BOOST, "free_text_title": 1.0,
                                 "free_text_description": 0.3, "constraint_title": 0.5,

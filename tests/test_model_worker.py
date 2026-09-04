@@ -57,3 +57,43 @@ def test_download_falls_back_to_huggingface(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "modelscope", bad)
     monkeypatch.setitem(sys.modules, "huggingface_hub", hf)
     assert worker.download_model(tmp_path / "target")
+
+
+# ---------- --embed 模式：嵌入请求边界 / 模型 id 路由 ----------
+
+def test_texts_validation_is_bounded():
+    assert worker._valid_texts(["q", "doc"]) == ["q", "doc"]
+    assert worker._valid_texts([]) is None
+    assert worker._valid_texts([1]) is None
+    assert worker._valid_texts(["x" * (worker.MAX_EMBED_TEXT_CHARS + 1)]) is None
+    assert worker._valid_texts(["ok"] * (worker.MAX_TEXTS + 1)) is None
+
+
+def test_download_embed_uses_embed_model_id(monkeypatch, tmp_path):
+    source = tmp_path / "cache"
+    _ready(source)
+    seen = {}
+    fake = ModuleType("modelscope")
+
+    def snap(model_id, ignore_file_pattern):
+        seen["id"] = model_id
+        return str(source)
+
+    fake.snapshot_download = snap  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "modelscope", fake)
+    assert worker.download_model(tmp_path / "target", model_id=worker.EMBED_MODEL_ID)
+    assert seen["id"] == worker.EMBED_MODEL_ID
+
+
+def test_main_embed_flag_routes_to_embed_model(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_download(target, model_id=worker.MODEL_ID):
+        seen["id"] = model_id
+        return True
+
+    monkeypatch.setattr(worker, "download_model", fake_download)
+    assert worker.main(["--download", str(tmp_path / "m"), "--embed"]) == 0
+    assert seen["id"] == worker.EMBED_MODEL_ID
+    assert worker.main(["--download", str(tmp_path / "m2")]) == 0
+    assert seen["id"] == worker.MODEL_ID

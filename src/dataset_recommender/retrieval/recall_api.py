@@ -77,6 +77,21 @@ def api_rerank_enabled() -> bool:
     return _env_flag(_RERANK_API_ENV)
 
 
+def rerank_api_ready() -> bool:
+    """cross_encoder 的 API 打分是否**就绪**（配置启用 + key 在位）——供选择层判定可用性。
+    只探存在性，绝不回显 key。"""
+    return api_rerank_enabled() and bool(_api_key())
+
+
+def embed_api_ready() -> bool:
+    """dense 的 API 数据源是否**就绪**（配置启用 + key 在位 + 语料向量文件通过 model/dims 校验）。
+    只探存在性，绝不回显 key；任何内部异常收窄为 False（与 api_status 同口径）。"""
+    try:
+        return bool(api_embed_enabled()) and bool(_api_key()) and _load_vectors() is not None
+    except Exception:
+        return False
+
+
 def api_status() -> dict:
     """健康端点用的只读快照（additive）：前端据此把「本地下载模型」卡改成「已在线」。
 

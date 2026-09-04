@@ -1975,9 +1975,9 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         base_url=payload.base_url)
     # 可选 LLM 重排，与润色解耦：只接受 off/llm，其余一律 off（安全默认）。
     rerank_backend = "llm" if str(payload.rerank or "").strip().lower() == "llm" else "off"
-    # 可选向量召回：只接受 dense/cross_encoder，其余一律 off（安全默认）。
+    # 可选向量召回：只接受 dense/cross_encoder/vector，其余一律 off（安全默认）。
     _recall = str(payload.recall or "").strip().lower()
-    recall_backend = _recall if _recall in ("dense", "cross_encoder") else "off"
+    recall_backend = _recall if _recall in ("dense", "cross_encoder", "vector") else "off"
     # 发表时间范围（前端年份选择器 → ISO 起止）：给了就必须是合法 YYYY-MM-DD，否则 400——
     # 旧行为「非年份打头一律静默当没传」会把用户的条件悄悄丢掉，非法日期还会冒充生效条件上屏。
     date_from = _require_iso_date(payload.date_from, name="date_from")
@@ -2000,12 +2000,13 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
     lenient_dims = _sanitize_lenient_dims(payload.lenient_dims)
     # 检索策略：只接受 fixed/auto，其余一律 fixed（安全默认）。auto → 分类器按候选压力、语义信息和可用后端选择 recall/rerank。
     strategy = "auto" if str(payload.strategy or "").strip().lower() == "auto" else "fixed"
-    # Web 有真 TTY，可请求内加载本地重排模型 → 传「可加载」语义（recall_backend_available），
-    # 让 auto 在宽查询上启用本地 cross_encoder；模型未装则回退确定性词面序（不报错）。fixed 时无所谓。
+    # auto 偏好解析（唯一真源 resolve_auto_recall_preference）：偏好序 vector > cross_encoder，
+    # 传「可执行」语义——本地模型可加载或 API 数据源就绪均计为可用；两者皆无则回退确定性词面序（不报错）。fixed 时无所谓。
     recall_available = None
+    preferred_recall = "cross_encoder"
     if strategy == "auto":
-        from ..retrieval.vector_recall import recall_backend_available
-        recall_available = recall_backend_available("cross_encoder")
+        from ..retrieval.vector_recall import resolve_auto_recall_preference
+        preferred_recall, recall_available = resolve_auto_recall_preference()
 
     _workflow_box: dict[str, Any] = {}
 
@@ -2054,7 +2055,7 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
             strategy=strategy,
             recall_available=recall_available,
             llm_available=auto_llm_available,
-            preferred_recall="cross_encoder",
+            preferred_recall=preferred_recall,
             base_llm_config=request_llm_config,
         )
     )
@@ -3020,7 +3021,7 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     # preliminary_final 判定。校验在幂等占用之前：400 的请求不得占幂等槽。
     sp_rerank = "llm" if str(payload.rerank or "").strip().lower() == "llm" else "off"
     _rec = str(payload.recall or "").strip().lower()
-    sp_recall = _rec if _rec in ("dense", "cross_encoder") else "off"
+    sp_recall = _rec if _rec in ("dense", "cross_encoder", "vector") else "off"
     sp_date_from = _require_iso_date(payload.date_from, name="date_from")
     sp_date_to = _require_iso_date(payload.date_to, name="date_to")
     _validate_or_400(validate_date_window, sp_date_from, sp_date_to)

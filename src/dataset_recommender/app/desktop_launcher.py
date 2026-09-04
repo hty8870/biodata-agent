@@ -792,10 +792,10 @@ def warm_recall_if_available(logger: logging.Logger) -> str:
     if os.getenv("BIODATA_SKIP_RECALL_WARM", "").strip().lower() in ("1", "true", "yes", "on"):
         return "disabled"
     try:
-        from dataset_recommender.retrieval.vector_recall import recall_backend_available, warm_recall_backend
+        from dataset_recommender.retrieval.vector_recall import recall_backend_local_available, warm_recall_backend
     except Exception:
         return "unavailable"
-    if not recall_backend_available("cross_encoder"):
+    if not recall_backend_local_available("cross_encoder"):
         return "unavailable"
     logger.info("预热本地语义重排模型（cross_encoder）… 首次加载较慢，请稍候。")
     started = time.perf_counter()
