@@ -645,7 +645,7 @@ export function telemetryExperimentAssign(subject, experimentId, armsText) {
                 || !Number.isFinite(weight) || weight <= 0 || weight > 1
                 || ["fixed", "auto"].indexOf(strategy) < 0
                 || ["off", "llm"].indexOf(rerank) < 0
-                || ["off", "dense", "cross_encoder"].indexOf(recall) < 0) { invalid = true; return; }
+                || ["off", "dense", "cross_encoder", "vector"].indexOf(recall) < 0) { invalid = true; return; }
         seen.add(id); arms.push({ id: id, weight: weight, strategy: strategy, rerank: rerank, recall: recall });
     });
     const total = arms.reduce(function (sum, arm) { return sum + arm.weight; }, 0);

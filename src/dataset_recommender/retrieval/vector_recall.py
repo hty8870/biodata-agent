@@ -11,6 +11,8 @@
 - 后端 `off`：原样返回（与未启用时**字节等价**）。
 - 后端 `dense`：本地嵌入 → 余弦 → 融合 → 稳定排序；模型缺失/依赖未装/任何异常一律回退原序
   （永不报错、永不违规、永不阻塞请求）。
+- 后端 `vector`：语料级向量召回——候选向量优先命中本地语料索引（vector_index，首用构建）或
+  API 向量文件（未覆盖条目现场补嵌），查询向量现编；缺省 RRF 名次融合。同一套回退合同。
 - **可复现**：给定同一模型与输入，稠密嵌入确定 → 适合进分级评测（不像 LLM 重排不可复现）。
 
 依赖边界：本模块**不在导入期引入任何重依赖**；sentence-transformers 仅在真正走 dense 且模型
@@ -33,7 +35,7 @@ from typing import Callable, Sequence
 from .retriever import RetrievedCandidate
 from ..app.runtime_paths import get_app_paths
 
-RECALL_BACKENDS = ("off", "dense", "cross_encoder")
+RECALL_BACKENDS = ("off", "dense", "cross_encoder", "vector")
 DEFAULT_RECALL_ALPHA = 0.5
 #: dense 融合法（2026-08-09 五机制批，调研-检索质量与RAG评测 §候选2）：
 #: "linear" = min-max 归一化 + α 线性融合（历史默认，字节等价保留）；
@@ -285,19 +287,24 @@ def recall_backend_ready(backend: str) -> bool:
         return _CROSS_CACHE.get("ce::" + str(default_cross_encoder_dir())) is not None
     if b == "dense":
         return _EMBEDDER_CACHE.get(str(default_model_dir())) is not None
+    if b == "vector":
+        # MCP v1 不开放 vector：语料索引首用构建是重 IO + 模型加载，piped-stdio 下不预热；
+        # 其可用性属 available 层语义（auto 判定），ready（已预热缓存）恒 False → MCP 回退规则序。
+        return False
     return True
 
 
-def recall_backend_available(backend: str) -> bool:
-    """该 recall 后端是否**可加载**（本地模型目录存在 + sentence-transformers 已装），**不触发加载**。
+def recall_backend_local_available(backend: str) -> bool:
+    """该 recall 后端的本地模型是否**可加载**（本地模型目录存在 + sentence-transformers 已装），**不触发加载**。
 
-    与 `recall_backend_ready` 的区别：
-    - `ready`  = 模型**已在缓存**里（piped-stdio 安全，MCP 用它——未预热的 torch 后端在请求内首次加载会死锁）。
-    - `available` = 模型**能加载**（有真 TTY 的 CLI/Web 用它——首次加载有开销但不死锁）。
+    三态语义：
+    - `ready`（recall_backend_ready）= 模型**已在缓存**里（piped-stdio 安全，MCP 用它——未预热的 torch 后端在请求内首次加载会死锁）。
+    - `local_available`（本函数）= 本地模型**能加载**（首次加载有开销但不死锁；暖机闸用它——API 数据源无需预热）。
+    - `available`（recall_backend_available）= 有**任一**可执行后端（本地可加载或 API 数据源就绪），auto 策略判定用它。
     'off' / 未知后端 → False（无需/无从加载语义模型）。仅做 find_spec + 目录存在性检查，无重导入。
     """
     b = (backend or "off").strip().lower()
-    if b not in ("cross_encoder", "dense"):
+    if b not in ("cross_encoder", "dense", "vector"):
         return False
     target = default_cross_encoder_dir() if b == "cross_encoder" else default_model_dir()
     if not target.exists():
@@ -314,7 +321,54 @@ def recall_backend_available(backend: str) -> bool:
             return external_runtime_ready()
         except Exception:
             return False
+    if b == "vector":
+        # 与 dense 同一嵌入模型：本地目录+sentence-transformers 不可用时，
+        # model-runtime 隔离 venv 的外部嵌入器也算本地可加载（frozen 形态）。
+        try:
+            from .model_runtime import external_embed_ready
+            return external_embed_ready()
+        except Exception:
+            return False
     return False
+
+
+def recall_backend_available(backend: str) -> bool:
+    """该 recall 后端是否**可执行**（本地模型可加载，或 API 数据源就绪），**不触发加载、不触网**。
+
+    auto 策略判定用它：本机形态（API 闸默认 off）语义与「本地可加载」逐位一致；
+    服务器形态（无本地模型、API 闸开且 key 在位）同样计为可用——cross_encoder 执行时
+    走智谱 rerank API、dense 走语料向量文件 + 查询侧 API 嵌入（见 recall_rerank 的 API 分支，
+    任一失败 fail-closed 回退规则序）。'off' / 未知后端 → False。只探存在性，绝不回显 key。
+    """
+    b = (backend or "off").strip().lower()
+    if b == "cross_encoder":
+        if recall_backend_local_available(b):
+            return True
+        from . import recall_api  # 惰性导入：recall_api 反向共享本模块 _WARNED，禁模块级循环导入
+        return recall_api.rerank_api_ready()
+    if b == "dense":
+        if recall_backend_local_available(b):
+            return True
+        from . import recall_api
+        return recall_api.embed_api_ready()
+    if b == "vector":
+        if recall_backend_local_available(b):
+            return True
+        from . import recall_api
+        return recall_api.embed_api_ready()
+    return False
+
+
+def resolve_auto_recall_preference() -> "tuple[str, bool]":
+    """auto 策略的语义后端偏好解析（Web/CLI/Agent 三调用点唯一真源）：返回 (preferred, available)。
+
+    偏好序 vector > cross_encoder：vector 每个查询只现编 1 条查询向量（语料向量走本地索引
+    或 API 向量文件），成本远低于 cross_encoder 的全存活集逐对打分；vector 不可执行时回退
+    cross_encoder；两者皆无 → ("cross_encoder", False)，调用方按「无语义后端」走确定性词面序。
+    判定走 recall_backend_available 语义：不触发加载、不触网。"""
+    if recall_backend_available("vector"):
+        return ("vector", True)
+    return ("cross_encoder", recall_backend_available("cross_encoder"))
 
 
 def warm_recall_backend(backend: str) -> bool:
@@ -449,14 +503,16 @@ def recall_rerank(
     model_dir: "str | Path | None" = None,
     top_k: "int | None" = None,
     trace: "dict | None" = None,
-    fusion: str = DEFAULT_RECALL_FUSION,
+    fusion: "str | None" = None,
 ) -> "list[RetrievedCandidate]":
-    """可选向量召回（存活集内语义重排）。三种后端，输出恒为输入 candidates 的**排列/截断**。
+    """可选向量召回（存活集内语义重排）。四种后端，输出恒为输入 candidates 的**排列/截断**。
 
     backend="off"（默认）    → 原样返回（截断到 top_k，如未传则不截）。
-    backend="dense"          → 本地稠密嵌入余弦 × 词面分融合排序：`fusion="linear"`（默认）
+    backend="dense"          → 本地稠密嵌入余弦 × 词面分融合排序：`fusion="linear"`（缺省默认）
                                为 min-max 归一化 + alpha 线性融合（历史行为字节等价）；
                                `fusion="rrf"` 为 RRF 名次融合（k=60，尺度无关、零调参）。
+    backend="vector"         → 语料级向量索引召回：候选向量命中本地语料索引 / API 向量文件
+                               （未覆盖条目现场补嵌），余弦 × 词面分融合；缺省 `fusion="rrf"`。
     backend="cross_encoder"  → 本地 cross-encoder 对全存活集逐对打分，按**纯分**排序（词面原序仅同分 tie-break）；
                                中文 query 附英文别名（双语扩展）以对齐英文文档。**基准选型胜出的默认路径**。
 
@@ -465,6 +521,9 @@ def recall_rerank(
     """
     items = list(candidates)
     started_at = time.perf_counter()
+    # fusion 解析（唯一默认在此）：缺省按后端取（dense=linear 历史默认逐位不变；vector=rrf
+    # 名次融合）；显式值小写归一后原样生效（未知值不当 rrf —— 安全默认与历史一致）。
+    resolved_fusion = str(fusion or "").strip().lower() or ("rrf" if backend == "vector" else "linear")
 
     def _duration_ms() -> int:
         return max(0, int(round((time.perf_counter() - started_at) * 1000)))
@@ -473,7 +532,7 @@ def recall_rerank(
         trace.update({
             "backend": backend, "status": "skipped", "reason": "disabled",
             "candidate_count": len(items), "duration_ms": 0,
-            "fusion": (str(fusion or "").strip().lower() if backend == "dense" else ""),
+            "fusion": (resolved_fusion if backend in ("dense", "vector") else ""),
         })
     if not items or backend == "off" or backend not in RECALL_BACKENDS:
         if trace is not None and not items:
@@ -524,38 +583,62 @@ def recall_rerank(
             _mark("used", "completed")
             return _cut([items[i] for i in order])
 
-        # backend == "dense"
-        # API 数据源分支（方案A：语料向量文件 + 查询侧智谱嵌入；env BIODATA_EMBED_API=zhipu
-        # 才启用，缺省 off → 本地形态逐字节不变）。注入 embedder 的测试/评测路径不受影响。
-        api_vectors: "list[list[float]] | None" = None
-        if embedder is None:
-            from . import recall_api  # 惰性导入：env off 时零开销零副作用
-            if recall_api.api_embed_enabled():
-                api_vectors = recall_api.api_dense_vectors(query, items)
-                if api_vectors is None:
-                    # fail-closed：文件缺失/版本不匹配/API 失败/限流 → 直接回退规则序
-                    _mark("fallback", "api_unavailable")
-                    return _cut(items)
-        enc: "Embedder | None" = None
-        if api_vectors is None:
-            enc = embedder if embedder is not None else load_embedder(model_dir)
-            if enc is None:
-                _mark("fallback", "model_or_dependency_unavailable")
-                return _cut(items)                                      # 优雅降级
-        use_rrf = str(fusion or "").strip().lower() == "rrf"
+        # backend in ("dense", "vector")：两路都先产出 [查询向量, *文档向量]，再走同一段
+        # 余弦 + 融合下游（dense 三种向量来源逐位不动；vector 为 2026-09-04 新增语料索引路）。
+        use_rrf = resolved_fusion == "rrf"
         a = max(0.0, min(1.0, float(alpha)))
-        if api_vectors is not None:
-            vectors = api_vectors
-        elif embedder is None:
-            # P-1：默认加载路径走文档向量 LRU 缓存（候选文本与查询无关、语料静态 → 嵌入是
-            # 最贵一步，按文本缓存）；查询向量仍每次现编。见 _DOC_VECTOR_CACHE 声明处注释。
-            texts = [_candidate_text(c) for c in items]
-            vectors = _dense_vectors_cached(enc, model_dir, query, texts)
+        if backend == "vector":
+            # 语料级向量召回：注入 embedder（单测/评测）→ 单批现编（与 dense 注入路径同形，
+            # 隔离即确定性）；否则 API 向量文件（env 启用时）；否则本地语料索引（首用构建）。
+            vectors: "list[list[float]] | None" = None
+            if embedder is not None:
+                texts = [_candidate_text(c) for c in items]
+                vectors = embedder([query, *texts])
+            else:
+                from . import recall_api  # 惰性导入：env off 时零开销零副作用
+                if recall_api.api_embed_enabled():
+                    vectors = recall_api.api_dense_vectors(query, items)
+                    if vectors is None:
+                        # fail-closed：文件缺失/版本不匹配/API 失败/限流 → 直接回退规则序
+                        _mark("fallback", "api_unavailable")
+                        return _cut(items)
+                else:
+                    from . import vector_index  # 惰性导入：索引首用构建有重 IO，按需加载
+                    vectors = vector_index.index_dense_vectors(query, items)
+                    if vectors is None:
+                        _mark("fallback", "index_unavailable")
+                        return _cut(items)
         else:
-            # 注入路径（单测/评测共享一次加载）：行为逐位不变——仍单批 enc([query, *texts])，
-            # 不过缓存（隔离即确定性：不同测试对同一文本的 mock 向量互不串味）。
-            texts = [_candidate_text(c) for c in items]
-            vectors = enc([query, *texts])
+            # backend == "dense"
+            # API 数据源分支（方案A：语料向量文件 + 查询侧智谱嵌入；env BIODATA_EMBED_API=zhipu
+            # 才启用，缺省 off → 本地形态逐字节不变）。注入 embedder 的测试/评测路径不受影响。
+            api_vectors: "list[list[float]] | None" = None
+            if embedder is None:
+                from . import recall_api  # 惰性导入：env off 时零开销零副作用
+                if recall_api.api_embed_enabled():
+                    api_vectors = recall_api.api_dense_vectors(query, items)
+                    if api_vectors is None:
+                        # fail-closed：文件缺失/版本不匹配/API 失败/限流 → 直接回退规则序
+                        _mark("fallback", "api_unavailable")
+                        return _cut(items)
+            enc: "Embedder | None" = None
+            if api_vectors is None:
+                enc = embedder if embedder is not None else load_embedder(model_dir)
+                if enc is None:
+                    _mark("fallback", "model_or_dependency_unavailable")
+                    return _cut(items)                                      # 优雅降级
+            if api_vectors is not None:
+                vectors = api_vectors
+            elif embedder is None:
+                # P-1：默认加载路径走文档向量 LRU 缓存（候选文本与查询无关、语料静态 → 嵌入是
+                # 最贵一步，按文本缓存）；查询向量仍每次现编。见 _DOC_VECTOR_CACHE 声明处注释。
+                texts = [_candidate_text(c) for c in items]
+                vectors = _dense_vectors_cached(enc, model_dir, query, texts)
+            else:
+                # 注入路径（单测/评测共享一次加载）：行为逐位不变——仍单批 enc([query, *texts])，
+                # 不过缓存（隔离即确定性：不同测试对同一文本的 mock 向量互不串味）。
+                texts = [_candidate_text(c) for c in items]
+                vectors = enc([query, *texts])
         if not vectors or len(vectors) != len(items) + 1:          # 长度不符 → 回退，绝不错位打分
             _mark("fallback", "invalid_vectors")
             return _cut(items)

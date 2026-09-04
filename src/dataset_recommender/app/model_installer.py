@@ -25,6 +25,8 @@ from typing import Callable, Iterator
 from .runtime_paths import AppPaths, get_app_paths
 from ..retrieval.model_runtime import (
     READY_SCHEMA,
+    embed_model_dir,
+    external_embed_ready,
     external_runtime_ready,
     model_dir,
     read_ready_manifest,
@@ -33,11 +35,11 @@ from ..retrieval.model_runtime import (
     runtime_root,
     worker_script,
 )
-from ..retrieval.model_worker import MODEL_ID, model_file_manifest, model_files_ready
+from ..retrieval.model_worker import EMBED_MODEL_ID, MODEL_ID, model_file_manifest, model_files_ready
 
 STATUS_SCHEMA = "biodata-model-install-status/v1"
 PYTHON_VERSION = "3.12.13"
-#: 磁盘预检保守阈值：下载约 2.2 GB、装完约 5 GB，预留 7 GiB 余量 fail-fast。
+#: 磁盘预检保守阈值：双模型下载约 2.7 GB、装完约 5.5 GB，预留 7 GiB 余量 fail-fast。
 MIN_FREE_BYTES = 7 * 1024 ** 3
 _STATE_LOCK = threading.Lock()
 # 修复：status.json 的写侧专用锁。此前 `_write_status` 的「写 .tmp + os.replace」没有
@@ -180,7 +182,7 @@ def _write_status(
 def model_install_status(paths: "AppPaths | None" = None) -> dict:
     resolved = paths or get_app_paths()
     manifest = read_ready_manifest(resolved)
-    if manifest and external_runtime_ready(resolved):
+    if manifest and external_runtime_ready(resolved) and external_embed_ready(resolved):
         runtime_bytes = manifest.get("runtime_bytes")
         model_bytes = manifest.get("model_bytes")
         # READY 查询直接读安装完成时写入的缓存字节；缺失/损坏时才回退一次扫描，
@@ -197,6 +199,9 @@ def model_install_status(paths: "AppPaths | None" = None) -> dict:
     except (OSError, ValueError, TypeError):
         value = {}
     if not isinstance(value, dict) or value.get("schema") != STATUS_SCHEMA:
+        value = {}
+    # 走到这里说明双模型实物不齐（上面 ready 分支已 return），旧版写入的 ready 属陈旧状态，作废回 idle 以恢复安装入口。
+    if value.get("state") == "ready":
         value = {}
     return _public_status(value)
 
@@ -295,13 +300,15 @@ def _ready_manifest(paths: AppPaths, lock: Path, *, runtime_bytes: int, model_by
         "runtime_bytes": runtime_bytes,
         "model_bytes": model_bytes,
         "model_files": model_file_manifest(model_dir(paths)),
+        "embed_model_id": EMBED_MODEL_ID,
+        "embed_files": model_file_manifest(embed_model_dir(paths)),
     }
 
 
 def install_local_model(paths: "AppPaths | None" = None, *, cancel: "threading.Event | None" = None) -> dict:
     resolved = paths or get_app_paths()
     cancel_event = cancel or threading.Event()
-    if external_runtime_ready(resolved):
+    if external_runtime_ready(resolved) and external_embed_ready(resolved):
         return model_install_status(resolved)
     uv = uv_path(resolved)
     lock = model_lock_path(resolved)
@@ -341,17 +348,24 @@ def install_local_model(paths: "AppPaths | None" = None, *, cancel: "threading.E
                 "--torch-backend", "cpu",
             ], env=env, log=log, cancel=cancel_event)
 
-            _write_status(resolved, state="running", stage="model", message="正在下载并核验约 2.2 GB 模型权重…", can_cancel=True)
+            _write_status(resolved, state="running", stage="model", message="正在下载并核验约 2.2 GB 重排模型权重…", can_cancel=True)
             _run_command([
                 str(runtime_python(resolved)), str(worker), "--download", str(model_dir(resolved)),
             ], env=env, log=log, cancel=cancel_event)
             if not model_files_ready(model_dir(resolved)):
                 raise ModelInstallError("model_incomplete", "模型下载完成但文件不完整。")
 
+            _write_status(resolved, state="running", stage="model", message="正在下载并核验约 0.5 GB 嵌入模型权重…", can_cancel=True)
+            _run_command([
+                str(runtime_python(resolved)), str(worker), "--download", str(embed_model_dir(resolved)), "--embed",
+            ], env=env, log=log, cancel=cancel_event)
+            if not model_files_ready(embed_model_dir(resolved)):
+                raise ModelInstallError("model_incomplete", "模型下载完成但文件不完整。")
+
             # 安装完成时一次性计算字节数，写进 READY manifest 与 status 缓存；
             # 之后 READY 状态查询直接读缓存，不再每次遍历 5 GB 目录。
             runtime_bytes = _dir_bytes(root / "venv")
-            model_bytes = _dir_bytes(model_dir(resolved))
+            model_bytes = _dir_bytes(model_dir(resolved)) + _dir_bytes(embed_model_dir(resolved))
             manifest = ready_manifest_path(resolved)
             temporary = manifest.with_suffix(".tmp")
             temporary.write_text(json.dumps(

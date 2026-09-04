@@ -349,8 +349,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260903-web5"  # 发送键幽灵变方修复：ghostExit 新增 keepIds，.console 幽灵保留 #submitBtn id 锚定的 pill 造型。
-STATIC_ASSETS_SHA256 = "f20c6ea893a98dce2ad7993a35b3e266b1bd531e0d0e64753c5d5853c55d0c64"
+CACHE_GENERATION = "20260904-web1"  # 语料级向量召回进 auto：usage_core 实验臂 recall 白名单新增 vector + shell 模型下载体积文案改双模型口径（与后端同批原子）。
+STATIC_ASSETS_SHA256 = "34ef2f326aac2713b7ce03c05b383d066aa6f2377f9ec1fc68916d0d5faacb23"
 
 
 def _static_assets_digest() -> str:

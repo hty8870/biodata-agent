@@ -35,11 +35,13 @@ def _bundle(paths: AppPaths) -> None:
 
 
 def _model_ready(paths: AppPaths) -> None:
-    target = mr.model_dir(paths)
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "config.json").write_text("{}", encoding="utf-8")
-    (target / "tokenizer.json").write_text("{}", encoding="utf-8")
-    (target / "model.safetensors").write_bytes(b"weights")
+    # 安装器同批下双模型：重排 + 嵌入两个目录都按完整文件就绪（fake_run 对两条
+    # --download 命令都会调到本助手）。
+    for target in (mr.model_dir(paths), mr.embed_model_dir(paths)):
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "config.json").write_text("{}", encoding="utf-8")
+        (target / "tokenizer.json").write_text("{}", encoding="utf-8")
+        (target / "model.safetensors").write_bytes(b"weights")
 
 
 def test_install_creates_isolated_runtime_and_ready_manifest(monkeypatch, tmp_path):
@@ -60,12 +62,16 @@ def test_install_creates_isolated_runtime_and_ready_manifest(monkeypatch, tmp_pa
     monkeypatch.setattr(mi, "_run_command", fake_run)
     result = mi.install_local_model(paths)
     assert result["state"] == "ready"
-    assert [cmd[1] for cmd in commands] == ["venv", "pip", str(mi.worker_script(paths))]
+    assert [cmd[1] for cmd in commands] == ["venv", "pip", str(mi.worker_script(paths)), str(mi.worker_script(paths))]
+    download_cmds = [cmd for cmd in commands if "--download" in cmd]
+    assert "--embed" in download_cmds[1] and "--embed" not in download_cmds[0]
     assert "--managed-python" in commands[0] and mi.PYTHON_VERSION in commands[0]
     assert "--require-hashes" in commands[1] and "--torch-backend" in commands[1]
     manifest = json.loads(mi.ready_manifest_path(paths).read_text(encoding="utf-8"))
     assert manifest["schema"] == mr.READY_SCHEMA and manifest["model_id"] == mi.MODEL_ID
+    assert manifest["embed_model_id"] == mi.EMBED_MODEL_ID and manifest["embed_files"]
     assert mr.external_runtime_ready(paths)
+    assert mr.external_embed_ready(paths)
 
 
 def test_install_failure_never_writes_ready_and_public_status_has_no_paths(monkeypatch, tmp_path):
@@ -390,3 +396,52 @@ def test_install_lock_is_mutually_exclusive_across_threads(monkeypatch, tmp_path
     release.set()
     t1.join(3)
     assert outcomes == ["busy"]
+
+
+def test_legacy_cross_only_install_gets_embed_top_up(monkeypatch, tmp_path):
+    """双模型同批安装之前的旧世界：venv + 重排模型就绪、无嵌入模型、manifest 无 embed_files。
+    就绪判定必须显示未就绪（而非"已就绪"且无补装入口），重跑安装器补齐嵌入后双模型转就绪。"""
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    py = mi.runtime_python(paths)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_bytes(b"python")
+    cross = mr.model_dir(paths)
+    cross.mkdir(parents=True, exist_ok=True)
+    (cross / "config.json").write_text("{}", encoding="utf-8")
+    (cross / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (cross / "model.safetensors").write_bytes(b"weights")
+    legacy_manifest = {
+        "schema": mr.READY_SCHEMA,
+        "model_id": mi.MODEL_ID,
+        "installed_at": "2026-01-01T00:00:00+00:00",
+        "runtime_bytes": 1,
+        "model_bytes": 11,
+        "model_files": {"config.json": 2, "tokenizer.json": 2, "model.safetensors": 7},
+    }
+    manifest_path = mi.ready_manifest_path(paths)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(legacy_manifest), encoding="utf-8")
+    assert mr.external_runtime_ready(paths)
+    assert not mr.external_embed_ready(paths)
+    assert mi.model_install_status(paths)["state"] != "ready"
+
+    def fake_run(command, *, env, log, cancel):
+        if "--download" in command and "--embed" in command:
+            _model_ready(paths)
+
+    monkeypatch.setattr(mi, "_run_command", fake_run)
+    result = mi.install_local_model(paths)
+    assert result["state"] == "ready"
+    manifest = json.loads(mi.ready_manifest_path(paths).read_text(encoding="utf-8"))
+    assert manifest["embed_files"]
+    assert mr.external_runtime_ready(paths)
+    assert mr.external_embed_ready(paths)
+
+
+def test_stale_ready_status_json_not_shown_when_models_incomplete(tmp_path):
+    """status.json 的 ready 只是安装完成时写入的缓存；实物不齐（无 manifest/无模型文件）
+    时不得据此显示"已就绪"（否则前端没有补装入口），应回退到 idle。"""
+    paths = _paths(tmp_path)
+    mi._write_status(paths, state="ready", stage="ready", message="本地精准重排已经就绪。")
+    assert mi.model_install_status(paths)["state"] == "idle"
