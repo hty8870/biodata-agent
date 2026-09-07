@@ -134,18 +134,25 @@ async function _whoamiQuiet() {
     } catch (_e) { return undefined; }
 }
 let _recheckInflight = false;
+let _recheckPending = false;   // 在途期间又来变更：挂起一次尾随复核，防旧应答落定中间态账户后再无人纠正
 async function _recheckIdentity() {
-    if (_recheckInflight) return;
+    if (_recheckInflight) { _recheckPending = true; return; }
     _recheckInflight = true;
     try {
-        try { await ACCOUNTS_READY; } catch (_e) {}   // 启动 whoami 未落定前不掺和（见 ACCOUNTS_READY 注释的找回竞态）
-        const prevName = CURRENT_USER ? CURRENT_USER.username : null;
-        const user = await _whoamiQuiet();
-        if (user === undefined) return;
-        const nextName = user ? user.username : null;
-        if (prevName === nextName) return;
-        setCurrentUser(user);
-        onAccountChanged();   // 不广播：这是被动对齐，广播只在 deliberate 变更点发，避免标签间回环
+        do {
+            _recheckPending = false;
+            try { await ACCOUNTS_READY; } catch (_e) {}   // 启动 whoami 未落定前不掺和（见 ACCOUNTS_READY 注释的找回竞态）
+            const prevName = CURRENT_USER ? CURRENT_USER.username : null;
+            const user = await _whoamiQuiet();
+            if (user === undefined) continue;   // 取态失败保持现状；有尾随变更则下一轮再试
+            const nextName = user ? user.username : null;
+            if (prevName === nextName) continue;
+            setCurrentUser(user);
+            // 锁定门随身份对齐：被动登录解开本标签的强制登录锁定；被动登出在护栏模式下回锁定（闸关 no-op）
+            if (user && _authLocked) { exitAuthLockdown(); closeAccountModal(); }
+            if (!user) enterAuthLockdown();
+            onAccountChanged();   // 不广播：这是被动对齐，广播只在 deliberate 变更点发，避免标签间回环
+        } while (_recheckPending);
     } finally {
         _recheckInflight = false;
     }

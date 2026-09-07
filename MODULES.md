@@ -23,7 +23,7 @@
 > | `agent/` | agent 执行侧（动词表/形状闸/图循环/回合） | action_plan · agent_schemas · agent_exec · turn · compare（新增：数据集对比的确定性 diff + 措辞层） |
 > | `app/` | 编排与接口（主管线/网页/CLI/面板/账户） | workflow · webapp · cli · board · accounts · model_installer |
 >
-> 仓库根另有独立子包 `devcontext/`（项目上下文检索系统，agent 侧记忆；详见 `devcontext/README.md`，测试 `devcontext/tests/` 已入 pytest-suite 质量门）：
+> 仓库根另有独立子包 `devcontext/`（项目上下文检索系统，agent 侧记忆；**仅私仓存在，不派生公开镜像**——公开仓库无此目录，本行只对私仓读者有效；详见 `devcontext/README.md`，测试 `devcontext/tests/` 已入 pytest-suite 质量门）：
 > source_catalog（真源分类+local_only 隐私闸）· index_store（索引生命周期+向量）· resolver（检索编排+rerank 闸）· retriever · chunker · reranker · semantic_backend（本地/API 向量与重排）· cost_budget · cost_policy · doc_audit · pack_builder · projection · query_lexicon · util · cli。
 >
 > 后文明细表的「文件」列仍写裸模块名，按上表定位子包（如 `retriever.py` → `retrieval/retriever.py`）。

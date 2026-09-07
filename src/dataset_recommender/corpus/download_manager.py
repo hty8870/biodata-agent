@@ -586,6 +586,15 @@ def update_job(*, add: "Sequence[str]" = (), remove: "Sequence[str]" = (),
         if job["state"] != STATE_RUNNING:
             raise DownloadManagerError("job_not_running", "下载任务已结束，无法再增删条目。")
 
+        # fail-closed 预检先于一切变更（含 remove）：磁盘预检若放在 remove 之后，
+        # 预检失败时 remove 的跳过/中止信号已生效而端点却报错，调用方会以为整体失败。
+        # 在途追加与 start_job 同一闸，防多次追加撑爆磁盘。
+        new_items: list[dict] = []
+        if plan:
+            new_items = [it for it in plan["items"] if it["dataset_uid"] not in job["_subdirs"]]
+            _ensure_disk_space(Path(job["dir"]).parent,
+                               sum(int(it.get("bytes") or 0) for it in new_items))
+
         # ---------- remove ----------
         removed: list[dict] = []
         rejected: list[dict] = []
@@ -631,13 +640,9 @@ def update_job(*, add: "Sequence[str]" = (), remove: "Sequence[str]" = (),
         added: list[dict] = []
         added_unsupported: list[dict] = []
         if plan:
-            # 先校验后变更（fail-closed：预检不过则任务零改动）：
-            # 1) 在途追加同样过磁盘预检（与 start_job 同一闸），防多次追加撑爆磁盘；
-            # 2) 追加批次的 allowed_hosts 并入任务白名单（plan 是白名单单一真源）——否则
-            #    新主机的追加文件会被 worker 的 SSRF 闸全部拒绝（显示已加入、随后全失败）。
-            new_items = [it for it in plan["items"] if it["dataset_uid"] not in job["_subdirs"]]
-            _ensure_disk_space(Path(job["dir"]).parent,
-                               sum(int(it.get("bytes") or 0) for it in new_items))
+            # 磁盘预检已在 remove 之前完成（fail-closed）；此处只剩非失败性变更。
+            # 追加批次的 allowed_hosts 并入任务白名单（plan 是白名单单一真源）——否则
+            # 新主机的追加文件会被 worker 的 SSRF 闸全部拒绝（显示已加入、随后全失败）。
             job["_allowed"] = sorted(set(job["_allowed"]) | set(plan.get("allowed_hosts") or []))
             taken = {v.lower() for v in job["_subdirs"].values()}
             new_subdirs: dict[str, str] = {}
