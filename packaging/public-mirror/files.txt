@@ -195,6 +195,7 @@ scripts/smoke_test.py
 scripts/smoke_ui_acceptance.py
 scripts/smoke_ui_playwright.py
 scripts/summarize_mcp_calls.py
+scripts/synth_ltr_data.py
 scripts/telemetry_delete.py
 scripts/telemetry_export.py
 scripts/telemetry_parquet.py
