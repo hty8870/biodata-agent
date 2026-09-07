@@ -86,6 +86,43 @@ def test_invalidate_external_cache_makes_new_upload_visible(tmp_path):
     assert any(source_of(r) == "迟到库" for r in full)
 
 
+def test_external_cache_stale_read_never_reinstalls(tmp_path, monkeypatch):
+    """慢读取横跨 invalidate：迟到的旧结果返回给当时的调用者可以，但绝不得回写缓存
+    （lru_cache 陈旧回装竞态的回归测试：旧值回写会让上传后的新数据持续不可见）。"""
+    import threading
+    from dataset_recommender.corpus import corpus as C
+    key = (str(tmp_path / "shipped"), str(tmp_path / "ext"))
+    invalidate_external_cache()
+    started = threading.Event()
+    finish = threading.Event()
+    calls = {"n": 0}
+
+    def _slow(_shipped, _user):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            started.set()
+            finish.wait(10)
+            return ("old",)
+        return ("new",)
+
+    monkeypatch.setattr(C, "_load_external_normalized", _slow)
+    out: list = []
+    t = threading.Thread(target=lambda: out.append(C._external_normalized(*key)))
+    t.start()
+    try:
+        assert started.wait(5)
+        invalidate_external_cache()     # 读取进行中发生失效
+        finish.set()
+        t.join(10)
+    finally:
+        finish.set()
+        t.join(10)
+    assert out == [("old",)]
+    # 旧值未回写：下一次调用重新装载拿到新值
+    assert C._external_normalized(*key) == ("new",)
+    assert calls["n"] == 2
+
+
 def test_upload_without_declared_source_defaults_labelled(tmp_path):
     """未声明 source 的外部记录：source_of 回退到 BASE_SOURCE（故上传端必须逐条打标，本测锁定该语义）。"""
     base = _make_base(tmp_path)

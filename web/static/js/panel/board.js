@@ -2625,7 +2625,7 @@ function ubDispatch(text, reply, fromChat, wasChat) {
         const _rpay = (reply && reply.result_payload) || null;
         usageLog(USAGE_KINDS.conv, { mode: "chat" });
         //final 三档。
-        // mb2（2026-08-17 复核中5 跨契约缺陷）：preliminary_final 分支必须**先于**
+        // preliminary_final 分支必须**先于**
         // 通用 result_payload 分支判定——后端结果批常驻且仅 preliminary 批时，legacy
         // result_payload 也非 None（镜像活跃批，turn.py 组卷收尾），若 a 档先判就会把屏上已在的
         // 同一批初步结果重复上屏、误报「已更新」。后端 preliminary_final 由独立的 loop_payload
@@ -2650,11 +2650,11 @@ function ubDispatch(text, reply, fromChat, wasChat) {
             if (_bb) { _bb.disabled = false; _bb.removeAttribute("aria-busy"); }
             return;
         }
-        // mb2 补充（同缺陷的 polish-on 面）：preliminary_final 的 b 档判定含「润色不会跑」
+        // polish-on 面：preliminary_final 的 b 档判定含「润色不会跑」
         // （turn.py 全与保守），polish 开时仅 preliminary 批也 preliminary_final=false——
         // 镜像载荷会落进 a 档：同一批初步结果重复上屏 + 误报「已更新」+ 跳过本该跑的润色。
         // 判别真源是结果批本身：活跃批 kind=preliminary 且屏上正是先行帧 → result_payload 只是
-        // 该批镜像、不是环内采纳，a 档不得截胡——落 c 档照旧 runRecommend（pre-M3 行为：
+        // 该批镜像、不是环内采纳，a 档不得截胡——落 c 档照旧 runRecommend（既有行为：
         // 润色照跑、落地摘徽标、无「已更新」）。环内真有采纳时活跃批是 rank/rerank 等环内批，
         // 本闸不压（无结果批的旧帧/非 agent 帧 batches 恒缺，判别短路为 false，行为逐位不变）。
         // a：环内采纳了结果（含 preliminary 镜像/去重/备选），统一交 selectDisplayBatch 决定——
@@ -2693,12 +2693,12 @@ function ubDispatch(text, reply, fromChat, wasChat) {
         return;
     }
     if (route === "tool") {
-        /* mb2（2026-08-17 真链路核实）：三 flag（scoped 路由/RAG 工具/多批）ON 时检索改由
+        /* 三 flag（scoped 路由/RAG 工具/多批）ON 时检索改由
            环内 rank/rerank 工具完成，整轮以 route=tool（EXEC plan）收尾——但后端契约里
            result_payload 恒为「环内上屏批」、result_batches/active_batch 随行（turn.py 组卷收尾；
            RAG 工具 ON 即使 MULTI_BATCH OFF 也会有 loop_payload）。tool 档若不消费它们，屏上永远停在
            pre-loop 先行批（「初步结果」徽标也摘不掉），环内采纳批与结果批切换器全丢（真机核实：换条件
-           一轮后屏上仍是上一轮结果）。消费口径（与 search 档 mb2 三档同一纪律）：
+           一轮后屏上仍是上一轮结果）。消费口径（与 search 档三档同一纪律）：
            · 屏上先行帧已是最终活跃批（仅 preliminary 批）→ 只摘徽标，不重复上屏、不报「已更新」；
            · 否则把活跃批落地（prefetched 零网络、淡入同 search a 档），result_batches/active_batch
              并入视图对象——切换器（results.js renderBatchSwitcher）随之对真实多批响应渲染；

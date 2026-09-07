@@ -143,10 +143,10 @@ fi
 echo "[deploy] 自动回退到 biodata-web:$prev_tag" >&2
 write_image_tag "$prev_tag"
 compose up -d || true
-if wait_healthy; then
+if wait_healthy && assert_guard_required; then
   echo "[deploy] 已回退并 healthy：biodata-web:$prev_tag"
   printf '%s rollback: %s failed, restored %s\n' "$(date '+%F %T')" "$new_tag" "$prev_tag" >> "$RELEASES_LOG"
 else
-  echo "[deploy] 回退后仍未 healthy——立即人工介入：docker logs $CONTAINER" >&2
+  echo "[deploy] 回退后仍未 healthy 或护栏断言未过——立即人工介入：docker logs $CONTAINER" >&2
 fi
 exit 1

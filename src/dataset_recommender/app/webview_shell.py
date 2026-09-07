@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
 """桌面窗口壳（pywebview 5.4，可选依赖）——把「开浏览器」升级成「开原生窗口」。
 
-背景（2026-08-21 桌面壳批 zcode/desktop-shell，Codex 只读评审结论已并入）：
-产品要从「弹系统浏览器」进化成「真正的桌面应用」。选型：pywebview + 系统 WebView
+背景：产品要从「弹系统浏览器」进化成「真正的桌面应用」。选型：pywebview + 系统 WebView
 （Windows=WebView2/EdgeChromium、macOS=WKWebView、Linux=WebKitGTK）——前端**零改动**
 （还是同一份 importmap 原生 ESM、同一个 127.0.0.1 回环服务），浏览器开发通道**永久保留**
 （截图/DevTools/Playwright 工作流不变）。本模块是启动器新增的**专用窗口 runner**
 （`desktop_launcher.Launcher.window_runner` 注入点，独立于既有的 `browser` 回调——
 后者仍被二次启动 attach 路径使用，不得被壳语义污染）。
 
-设计约束（Codex 评审钉死）：
+设计约束：
 - **懒导入**：pywebview 是可选依赖（requirements-webview.txt，>=5.4,<6），导入期不碰它；
   缺失/异常 → 回退 `webbrowser.open` 并记日志（logging，noconsole 构建下 print 会被
   `_NullStream` 吞掉，必须走启动器滚动日志），永不阻断启动。
@@ -33,7 +32,7 @@
   完整 favicon ICO 写入 WinForms `Form.Icon`（不支持 DWM 的系统保持原生配色）。
 - **无窗口测试**：本模块绝不主动创建窗口；pytest monkeypatch 假 webview 只验证装配语义。
   真实窗口观感人工快验（scripts/run_app.py），不进 pytest。
-- **下载中关窗（边缘修复第 6 项，最近似方案）**：pywebview 5.4 无法从壳侧可靠拦截关窗
+- **下载中关窗（最近似方案）**：pywebview 5.4 无法从壳侧可靠拦截关窗
   （`events.closing` 仅通知、无取消返回值；`confirm_close` 是建窗期全局布尔、不可按下载
   状态动态切换），因此落地「下载中标记 + closing 事件检查提示」——生产者调用
   `set_download_active()`，壳在 `closing` 时告警并尽力弹原生警告框提示「关闭会中断下载、

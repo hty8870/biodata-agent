@@ -4,28 +4,31 @@ The private repository is the implementation source. The public repository is
 a reviewed projection of one exact private commit, not an independently edited
 release line.
 
-`public-mirror.json` records the source private commit, runtime version,
-transformation version, and reviewed hash pairs for JavaScript files whose
-public comments intentionally differ. `scripts/verify_public_mirror.py` checks:
+`public-mirror.json` is the only generated file: it records the source private
+commit, runtime version, and the hashes of the projection policy and the public
+file list. `scripts/verify_public_mirror.py` re-renders the expected public
+tree from that exact private commit and checks:
 
-- every Python runtime file has the same AST after removing docstrings and
-  OpenAPI `title`/`description` text;
-- public metadata snapshots and public evaluation queries match semantically;
-- dependency locks and `database/SOURCES.yml` are identical;
-- reviewed JavaScript pairs still have the hashes approved during the sync;
-- private holdout, deployment workflow, collaboration records, and development
-  logs do not exist in the public repository;
-- the public evaluation manifest consumes only public query sets.
+- the private worktree is clean and its HEAD equals `source_private_commit`;
+- every public file is byte-identical to the deterministic projection of its
+  private source — `packaging/public-mirror/policy.json` `mappings` declares
+  the only allowed renames, and every other public path comes from the
+  same-named private file;
+- every tracked private path is classified — allowlisted for publication,
+  delivery-ignored as internal material, or git-ignored as a local artifact —
+  so nothing is silently dropped or leaked;
+- `public-mirror.json` equals the manifest the generator itself would emit.
 
 ## Sync procedure
 
 1. Commit and test the private source. Do not certify a dirty private tree.
-2. Project runtime code, public datasets, public evaluation inputs, locks, and
-   public-safe documentation into a clean public worktree.
-3. Review every intentional text-only or JavaScript difference. Update a hash
-   pair only after that review.
-4. Set `source_private_commit` to the exact private commit and keep
-   `runtime_version` equal to `WEB_API_VERSION` in both repositories.
+2. Regenerate the public tree with
+   `python scripts/build_public_mirror.py apply --public-root <public-worktree>`
+   from a clean public branch. Never hand-edit the generated tree — fix the
+   private source, the policy, or the classification instead.
+3. Review the generated diff only.
+4. `source_private_commit` is set to the exact private commit by the generator;
+   `runtime_version` must equal `WEB_API_VERSION` in both repositories.
 5. Run:
 
    ```powershell

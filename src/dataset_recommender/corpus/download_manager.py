@@ -495,6 +495,10 @@ def start_job(uids: Sequence[str], *, records: "dict | None" = None,
             + (f"（例如 {first.get('dataset_uid', '')}：{first.get('reason', '')}）。"
                if first else "") + "可改用任务包，或换一批数据集。")
     base = Path(out_dir) if out_dir else default_download_dir()
+    if not out_dir and base.exists():
+        # 默认目录名只有秒级时间戳：同秒连续任务/多进程实例会撞目录并互相覆盖
+        # README/manifest/同名文件——撞名时追加随机短后缀（与 job_id 的 uuid 后缀同式）。
+        base = base.with_name(f"{base.name}-{uuid.uuid4().hex[:6]}")
     # **先预检、后建目录**（回归钉）：磁盘预检用「父目录」做（同卷任一路径的
     # disk_usage 结果相同），预检不通过就抛 507、**不创建任务目录**——此前先 mkdir 再预检，
     # 507 路径会在真实下载目录（~/Downloads/BioData数据-*）留下空目录（批留下 8 个的根源）。
@@ -627,6 +631,14 @@ def update_job(*, add: "Sequence[str]" = (), remove: "Sequence[str]" = (),
         added: list[dict] = []
         added_unsupported: list[dict] = []
         if plan:
+            # 先校验后变更（fail-closed：预检不过则任务零改动）：
+            # 1) 在途追加同样过磁盘预检（与 start_job 同一闸），防多次追加撑爆磁盘；
+            # 2) 追加批次的 allowed_hosts 并入任务白名单（plan 是白名单单一真源）——否则
+            #    新主机的追加文件会被 worker 的 SSRF 闸全部拒绝（显示已加入、随后全失败）。
+            new_items = [it for it in plan["items"] if it["dataset_uid"] not in job["_subdirs"]]
+            _ensure_disk_space(Path(job["dir"]).parent,
+                               sum(int(it.get("bytes") or 0) for it in new_items))
+            job["_allowed"] = sorted(set(job["_allowed"]) | set(plan.get("allowed_hosts") or []))
             taken = {v.lower() for v in job["_subdirs"].values()}
             new_subdirs: dict[str, str] = {}
             new_titles: dict[str, str] = {}
