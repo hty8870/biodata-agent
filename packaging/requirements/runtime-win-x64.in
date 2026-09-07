@@ -20,13 +20,13 @@
 #   明确不在此清单——模型与重排依赖不随包，运行时按需惰性降级（见 spec excludes）。
 # - pywebview 钉 >=5.4,<6（2026-08-21 桌面壳批 ds1）：frozen 窗口模式的壳层依赖
 #   （requirements/requirements-webview.txt 的源码口径同款）；上游 6.x 行为未验证不进包。
-fastapi>=0.110
-uvicorn>=0.29
-python-multipart>=0.0.9
-httpx>=0.27
-python-dotenv>=1.0
+fastapi>=0.141.1
+uvicorn>=0.52.4
+python-multipart>=0.0.32
+httpx>=0.28.1
+python-dotenv>=1.2.3
 mcp==1.28.1
-langgraph>=0.2
-langchain-core>=0.3
-langchain-openai>=0.2
+langgraph>=1.2.11
+langchain-core>=1.6.1
+langchain-openai>=1.6.0
 pywebview>=5.4,<6
