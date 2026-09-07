@@ -113,7 +113,7 @@ def test_ci_is_offline_after_install_and_never_runs_real_llm_or_model_fetch():
 def test_ci_installs_only_the_hash_locked_environment():
     source = _text(CI_REQUIREMENTS)
     assert re.search(r"(?m)^-r requirements\.txt\s*$", source)
-    assert re.search(r"(?m)^pytest>=7\.0\s*$", source)
+    assert re.search(r"(?m)^pytest>=9\.1\.1\s*$", source)
     assert re.search(r"(?m)^mcp==1\.28\.1\s*$", source)
 
     runtime = _text(RUNTIME_REQUIREMENTS)
