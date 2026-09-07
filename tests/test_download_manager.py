@@ -596,6 +596,34 @@ def test_update_remove_pending_dataset_is_skipped(tmp_path):
     assert by["cxg:c"]["status"] == "skipped"
 
 
+def test_update_preflight_failure_leaves_job_untouched(monkeypatch, tmp_path):
+    """remove+add 同批且磁盘预检失败 → 任务零变更（remove 不先生效）：预检必须先于一切变更。"""
+    from types import SimpleNamespace
+    gate, entered = threading.Event(), threading.Event()
+    a = _record("cxg:a", url=CXG_PAGE, download_url=H5AD_URL, filesize=len(b"a"), name="甲")
+    c = _record("cxg:c", url=CXG_PAGE, download_url=H5AD_URL.replace("6d55", "6d57"),
+                filesize=len(b"c"), name="丙")
+    big = _record("cxg:big", url=CXG_PAGE, download_url=H5AD_URL.replace("6d55", "6d58"),
+                  filesize=10 ** 9, name="大件")
+
+    def open_(url, timeout):
+        return BlockingResp(b"a", gate, entered)
+
+    job = DM.start_job(["cxg:a", "cxg:c"], records=_records(a, c, big),
+                       out_dir=str(tmp_path), opener=open_)
+    assert entered.wait(timeout=10)
+    monkeypatch.setattr(DM.shutil, "disk_usage",
+                        lambda p: SimpleNamespace(free=1000, total=10 ** 12, used=10 ** 12))
+    with pytest.raises(DM.DownloadManagerError) as e:
+        DM.update_job(remove=["cxg:c"], add=["cxg:big"], records=_records(a, c, big))
+    assert e.value.code == "disk_space_insufficient"
+    st = DM.get_status(job["job_id"])
+    assert all(f["status"] == "pending" for f in st["files"] if f["dataset_uid"] == "cxg:c")
+    assert all(f["dataset_uid"] != "cxg:big" for f in st["files"])
+    gate.set()
+    _wait_state(job["job_id"])
+
+
 def test_update_remove_downloading_aborts_cleans_part_and_continues(tmp_path):
     gate, entered = threading.Event(), threading.Event()
     content = b"Z" * (3 * 1024 * 1024)   # 3 MiB → 3 块；首块后钉住

@@ -126,18 +126,20 @@ def invalidate_base_cache() -> None:
     _base_normalized.cache_clear()
 
 
-@lru_cache(maxsize=2)
-def _external_normalized(shipped_dir_str: str, user_dir_str: str) -> tuple[DatasetRecord, ...]:
-    """双层外部库归一结果（静态 → 缓存）：官方快照（shipped，只读）+ 用户上传（user，可写）。
+#: 外部库归一缓存（代际校验）：key=(shipped,user) → (generation, records)。
+#: 不用 lru_cache：慢读取横跨 invalidate 时 lru 会把旧值重新装回已清缓存（陈旧回装竞态，
+#: 上传后检索持续不可见直到下次失效/重启）；代际校验下迟到的旧结果直接丢弃不回写。
+_EXTERNAL_CACHE: dict = {}
+
+
+def _load_external_normalized(shipped: Path, user: Path) -> tuple:
+    """双层外部库归一（纯装载，不缓存）：官方快照（shipped，只读）+ 用户上传（user，可写）。
 
     - **同文件名去重：user 层优先**——写侧恒落 user 层、正常不会与 shipped 撞名；手工撞名时
       以 user 层文件为准（shipped 侧按 source_file 名过滤，不重复装载）。
     - source/portable 下两层同目录 → user 文件名集合覆盖 shipped 全部文件 → 每文件只装载
       一次，行为与历史单一目录逐字节一致。
-    - 宽容装载（单文件坏不连累整库，`load_raw_records(lenient=True)`）与
-      `invalidate_external_cache`（清全缓存）语义保持。"""
-    shipped = Path(shipped_dir_str)
-    user = Path(user_dir_str)
+    - 宽容装载（单文件坏不连累整库，`load_raw_records(lenient=True)`）语义保持。"""
     if not shipped.is_dir() and not user.is_dir():
         return tuple()
     user_names = {p.name for p in user.glob("*.json") if p.is_file()} if user.is_dir() else set()
@@ -149,6 +151,21 @@ def _external_normalized(shipped_dir_str: str, user_dir_str: str) -> tuple[Datas
     if user.is_dir():
         raw.extend(load_raw_records(user, lenient=True))
     return tuple(normalize_records(raw))
+
+
+def _external_normalized(shipped_dir_str: str, user_dir_str: str) -> tuple:
+    key = (shipped_dir_str, user_dir_str)
+    hit = _EXTERNAL_CACHE.get(key)
+    if hit is not None and hit[0] == _EXTERNAL_CACHE_GENERATION:
+        return hit[1]
+    gen_before = _EXTERNAL_CACHE_GENERATION
+    value = _load_external_normalized(Path(shipped_dir_str), Path(user_dir_str))
+    if gen_before == _EXTERNAL_CACHE_GENERATION:
+        # 装载期间未发生失效才回写；否则丢弃（旧值绝不重新入缓存）
+        if len(_EXTERNAL_CACHE) >= 2 and key not in _EXTERNAL_CACHE:
+            _EXTERNAL_CACHE.clear()
+        _EXTERNAL_CACHE[key] = (gen_before, value)
+    return value
 
 
 def _external_normalized_for(project_root: Path) -> tuple[DatasetRecord, ...]:
@@ -163,7 +180,7 @@ def invalidate_external_cache() -> None:
     保证「上传即时可见、可检索」。基础语料走 `_base_fingerprint` 键控缓存（文件变动自动失效），
     不在本函数职责内。"""
     global _EXTERNAL_CACHE_GENERATION
-    _external_normalized.cache_clear()
+    _EXTERNAL_CACHE.clear()
     _EXTERNAL_CACHE_GENERATION += 1
 
 

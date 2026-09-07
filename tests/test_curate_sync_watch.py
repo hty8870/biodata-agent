@@ -132,6 +132,31 @@ def test_sync_lock_same_thread_reentrant(tmp_path):
     assert cc.sync_lock_busy(tmp_path) is False
 
 
+def test_sync_lock_concurrent_thread_returns_sync_busy(tmp_path):
+    """同进程两线程并发争用线程锁：后来者立即 sync_busy，不阻塞排队、不在前者放锁后重跑。"""
+    import threading
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _holder():
+        with cc.sync_updates_critical_section(tmp_path):
+            entered.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=_holder)
+    holder.start()
+    try:
+        assert entered.wait(5), "前置：持锁线程应已进入临界区"
+        with pytest.raises(cc.CurateError) as ei:
+            with cc.sync_updates_critical_section(tmp_path):
+                pass
+        assert ei.value.code == "sync_busy"
+    finally:
+        release.set()
+        holder.join(10)
+    assert not holder.is_alive()
+
+
 # ---------------------------------------------------------------- operation receipt
 
 def test_sync_updates_receipt_fields_complete(tmp_path, fake_sync_sources):

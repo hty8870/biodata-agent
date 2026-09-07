@@ -110,6 +110,60 @@ function installAuthFetchGuard() {
     };
 }
 
+/* ---------- 多标签页账户态同步 ----------
+   同浏览器多标签共享同一 origin 的会话 cookie，但各标签的 CURRENT_USER 是各自内存副本：
+   A 标签登录/登出/切换后，B 标签仍按旧账户的命名空间读写记忆/收藏/历史（账户漂移）。
+   同步靠两条通用机制，无定时轮询：
+   - BroadcastChannel：本标签 deliberate 变更后广播，其他标签收到即复核身份；
+   - visibilitychange：标签重新可见时去抖复核（BroadcastChannel 不可用时的兜底）。
+   复核只认 whoami 的真实应答：网络/服务端异常（undefined）保持现状，绝不把取态失败当登出。 */
+const _ACCOUNT_CHANNEL = (typeof BroadcastChannel === "function") ? new BroadcastChannel("biodata-account") : null;
+// Node 契约测试链会真实执行本模块：Node 的 BroadcastChannel 是活动句柄，不 unref 会
+// 挂住事件循环让测试进程永不退出（浏览器无此方法，typeof 闸下 no-op）。
+if (_ACCOUNT_CHANNEL && typeof _ACCOUNT_CHANNEL.unref === "function") _ACCOUNT_CHANNEL.unref();
+function _broadcastAccountChanged() {
+    if (!_ACCOUNT_CHANNEL) return;
+    try { _ACCOUNT_CHANNEL.postMessage({ type: "account-changed", at: Date.now() }); } catch (_e) {}
+}
+async function _whoamiQuiet() {
+    try {
+        const res = await fetch(API.accountWhoami);
+        if (!res.ok) return undefined;
+        const data = await res.json();
+        return (data && data.ok && data.user) ? data.user : null;
+    } catch (_e) { return undefined; }
+}
+let _recheckInflight = false;
+let _recheckPending = false;   // 在途期间又来变更：挂起一次尾随复核，防旧应答落定中间态账户后再无人纠正
+async function _recheckIdentity() {
+    if (_recheckInflight) { _recheckPending = true; return; }
+    _recheckInflight = true;
+    try {
+        do {
+            _recheckPending = false;
+            try { await ACCOUNTS_READY; } catch (_e) {}   // 启动 whoami 未落定前不掺和（见 ACCOUNTS_READY 注释的找回竞态）
+            const prevName = CURRENT_USER ? CURRENT_USER.username : null;
+            const user = await _whoamiQuiet();
+            if (user === undefined) continue;   // 取态失败保持现状；有尾随变更则下一轮再试
+            const nextName = user ? user.username : null;
+            if (prevName === nextName) continue;
+            setCurrentUser(user);
+            // 锁定门随身份对齐：被动登录解开本标签的强制登录锁定；被动登出在护栏模式下回锁定（闸关 no-op）
+            if (user && _authLocked) { exitAuthLockdown(); closeAccountModal(); }
+            if (!user) enterAuthLockdown();
+            onAccountChanged();   // 不广播：这是被动对齐，广播只在 deliberate 变更点发，避免标签间回环
+        } while (_recheckPending);
+    } finally {
+        _recheckInflight = false;
+    }
+}
+let _recheckTimer = 0;
+function _scheduleRecheck() {
+    if (document.visibilityState !== "visible") return;
+    if (_recheckTimer) clearTimeout(_recheckTimer);
+    _recheckTimer = setTimeout(function () { _recheckTimer = 0; _recheckIdentity(); }, 400);
+}
+
 function knownAccountsRead() {
     try {
         const raw = localStorage.getItem(KNOWN_ACCOUNTS_KEY);
@@ -197,6 +251,7 @@ export async function accountSwitchTo(username) {
     }
     setCurrentUser(data.user);
     onAccountChanged();
+    _broadcastAccountChanged();
     toast("已切换到「" + data.user.username + "」");
 }
 
@@ -311,7 +366,7 @@ function accountMenuClick(event) {
     if (!actionBtn) return;
     if (actionBtn.getAttribute("data-acct-action") === "login") { openAccountModal(null); return; }
     if (actionBtn.getAttribute("data-acct-action") === "logout") {
-        accountLogout().then(function () { onAccountChanged(); toast("已退出登录"); })
+        accountLogout().then(function () { onAccountChanged(); _broadcastAccountChanged(); toast("已退出登录"); })
             .catch(function (err) { toast(String((err && err.message) || "退出失败，请重试")); });
     }
 }
@@ -352,6 +407,7 @@ async function submitAccount(kind) {
         if (_authLocked) exitAuthLockdown();   // 登录锁定下认证成功 → 解锁整页
         closeAccountModal();
         onAccountChanged();
+        _broadcastAccountChanged();
         toast(kind === "register" ? "注册成功，已登录" : "登录成功");
     } catch (err) {
         setAccountError(String((err && err.message) || "认证失败"));
@@ -364,6 +420,9 @@ export function initAccounts() {
     renderAccountState();
     renderAccountChip();
     installAuthFetchGuard();   // T3：401 auth_required → 自动回登录锁定（护栏模式外 no-op）
+    // 多标签页同步：他标签 deliberate 变更（广播）或本标签重新可见（去抖复核）→ whoami 对账
+    if (_ACCOUNT_CHANNEL) _ACCOUNT_CHANNEL.onmessage = function () { _recheckIdentity(); };
+    document.addEventListener("visibilitychange", _scheduleRecheck);
     // 账号 chip / 菜单（2026-08-03 起在设置·账户块内，登录/注册/登出/切换全走这颗 chip 的菜单）
     const chip = $("accountChip");
     if (chip) chip.addEventListener("click", toggleAccountMenu);

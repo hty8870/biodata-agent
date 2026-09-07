@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""trace 事件词表与载荷构造（可追溯性波1）。
+"""trace 事件词表与载荷构造。
 
 六类受控 kind：route_decision / llm_call / tool_call /
 batch_emission / state_snapshot / finish_reason。载荷构造函数全是**纯函数**——
-波2 集成点每处一行 `emit_xxx(...)`，构造与落盘（recorder.emit_event）分离可单测。
+集成点每处一行 `emit_xxx(...)`，构造与落盘（recorder.emit_event）分离可单测。
 """
 from __future__ import annotations
 

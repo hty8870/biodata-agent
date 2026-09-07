@@ -318,8 +318,17 @@ def reset_caches_for_test() -> None:
 
 # ------------------------------------------------------------------ dense：查询侧向量组装
 
-def _embed_texts(texts: "Sequence[str]") -> "list[list[float]] | None":
-    """查询侧 API 嵌入（分批 ≤64）；任一批失败 → None（整组回退，绝不错位）。"""
+def _embed_texts(
+    texts: "Sequence[str]",
+    usage_sink: "object | None" = None,
+    record_ledger: bool = True,
+) -> "list[list[float]] | None":
+    """查询侧 API 嵌入（分批 ≤64）；任一批失败 → None（整组回退，绝不错位）。
+
+    usage_sink：可选回调 `usage_sink(kind, model, usage_dict)`，每次 HTTP 响应拿到
+    usage 后在落账旁路同步回调（供调用方做实际用量对账）；默认 None 时行为逐位不变。
+    record_ledger：False 时跳过 .userdata/embed_usage.jsonl 落账（调用方自建账本的
+    场景——如 devcontext 直写共享 usage_events——从源头避免双计）；默认 True 逐位不变。"""
     out: "list[list[float]]" = []
     for start in range(0, len(texts), _EMBED_BATCH):
         chunk = list(texts[start:start + _EMBED_BATCH])
@@ -341,7 +350,10 @@ def _embed_texts(texts: "Sequence[str]") -> "list[list[float]] | None":
                 _warn_once("embed_dims", "嵌入向量维度与配置不符——回退规则序。")
                 return None
             out.append([float(x) for x in vec])
-        _record_usage("embed", _embed_model(), data.get("usage"))
+        if record_ledger:
+            _record_usage("embed", _embed_model(), data.get("usage"))
+        if usage_sink is not None:
+            usage_sink("embed", _embed_model(), data.get("usage"))
     return out
 
 
@@ -392,13 +404,44 @@ def api_dense_vectors(
     return [fresh[0], *doc_vecs]
 
 
+# ------------------------------------------------------------------ 通用文本语义接口（additive）
+# 供非检索的内部批处理工具复用同一 HTTP/QPM/批次/形状校验/usage 落账/
+# 密钥纪律（单通道原则：不复制第二套 API 客户端）。纯别名，产品检索行为零变化。
+
+
+def api_embed_ready_simple() -> bool:
+    """embed API 就绪判定的「无向量文件」形态：配置启用 + key 在位；不加载语料向量文件。"""
+    return bool(api_embed_enabled()) and bool(_api_key())
+
+
+def api_embed_texts(
+    texts: "Sequence[str]",
+    usage_sink: "object | None" = None,
+    record_ledger: bool = True,
+) -> "list[list[float]] | None":
+    """通用文本嵌入（无 dataset 耦合）；分批/QPM/形状/维度校验与 usage 落账与 _embed_texts 同源。
+
+    usage_sink：可选回调 `usage_sink(kind, model, usage_dict)`（实际用量对账旁路）；
+    record_ledger：False 跳过 .userdata 落账（调用方自建账本时防双计）；
+    缺省参数下产品行为逐位不变。"""
+    return _embed_texts(texts, usage_sink=usage_sink, record_ledger=record_ledger)
+
+
 # ------------------------------------------------------------------ cross_encoder：rerank 打分
 
-def api_rerank_scores(query: str, texts: "Sequence[str]") -> "list[float] | None":
+def api_rerank_scores(
+    query: str,
+    texts: "Sequence[str]",
+    usage_sink: "object | None" = None,
+    record_ledger: bool = True,
+) -> "list[float] | None":
     """rerank-API 打分：documents 分批 ≤128，relevance_score 直接做排序键。
 
     失败 → None（回退规则序）。分批间分数口径同为 query-doc 绝对相关度，
-    灰度期可接受（bake-off 验证后再放量）。"""
+    灰度期可接受（bake-off 验证后再放量）。
+    usage_sink：可选回调 `usage_sink(kind, model, usage_dict)`（实际用量对账旁路）；
+    record_ledger：False 跳过 .userdata 落账（调用方自建账本时防双计）；
+    缺省参数下产品行为逐位不变。"""
     if not texts:
         return []
     scores: "list[float | None]" = [None] * len(texts)
@@ -426,7 +469,10 @@ def api_rerank_scores(query: str, texts: "Sequence[str]") -> "list[float] | None
             score = row.get("relevance_score")
             if isinstance(idx, int) and 0 <= idx < len(chunk) and isinstance(score, (int, float)):
                 scores[start + idx] = float(score)
-        _record_usage("rerank", _rerank_model(), data.get("usage"))
+        if record_ledger:
+            _record_usage("rerank", _rerank_model(), data.get("usage"))
+        if usage_sink is not None:
+            usage_sink("rerank", _rerank_model(), data.get("usage"))
     if any(s is None for s in scores):
         _warn_once("rerank_partial", "重排响应未覆盖全部候选——回退规则序。")
         return None

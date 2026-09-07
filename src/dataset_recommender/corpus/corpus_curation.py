@@ -4482,7 +4482,15 @@ def sync_updates_critical_section(project_root: Path):
         finally:
             _sync_lock_state.depth = depth
         return
-    with _sync_lock:                    # 锁序恒定：线程锁 → OS 锁（单一顺序，无死锁面）
+    if not _sync_lock.acquire(blocking=False):  # 锁序恒定：线程锁 → OS 锁（单一顺序，无死锁面）
+        # 同进程并发 sync：不阻塞排队（排队会在前者放锁后静默重跑一整轮分钟级同步），
+        # 与 OS 锁占用同一出口——立即 sync_busy，兑现本函数 docstring 的非阻塞契约。
+        raise CurateError(
+            "sync_busy",
+            "另一个「同步数据集」正在运行。本次没有做任何检查、"
+            "也没有写入任何内容；请稍后重试，或先用「检查更新」只读看一眼。",
+        )
+    try:
         fh = _acquire_os_sync_lock_nowait(project_root)
         if fh is None:
             raise CurateError(
@@ -4496,6 +4504,8 @@ def sync_updates_critical_section(project_root: Path):
         finally:
             _sync_lock_state.depth = 0
             _release_os_sync_lock(fh)
+    finally:
+        _sync_lock.release()
 
 
 def sync_lock_busy(project_root: Path) -> bool:
