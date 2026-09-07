@@ -7,4 +7,4 @@
 # 5.4 依赖 pythonnet + 自带 PyInstaller hook——frozen 纳入需把完整解析结果并进 runtime lock，
 # 属合并后主树构建批）。
 # 不进入 requirements-ci.lock：离线质量门与 CI 无窗口环境用不到，且 hash 锁需整体重生成。
-pywebview>=5.4,<6
+pywebview>=6.2.1,<7
