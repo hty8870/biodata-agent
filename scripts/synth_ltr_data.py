@@ -1,27 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Synthesize pointwise LTR (learning-to-rank) data from the frozen catalog.
+"""Synthesize graded query–document training pairs from the frozen catalog.
 
-Deterministic, offline, zero-LLM: sample constraint combinations from the
-controlled vocabulary, render natural-language queries from a template bank,
-run the real retrieval pipeline, and grade every returned candidate by
-constraint satisfaction (labels are known by construction).
+Stage-1 data builder for learning-to-rank experiments on the recall-fusion layer.
+Fully deterministic and offline: no LLM calls, no network access. Given the same
+catalog and the same seed, repeated runs produce byte-identical output.
 
-Design notes:
-- Hard constraints go through the parser as usual; one dimension is phrased
-  with a soft-preference hedge (e.g. "最好…") so survivors vary in how many
-  sampled constraints they satisfy — that variance is what the ranker learns
-  from. Grades: 2 = all sampled constraints satisfied, 1 = exactly one
-  violated, 0 = two or more violated.
-- Candidate judging reuses the frozen benchmark's external judge
-  (``evaluate_recommendation.constraint_satisfied``) so labels share the
-  benchmark's semantics.
-- Queries colliding verbatim with the frozen evaluation set are dropped.
-- Train/held-out split is by constraint-combination cluster so no
-  combination leaks across the boundary.
+Method:
+- Sample constraint combinations from the controlled vocabulary (species / tissue
+  / disease, plus an optional raw-data requirement). Combinations are pre-screened
+  for corpus support (records matching each vocabulary value are precomputed as
+  sets, so support is a set intersection) before any pipeline execution. Some
+  dimensions are phrased as soft preferences ("最好…") so the pipeline's hard
+  filter admits candidates that violate them, producing graded relevance variance
+  without any human or LLM labelling: a candidate satisfying every expressed
+  constraint is a positive by construction.
+- Each synthesized query is verified against the real query parser (must parse as
+  executable and keep the intended hard dimensions), then executed through the
+  real retrieval pipeline; the returned top-k candidates become the labelled
+  pairs, including hard negatives (surfaced by ranking but violating a soft
+  constraint).
+- Relevance judging reuses the benchmark's external judge
+  (``evaluate_recommendation.constraint_satisfied``) so labels share the frozen
+  benchmark's satisfaction semantics.
+- Train/held-out split is by constraint-combination cluster (no cluster appears
+  in both splits), and synthesized queries are de-duplicated against the frozen
+  benchmark query set verbatim.
 
 Usage:
-  python scripts/synth_ltr_data.py [--target-queries 1400] [--seed 20260907]
-      [--out-dir research/ltr_data] [--limit N]
+  python scripts/synth_ltr_data.py                 # full run into research/ltr_data/
+  python scripts/synth_ltr_data.py --limit 40      # small debug run
 """
 from __future__ import annotations
 
@@ -37,33 +44,79 @@ AGENT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENT_ROOT / "src"))
 sys.path.insert(0, str(AGENT_ROOT / "scripts"))
 
-from evaluate_recommendation import constraint_satisfied, load_pipeline, recommend  # noqa: E402
-from dataset_recommender.retrieval.query_parser import active_filters, parse_query  # noqa: E402
+from evaluate_recommendation import (  # noqa: E402
+    constraint_satisfied,
+    load_pipeline,
+    recommend,
+)
+from dataset_recommender.retrieval.query_parser import (  # noqa: E402
+    active_filters,
+    parse_query,
+)
 from dataset_recommender.retrieval.vocabulary import CATALOG  # noqa: E402
 
 DEFAULT_SEED = 20260907
-DEFAULT_TARGET = 1400
-HELDOUT_MIN_QUERIES = 150
-HELDOUT_RATIO = 0.15
-TOP_K = 10
-#: Minimum corpus records matching all constraints for a cluster to be usable.
-MIN_SUPPORT_FULL = 1
+DEFAULT_OUT_DIR = AGENT_ROOT / "research" / "ltr_data"
+DEFAULT_TARGET_QUERIES = 1700
+DEFAULT_TOP_K = 12
+HOLDOUT_MIN_QUERIES = 150
 
 CORE_DIMS = ("species", "tissue", "disease")
+RAW_KEY = "has_raw_data"
 
-#: Query templates; {body} is the space-joined constraint phrases, {soft} a
-#: hedged soft-preference clause, {raw} a raw-data requirement clause.
+#: Minimum records satisfying every hard dimension (and the raw-data clause when
+#: present) for a combination to be worth executing through the pipeline.
+MIN_HARD_SUPPORT = 3
+#: How many distinct query phrasings may reuse the same constraint cluster.
+#: Clusters stay the split unit, so extra phrasings never leak across splits.
+PHRASINGS_PER_CLUSTER = 4
+
+# Query text templates. {body} is the space-joined hard-constraint phrases,
+# {soft} an optional soft-preference clause, {raw} an optional raw-data clause.
+# Every template below is verified to parse as executable with and without the
+# optional clauses; wording variants containing "公开数据集" in fixed positions
+# were measured to make the parser abstain and must not be reintroduced.
 TEMPLATES = (
-    "{body}",
-    "找{body}的数据集",
-    "给我一些{body}相关的数据",
-    "有没有{body}的公开数据",
-    "想做{body}方面的研究，有什么数据集可用",
-    "{body}单细胞数据",
-    "请推荐{body}数据集",
+    "{body}{soft}{raw}",
+    "找{body}相关的数据集{soft}{raw}",
+    "给我一些{body}的数据{soft}{raw}",
+    "有没有{body}的数据{soft}{raw}",
+    "求{body}方面的数据集{soft}{raw}",
+    "搜一下{body}的数据{soft}{raw}",
+    "需要{body}的数据集{soft}{raw}",
+    "{body}的数据集有哪些{soft}{raw}",
+    "帮忙找{body}的单细胞数据{soft}{raw}",
 )
-SOFT_CLAUSES = ("，最好{phrase}", "，优先{phrase}", "，{phrase}的更好")
+# Verified to make the parser emit a `prefer` filter (true soft preference) for
+# the soft dimension — checked against parse_query/active_filters. The inverted
+# form "，{X}优先" (value before 优先) is instead hardened into an `include`
+# filter and silently destroys the graded-label variance; do not reintroduce it.
+# The main loop additionally asserts every soft dimension parsed as `prefer`.
+SOFT_PREFIXES = (
+    "，最好{soft}",
+    "，最好是{soft}",
+    "，倾向于{soft}",
+    "，优先考虑{soft}",
+    "，如果有{soft}更好",
+    "，如果有{soft}的话",
+    "，优先{soft}",
+)
 RAW_CLAUSES = ("，需要包含 FASTQ 原始数据", "，要能下载到原始数据", "，必须有 fastq")
+
+# Combination patterns: (hard dims, soft dims, force raw-data clause, weight).
+# Two-soft-dim patterns let a candidate violate two expressed constraints,
+# which is what produces grade-0 pairs.
+PATTERNS = (
+    (("disease",), ("tissue",), False, 0.18),
+    (("species", "disease"), ("tissue",), False, 0.22),
+    (("tissue", "disease"), (), True, 0.12),
+    (("species", "tissue"), ("disease",), False, 0.13),
+    (("disease",), ("tissue",), True, 0.08),
+    (("species",), ("disease",), False, 0.08),
+    (("species", "disease"), (), True, 0.04),
+    (("disease",), ("tissue", "species"), False, 0.10),
+    (("tissue",), ("disease", "species"), False, 0.05),
+)
 
 
 def _is_cjk(text: str) -> bool:
@@ -71,231 +124,308 @@ def _is_cjk(text: str) -> bool:
 
 
 def dim_entries(dim: str) -> list[dict]:
-    """Controlled-vocabulary entries for a dimension: canonical value, a
-    query-renderable phrase (longest CJK alias, else the canonical display),
-    and judge terms (canonical + non-CJK aliases, lowercased)."""
-    out: list[dict] = []
-    for entry in CATALOG.get(dim, []) or []:
+    """Controlled-vocabulary values for one dimension with a typeable phrase and judge terms.
+
+    Judge terms must cover every surface the retrieval hard filter can match on:
+    the display value, non-CJK aliases, and the entry's ``targets`` (the match
+    stems the pipeline actually substring-matches records against, e.g.
+    "cervical" for Cervical Cancer) — omitting targets would misjudge hard
+    constraints the pipeline itself satisfied."""
+    out = []
+    for entry in CATALOG.get(dim, []):
         display = str(entry.get("display") or "").strip()
+        aliases = [str(a).strip() for a in entry.get("aliases", []) if str(a).strip()]
+        targets = [str(t).strip() for t in entry.get("targets", []) if str(t).strip()]
         if not display:
             continue
-        aliases = [str(a).strip() for a in entry.get("aliases", []) if str(a).strip()]
         cjk = sorted((a for a in aliases if _is_cjk(a)), key=len, reverse=True)
-        judge = sorted({display.lower(), *(a.lower() for a in aliases if not _is_cjk(a))})
-        out.append({"value": display, "phrase": cjk[0] if cjk else display, "judge": judge})
+        phrase = cjk[0] if cjk else display
+        judge = sorted({
+            display.lower(),
+            *(a.lower() for a in aliases if not _is_cjk(a)),
+            *(t.lower() for t in targets),
+        })
+        out.append({"value": display, "phrase": phrase, "judge": judge})
     return sorted(out, key=lambda e: e["value"])
 
 
-#: How many query phrasings may reuse the same constraint cluster. Clusters stay
-#: the split unit for the held-out set, so extra phrasings never leak across.
-PHRASINGS_PER_CLUSTER = 6
-
-#: Sampling patterns: (hard dims, soft dim or None, require raw data).
-PATTERNS = (
-    (("disease",), "tissue", False),
-    (("disease",), "tissue", True),
-    (("species", "disease"), "tissue", False),
-    (("species", "disease"), "tissue", True),
-    (("tissue", "disease"), "species", False),
-    (("species", "tissue"), None, True),
-    (("disease",), None, True),
-    (("species", "tissue", "disease"), None, False),
-)
+def cluster_id(constraints: dict) -> str:
+    """Stable id for a constraint combination; the train/held-out split unit."""
+    parts = sorted(f"{d}={v}" for d, v in constraints.items())
+    return "|".join(parts)
 
 
-def build_query(parts: list[str], soft_phrase: str | None, need_raw: bool, rng: random.Random) -> str:
-    body = " ".join(parts)
-    text = rng.choice(TEMPLATES).format(body=body)
-    if soft_phrase:
-        text += rng.choice(SOFT_CLAUSES).format(phrase=soft_phrase)
-    if need_raw:
-        text += rng.choice(RAW_CLAUSES)
-    return text
+def grade_candidate(record, judge_map: dict) -> tuple[int, dict]:
+    """Grade one candidate against the full constraint set with the benchmark judge.
 
-
-def hard_dim_set(intent: object) -> set[str]:
-    dims = set()
-    for f in active_filters(intent):
-        if f.get("polarity") != "include":
-            continue
-        fid = str(f.get("filter_id") or "")
-        if fid.startswith("include:"):
-            dims.add(fid.split(":", 1)[1])
-        elif fid == "raw:required":
-            dims.add("has_raw_data")
-    return dims
-
-
-def grade_candidate(record: object, constraints: dict[str, list]) -> tuple[int, dict[str, bool]]:
-    matched = {dim: constraint_satisfied(record, dim, terms) for dim, terms in constraints.items()}
+    grade 2 = every constraint satisfied, 1 = exactly one violated, 0 = two or more.
+    Returns (grade, per-dimension satisfaction map)."""
+    matched = {
+        dim: constraint_satisfied(record, dim, terms)
+        for dim, terms in judge_map.items()
+    }
     violated = sum(1 for ok in matched.values() if not ok)
     return (2 if violated == 0 else 1 if violated == 1 else 0), matched
 
 
-def synthesize(target_queries: int, seed: int, out_dir: Path, limit: int | None) -> dict:
-    settings, records = load_pipeline()
-    entries = {dim: dim_entries(dim) for dim in CORE_DIMS}
+def benchmark_queries() -> set[str]:
+    path = AGENT_ROOT / "eval" / "eval_queries.json"
+    if not path.exists():
+        return set()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {str(q.get("query", "")).strip() for q in data.get("queries", [])}
 
-    # Precompute per-entry matching record sets once; combo support is then a
-    # set intersection instead of rescanning the corpus per attempt.
-    match_sets: dict[tuple[str, str], frozenset] = {}
-    for dim, dim_entries_list in entries.items():
-        for e in dim_entries_list:
-            match_sets[(dim, e["value"])] = frozenset(
-                i for i, r in enumerate(records) if constraint_satisfied(r, dim, e["judge"]))
-    raw_set = frozenset(i for i, r in enumerate(records) if getattr(r, "has_raw_data", None) is True)
-    bench_queries = set()
-    bench_path = AGENT_ROOT / "eval" / "eval_queries.json"
-    if bench_path.exists():
-        payload = json.loads(bench_path.read_text(encoding="utf-8"))
-        bench_queries = {str(q.get("query") or "").strip() for q in payload.get("queries", [])}
 
-    rng = random.Random(seed)
-    seen_queries: set[str] = set()
-    cluster_counts: dict[str, int] = {}
-    dropped = {"parse": 0, "support": 0, "bench_dup": 0, "query_dup": 0}
+def build_query_specs(
+    target: int,
+    rng: random.Random,
+    entries: dict,
+    match_sets: dict,
+    raw_set: frozenset,
+) -> tuple[list[dict], int]:
+    """Sample constraint combinations and render query texts until `target` unique specs.
+
+    A combination is only kept when at least MIN_HARD_SUPPORT records satisfy every
+    hard dimension (plus the raw-data clause when present) and at least one record
+    additionally satisfies all soft dimensions, so each executed query can yield
+    both positive and graded-negative pairs. Returns (specs, low_support_drops)."""
+    dims_with_entries = [d for d in CORE_DIMS if entries.get(d)]
+    patterns = [p for p in PATTERNS if all(d in dims_with_entries for d in p[0] + p[1])]
+    weights = [p[3] for p in patterns]
     specs: list[dict] = []
-
+    cluster_counts: dict[str, int] = {}
+    seen_texts: set[str] = set()
+    dropped_support = 0
     attempts = 0
-    max_attempts = max(target_queries * 400, 200_000)
-    while len(specs) < target_queries and attempts < max_attempts:
+    max_attempts = max(target * 400, 500_000)
+    while len(specs) < target and attempts < max_attempts:
         attempts += 1
-        hard_dims, soft_dim, need_raw = PATTERNS[rng.randrange(len(PATTERNS))]
-        picked = {dim: entries[dim][rng.randrange(len(entries[dim]))] for dim in hard_dims}
-        soft_entry = entries[soft_dim][rng.randrange(len(entries[soft_dim]))] if soft_dim else None
-        constraints: dict[str, object] = {dim: e["judge"] for dim, e in picked.items()}
-        if soft_entry:
-            constraints[soft_dim] = soft_entry["judge"]
-        if need_raw:
-            constraints["has_raw_data"] = True  # judge expects a bool for this key
+        hard_dims, soft_dims, force_raw, _w = rng.choices(patterns, weights=weights, k=1)[0]
+        constraints: dict[str, dict] = {}
+        for dim in hard_dims + soft_dims:
+            constraints[dim] = rng.choice(entries[dim])
+        want_raw = force_raw or rng.random() < 0.12
 
-        cluster = "|".join(f"{d}={picked[d]['value']}" for d in sorted(picked))
-        if soft_entry:
-            cluster += f"|soft:{soft_dim}={soft_entry['value']}"
-        if need_raw:
-            cluster += "|raw"
-        if cluster_counts.get(cluster, 0) >= PHRASINGS_PER_CLUSTER:
+        hard_set: frozenset | None = None
+        for dim in hard_dims:
+            s = match_sets[(dim, constraints[dim]["value"])]
+            hard_set = s if hard_set is None else hard_set & s
+        assert hard_set is not None  # every pattern has at least one hard dim
+        if want_raw:
+            hard_set = hard_set & raw_set
+        full_set = hard_set
+        for dim in soft_dims:
+            full_set = full_set & match_sets[(dim, constraints[dim]["value"])]
+        if hard_set is None or len(hard_set) < MIN_HARD_SUPPORT or not full_set:
+            dropped_support += 1
             continue
 
-        sets = [match_sets[(dim, picked[dim]["value"])] for dim in hard_dims]
-        if soft_entry:
-            sets.append(match_sets[(soft_dim, soft_entry["value"])])
-        if need_raw:
-            sets.append(raw_set)
-        support = len(sets[0].intersection(*sets[1:])) if sets else 0
-        if support < MIN_SUPPORT_FULL:
-            dropped["support"] += 1
+        cid = cluster_id({d: c["value"] for d, c in constraints.items()} | ({"raw": "1"} if want_raw else {}))
+        if cluster_counts.get(cid, 0) >= PHRASINGS_PER_CLUSTER:
             continue
-
-        query = build_query([picked[d]["phrase"] for d in hard_dims],
-                            soft_entry["phrase"] if soft_entry else None, need_raw, rng)
-        if query in seen_queries:
-            dropped["query_dup"] += 1
+        body = " ".join(constraints[d]["phrase"] for d in hard_dims)
+        soft = ""
+        if soft_dims:
+            soft = "".join(
+                rng.choice(SOFT_PREFIXES).format(soft=constraints[d]["phrase"])
+                for d in soft_dims
+            )
+        raw = rng.choice(RAW_CLAUSES) if want_raw else ""
+        text = rng.choice(TEMPLATES).format(body=body, soft=soft, raw=raw).strip()
+        text = " ".join(text.split())
+        if text in seen_texts:
             continue
-        if query in bench_queries:
-            dropped["bench_dup"] += 1
-            continue
-
-        intent = parse_query(query, settings.keyword_mapping)
-        parsed_hard = hard_dim_set(intent)
-        expected_hard = set(hard_dims) | ({"has_raw_data"} if need_raw else set())
-        if getattr(intent, "parse_status", "") != "executable" or not expected_hard <= parsed_hard:
-            dropped["parse"] += 1
-            continue
-
-        cluster_counts[cluster] = cluster_counts.get(cluster, 0) + 1
-        seen_queries.add(query)
-        specs.append({"query": query, "cluster": cluster, "constraints": constraints,
-                      "hard": sorted(expected_hard), "support": support})
-
-    if limit:
-        specs = specs[:limit]
-
-    rows: list[dict] = []
-    for i, spec in enumerate(specs, 1):
-        candidates = recommend(spec["query"], records, settings, top_k=TOP_K)
-        if not candidates:
-            dropped["support"] += 1
-            continue
-        rows.append({
-            "query_id": f"syn{i:05d}",
-            "query": spec["query"],
-            "cluster_id": spec["cluster"],
-            "constraints": {d: (t if isinstance(t, bool) else (t[0] if len(t) == 1 else t))
-                            for d, t in spec["constraints"].items()},
-            "hard_dims": spec["hard"],
-            "support": spec["support"],
-            "candidates": [
-                (lambda grade, matched: {
-                    "uid": str(c.record.raw.get("dataset_uid") or "") if isinstance(c.record.raw, dict) else "",
-                    "pos": pos,
-                    "lex_score": float(getattr(c, "score", 0.0) or 0.0),
-                    "grade": grade,
-                    "matched": matched,
-                })(*grade_candidate(c.record, spec["constraints"]))
-                for pos, c in enumerate(candidates, 1)
-            ],
+        cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+        seen_texts.add(text)
+        specs.append({
+            "query": text,
+            "cluster_id": cid,
+            "hard_dims": list(hard_dims),
+            "soft_dims": list(soft_dims),
+            "constraints": {d: c["value"] for d, c in constraints.items()},
+            "want_raw": want_raw,
+            "support": len(hard_set),
         })
+    return specs, dropped_support
 
-    # Cluster-disjoint split: whole clusters to held-out until enough queries.
-    clusters = sorted({r["cluster_id"] for r in rows})
+
+def assign_splits(specs: list[dict], rng: random.Random, holdout_min: int) -> None:
+    """Assign whole clusters to held-out until it holds enough queries.
+
+    The floor is capped on small runs so a debug-sized `--target-queries`/`--limit`
+    cannot put every cluster into held-out and leave the training file empty."""
+    clusters = sorted({s["cluster_id"] for s in specs})
     rng.shuffle(clusters)
-    heldout_target = max(HELDOUT_MIN_QUERIES, int(round(len(rows) * HELDOUT_RATIO)))
-    heldout_clusters: set[str] = set()
-    heldout_count = 0
-    for cl in clusters:
-        if heldout_count >= heldout_target:
+    holdout_target = min(holdout_min, max(1, int(round(len(specs) * 0.15))))
+    holdout_clusters: set[str] = set()
+    count = 0
+    for cid in clusters:
+        if count >= holdout_target:
             break
-        heldout_clusters.add(cl)
-        heldout_count += sum(1 for r in rows if r["cluster_id"] == cl)
-    for r in rows:
-        r["split"] = "heldout" if r["cluster_id"] in heldout_clusters else "train"
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for split in ("train", "heldout"):
-        part = [r for r in rows if r["split"] == split]
-        with (out_dir / f"synth_{split}.jsonl").open("w", encoding="utf-8") as fh:
-            for r in part:
-                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-    grades = [c["grade"] for r in rows for c in r["candidates"]]
-    stats = {
-        "seed": seed,
-        "corpus_size": len(records),
-        "queries": len(rows),
-        "pairs": len(grades),
-        "grade_distribution": {str(g): grades.count(g) for g in (0, 1, 2)},
-        "train_queries": sum(1 for r in rows if r["split"] == "train"),
-        "heldout_queries": sum(1 for r in rows if r["split"] == "heldout"),
-        "heldout_clusters": len(heldout_clusters),
-        "cluster_leakage": 0,  # disjoint by construction; assertion below guards
-        "dropped": dropped,
-        "attempts": attempts,
-    }
-    train_clusters = {r["cluster_id"] for r in rows if r["split"] == "train"}
-    assert not (train_clusters & heldout_clusters), "cluster leakage between splits"
-    (out_dir / "_stats.json").write_text(
-        json.dumps(stats, ensure_ascii=False, indent=2), encoding="utf-8")
-    return stats
+        if len(holdout_clusters) >= len(clusters) - 1:
+            break  # always leave at least one cluster for the training split
+        holdout_clusters.add(cid)
+        count += sum(1 for s in specs if s["cluster_id"] == cid)
+    for s in specs:
+        s["split"] = "heldout" if s["cluster_id"] in holdout_clusters else "train"
 
 
-def main() -> None:
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--target-queries", type=int, default=DEFAULT_TARGET_QUERIES)
+    parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--limit", type=int, default=0, help="debug: only run the first N specs")
+    args = parser.parse_args()
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     except Exception:
         pass
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--target-queries", type=int, default=DEFAULT_TARGET)
-    ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    ap.add_argument("--out-dir", type=Path, default=AGENT_ROOT / "research" / "ltr_data")
-    ap.add_argument("--limit", type=int, default=None, help="debug: cap synthesized queries")
-    args = ap.parse_args()
 
     started = time.time()
-    stats = synthesize(args.target_queries, args.seed, args.out_dir, args.limit)
+    rng = random.Random(args.seed)
+    settings, records = load_pipeline()
+    entries = {dim: dim_entries(dim) for dim in CORE_DIMS}
+    banned = benchmark_queries()
+
+    # Precompute the set of records matching each vocabulary value once, so the
+    # support check per sampled combination is a set intersection instead of a
+    # full corpus rescan.
+    match_sets = {
+        (dim, e["value"]): frozenset(
+            i for i, r in enumerate(records) if constraint_satisfied(r, dim, e["judge"])
+        )
+        for dim in CORE_DIMS
+        for e in entries[dim]
+    }
+    raw_set = frozenset(i for i, r in enumerate(records) if getattr(r, "has_raw_data", None) is True)
+
+    specs, dropped_support = build_query_specs(args.target_queries, rng, entries, match_sets, raw_set)
+    if args.limit:
+        specs = specs[: args.limit]
+
+    stats = {
+        "seed": args.seed,
+        "top_k": args.top_k,
+        "catalog_records": len(records),
+        "benchmark_queries_excluded": len(banned),
+        "specs_sampled": len(specs),
+        "dropped_low_support": dropped_support,
+        "dropped_benchmark_collision": 0,
+        "dropped_parser_reject": 0,
+        "dropped_soft_not_honoured": 0,
+        "dropped_few_candidates": 0,
+        "queries_written": 0,
+        "pairs_written": 0,
+        "grade_counts": {"0": 0, "1": 0, "2": 0},
+        "splits": {"train": 0, "heldout": 0},
+        "elapsed_s": 0.0,
+    }
+
+    out_dir: Path = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Execute every spec through the pipeline first; the train/held-out split is
+    # assigned afterwards on the surviving queries, so parser rejects cannot
+    # shrink the held-out set below its floor.
+    surviving: list[dict] = []
+    for i, spec in enumerate(specs, 1):
+        query = spec["query"]
+        if query in banned:
+            stats["dropped_benchmark_collision"] += 1
+            continue
+        intent = parse_query(query, settings.keyword_mapping)
+        if getattr(intent, "parse_status", "") != "executable":
+            stats["dropped_parser_reject"] += 1
+            continue
+        include_dims = {
+            f.get("dim") for f in active_filters(intent) if f.get("polarity") == "include"
+        }
+        if not set(spec["hard_dims"]).issubset(include_dims):
+            stats["dropped_parser_reject"] += 1
+            continue
+        if spec["want_raw"] and getattr(intent, "has_raw_data_required", None) is not True:
+            stats["dropped_parser_reject"] += 1
+            continue
+        # Every soft dimension must have been honoured as a soft preference by the
+        # parser; a soft clause hardened into an include filter would silently
+        # remove the graded-label variance the dataset exists for.
+        prefer_dims = {
+            f.get("dim") for f in active_filters(intent) if f.get("polarity") == "prefer"
+        }
+        if not set(spec["soft_dims"]).issubset(prefer_dims):
+            stats["dropped_soft_not_honoured"] += 1
+            continue
+
+        candidates = recommend(query, records, settings, top_k=args.top_k)
+        if len(candidates) < 3:
+            stats["dropped_few_candidates"] += 1
+            continue
+
+        judge_map = {d: entries[d][next(i for i, e in enumerate(entries[d])
+                                      if e["value"] == v)]["judge"]
+                     for d, v in spec["constraints"].items()}
+        if spec["want_raw"]:
+            judge_map[RAW_KEY] = True
+        # Union the parser's own extracted values (which may be stems not present
+        # in display/aliases) into the judge terms, so the judge scores the same
+        # constraint the parser filtered on.
+        for f in active_filters(intent):
+            dim = f.get("dim")
+            if isinstance(judge_map.get(dim), list):
+                judge_map[dim] = sorted({
+                    *judge_map[dim],
+                    *(str(v).lower() for v in f.get("values") or []),
+                })
+
+        rows = []
+        for pos, cand in enumerate(candidates, 1):
+            raw_rec = getattr(cand.record, "raw", None)
+            uid = str(raw_rec.get("dataset_uid") or "") if isinstance(raw_rec, dict) else ""
+            grade, matched = grade_candidate(cand.record, judge_map)
+            stats["grade_counts"][str(grade)] += 1
+            rows.append({
+                "uid": uid,
+                "pos": pos,
+                "lex_score": cand.score,
+                "grade": grade,
+                "matched": matched,
+            })
+        stats["pairs_written"] += len(rows)
+        stats["queries_written"] += 1
+        surviving.append({
+            "query_id": f"sq-{i:05d}",
+            "query": query,
+            "cluster_id": spec["cluster_id"],
+            "constraints": spec["constraints"],
+            "hard_dims": spec["hard_dims"],
+            "soft_dims": spec["soft_dims"],
+            "has_raw_data_required": spec["want_raw"],
+            "candidates": rows,
+        })
+        if i % 200 == 0:
+            print(f"  … {i}/{len(specs)} specs processed", flush=True)
+
+    assign_splits(surviving, rng, HOLDOUT_MIN_QUERIES)
+    paths = {"train": out_dir / "synth_train.jsonl", "heldout": out_dir / "synth_heldout.jsonl"}
+    handles = {k: p.open("w", encoding="utf-8", newline="\n") for k, p in paths.items()}
+    try:
+        for line in surviving:
+            split = line["split"]
+            stats["splits"][split] += 1
+            handles[split].write(json.dumps(line, ensure_ascii=False) + "\n")
+    finally:
+        for fh in handles.values():
+            fh.close()
+
     stats["elapsed_s"] = round(time.time() - started, 1)
+    (out_dir / "_stats.json").write_text(
+        json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     print(json.dumps(stats, ensure_ascii=False, indent=2))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
