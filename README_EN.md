@@ -71,21 +71,24 @@ A **conversational dataset-discovery agent** for public single-cell and spatial 
 
 ```mermaid
 flowchart TD
-    Q[One user sentence] --> R{Unified router<br/>rule classification first}
-    R -->|clear search| S[Retrieval side RAG]
-    R -->|edit constraints| P[Constraint-board planner]
-    R -->|action or ambiguous| G[LLM guarded parsing<br/>routes only, never executes]
-    S --> K[Keyword retrieval<br/>zero-LLM hard filter]
-    K --> J{LLM judgment<br/>rerank / polish / detect tool call}
-    J --> F[Multi-layer ranking<br/>rules / local semantic / AI rerank]
+    Q[One user sentence] --> G{Entry gate<br/>identifier fast lane · AI-execution switch}
+    G -->|identifier/direct link, zero LLM| K[Keyword retrieval<br/>zero-LLM hard filter]
+    G -->|switch off, rule-direct| K
+    G -->|switch off + operation intent| N[Honest echo / degraded bubble]
+    G -->|switch on, full routing| R{LLM unified router<br/>rule-match overview as input<br/>routes only, never executes}
+    R -->|search| K
+    R -->|edit constraints| B[Constraint-board planner]
+    B --> K
+    R -->|tool call| P[Closed-verb plan<br/>langgraph preferred, built-in planner fallback]
+    R -->|unparsed| N
+    K --> F[Multi-layer ranking<br/>rules / local semantic / AI rerank]
     F --> C[Explainable result cards]
-    G --> A[Execution side ReAct loop<br/>langgraph optional]
-    A --> T[Closed-verb tool calls]
+    P --> T[Frontend-dispatched execution]
     T --> CF{Two-phase confirm<br/>confirm_token}
     CF --> L[(Audit ledger<br/>receipts, recallable)]
 ```
 
-Both sides share the same corpora (frozen baseline + external library) and the same deterministic generators; any unavailable AI component degrades honestly.
+Both sides share the same corpora (frozen baseline + external library) and the same deterministic generators; any unavailable AI component degrades honestly. With the switch on and no action marker in the sentence, a preliminary retrieval runs concurrently with LLM routing — reused on a search verdict, discarded on a tool-call verdict — so routing never waits on retrieval.
 
 ## Quick start
 
@@ -278,7 +281,7 @@ The web edition also offers **online MCP**: the same instance in streamable-HTTP
 
 `curate_datasets` manages **your own uploads** in one sentence: `action=list` inventories the external library and recycle bin, `import` imports local dataset JSON (content-hash dedup; duplicates rejected by default, `force=true` overwrites), `search_online` searches official sources (candidates previewed first, ingested only after confirmation), `remove` moves files to the recycle bin (reversible), `restore` brings them back, `check_updates` checks official sources for updates, `sync_updates` syncs them into the external library (returns an operation receipt, atomically recallable). All writes are **two-phase**: by default only a preview and `confirm_token` are returned (nothing on disk); sending the token back executes; a token that mismatches the content fingerprint writes not a single byte. The scope is limited to `upload_*` files in `database/external/`; official snapshots and the frozen baseline `database/base/` are structurally unreachable. The web endpoints are `POST /api/curate/plan`, `/api/curate/apply`, `/api/curate/sync-updates` (plus read-only `/api/curate/sync-status` and atomic recall `/api/curate/recall`); the CLI is `scripts/curate_datasets.py` — all three share one implementation.
 
-The web edition also provides a unified conversation router, `POST /api/utterance`: each sentence is rule-classified first — clear searches go straight through (no LLM), constraint edits go to the constraint-board planner, and only action or ambiguous sentences reach LLM-guarded parsing (the only path that may call an LLM; it routes, never executes).
+The web edition also provides a unified conversation router, `POST /api/utterance`: every input passes the entry gate first — a sentence pasting an identifier or direct link goes straight to retrieval with zero LLM; with "AI execution" off, all input is handled as rule-based search (sentences whose operation intent is rule-detected get a degraded bubble instead of being silently treated as search); with it on, every sentence goes through LLM unified routing (the rule-match overview feeds the routing decision; the langgraph graph is preferred and the built-in planner takes over when the extension or LLM is unavailable), routing only, never executing — a search or constraint-edit verdict yields a rewritten query handed to `/api/recommend`, a tool-call verdict yields only a closed-verb plan for the frontend to confirm and execute, and anything unparsed gets an honest echo.
 
 Every MCP tool call appends one redacted JSON line to `.userdata/mcp_calls.jsonl` on the local machine (no network, no database); set `BIODATA_MCP_CALL_LOG=off` in the MCP client's env to disable, and use `scripts/summarize_mcp_calls.py` for statistics. On Windows, `scripts\setup_mcp.ps1` handles the dedicated environment, protocol self-check, API configuration, client registration, and read-back verification. Full steps: see the MCP tutorial (Chinese) at `使用教程/MCP安装/MCP_安装教程.md`.
 

@@ -69,21 +69,24 @@
 
 ```mermaid
 flowchart TD
-    Q[用户一句话] --> R{统一路由<br/>规则分类优先}
-    R -->|明确检索| S[检索面 RAG]
-    R -->|改条件| P[条件板规划]
-    R -->|动作或歧义| G[LLM 护栏解析<br/>只路由 不执行]
-    S --> K[关键词检索<br/>零 LLM 硬过滤]
-    K --> J{LLM 判断<br/>重排 / 润色 / 识别工具调用}
-    J --> F[多层排序<br/>规则 / 本地语义 / AI 重排]
+    Q[用户一句话] --> G{入口闸<br/>编号快速道 · AI 执行开关}
+    G -->|编号/直链 零 LLM| K[关键词检索<br/>零 LLM 硬过滤]
+    G -->|闸关 规则直达| K
+    G -->|闸关 + 操作意图| N[如实回音 / 降级气泡]
+    G -->|闸开 全量分流| R{LLM 统一路由<br/>规则匹配概览作输入<br/>只路由 不执行}
+    R -->|检索| K
+    R -->|改条件| B[条件板规划]
+    B --> K
+    R -->|工具调用| P[封闭动词表 plan<br/>langgraph 优先 内置规划器兜底]
+    R -->|无法归类| N
+    K --> F[多层排序<br/>规则 / 本地语义 / AI 重排]
     F --> C[可解释结果卡片]
-    G --> A[执行面 ReAct 主环<br/>langgraph 可选]
-    A --> T[封闭动词表工具调用]
+    P --> T[前端派发执行]
     T --> CF{两步确认<br/>confirm_token}
     CF --> L[(审计账本<br/>回执 可撤回)]
 ```
 
-两条面共用同一套语料（冻结基准 + 外部库）与同一套确定性生成器；任一 AI 环节不可用都诚实回退。
+两条面共用同一套语料（冻结基准 + 外部库）与同一套确定性生成器；任一 AI 环节不可用都诚实回退。「AI 执行」开启且无动作标记的句子，在 LLM 分流的同时会并发预跑一轮初步检索：判为检索即复用该结果、判为工具调用则丢弃——路由不空等检索。
 
 ## 快速开始
 
@@ -276,7 +279,7 @@ $Python = '.\.venv\Scripts\python.exe'   # macOS/Linux 换成 ./.venv/bin/python
 
 `curate_datasets` 让你用一句话管护**自己上传的数据**：`action=list` 清点外部库与回收站、`import` 导入本地数据集 JSON（内容 hash 去重，撞重默认拒绝、`force=true` 覆盖）、`search_online` 联网搜索官方源（候选先预览、确认后才入库）、`remove` 移入回收站（可逆）、`restore` 移回、`check_updates` 检查官方源更新、`sync_updates` 同步进外部库（落盘返回 operation receipt，可整次撤回）。所有写动作都是**两步确认**：默认只返回预览和 `confirm_token`（不落盘），回传 token 才真执行；token 与内容指纹不符时一个字节都不写。管护对象仅限 `database/external/` 的 `upload_*` 文件，官方快照与冻结基准 `database/base/` 结构性不可达。网页端对应 `POST /api/curate/plan`、`/api/curate/apply`、`/api/curate/sync-updates`（另有只读 `/api/curate/sync-status` 与整次撤回 `/api/curate/recall`），命令行对应 `scripts/curate_datasets.py`，三处共用同一套逻辑。
 
-网页端另提供统一对话路由 `POST /api/utterance`：一句话先经规则分类——明确检索直达（不调大模型）、改条件走条件板规划、动作或歧义句走大模型护栏解析（仅这一路可能调用大模型；只路由、不执行）。
+网页端另提供统一对话路由 `POST /api/utterance`：一切输入先过入口闸——贴编号/直链的句子零 LLM 直达检索；「AI 执行」关闭时所有输入按规则检索处理（规则检出操作意图的句子回降级气泡，不静默当检索）；开启时所有句子经 LLM 统一分流（规则匹配概览作为分流输入；langgraph 图优先、未装扩展或未配大模型时回退内置规划器），只路由、不执行——判为检索或改条件就产出改写后的检索句交给 `/api/recommend`，判为工具调用就只出封闭动词表 plan、交由前端确认后执行，无法归类则如实回音。
 
 每次 MCP 工具调用都会在本机追加一行脱敏 JSON 日志到 `.userdata/mcp_calls.jsonl`（不联网、不入库）；在 MCP 客户端的 env 里设 `BIODATA_MCP_CALL_LOG=off` 可关闭，统计用 `scripts/summarize_mcp_calls.py`。Windows 可使用 `scripts\setup_mcp.ps1` 完成独立环境、协议自检、API 配置、客户端注册和回读验证。完整步骤见[MCP 安装教程](使用教程/MCP安装/MCP_安装教程.md)。
 
