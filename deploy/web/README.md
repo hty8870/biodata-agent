@@ -3,6 +3,10 @@
 > 范围：把仓库以**版本化 Docker 镜像**部署到 Internet-facing 主机。应用端口只发布到
 > 宿主 loopback，公网入口必须先经过 TLS 反向代理；无域名/证书时不得承载真实账户、查询、
 > 会话或 BYOK 凭据。回退 = 换 tag 重新部署，分钟级。
+>
+> **过渡状态（2026-09-09 用户拍板）**：域名 ICP 备案中，公网暂以 HTTP 直连 + 账户门运行，
+> `PUBLIC_HEALTH_URL` 用 `http://<server-host>/api/health`；备案与证书落地后恢复上述 TLS 形态
+> （恢复动作 = 装回反向代理 + 把 environment 变量切回 https，代码与脚本不变）。
 
 ## 1. 形态一览
 
@@ -20,7 +24,7 @@
 
 服务器路径边界（本任务的一切改动以此为止）：
 
-- `/opt/biodata-web/`——部署物：`.env`、`deploy-policy.conf`、compose、root-owned 两个部署脚本、`RELEASES.log`
+- `/opt/biodata-web/`——部署物：`.env`、compose、root-owned `deploy.sh`、`RELEASES.log`
 - `/data/biodata-web/`——应用运行态数据（宿主每日 03:00 自动备份 `/data`，见 §6）
 - 受控运维系统——保存批准、digest、备份、回退和健康证据；不把真实记录回填 Git
 
@@ -84,12 +88,10 @@ ssh -i ~/.ssh/<ssh-key> <admin-user>@<server-host> "
   rm -f /tmp/biodata-web.env.upload
 "
 
-# 3) root-owned policy / compose / wrapper / deploy.sh 就位
+# 3) root-owned compose / deploy.sh 就位
 ssh -i ~/.ssh/<ssh-key> <admin-user>@<server-host> "
   sudo install -m 644 -o root -g root /opt/biodata-web/build/$TAG/deploy/web/docker-compose.web.yml /opt/biodata-web/docker-compose.web.yml
   sudo install -m 755 -o root -g root /opt/biodata-web/build/$TAG/deploy/web/deploy.sh /opt/biodata-web/deploy.sh
-  sudo install -m 755 -o root -g root /opt/biodata-web/build/$TAG/deploy/web/deploy-release.sh /opt/biodata-web/deploy-release.sh
-  sudo install -m 600 -o root -g root /secure/local/deploy-policy.conf /opt/biodata-web/deploy-policy.conf
 "
 
 # 4) 安装 TLS 反向代理模板并验证 nginx 配置/证书，再构建镜像
@@ -99,23 +101,33 @@ ssh -i ~/.ssh/<ssh-key> <admin-user>@<server-host> "
   sudo nginx -t
 "
 
-# 5) 部署：日常远程账号只可 sudo 这一条 wrapper
-ssh -i ~/.ssh/<deploy-key> deploy@<server-host> "sudo -n /opt/biodata-web/deploy-release.sh '$TAG'"
+# 5) 部署：日常远程账号经 sudoers 白名单直接调 deploy.sh（镜像已在 step 4 本机构建）
+ssh -i ~/.ssh/<deploy-key> deploy@<server-host> "sudo -n /opt/biodata-web/deploy.sh '$TAG'"
 ```
 
 `BIODATA_TRUSTED_HOSTS` 填浏览器实际访问域名；compose 固定开启账户门与 Secure cookie，
-并只发布宿主 loopback。`PUBLIC_HEALTH_URL` 必须是同一域名的 HTTPS `/api/health`。
+并只发布宿主 loopback。`PUBLIC_HEALTH_URL` 用同一入口的 `/api/health`；目标形态为 HTTPS，
+2026-09-09 起域名 ICP 备案过渡期允许 http（见 §5 末注）。
 
 ## 5. 日常发布与回退
 
-发布新版 = 构建并推送经过验证的镜像 → `sudo /opt/biodata-web/deploy-release.sh <new-tag>`。
-wrapper 按 root-owned policy 限定 registry，随后 deploy.sh 写 `IMAGE_TAG` → `up -d` → 等 healthy（≤120s）→ 失败自动切回上一 tag →
-成功记 `/opt/biodata-web/RELEASES.log` 并清理镜像只留最近 5 个。
+发布新版 = ① 按 §2 同步构建上下文到服务器，构建并推送经过验证的镜像到 TCR（`docker build` +
+`docker push`，标签规则见 §1）→ ② GitHub「Deploy web」workflow 手动触发（`workflow_dispatch`，
+**唯一部署入口**，部署 TCR 中已存在的 tag；`AUTO_DEPLOY=false` 时不存在自动路径）。
+workflow 经受限 deploy 账号在服务器上执行 `sudo docker pull` → `sudo docker tag` →
+`sudo /opt/biodata-web/deploy.sh <new-tag>`（sudoers 白名单只放行这三条）；
+deploy.sh 写 `IMAGE_TAG` → `up -d` → 等 healthy（≤120s）→ 容器内断言账户护栏 →
+失败自动切回上一 tag → 成功记 `/opt/biodata-web/RELEASES.log` 并清理镜像只留最近 5 个。
 
-**手工回退**（不依赖 deploy.sh 的自动路径时）：
+> 2026-09-09 起域名 ICP 备案过渡：`PUBLIC_HEALTH_URL` 允许 `http://<server-host>/api/health`，
+> 公网健康断言按 scheme 分支（https 钉死 TLS1.2+，http 明文直连并在日志给警告）。
+> 备案与证书落地后，只需把 environment 变量 `PUBLIC_HEALTH_URL` 切回
+> `https://<your-domain>/api/health`，workflow 与脚本均无需再改。
+
+**手工回退**（不走 GitHub workflow 时，同样经 deploy 账号）：
 
 ```bash
-ssh -i ~/.ssh/<deploy-key> deploy@<server-host> "sudo -n /opt/biodata-web/deploy-release.sh '<old-tag>'"
+ssh -i ~/.ssh/<deploy-key> deploy@<server-host> "sudo -n /opt/biodata-web/deploy.sh '<old-tag>'"
 # 或最原始形态：改 /opt/biodata-web/.env 的 IMAGE_TAG=<old-tag> 后
 #   sudo docker compose --env-file /opt/biodata-web/.env -f /opt/biodata-web/docker-compose.web.yml -p biodata-web up -d
 ```
@@ -205,3 +217,20 @@ sudo docker compose --env-file /opt/biodata-web/.env -f /opt/biodata-web/docker-
 # 查看当日用量账本（容器内 /data/.userdata/llm_quota.json，只留当日）
 sudo docker exec biodata-web cat /data/.userdata/llm_quota.json
 ```
+
+## 10. 可选演示：Redis 会话 + RQ 消息队列（2026-09-08）
+
+默认部署形态**不需要**本节——未设开关变量时，会话走 JSON 文件后端、corpus-sync 走进程内
+线程 job，行为与历史逐字节一致。本节仅是学习/演示用的可选增强，**未接入 deploy.sh、
+不进入生产发布流程**；投产（多实例、Redis 备份与公网口径）须另行评审决策。
+
+两个独立开关（语义真源在代码注释：`redis_sessions.py` / `rq_jobs.py` / `redis_store.py`）：
+
+- `BIODATA_SESSION_STORE=redis`：登录会话改存 Redis，多进程/多实例共享登录态；
+- `BIODATA_JOB_BACKEND=rq`：corpus-sync 长任务改投 RQ 队列，由独立 worker 进程执行，
+  web 进程读状态（Redis hash）并在任务终态时于本进程补做缓存失效。
+
+前置条件：运行环境装有可选依赖（`pip install -r requirements/requirements-mq.txt`；
+默认发布镜像不含，演示需自行扩展镜像或本机源码形态）。compose 叠加示例见
+`deploy/web/docker-compose.mq.example.yml`（含 redis 服务与 worker 服务，文件头有完整
+用法与回退说明）。

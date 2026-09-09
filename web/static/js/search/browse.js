@@ -10,7 +10,7 @@
    经 setFavRerender 注册给 fav_folders，fav_folders→browse 反向边消失，见 fav_folders.js 头部）。
    shell/accounts/boot 与 interactions/fav_folders/reuse_pack 同样经 import 取本文件导出
    （绞杀桥已全退役）。 */
-import { API, LS, REDUCE_MOTION, $, countUp, escapeHtml, fmtTime, getFavs, getHist, isFav, itemKey, killRevealST, nsKey, prettyPlatform, revealCards, toast, writeJSON } from "#core";
+import { API, LS, REDUCE_MOTION, $, countUp, escapeHtml, fmtTime, getFavs, getHist, isFav, itemKey, killRevealST, nsKey, openPopup, prettyPlatform, revealCards, toast, writeJSON } from "#core";
 import { buildCard } from "#cards";
 import { resetSubmitButton } from "#progress";
 import { exitResultsLayout, setFacetState } from "#results";
@@ -391,7 +391,7 @@ export function renderHistory() {
         row.querySelector(".hist-main").addEventListener("click", () => { viewHistorySnapshot(g); closeHistWin(); });
         const nt = row.querySelector(".hist-newtab");
         if (nt) nt.addEventListener("click", () => {
-            window.open(location.pathname + "?conv=" + encodeURIComponent(h.convId), "_blank", "noopener");
+            openPopup(location.pathname + "?conv=" + encodeURIComponent(h.convId));
         });
         const rr = row.querySelector(".hist-rerun");
         if (rr) rr.addEventListener("click", () => { $("queryInput").value = h.query; closeHistWin(); showView("query"); runRecommend(); });

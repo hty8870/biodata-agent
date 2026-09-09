@@ -8,6 +8,7 @@
    `setHistHooks` 把两个取值函数注册进来；core 只在函数体内调钩子，环结构性消失。 */
 import { USAGE_KINDS } from "#usage_core";
 import { usageCardRank, usageLogCardAction } from "#usage_log";
+import { COPY } from "./copy.js";
 
 /* 历史打标钩子（board.js 在 initCondBoard 注册）。未注册时（理论上只剩未加载 board 的
    页面）回退空值——pushHist 各字段形状不变，仅 convId/chat 为空。 */
@@ -219,6 +220,16 @@ export function activeView() { const el = document.querySelector(".view.active")
 
 let toastTimer = null;
 export function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); if (toastTimer) clearTimeout(toastTimer); const ms = Math.round(Math.max(2400, Math.min(4000, 1600 + String(msg).length * 70))); toastTimer = setTimeout(() => t.classList.remove("show"), ms); }
+
+/* 程序化新开标签页的唯一出口（2026-09-09 弹窗拦截提醒，与 downloads.js 单通道同纪律）。
+   window.open 被浏览器拦截时返回 null——不拦时什么也不多说，被拦时给可操作的提醒
+   （文案唯一锚点 COPY.common.popupBlocked），绝不静默无事发生。返回窗口句柄（被拦=null），
+   调用方据此决定要不要发「已在新标签页打开」之类的成功回执。 */
+export function openPopup(url) {
+    const w = window.open(url, "_blank", "noopener");
+    if (!w) toast(COPY.common.popupBlocked);
+    return w;
+}
 
 /* ---------- storage ---------- */
 export function readJSON(k, fb) { try { const v = JSON.parse(localStorage.getItem(k)); return v ?? fb; } catch (_e) { return fb; } }

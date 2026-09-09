@@ -1282,6 +1282,25 @@ def test_pack_download_verb_goes_browser_direct_automatically():
     assert "webGuardOn" not in imp, "护栏分支退役后 act.js 不许再 import webGuardOn"
 
 
+def test_popup_blocked_hint_single_anchor_and_wiring():
+    """2026-09-09 用户点图：下载/新窗口被浏览器弹窗拦截时用户常无感知、也不知被拦意味着
+    什么。提醒文案只在 COPY.common.popupBlocked 一处定义；core.js 的 openPopup 是程序化
+    新标签页唯一出口，被拦（window.open 返回 null）统一 toast；downloads.js 发射 toast
+    与面板页脚、act.js 下载回执共用同一锚点，不许各调用点另写变体。"""
+    copy_js = _read("core/copy.js")
+    assert "popupBlocked:" in copy_js, "拦截提醒文案必须在 COPY.common 单一定义"
+    core = _strip_comments(CORE)
+    fn = core.split("export function openPopup(", 1)[1]
+    assert "window.open(" in fn and "toast(COPY.common.popupBlocked)" in fn, (
+        "openPopup 必须在 window.open 被拦（返回 null）时 toast 统一提醒")
+    dl = _strip_comments(_read("core/downloads.js"))
+    assert dl.count("COPY.common.popupBlocked") >= 2, "发射 toast 与面板页脚都必须接同一提醒锚点"
+    assert "COPY.common.popupBlocked" in _strip_comments(ACT), "act.js 下载回执必须带拦截提醒"
+    for mod in ("search/browse.js", "panel/board.js", "core/interactions.js"):
+        assert "window.open(" not in _strip_comments(_read(mod)), (
+            f"{mod} 不许绕过 openPopup 裸调 window.open")
+
+
 def test_reset_task_pack_no_longer_guards_server_download():
     """dl-browser-queue（反向钉，取代守卫钉）：_dl 服务端代下状态机已退役——浏览器下载
     队列状态收在 downloads.js，resetTaskPack 不触碰。旧的「下载进行中跳过重置」守卫

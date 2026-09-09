@@ -75,7 +75,8 @@ def test_each_conversation_row_click_and_actions():
     「本标签页显示」按钮退役）；行尾动作＝新标签页打开（?conv=）+ 重新检索 + 删除（二段确认）。"""
     assert "hist-view" not in BROWSE, "「本标签页显示」按钮应已退役——点行本体即找回"
     assert "hist-main" in BROWSE and "viewHistorySnapshot(" in BROWSE
-    assert "hist-newtab" in BROWSE and "window.open(" in BROWSE
+    assert "hist-newtab" in BROWSE and "openPopup(" in BROWSE
+    assert "window.open(" not in BROWSE, "browse.js 不许绕过 openPopup 裸调 window.open"
     assert '?conv=' in BROWSE and "encodeURIComponent" in BROWSE
     # 删除：每条行尾都有 hist-del；二段确认（armed）；删除写**当前账户命名空间**键（写裸键是账户隔离漏洞）
     assert "hist-del" in BROWSE and "armed" in BROWSE and "deleteHistoryGroup" in BROWSE

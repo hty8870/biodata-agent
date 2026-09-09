@@ -12,6 +12,7 @@
    2026-08-16：「按原话重新检索」「以后别自动执行」两颗 chip 退役（agent 能力已足够），
    runRecommend/syncAiGates 随之不再引用。 */
 import { API, $, escapeHtml, isHttp, toast } from "#core";
+import { COPY } from "../core/copy.js";
 import { ACT_BUSY_NOTE, actExcludedFilesNote, actReceiptFrom, actSecondOrderGaps, actWhatHappened, tpBytes } from "#act_core";
 import { planIsRetrievalOnly, planHeadIsGraphDoneRetrieval, PLAN_CANCELLED_FALLBACK_ZH, searchFactsReceiptText } from "#board_core";
 import { arxActive, arxBegin, arxDecision, arxDecisionDone, arxFail, arxFinish, arxOnChange, arxStep } from "#act_run";
@@ -171,6 +172,7 @@ async function actRunPackDownload(plan) {
             onDisk: true,
             extra: "已开始下载 " + enq.queued + " 个数据文件（仅各数据集的代表性主文件，共约 " + tpBytes(enq.bytes) + "）。"
                 + "进度与取消在浏览器自带的下载管理里（Ctrl+J）；下载面板里可取消还没开始的排队项、可继续追加。"
+                + COPY.common.popupBlocked
                 + (enq.already
                     ? "另有 " + enq.already + " 个主文件此前已交给浏览器或在排队，这次没有重复下载。"
                     : "")

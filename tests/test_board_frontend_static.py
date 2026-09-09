@@ -297,8 +297,10 @@ def test_history_reply_bubble_button_and_fork_bar():
         assert re.search(r"\bfunction\s+" + sym + r"\b", BOARD) or re.search(r"export function\s+" + sym + r"\b", BOARD), f"{sym} 没有定义"
     assert "cbRevertToFrame(cur.id)" in BOARD, "回退键必须复用 cbRevertToFrame 的截断语义"
     assert "armed" in BOARD, "不可撤销的回退必须二段确认（armed 模式）"
-    # 分支＝新开浏览器标签页（本标签页不变），落点 ?fork= 由 browse.js 接住
-    assert "window.open(" in BOARD and "?fork=" in BOARD, "分支必须新开浏览器标签页（?fork=）"
+    # 分支＝新开浏览器标签页（本标签页不变），落点 ?fork= 由 browse.js 接住；
+    # 新标签页一律走 openPopup 单通道（被浏览器拦截时统一 toast 提醒），不许再裸调 window.open
+    assert "openPopup(" in BOARD and "?fork=" in BOARD, "分支必须新开浏览器标签页（?fork=）"
+    assert "window.open(" not in BOARD, "board.js 不许绕过 openPopup 裸调 window.open"
     assert 'params.get("fork")' in BROWSE and "cbAdoptAsBranch" in BROWSE, "新标签页的 ?fork= 落点没接"
     # 输入条变形的唯一同步口：cbRenderHistory 每次重画都调 cbComposerSync（游标不在栈顶＝三键）
     assert "cbComposerSync();" in BOARD
@@ -383,7 +385,7 @@ def test_msg_feedback_action_bar_wired():
         "feedback 模块不许经 # 静态 import 进 board.js（会牵动静态图）")
     # 分支：与输入条变形三键同一落点格式（?fork=<convId>:<N>，新开标签页）
     fork_body = re.search(r"function _cbMsgFork\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
-    assert fork_body and "?fork=" in fork_body.group(1) and "window.open(" in fork_body.group(1)
+    assert fork_body and "?fork=" in fork_body.group(1) and "openPopup(" in fork_body.group(1)
     # 样式：操作条与评论编辑器的类都在 CSS 里（漏了就是一排裸按钮）
     for cls in (".cbh-actbar", ".cbh-act", ".cbh-cmt-ta", ".cbh-cmt-send"):
         assert cls in CSS, f"app.css 缺 {cls}"
