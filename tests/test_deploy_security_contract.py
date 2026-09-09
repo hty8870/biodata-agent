@@ -35,23 +35,15 @@ def test_deploy_script_validates_tag_and_has_no_nested_sudo_or_sed_interpolation
     assert "awk -v tag=\"$tag\"" in text
 
 
-def test_root_wrapper_treats_policy_as_data_and_is_the_only_privileged_entry():
-    text = _text("deploy/web/deploy-release.sh")
-    assert "BASE=/opt/biodata-web" in text
-    assert TAG_RE_LITERAL in text
-    assert "source " not in text
-    assert "eval " not in text
-    assert "unknown deploy policy entry" in text
-    assert '/usr/bin/docker pull "$remote_image"' in text
-    assert '/usr/bin/docker tag "$remote_image" "$local_image"' in text
-    assert 'exec "$DEPLOY_SCRIPT" "$tag"' in text
+def test_deploy_workflow_validates_all_shell_inputs_and_pins_health_scheme():
+    """部署 workflow 合同：输入先进 env 再校验，健康检查 scheme 跟随 PUBLIC_HEALTH_URL。
 
-    setup = _text("deploy/web/OIDC-SETUP.md")
-    assert "NOPASSWD: /opt/biodata-web/deploy-release.sh *" in setup
-    assert "NOPASSWD: /usr/bin/docker" not in setup
-
-
-def test_deploy_workflow_validates_all_shell_inputs_and_uses_https_health():
+    2026-09-09 合同变更（用户拍板，域名 ICP 备案过渡）：
+    - PUBLIC_HEALTH_URL 接受 http/https 两种 scheme；https 分支仍钉死 TLS1.2+，
+      http 分支仅过渡期使用，备案完成后只改 environment 变量即切回；
+    - 部署不再经 root wrapper（deploy-release.sh 已退役删除），workflow 直接对齐
+      服务器 sudoers 现实白名单：docker pull / docker tag / deploy.sh 三条。
+    """
     if not WORKFLOW.exists():
         return  # public mirror intentionally has no production deployment workflow
     text = WORKFLOW.read_text(encoding="utf-8")
@@ -59,11 +51,13 @@ def test_deploy_workflow_validates_all_shell_inputs_and_uses_https_health():
     ssh_at = text.index("- name: Deploy on production host via SSH")
     assert validate_at < ssh_at
     assert TAG_RE_LITERAL in text
-    assert "PUBLIC_HEALTH_URL must be HTTPS" in text
+    assert "PUBLIC_HEALTH_URL must be http(s)" in text
     assert "--proto '=https' --tlsv1.2" in text
-    assert "sudo -n /opt/biodata-web/deploy-release.sh '$TAG'" in text
-    assert "sudo -n /usr/bin/docker pull" not in text
-    assert "sudo -n /usr/bin/docker tag" not in text
+    assert "--proto '=http'" in text
+    assert "sudo -n /usr/bin/docker pull" in text
+    assert "sudo -n /usr/bin/docker tag" in text
+    assert "sudo -n /opt/biodata-web/deploy.sh '$TAG'" in text
+    assert "deploy-release.sh" not in text
     # Expressions go into env first; untrusted values are not pasted into run scripts.
     assert 'printf \'%s\\n\' "$DEPLOY_HOST_KEY"' in text
     assert '"$DEPLOY_USER@$DEPLOY_HOST"' in text

@@ -364,7 +364,8 @@ function _dlqHtml(info) {
     if (_queue.some(function (q) { return q.status === "fired"; })) {
         html += '<p class="dlq-foot">「已交给浏览器」的文件，进度与取消在浏览器自带的下载管理里（Ctrl+J）；'
             + "本面板能取消的是还没开始的排队项。若浏览器询问「是否允许下载多个文件」，请选允许；"
-            + "被拦下的条目点行内「重下」即可。</p>";
+            + escapeHtml(COPY.common.popupBlocked)
+            + "被拦下的条目点行内「重下」即可重发。</p>";
     }
     if (unsData.length) {
         html += '<p class="dlq-uns">' + unsData.length + " 个数据集暂不支持浏览器直下："
@@ -439,7 +440,7 @@ export function initDownloads() {
                     title: anchor.getAttribute("data-dlq-title") || name,
                 }], { auto: true });
                 if (added.some(function (q) { return q.status === "queued"; })) {
-                    toast("已开始下载：" + name + "（记录见下载面板）");
+                    toast("已开始下载：" + name + "（记录见下载面板）。" + COPY.common.popupBlocked);
                 } else {
                     toast("「" + name + "」已在下载队列里或已交给浏览器，没有重复下载；要重下请到下载面板点「重下」。");
                 }

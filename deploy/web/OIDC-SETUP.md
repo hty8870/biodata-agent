@@ -12,10 +12,9 @@ push master
   → registry 推送经过验证的不可变镜像
   → production environment job
   → SSH 到专用 deploy 用户
-  → sudo /opt/biodata-web/deploy-release.sh <validated-tag>
-  → wrapper 从 root-owned policy 读取唯一允许的 registry image
-  → pull + tag + deploy.sh
-  → 内部 health/account guard + 外部 HTTPS health
+  → sudo /usr/bin/docker pull + docker tag（sudoers 白名单限定）
+  → sudo /opt/biodata-web/deploy.sh <validated-tag>
+  → 内部 health/account guard + 外部 health（scheme 跟随 PUBLIC_HEALTH_URL）
 ```
 
 日常应保持 `AUTO_DEPLOY=false`。`workflow_dispatch` 只部署已经存在的镜像 tag；它仍必须受
@@ -42,7 +41,7 @@ environment 保存：
 | `DEPLOY_HOST` | `<server-host>`，仅主机名/IP，不带 shell 字符 |
 | `DEPLOY_USER` | `deploy` |
 | `DEPLOY_HOST_KEY` | `<server-host> ssh-ed25519 <public-host-key>` |
-| `PUBLIC_HEALTH_URL` | `https://<your-domain>/api/health`，必须 HTTPS |
+| `PUBLIC_HEALTH_URL` | `https://<your-domain>/api/health`；域名 ICP 备案过渡期可为 `http://<server-host>/api/health`（2026-09-09 起，备案后切回 HTTPS） |
 | `AUTO_DEPLOY` | `false`（默认） |
 
 不再使用的 cloud/OIDC secret 应删除，而不是长期留在 environment。
@@ -61,52 +60,48 @@ Protection rules：
 
 1. 创建锁密码、仅密钥登录的 `deploy` 用户；禁端口转发、agent forwarding、tunnel 和 TTY。
 2. root 安装以下文件：
-   - `/opt/biodata-web/deploy-release.sh`：root:root 0755；
    - `/opt/biodata-web/deploy.sh`：root:root 0755；
-   - `/opt/biodata-web/deploy-policy.conf`：root:root 0600；
    - `/opt/biodata-web/.env`：root:root 0600；
    - `/opt/biodata-web/docker-compose.web.yml`：root:root 0644。
-3. `deploy-policy.conf` 只含一行：
-
-   ```text
-   REGISTRY_IMAGE=registry.example.com/namespace/biodata-web
-   ```
-
-4. sudoers 只放行 wrapper，不放行裸 Docker CLI：
+3. sudoers 只放行部署必需的三条命令（2026-08-30 简化：wrapper/policy 通道退役，
+   白名单直接对齐 deploy.sh 的真实需要；registry image 路径由 workflow 侧校验）：
 
    ```sudoers
-   deploy ALL=(root) NOPASSWD: /opt/biodata-web/deploy-release.sh *
+   deploy ALL=(root) NOPASSWD: /usr/bin/docker pull *, /usr/bin/docker tag *, /opt/biodata-web/deploy.sh *
    ```
 
-5. 用 `visudo -cf` 校验；以下命令必须被拒绝：`sudo docker ...`、`sudo cat .env`、
-   `sudo bash`、`sudo deploy.sh ...`。
-6. 安装 TLS 反向代理；应用端口只绑定 `127.0.0.1`。使用
+4. 用 `visudo -cf` 校验；以下命令必须被拒绝：`sudo docker run ...`、`sudo docker exec ...`、
+   `sudo cat /opt/biodata-web/.env`、`sudo bash`。
+5. 安装 TLS 反向代理；应用端口只绑定 `127.0.0.1`。使用
    `nginx.biodata.conf.example` 作为模板，并在启用前执行 `nginx -t`。
+   （域名 ICP 备案过渡期可暂缺 TLS 代理，公网经宿主 80 端口 HTTP 直连；备案后补回。）
 
 ## 4. 首次手动验收
 
 1. 保证已有可回退镜像；
 2. 保持 `AUTO_DEPLOY=false`；
 3. 从受保护 `master` 手动运行 Deploy web，输入合法既有 tag；
-4. 预期：wrapper 校验 tag/policy，部署后内部和外部 health 均通过；
+4. 预期：workflow 校验输入与 registry image 路径，服务器 pull/tag 后 deploy.sh 完成部署，
+   内部和外部 health 均通过；
 5. 验证：
-   - `https://<your-domain>/api/health` 返回 `account.required == true`；
-   - HTTP 自动重定向 HTTPS；
-   - session cookie 带 `Secure`/`HttpOnly`/`SameSite=Strict`；
-   - `127.0.0.1:8510` 仅在服务器本机可达；
-   - 非法 tag、未知 policy key、非批准 registry 均 fail-closed；
-   - deploy 用户无法直接调用 Docker 或读取 `.env`。
+   - `https://<your-domain>/api/health` 返回 `account.required == true`
+     （过渡期：`http://<server-host>/api/health` 同断言）；
+   - HTTP 自动重定向 HTTPS（TLS 落地后要求）；
+   - session cookie 带 `Secure`/`HttpOnly`/`SameSite=Strict`（TLS 落地后要求）；
+   - `127.0.0.1:8510` 仅在服务器本机可达（公网入口经宿主 80/443）；
+   - 非法 tag、非法 registry image 路径均 fail-closed；
+   - deploy 用户只能 sudo 白名单三条命令，无法读取 `.env` 或获得任意 root shell。
 
 ## 5. 回退
 
-回退仍走同一个 wrapper，不能绕过策略直接改 compose：
+回退走同一条 deploy.sh 通道（镜像须已在服务器本机镜像库）：
 
 ```bash
 ssh -i ~/.ssh/<deploy-key> deploy@<server-host> \
-  "sudo -n /opt/biodata-web/deploy-release.sh '<verified-old-tag>'"
+  "sudo -n /opt/biodata-web/deploy.sh '<verified-old-tag>'"
 ```
 
-wrapper 和 deploy.sh 验证相同 tag 语法；deploy.sh 等待 healthy、断言账户门并在失败时回到上一 tag。
+deploy.sh 校验 tag 语法、等待 healthy、断言账户门，并在失败时自动回到上一 tag。
 
 ## 6. 轮换与审计
 

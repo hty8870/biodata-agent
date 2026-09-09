@@ -3,7 +3,7 @@
 # 安装位置：/opt/biodata-web/deploy.sh（与 deploy/web/deploy.sh 同源）。
 #
 # 用法：sudo /opt/biodata-web/deploy.sh <image-tag>
-# 日常远程发布应只调用 root-owned deploy-release.sh；本脚本保留给本机回退与 wrapper 复用。
+# 日常远程发布经受限 deploy 账号直接 sudo 调用本脚本（sudoers 白名单三条之一，2026-08-30 起）。
 #
 # 行为（幂等，重复执行同一 tag = 重新 up -d 并重新等 healthy）：
 #   1. 校验镜像 biodata-web:<tag> 已存在于本机（部署从不隐式 pull，版本真源是本机镜像库）；
@@ -17,7 +17,7 @@ set -euo pipefail
 TAG_RE='^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-  echo "[deploy] 必须以 root 运行；远程账号只能通过专用 deploy-release.sh sudo 规则调用。" >&2
+  echo "[deploy] 必须以 root 运行（远程 deploy 账号经 sudoers 白名单调用）。" >&2
   exit 2
 fi
 

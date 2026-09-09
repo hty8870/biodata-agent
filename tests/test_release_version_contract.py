@@ -349,8 +349,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260907-rf2"  # 审查修复批追加：被动对齐补锁定门过渡 + 尾随复核去重（accounts.js）。
-STATIC_ASSETS_SHA256 = "a6c2fefc1100b1c4604fc8887ce251cfb7d579c6f9196f7e0b9d82140ccbdae4"
+CACHE_GENERATION = "20260909-pp1"  # 弹窗拦截提醒批：openPopup 单通道 + COPY.common.popupBlocked 锚点。
+STATIC_ASSETS_SHA256 = "8d9679b142a3716d9b3e31bcfd41dbc9170c71e8dc378fa2ffa6ff7e6ac7958d"
 
 
 def _static_assets_digest() -> str:

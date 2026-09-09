@@ -10,7 +10,7 @@
    但绑定都只在函数体内使用，ESM 允许）。
    core/search/results/facets/interactions/browse/accounts 同样经 import 取本文件导出
    （绞杀桥全退役）。 */
-import { API, $, escapeHtml, MOTION, ghostExit, nsKey, pushHistChatOnly, setHistHooks, toast, currentAccountScope } from "#core";
+import { API, $, escapeHtml, MOTION, ghostExit, nsKey, openPopup, pushHistChatOnly, setHistHooks, toast, currentAccountScope } from "#core";
 import { cbPushFrame, cbRowsFrom, cbSummary, CB_MAX_FRAMES, cbMsgFbNext, cbMsgCommentText, cbMsgForkable, searchFactsReceiptText, plansNeedActReceipt, PLAN_CANCELLED_FALLBACK_ZH } from "#board_core";
 import { applyRecommendResult, bumpRecSeq, LAST_RECOMMEND_DATA, landRecommendResult,
     recSeqNow, runRecommend, searchParamSnapshot, setLastRecommendData, setPrelimBadge } from "#search";
@@ -821,8 +821,7 @@ function cbBranchFromHere() {
     // 并换上一个新 convId（cbAdoptAsBranch）——此后两边的历史记录分成两条对话。
     const conv = cbConvId();
     const url = location.pathname + "?fork=" + encodeURIComponent(conv + ":" + (_cbCursor + 1));
-    window.open(url, "_blank", "noopener");
-    toast("已在新标签页打开分支；本标签页保持不变");
+    if (openPopup(url)) toast("已在新标签页打开分支；本标签页保持不变");
 }
 
 /* 新标签页分支落点（?fork=，browse.js initHistWin 调用）：会话已按历史前缀重建好，
@@ -957,8 +956,7 @@ function _cbMsgFork(entry) {
     // 与 cbBranchFromHere 同一落点格式（?fork=<convId>:<N>，N = 前 N 轮检索快照）——
     // 浏览器里新开标签页，本窗口原样保留；新标签页由 browse.js 重建前缀并换新 convId。
     const url = location.pathname + "?fork=" + encodeURIComponent(cbConvId() + ":" + (idx + 1));
-    window.open(url, "_blank", "noopener");
-    toast("已在新标签页打开分支；本标签页保持不变");
+    if (openPopup(url)) toast("已在新标签页打开分支；本标签页保持不变");
 }
 
 function _cbMsgCommentToggle(entry) {

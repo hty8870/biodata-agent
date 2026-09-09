@@ -47,8 +47,10 @@ def client(tmp_path, monkeypatch):
     _reset_job()
     monkeypatch.setenv("BIODATA_ACCOUNTS_FILE", str(tmp_path / "accounts.json"))
     monkeypatch.setenv("BIODATA_SESSIONS_FILE", str(tmp_path / "sessions.json"))
+    monkeypatch.setenv("BIODATA_JOBS_DB", str(tmp_path / "jobs.sqlite"))  # 持久镜像落 tmp，测试密闭
     monkeypatch.delenv("BIODATA_REQUIRE_ACCOUNT", raising=False)
     monkeypatch.delenv("BIODATA_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("BIODATA_JOB_BACKEND", raising=False)             # 本文件只测默认线程路径
     with TestClient(webapp.app, base_url="http://127.0.0.1",
                     client=("127.0.0.1", 50000)) as c:   # 对端回环：admin 端点 loopback 闸依赖它
         yield c
@@ -61,6 +63,7 @@ def _reset_job() -> None:
     with webapp._CORPUS_SYNC_JOB_LOCK:
         webapp._CORPUS_SYNC_JOB.update(
             status="idle", started_at=None, finished_at=None, result=None, error=None)
+    webapp._CORPUS_SYNC_RECONCILED = False   # 每测试重新允许一次镜像对账
 
 
 def _wait_job(timeout_s: float = 10.0) -> dict:

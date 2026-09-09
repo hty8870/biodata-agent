@@ -1,3 +1,0 @@
-# Install as /opt/biodata-web/deploy-policy.conf, owner root:root, mode 600.
-# Data only: do not add quotes, shell expansion, credentials, tags, or extra keys.
-REGISTRY_IMAGE=registry.example.com/namespace/biodata-web

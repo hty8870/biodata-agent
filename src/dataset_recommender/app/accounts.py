@@ -11,6 +11,12 @@
   重新登录」的根因）。会话是**可再生**的（丢了 = 重新登录，不丢账户数据），故会话库 fail-open
   （缺失/损坏 → 空库全体登出），与账户库的 fail-closed 相反。cookie 由接口层置 `HttpOnly` +
   `SameSite=Strict`（loopback http，无需 Secure）。
+- 会话可选 **Redis 后端**（`BIODATA_SESSION_STORE=redis` + `BIODATA_REDIS_URL`，见
+  `app/redis_sessions.py`）：供多进程 / 多实例形态共享登录态；**默认不设这两个变量时，内存 +
+  JSON 快照路径逐字节不变**（Redis 侧模块也只在实际启用时才被 import）。Redis 后端的 fail 语义
+  与文件后端一致——会话可再生，故 resolve/destroy 失败 fail-open（登出/丢掉，绝不因存储抖动 500），
+  create 失败如实抛 `AccountError`；`BIODATA_SESSION_STORE` 写成其他非空值则 fail-closed 报
+  `bad_config`（配置笔误不许静默降级成内存后端，那会让会话悄悄不跨进程）。
 - 用户库 = 被 gitignore 的本地 JSON（默认 `.userdata/accounts.json`，`BIODATA_ACCOUNTS_FILE` 可覆盖）；
   **不进版本库、不进交付包**（不在 release allowlist 的 ROOT_DIRS 内）。会话库同理
   （`.userdata/sessions.json`，`BIODATA_SESSIONS_FILE` 可覆盖）。
@@ -57,6 +63,7 @@ _DUMMY_SALT = b"\x00" * _SALT_BYTES
 _LOCK = threading.RLock()
 _SESSIONS: dict[str, dict[str, Any]] = {}   # token -> {user_id, username, expires_at}
 _FAILS: dict[str, list[float]] = {}         # username -> 近期失败时间戳
+_REDIS_SESSION_STORE: "Any | None" = None   # Redis 会话后端惰性单例（None = 未启用或尚未建）
 
 
 class AccountError(Exception):
@@ -275,7 +282,46 @@ def authenticate(username: str, password: str, *, store_path: Path) -> PublicUse
         return PublicUser(record["id"], record["username"])
 
 
+def _redis_store_if_enabled() -> "Any | None":
+    """按 env 决定会话后端：`BIODATA_SESSION_STORE=redis` → 惰性建 `RedisSessionStore` 单例。
+
+    - 空 / 未设 → None（默认内存 + JSON 快照路径，行为逐字节不变）；
+    - `redis` → 建/复用单例（参数取本模块既有常量，保证两后端 TTL/熵同源）；
+    - 其他非空值 → `AccountError("bad_config")`（配置笔误 fail-closed，绝不静默降级到内存后端——
+      那会让会话悄悄不跨进程，是比直接报错更难查的故障）。
+
+    Redis 侧模块在函数体内 import：默认形态不加载 redis 依赖链（最小安装无 redis 包）。
+    """
+    mode = os.environ.get("BIODATA_SESSION_STORE", "").strip().lower()
+    if not mode:
+        return None
+    if mode != "redis":
+        raise AccountError(
+            "bad_config",
+            f"BIODATA_SESSION_STORE 只支持 redis（当前收到 {mode!r}）；请改正或留空以使用默认内存后端。",
+        )
+    global _REDIS_SESSION_STORE
+    if _REDIS_SESSION_STORE is None:
+        from .redis_sessions import RedisSessionStore
+        from .redis_store import RedisUnavailable
+        try:
+            _REDIS_SESSION_STORE = RedisSessionStore(
+                ttl_seconds=_SESSION_TTL,
+                token_bytes=_SESSION_BYTES,
+            )
+        except RedisUnavailable as exc:   # 建连期异常（如缺包）翻成本模块错误契约，code 原样透传
+            raise AccountError(exc.code, exc.message) from exc
+    return _REDIS_SESSION_STORE
+
+
 def create_session(user: PublicUser, *, sessions_path: Path | None = None) -> str:
+    store = _redis_store_if_enabled()
+    if store is not None:
+        from .redis_store import RedisUnavailable   # 惰性 import：默认形态零新 import 边
+        try:
+            return store.create(user)
+        except RedisUnavailable as exc:
+            raise AccountError(exc.code, exc.message) from exc
     token = secrets.token_urlsafe(_SESSION_BYTES)
     now = _now()
     with _LOCK:
@@ -290,6 +336,12 @@ def create_session(user: PublicUser, *, sessions_path: Path | None = None) -> st
 def resolve_session(token: str | None, *, sessions_path: Path | None = None) -> PublicUser | None:
     if not token:
         return None
+    store = _redis_store_if_enabled()
+    if store is not None:
+        sess = store.resolve(token)   # Redis 侧 fail-open：不可用/畸形/过期 → None
+        if sess is None:
+            return None
+        return PublicUser(sess["user_id"], sess["username"])
     with _LOCK:
         _hydrate_sessions(sessions_path)
         sess = _SESSIONS.get(token)
@@ -306,6 +358,10 @@ def resolve_session(token: str | None, *, sessions_path: Path | None = None) -> 
 def destroy_session(token: str | None, *, sessions_path: Path | None = None) -> None:
     if not token:
         return
+    store = _redis_store_if_enabled()
+    if store is not None:
+        store.destroy(token)   # Redis 侧 fail-open：删除失败静默吞掉
+        return
     with _LOCK:
         _hydrate_sessions(sessions_path)
         if _SESSIONS.pop(token, None) is not None and sessions_path is not None:
@@ -313,7 +369,15 @@ def destroy_session(token: str | None, *, sessions_path: Path | None = None) -> 
 
 
 def _reset_state_for_tests() -> None:
-    """仅供测试：清空进程内会话与失败计数（不碰用户库文件）。"""
+    """仅供测试：清空进程内会话与失败计数（不碰用户库文件），并复位 Redis 后端单例。"""
+    global _REDIS_SESSION_STORE
     with _LOCK:
         _SESSIONS.clear()
         _FAILS.clear()
+        _REDIS_SESSION_STORE = None
+    # Redis 侧单例与共享连接只在「本进程确实 import 过 redis_store」时复位；默认形态
+    # （env 未设）不引入任何 import 边，也不加载 redis 依赖链。
+    import sys
+    if "dataset_recommender.app.redis_store" in sys.modules:
+        from . import redis_store
+        redis_store._reset_for_tests()

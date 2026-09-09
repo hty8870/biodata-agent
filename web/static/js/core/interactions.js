@@ -6,7 +6,7 @@
    runDiagnose 与 bs、reuse_pack 的 buildReusePack/setReuseScope、fav_folders 的
    toggleFavFolderManage 经 import 取（互调成环——绑定都只在函数体内使用，ESM 允许）。
    boot 与 search/browse/shell/results 经 import 取本文件导出（绞杀桥已全退役）。 */
-import { API, LS, MOTION, REDUCE_MOTION, $, clampInt, copyTextAny, escapeHtml, nsKey, prettySource, readJSON, toast, writeJSON } from "#core";
+import { API, LS, MOTION, REDUCE_MOTION, $, clampInt, copyTextAny, escapeHtml, nsKey, openPopup, prettySource, readJSON, toast, writeJSON } from "#core";
 import { closeFilesModal } from "#cards";
 import { closeMemoryModal, renderMemorySuggestions, setRememberSearchAvailable } from "#memory";
 import { animateConsoleWidth } from "#progress";
@@ -309,7 +309,7 @@ export function bind() {
             const hadSession = !!qi.value.trim()
                 || document.querySelector('.view[data-view="query"]').classList.contains("has-results");
             if (hadSession) {
-                window.open(location.pathname, "_blank");   // 用户手势内开新标签页，浏览器不拦
+                openPopup(location.pathname);   // 用户手势内开新标签页；万一被拦由 openPopup 统一提醒
             } else {
                 qi.focus();   // 已是空白查询页：不开重复标签，原地聚焦即可
             }
