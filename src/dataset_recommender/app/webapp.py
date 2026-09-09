@@ -943,8 +943,9 @@ async def _account_gate(request: Request, call_next):
     if path.startswith("/api/"):
         # 任务 3（2026-08-26 基线+补丁包）：会话解析提前到闸前、且不受护栏开关控制——只要
         # 请求带有效会话（含本机登录态），本请求的语料读写就绑定该账户的补丁包；无会话/匿名
-        # → user None → 不绑定，读写路径与历史逐字节一致。resolve_session 是进程内 dict 命中
-        # （_hydrate_sessions 一次性把会话库载入内存），每请求成本可忽略。
+        # → user None → 不绑定，读写路径与历史逐字节一致。resolve_session 默认是进程内 dict
+        # 命中（_hydrate_sessions 一次性把会话库载入内存），每请求成本可忽略；opt-in Redis
+        # 会话后端（BIODATA_SESSION_STORE=redis）下是每请求一次 Redis GET，毫秒级。
         user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
     if (_account_gate_required() and path.startswith("/api/")
             and path not in _AUTH_OPEN_PATHS and user is None):
@@ -3571,6 +3572,13 @@ def api_curate_check_updates(payload: CurateCheckUpdatesRequest, request: Reques
 # （原子替换 + recall_api.invalidate_vectors()）。单飞吸收并发：running 中重复触发不新建、
 # 不抛 sync_busy 给调用方，返回同一个 job 的现状。
 # guard off（本机形态）不经过这里：/api/curate/sync-updates 保持请求内阻塞，逐字节不变。
+#
+# 2026-09-08 Redis/MQ 批（默认线程路径一行不动，两个 opt-in 增强）：
+# ① durable_jobs SQLite 持久镜像——状态跃迁写穿透 + 进程重启对账（running 孤儿如实翻
+# failed）+ 全新进程 idle 时回落呈现上一轮终态，均 best-effort，失败只告警不返炸；
+# ② env BIODATA_JOB_BACKEND=rq → start/snapshot 委托 rq_jobs（Redis 状态 hash + RQ worker
+# 跨进程执行；worker 跑完后 web 进程经 needs_web_invalidate 旗标在本进程补做缓存失效）。
+# 两条路径互斥不双写；未设 env 时下列代码行为与历史逐字节一致。
 
 _CORPUS_SYNC_JOB_LOCK = threading.Lock()
 _CORPUS_SYNC_JOB: dict = {
@@ -3582,15 +3590,72 @@ _CORPUS_SYNC_JOB: dict = {
 }
 #: 向量重建子进程超时（秒）：全语料嵌入是十分钟级任务，20 分钟上限兜底防挂死。
 _CORPUS_SYNC_VECTOR_TIMEOUT_S = 20 * 60
+#: durable_jobs 表按 kind 一行；本模块只有这一类 job。
+_CORPUS_SYNC_JOB_KIND = "corpus_sync"
+#: 每进程只对持久镜像 reconcile 一次（进程启动后首次触碰 job 状态时）。
+_CORPUS_SYNC_RECONCILED = False
 
 
 def _corpus_sync_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
+def _corpus_sync_jobs_db() -> Path:
+    """持久镜像库路径（实例 userdata 层 / env 覆盖，规则真源在 durable_jobs）。"""
+    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+    return durable_jobs.default_db_path(PROJECT_ROOT)
+
+
+def _corpus_sync_mirror_warn(step: str, exc: Exception) -> None:
+    """持久镜像写失败只记告警，绝不反过来炸掉 job 本体/状态端点（镜像是增强，不是真源）。"""
+    print(f"[corpus-sync] 持久镜像 {step} 失败（不影响任务本身）：{type(exc).__name__}: {exc}",
+          file=sys.stderr)
+
+
+def _corpus_sync_reconcile_once() -> None:
+    """进程启动后首次触碰 job 状态时镜像对账：镜像停在 running = 上一进程被打断，如实翻
+    failed（单 worker 前提下成立——本进程没发起它，running 镜像即孤儿）。"""
+    global _CORPUS_SYNC_RECONCILED
+    if _CORPUS_SYNC_RECONCILED:
+        return
+    _CORPUS_SYNC_RECONCILED = True
+    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+    try:
+        durable_jobs.reconcile_interrupted(
+            _CORPUS_SYNC_JOB_KIND, "进程重启，上一次同步任务被中断。", db_path=_corpus_sync_jobs_db())
+    except Exception as exc:
+        _corpus_sync_mirror_warn("reconcile", exc)
+
+
 def _corpus_sync_job_snapshot() -> dict:
+    """job 状态快照。RQ 后端点亮时真源在 Redis（读不到如实 503，不伪造 idle）；默认路径
+    返回内存快照，全新进程（idle 且从未跑过）时回落到持久镜像——重启不丢上一轮终态。"""
+    from . import rq_jobs  # 惰性：webapp 顶层零新 import 边
+    if rq_jobs.backend_active():
+        try:
+            snap = rq_jobs.snapshot()
+        except rq_jobs.JobBackendError as exc:
+            raise HTTPException(status_code=503, detail=exc.message,
+                                headers={"X-Error-Code": exc.code}) from exc
+        if snap["status"] in ("done", "failed") and rq_jobs.consume_web_invalidate_flag():
+            # worker 在独立进程跑完：它清不了 web 进程的内存缓存，真正有效的失效在这里补做。
+            invalidate_external_cache()
+            from ..retrieval import recall_api  # 惰性：webapp 顶层零新 import 边
+            recall_api.invalidate_vectors()
+        return snap
+    _corpus_sync_reconcile_once()
     with _CORPUS_SYNC_JOB_LOCK:
-        return dict(_CORPUS_SYNC_JOB)
+        snap = dict(_CORPUS_SYNC_JOB)
+    if snap["status"] == "idle" and snap["finished_at"] is None:
+        from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+        try:
+            mirrored = durable_jobs.load(_CORPUS_SYNC_JOB_KIND, db_path=_corpus_sync_jobs_db())
+        except Exception as exc:
+            _corpus_sync_mirror_warn("load", exc)
+            mirrored = None
+        if mirrored is not None:
+            return mirrored
+    return snap
 
 
 def _corpus_sync_rebuild_vectors() -> "str | None":
@@ -3631,41 +3696,77 @@ def _corpus_sync_rebuild_vectors() -> "str | None":
     return None
 
 
+def _corpus_sync_execute(sources: "list[str] | None") -> dict:
+    """job 第一阶段执行体：sync_updates（显式无补丁作用域 → 共享写层 upload_*）。单通道——
+    默认线程路径与 RQ worker 路径（rq_jobs.corpus_sync_entry）共用这一份实现，禁止平行
+    写第二份。返回 operation receipt；异常原样上抛，由调用方收口为 failed。"""
+    from ..corpus import corpus_curation as cc
+    from ..corpus.patch_package import unbound_patch_scope
+
+    with unbound_patch_scope():
+        return cc.sync_updates(sources, project_root=PROJECT_ROOT)
+
+
+def _corpus_sync_job_finalize(status: str, result: "dict | None", error: "str | None") -> None:
+    """终态落账（默认线程路径）：内存快照更新 + 持久镜像 best-effort 写穿透。镜像失败只
+    告警——运行期事实源仍是内存快照，镜像只服务重启对账。"""
+    finished_at = _corpus_sync_now()
+    with _CORPUS_SYNC_JOB_LOCK:
+        _CORPUS_SYNC_JOB.update(
+            status=status, finished_at=finished_at, result=result, error=error)
+    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+    try:
+        durable_jobs.record_terminal(
+            _CORPUS_SYNC_JOB_KIND, status, finished_at, result, error,
+            db_path=_corpus_sync_jobs_db())
+    except Exception as exc:
+        _corpus_sync_mirror_warn("record_terminal", exc)
+
+
 def _corpus_sync_job_run(sources: "list[str] | None") -> None:
-    """job 线程体：sync → 外部库缓存失效 →（有新增）向量重建。一切异常收口为 failed 状态，
-    绝不漏栈到线程外；结果/错误都进 _CORPUS_SYNC_JOB 供状态端点如实呈现。"""
+    """job 线程体（默认线程路径）：sync → 外部库缓存失效 →（有新增）向量重建。一切异常收口
+    为 failed 状态，绝不漏栈到线程外；结果/错误都进 _CORPUS_SYNC_JOB 供状态端点如实呈现，
+    并经 _corpus_sync_job_finalize 写穿透到持久镜像。"""
     result = None
     try:
-        from ..corpus import corpus_curation as cc
-        from ..corpus.patch_package import unbound_patch_scope
-
-        with unbound_patch_scope():
-            result = cc.sync_updates(sources, project_root=PROJECT_ROOT)
+        result = _corpus_sync_execute(sources)
         invalidate_external_cache()
         vec_err = None
         if int(result.get("imported_total") or 0) > 0:
             vec_err = _corpus_sync_rebuild_vectors()
-        with _CORPUS_SYNC_JOB_LOCK:
-            _CORPUS_SYNC_JOB.update(
-                status="failed" if vec_err else "done",
-                finished_at=_corpus_sync_now(),
-                result=result,
-                error=vec_err)
+        _corpus_sync_job_finalize("failed" if vec_err else "done", result, vec_err)
     except Exception as exc:  # 含 CurateError(sync_busy)：另一进程持整任务锁时如实 failed
         hint = getattr(exc, "hint", "") or str(exc) or type(exc).__name__
-        with _CORPUS_SYNC_JOB_LOCK:
-            _CORPUS_SYNC_JOB.update(
-                status="failed", finished_at=_corpus_sync_now(), result=result, error=hint)
+        _corpus_sync_job_finalize("failed", result, hint)
 
 
 def _corpus_sync_job_start(sources: "list[str] | None") -> dict:
-    """启动或附着语料同步 job（单飞：running 中不新建、不抛 sync_busy，直接返回现状快照）。"""
+    """启动或附着语料同步 job（单飞：running 中不新建、不抛 sync_busy，直接返回现状快照）。
+
+    env BIODATA_JOB_BACKEND=rq → 委托 rq_jobs（跨进程 worker 执行）；后端不可用如实 503，
+    不静默回落内存路径（用户明明开了 MQ，静默降级会变成查不出来的错觉）。默认路径先对
+    持久镜像做一次重启对账，置 running 后 best-effort 写穿透。"""
+    from . import rq_jobs  # 惰性：webapp 顶层零新 import 边
+    if rq_jobs.backend_active():
+        try:
+            return rq_jobs.start(sources)
+        except rq_jobs.JobBackendError as exc:
+            raise HTTPException(status_code=503, detail=exc.message,
+                                headers={"X-Error-Code": exc.code}) from exc
+    _corpus_sync_reconcile_once()
     with _CORPUS_SYNC_JOB_LOCK:
         if _CORPUS_SYNC_JOB["status"] == "running":
             return dict(_CORPUS_SYNC_JOB)
+        started_at = _corpus_sync_now()
         _CORPUS_SYNC_JOB.update(
-            status="running", started_at=_corpus_sync_now(),
+            status="running", started_at=started_at,
             finished_at=None, result=None, error=None)
+    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+    try:
+        durable_jobs.record_running(
+            _CORPUS_SYNC_JOB_KIND, started_at, db_path=_corpus_sync_jobs_db())
+    except Exception as exc:
+        _corpus_sync_mirror_warn("record_running", exc)
     worker = threading.Thread(
         target=_corpus_sync_job_run, args=(sources,), name="corpus-sync-job", daemon=True)
     worker.start()

@@ -41,9 +41,8 @@ deploy/web/ACCEPTANCE-CHECKLIST.md
 deploy/web/Dockerfile
 deploy/web/OIDC-SETUP.md
 deploy/web/README.md
-deploy/web/deploy-policy.conf.example
-deploy/web/deploy-release.sh
 deploy/web/deploy.sh
+deploy/web/docker-compose.mq.example.yml
 deploy/web/docker-compose.web.yml
 deploy/web/nginx.biodata.conf.example
 deploy/web/requirements-web.lock
@@ -122,6 +121,7 @@ requirements/requirements-ci.txt
 requirements/requirements-embeddings.txt
 requirements/requirements-langchain.txt
 requirements/requirements-loadsmoke.txt
+requirements/requirements-mq.txt
 requirements/requirements-webview.txt
 requirements/requirements.txt
 scripts/aggregate_multicall_arms.py
@@ -233,13 +233,18 @@ src/dataset_recommender/app/board.py
 src/dataset_recommender/app/cli.py
 src/dataset_recommender/app/desktop_launcher.py
 src/dataset_recommender/app/desktop_launcher_win32.py
+src/dataset_recommender/app/durable_jobs.py
 src/dataset_recommender/app/limits.py
 src/dataset_recommender/app/llm_quota.py
 src/dataset_recommender/app/mcp_server.py
 src/dataset_recommender/app/mcp_tokens.py
 src/dataset_recommender/app/model_installer.py
 src/dataset_recommender/app/recommend_rows.py
+src/dataset_recommender/app/redis_sessions.py
+src/dataset_recommender/app/redis_store.py
 src/dataset_recommender/app/request_validation.py
+src/dataset_recommender/app/rq_jobs.py
+src/dataset_recommender/app/rq_worker.py
 src/dataset_recommender/app/runtime_paths.py
 src/dataset_recommender/app/webapp.py
 src/dataset_recommender/app/webview_shell.py
@@ -410,6 +415,7 @@ tests/test_downloads.py
 tests/test_dream.py
 tests/test_dream_core_behavior.py
 tests/test_dream_frontend.py
+tests/test_durable_jobs.py
 tests/test_empty_query_and_action_audit.py
 tests/test_env_hardening.py
 tests/test_env_template_contract.py
@@ -504,6 +510,7 @@ tests/test_ranking_experiment_contract.py
 tests/test_ranking_interleave.py
 tests/test_reachability.py
 tests/test_recall_api.py
+tests/test_redis_sessions.py
 tests/test_relative_dates.py
 tests/test_release_builder.py
 tests/test_release_version_contract.py
@@ -517,6 +524,7 @@ tests/test_retriever_rerank_order.py
 tests/test_reuse_pack.py
 tests/test_reuse_pack_export.py
 tests/test_reuse_pack_snapshot.py
+tests/test_rq_jobs.py
 tests/test_run_web_guard_config.py
 tests/test_run_web_warmup.py
 tests/test_runtime_first_launch_smoke.py
@@ -577,6 +585,7 @@ tests/test_webapp_custom_endpoint.py
 tests/test_webapp_endpoint_security.py
 tests/test_webapp_guard_hardening.py
 tests/test_webapp_hardening.py
+tests/test_webapp_job_backends.py
 tests/test_webapp_local_model.py
 tests/test_webapp_request_logging.py
 tests/test_webapp_reuse_pack.py

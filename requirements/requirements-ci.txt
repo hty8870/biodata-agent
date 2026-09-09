@@ -24,3 +24,9 @@ cryptography==50.0.1
 # 函数内 import numpy）需要 numpy；产品自身不直接 import。numpy 2.5.x 要求
 # Python>=3.12，devcontext 测试只在 full profile（CI=3.12）运行，min 3.10 job 不装。
 numpy==2.5.2; python_version >= '3.12'
+# Redis/MQ 批（2026-09-08）：test_redis_sessions / test_rq_jobs / test_webapp_job_backends
+# 硬 import redis/rq/fakeredis（可选后端的测试门）。版本跟随 requirements-mq.txt 下界钉死，
+# fakeredis 仅测试用（生产代码不 import）。
+redis==8.1.0
+rq==2.12.0
+fakeredis==2.37.1

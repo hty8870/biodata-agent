@@ -13,6 +13,11 @@ export const COPY = Object.freeze({
         clear: "清空",
         confirmClear: "再点一次确认清空",
         unnamedDataset: "（未命名）",
+        /* 弹窗/下载被浏览器拦截时的统一提醒（2026-09-09 用户点图：试用时下载触发弹窗拦截，
+           用户未必发现窗口被拦、也不知那意味着什么）。唯一定义点：openPopup（core.js）
+           被拦 toast、downloads.js 发射 toast 与面板页脚、act.js 下载回执共用这一句，
+           不许在各调用点另写变体。 */
+        popupBlocked: "没反应？多半是浏览器拦截了弹窗或下载：看地址栏右侧的拦截提示图标，允许本站的弹窗/下载后重试。",
     }),
     conditions: Object.freeze({ include: "纳入条件", exclude: "排除条件" }),
     introductionFacts: Object.freeze(["数据来源", "物种", "组织", "疾病", "技术与平台", "样本量", "发表时间", "原始数据"]),
