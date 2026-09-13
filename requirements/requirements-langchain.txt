@@ -3,4 +3,4 @@
 # 安装：pip install -r requirements-langchain.txt
 langgraph>=1.2.11
 langchain-core>=1.6.2
-langchain-openai>=1.6.0
+langchain-openai>=1.6.2
