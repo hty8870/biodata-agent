@@ -401,25 +401,38 @@ def test_auto_rescue_is_retired_from_search():
     assert "没有命中，我试着换个说法再查一次" not in code
 
 
-def test_rescue_option_strip_is_wired_in_board():
-    """：救回选择条接线钉——零命中 pill 渲染「点击处理」+ 视觉区分类（ft-pill--zero）+
-    data-ft-zero；选择条可开可关（openRescueStrip/closeRescueStrip/maybeSyncRescueStrip/
-    _rescueStripClick）；提交项作为用户下一句经 ubSubmit 走既有管线，不占对话流。"""
+def test_relax_card_auto_popup_is_wired_in_board():
+    """：零命中自动弹卡接线钉（2026-09-14 收编）——零命中 pill 渲染「点击处理」+
+    视觉区分类（ft-pill--zero）+ data-ft-zero 不变；最新活跃 pill 零命中 →
+    maybeAutoRelaxCard 兜底弹 ask.relax 选择卡（环内优先不抢 + _relaxDismissed 按批记忆）；
+    作答走 cbChoose askrelax 分支 → cbCommit suppressed_constraints 零 LLM 重搜。"""
     assert "ft-pill--zero" in BOARD
     assert "点击处理" in BOARD
     assert "data-ft-zero" in BOARD
-    for fn in ("openRescueStrip", "closeRescueStrip", "maybeSyncRescueStrip", "_rescueStripClick"):
-        assert re.search(rf"function {fn}\(", BOARD), f"board.js 缺救回选择条函数 {fn}"
-    assert 'ubSubmit("chat", { text: o.submitText })' in BOARD, "选择条提交没走既有管线"
+    for fn in ("maybeAutoRelaxCard", "_autoRelaxCardOpen", "askRelaxShow"):
+        assert re.search(rf"function {fn}\(", BOARD), f"board.js 缺自动弹卡函数 {fn}"
+    assert "_relaxDismissed" in BOARD, "自动卡 dismiss 须按 batchId 记忆（同批不再自动弹）"
+    assert 'data-cb-choice="askrelax:' in BOARD, "选择卡选项没走 cbChoose askrelax 通道"
+    assert "suppressed_constraints: (opt.suppress || []).slice()" in BOARD, \
+        "作答执行没走 cbCommit suppressed_constraints 零 LLM 重搜"
+    # legacy 单批零命中（纯 /api/recommend 路径，AI 关走这条）补网：包成单批视图，零命中 pill
+    # 才存在——自动弹卡与 pill「点击处理」重开都锚在它上（e2e _relax1_check 抓到过无 pill 不弹卡）。
+    wrap = re.search(r"data\.result_batches = \[\{ batch_id: _zid.*?\}\];", BOARD, re.S)
+    assert wrap, "legacy 零命中未包装成单批视图（零命中 pill 无从存在，自动弹卡不触发）"
+    assert 'data.active_batch = _zid' in BOARD
+    assert '"fz" + frame.id' in BOARD, "批 id 须带帧号——dismiss 记忆按批 id 记，固定 id 会跨查询互相吞没"
+    assert "const _zpayload = Object.assign({}, data);" in BOARD, \
+        "payload 必须浅拷贝——直引 data 会让 LAST_RECOMMEND_DATA 自引用成环（JSON 序列化即炸）"
+    assert "flowSetPills(_flowPillsFrom(data.result_batches, _zid, false))" in BOARD
 
 
-def test_rescue_option_derivation_lives_in_batch_select():
-    """：零命中救回纯逻辑集中在 batch_select.js——isZeroHitBatch（payload.results 空数组）
-    deriveRescueOptions（relaxation_options → degraded_search → query_constraints → 兜底换词）、
+def test_relax_card_derivation_lives_in_batch_select():
+    """：零命中放松纯逻辑集中在 batch_select.js——isZeroHitBatch（payload.results 空数组）、
+    deriveRelaxCard（relaxation_options → ask.relax 卡 payload，suppress 原样透传整组替换语义）、
     latestActiveBatchId（最后一个回执 entry 的活跃批）。board 从它取用，不各抄一份。
     「点击处理」只在零命中批是最新结果（最后回执 entry 的活跃批）时出现。"""
     BS = _read("core/batch_select.js")
-    for fn in ("isZeroHitBatch", "deriveRescueOptions", "latestActiveBatchId"):
+    for fn in ("isZeroHitBatch", "deriveRelaxCard", "latestActiveBatchId"):
         assert re.search(rf"export function {fn}\(", BS), f"batch_select.js 缺导出 {fn}"
     # 渲染 & 点击都以「最后一个回执 entry 的活跃批」判定（数据-ft-zero-latest）
     assert "latestActiveBatchId(_cbLog)" in BOARD, "渲染侧没按最新活跃批判定「点击处理」"
@@ -1188,9 +1201,10 @@ def test_loading_never_double_fires_with_streaming():
         "startProgress 的 loading 幂等守卫不在了——接手方会重复挂 loading"
     )
     sub = _strip_comments(_fn_body(BOARD, "export async function ubSubmit(source, opts)"))
-    assert "if (streamAgent)" in sub, "流式分支必须还在（SSE 入口）"
+    assert "if (!reply && streamAgent)" in sub, "Legacy SSE remains the fallback when no durable reply is available"
+    assert "startConversationRun" in sub
     # 手工 loading 舞蹈已随孤 % 修复退役：流式分支里不许再出现绕过 startProgress 的裸挂类
-    stream_seg = sub.split("if (streamAgent)", 1)[1]
+    stream_seg = sub.split("if (!reply && streamAgent)", 1)[1]
     assert 'classList.add("loading")' not in stream_seg, (
         "流式档直接 startProgress（loading 与在途旗标统一起跑），不许再手工裸挂 loading"
     )
@@ -1286,15 +1300,32 @@ def test_popup_blocked_hint_single_anchor_and_wiring():
     """2026-09-09 用户点图：下载/新窗口被浏览器弹窗拦截时用户常无感知、也不知被拦意味着
     什么。提醒文案只在 COPY.common.popupBlocked 一处定义；core.js 的 openPopup 是程序化
     新标签页唯一出口，被拦（window.open 返回 null）统一 toast；downloads.js 发射 toast
-    与面板页脚、act.js 下载回执共用同一锚点，不许各调用点另写变体。"""
+    与面板页脚、act.js 下载回执共用同一锚点，不许各调用点另写变体。
+    2026-09-11 补强：用户实测瞬时 toast（≤4s）根本没看到——所有携带拦截提醒的 toast
+    一律 sticky（常驻到用户点一下才关），瞬时提醒对此类场景无效。"""
     copy_js = _read("core/copy.js")
     assert "popupBlocked:" in copy_js, "拦截提醒文案必须在 COPY.common 单一定义"
     core = _strip_comments(CORE)
     fn = core.split("export function openPopup(", 1)[1]
-    assert "window.open(" in fn and "toast(COPY.common.popupBlocked)" in fn, (
-        "openPopup 必须在 window.open 被拦（返回 null）时 toast 统一提醒")
+    assert "window.open(" in fn and "toast(COPY.common.popupBlocked, { sticky: true })" in fn, (
+        "openPopup 必须在 window.open 被拦（返回 null）时 sticky toast 统一提醒")
+    assert "export function toast(msg, opts)" in core and 'classList.toggle("sticky", sticky)' in core, (
+        "core.js 的 toast 必须支持 sticky 选项（常驻到点击关闭）")
     dl = _strip_comments(_read("core/downloads.js"))
     assert dl.count("COPY.common.popupBlocked") >= 2, "发射 toast 与面板页脚都必须接同一提醒锚点"
+    assert '+ COPY.common.popupBlocked, { sticky: true }' in dl, (
+        "下载发射 toast 必须 sticky——瞬时 toast 用户看不到")
+    assert 'q.status === "queued" || q.status === "fired"' in dl, (
+        "点下载的成功判定必须含 fired：dlqEnqueue(auto:true) 同步泵出队首后单文件"
+        "唯一条目已是 fired，只数 queued 会把首次成功下载误判进「没有重复下载」分支")
+    assert 'window.open(item.url, "_blank")' in dl, (
+        "_fire 跨域通道必须 _blank+null 检测：noopener 恒返 null、具名复用也返 null"
+        "（2026-09-12 探针实测），唯 _blank 的 null 能如实区分「被拦」")
+    assert "w.opener = null" in dl, "_fire 防 tabnabbing 靠手动置 opener，不用 noopener 特性"
+    assert "sameOrigin" in dl, "_fire 同源通道原地静默下载（锚点+download 属性），不开标签"
+    assert "if (!_fire(_queue[i]))" in dl, "_pump 必须在被拦（_fire 返 false）时断链留队列"
+    assert ', "_blank", "noopener")' not in core, (
+        "openPopup 不得再用 noopener 特性（恒返 null=误报拦截），opener 手动置 null")
     assert "COPY.common.popupBlocked" in _strip_comments(ACT), "act.js 下载回执必须带拦截提醒"
     for mod in ("search/browse.js", "panel/board.js", "core/interactions.js"):
         assert "window.open(" not in _strip_comments(_read(mod)), (
@@ -1505,30 +1536,47 @@ def test_batch_select_spec_passes_in_node() -> None:
     assert r.returncode == 0, f"batch_select_spec.mjs 失败：\n{r.stdout}\n{r.stderr}"
 
 
-def test_relax_phrase_templates_consistent_results_and_batch_select() -> None:
-    """ 契约钉：results.js 空态卡放宽 chips（RELAX_GROUPS.verb）与 batch_select.js
-    选择条选项（deriveRescueOptions → _relaxUtterance）必须用**同一套** drop/only 短语模板——同一放宽
-    动作在空态卡与选择条两处文案不许漂移。batch_select 是可 node 直 import 的纯核，真跑 deriveRescueOptions
-    取输出作真源；results.js 的 RELAX_GROUPS.verb 是字符串拼接函数，静态提取片段并断言能拼出同句。
-    两档（drop/only）都要钉。"""
-    script = (
-        f'import * as B from "{(STATIC / "js" / "core" / "batch_select.js").as_uri()}";\n'
-        "const b = { batch_id:'x', kind:'rank', query_effective:'q',\n"
-        "  payload:{ ok:true, results:[], search_trace:{steps:[{id:'rule_rank',status:'used'}]},\n"
-        "    relaxation_options:[ {key:'dim:tissue',kind:'drop',label:'组织',count:12},\n"
-        "                          {key:'only:species',kind:'only',label:'物种',count:8} ] } };\n"
-        "console.log(JSON.stringify(B.deriveRescueOptions(b, {max:10}).map(o => o.summary)));\n"
-    )
-    batch_phrases = _run_node(script, {}, suffix=".mjs")
-    assert batch_phrases == ["去掉「组织」条件再搜", "只按「物种」搜，其它条件都放开"], batch_phrases
-    # results.js 静态：RELAX_GROUPS 的 drop/only verb 模板必须能拼出上述同一句短语
-    res = _strip_comments(RESULTS)
-    assert re.search(r'去掉「"\s*\+\s*\w+\s*\+\s*"」条件再搜', res), (
-        "results.js RELAX_GROUPS 的 drop verb 必须与 batch_select.js 一致"
-        "（去掉「X」条件再搜）——空态卡与选择条文案不许漂移")
-    assert re.search(r'只按「"\s*\+\s*\w+\s*\+\s*"」搜，其它条件都放开', res), (
-        "results.js RELAX_GROUPS 的 only verb 必须与 batch_select.js 一致"
-        "（只按「X」搜，其它条件都放开）——空态卡与选择条文案不许漂移")
+def test_downloads_spec_passes_in_node() -> None:
+    """真行为：node 直跑 tests/js/downloads_spec.mjs（下载单通道计数语义规格）。
+
+    该规格此前只有静态字符串检查与 `node --check` 语法——规格本体从不执行。这里走与
+    batch_select_spec 相同的既有驱动层：断言**退出码**与**成功标志**（含断言计数），
+    Node 缺失行为与既有门一致（full 质量门的语法检查环节必有 node）。"""
+    node = _resolve_node()
+    assert node, "未找到 node（BIODATA_NODE 或 PATH）"
+    spec = ROOT / "tests" / "js" / "downloads_spec.mjs"
+    r = subprocess.run([node, str(spec)], cwd=ROOT, capture_output=True, text=True,
+                       encoding="utf-8", timeout=120)
+    assert r.returncode == 0, f"downloads_spec.mjs 失败：\n{r.stdout}\n{r.stderr}"
+    m = re.search(r"downloads_spec: PASS（(\d+) 项断言）", r.stdout)
+    assert m, f"缺成功标志或断言计数：\n{r.stdout}"
+    assert int(m.group(1)) >= 15, f"断言数异常偏少（{m.group(1)}），规格可能被掏空"
+
+
+def test_relax_card_wording_and_exec_single_channel() -> None:
+    """ 契约钉（2026-09-14 收编）：「放松哪个条件」只剩 ask.relax 选择卡一个用户触点——
+    渲染唯一（askRelaxShow：only→只按「X」搜 / drop→不按「X」筛）、执行唯一（cbChoose
+    askrelax 分支：所选 opt.suppress 原样下发 cbCommit，前端零合并零改写）。钉死渲染措辞
+    模板与执行透传，防第二触点/第二执行路径复活。"""
+    show = re.search(r"function askRelaxShow\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
+    assert show, "找不到 askRelaxShow 的函数体"
+    body = show.group(1)
+    assert re.search(r'只按「"\s*\+\s*\(o\.label', body), "only 档措辞模板变了（只按「X」搜）"
+    assert re.search(r'不按「"\s*\+\s*\(o\.label', body), "drop 档措辞模板变了（不按「X」筛）"
+    # 2026-09-14 用户评审：选项不内嵌示例数据集名（信息效率），卡层不再消费 preview；
+    # 卡面必须另起一行指出卡住的查询原句（一句话多句查询时不张冠李戴）。
+    assert "o.preview" not in body, "选项不得再内嵌预览数据集名（卡层 preview 已退役）"
+    assert "cb-relax-q" in body and "卡住的查询：「" in body, "卡面缺「卡住的查询」行"
+    # 执行通道：suppress 清单原样透传（服务端已按整组替换语义合并好）
+    choose = re.search(r"async function cbChoose\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
+    assert choose, "找不到 cbChoose 的函数体"
+    assert "suppressed_constraints: (opt.suppress || []).slice()" in choose.group(1), \
+        "作答执行必须把所选 suppress 原样下发（整组替换语义，前端零合并逻辑）"
+    # 退役面：旧触点的函数/样式钩子不得在交付代码里复活
+    for dead in ("deriveRescueOptions", "openRescueStrip", "closeRescueStrip",
+                 "applyRelaxation", "buildRelaxBlock", "relaxEffectiveHits"):
+        assert dead not in _strip_comments(BOARD), f"旧触点 {dead} 在 board.js 复活"
+        assert dead not in _strip_comments(RESULTS), f"旧触点 {dead} 在 results.js 复活"
 
 
 # ---------------------------------------------------------------- p11系统回复 = LLM final answer

@@ -264,6 +264,7 @@ def test_status_reports_version_and_tools_single_source():
     assert st["server_version"] == M._SERVER_VERSION
     assert st["tools"] == list(M._EXPECTED_TOOLS)
     assert set(M._EXPECTED_TOOLS) == {
+        "agent_chat", "agent_conversations", "agent_projects", "agent_task", "agent_replay", "agent_learning",
         "recommend_datasets", "get_file_manifest", "parse_constraints",
         "browse_datasets", "get_dataset_introduction", "assess_dataset_fair",
         "build_reuse_pack", "lookup_identifier", "find_compatible_datasets",

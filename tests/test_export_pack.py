@@ -46,6 +46,24 @@ FULL_FILES = list(dict.fromkeys(
     + ["provenance.md", "method-draft.md", "recipe.json"]))
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_corpus_write_marker(tmp_path_factory):
+    """把跨进程语料写代际标记的读路径钉进沙箱（与 test_download_manager / test_task_pack 同口径）。
+
+    真实语料装载会读 `<project_root>/.userdata/corpus_write_generation`；离线审计 harness
+    把 `.userdata` 一律当真实用户数据硬阻断，于是本文件所有依赖 `records` 的测试整片报错。
+    标记只是缓存代际令牌、读不到即空串（生产语义），这里用同语义的空沙箱路径隔离。
+    """
+    from dataset_recommender.corpus import corpus as _corpus
+
+    sandbox = tmp_path_factory.mktemp("userdata")
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(_corpus, "_write_marker_path",
+                   lambda root: sandbox / "corpus_write_generation")
+    yield
+    monkey.undo()
+
+
 @pytest.fixture(scope="module")
 def records():
     return corpus.load_full_corpus(ROOT / "database" / "base", ROOT)
@@ -137,7 +155,7 @@ def test_full_kind_includes_everything(snapshot, records):
 def test_manifest_lists_stable_identifier_url_and_verified_time(pack):
     md = next(f["text"] for f in export_pack.render_files(pack, "full") if f["path"] == "manifest.md")
     rows = pack["manifest_rows"]
-    resolved = [r for r in rows if r["status"]]
+    resolved = [r for r in rows if r["uid"] not in pack["unresolved"]]
     assert len(resolved) == 3 and len(pack["unresolved"]) == 1
     # 已核验/已排除带核验时间；待核验如实留空（"—"）
     verified = [r for r in resolved if r["status"] in ("已核验", "已排除")]
@@ -147,6 +165,26 @@ def test_manifest_lists_stable_identifier_url_and_verified_time(pack):
     tomb = next(r for r in rows if r["uid"] == "cxg:not-in-corpus")
     assert tomb["name"] == "（当前库中找不到）"
     assert "当前库中找不到" in md
+
+
+@pytest.mark.parametrize("status,decision", [
+    ("已排除", "排除"), ("已核验", "纳入"), ("待核验", "未裁决"), ("候选", "未裁决"),
+])
+def test_export_missing_candidate_preserves_saved_decision(status, decision):
+    snapshot = export_pack.sanitize_snapshot({"name": "Saved review", "candidates": [
+        {"uid": "missing:1", "status": status, "reason": "已保存的核对依据",
+         "verified_at": "2026-01-01"}]})
+    pack = export_pack.build_export_pack(snapshot, [], today="2026-01-02")
+    files = {f["path"]: f["text"] for f in export_pack.render_files(pack, "full")}
+    row = pack["manifest_rows"][0]
+    assert (row["status"], row["reason"], row["verified_at"]) == (
+        status, "已保存的核对依据", "2026-01-01")
+    assert row["name"] == "（当前库中找不到）" and row["url"] == ""
+    assert f"\t{status}\t{decision}\t已保存的核对依据\t2026-01-01" in files["candidates.tsv"]
+    assert "| （当前库中找不到） | missing:1 | 已保存的核对依据 | 2026-01-01 |" in files["candidates.md"]
+    assert f"{status} 1" in files["candidates.md"]
+    assert pack["items"] == [] and pack["citations"]["ris"] == ""
+    assert "missing:1" not in files["download/manifest.tsv"]
 
 
 def test_download_task_pack_reuses_task_pack(snapshot, records):
@@ -291,3 +329,32 @@ def test_empty_candidates_still_exportable(snapshot, records):
     assert pack["manifest_rows"] == []
     md = next(f["text"] for f in files if f["path"] == "manifest.md")
     assert "数据集清单" in md
+
+
+# ----------------------------------------------------------------- TSV 结构安全
+
+def test_tsv_columns_survive_tabs_and_newlines_in_free_text(snapshot, records):
+    """理由/标题里出现制表符或换行时，TSV 不许被撑出额外的列/行。
+
+    `_cell` 曾同时服务 Markdown 与 TSV，只清 `|`/`\\n`/`\\r` 不清 `\\t`——一个含制表符的
+    理由就让 manifest.tsv 8→9 列、candidates.tsv 6→7 列，机器可读证据整片错位。
+    """
+    snap = json.loads(json.dumps(snapshot))
+    snap["candidates"][0]["reason"] = "行内制表符\t与换行\n以及竖线 | 和回车 \r 都得单行化"
+    pack = export_pack.build_export_pack(snap, records, today="2026-08-22")
+    files = {f["path"]: f["text"] for f in export_pack.render_files(pack, "screening_record")}
+
+    manifest_rows = [ln for ln in files["manifest.tsv"].splitlines() if not ln.startswith("#")]
+    assert len(manifest_rows) == len(pack["manifest_rows"])   # 表头本身也是 `#` 注释行
+    assert all(len(ln.split("\t")) == 8 for ln in manifest_rows), \
+        [ln.split("\t") for ln in manifest_rows]
+
+    cand_rows = files["candidates.tsv"].splitlines()
+    assert all(len(ln.split("\t")) == 6 for ln in cand_rows), cand_rows
+
+    # 内容如实保留（只是折成单行）：制表符/换行都变成空格，没有丢信息
+    assert "行内制表符 与换行" in files["manifest.tsv"]
+    assert "行内制表符" in files["candidates.tsv"]
+    # Markdown 侧照旧：竖线转义仍在，且同样被单行化（表格不会被撑断）
+    assert "\\|" in files["manifest.md"]
+    assert "\t" not in files["manifest.md"] and "\r" not in files["manifest.md"]

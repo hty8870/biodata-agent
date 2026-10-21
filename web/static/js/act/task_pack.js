@@ -8,7 +8,7 @@
    2026-08-30：「真实数据下载」改道——不再服务端代下，面板底部主按钮把勾选
    交给统一下载引擎 core/downloads.js（/api/files 取主文件 → 浏览器直下，面板内队列区可追加/取消）。
    服务端代下 UI（旧 _dl 状态机）已退役；后端 /api/download/* 保留给 MCP「下载到本机」。 */
-import { API, $, escapeHtml, sampleFrom, toast } from "#core";
+import { API, $, escapeHtml, sampleFrom, toast, beginRequest, invalidateRequest } from "#core";
 import { getConfig } from "#shell";
 import { queryForRetrieval, getDateRange } from "#interactions";
 import { LAST_RECOMMEND_DATA } from "#search";
@@ -41,13 +41,16 @@ export let _tpChosen = new Set();
 /* 409（服务端发现「和你刚才看到的不是同一批了」）的兜底句唯一真源——
    产包回执与 tpShowStale 面板共用，后端 message_zh 缺席时两处必须说同一句话。 */
 const TP_STALE_FALLBACK = "这份清单已经不是刚才那一批了。";
-let _tpSeq = 0;          // 并发代号：晚到的旧预览一律丢弃
+const _tpRequests = {};
+const _tpBuildRequests = {};          // 并发代号：晚到的旧预览一律丢弃
 let _tpBusy = false;
 /* 用户这次说的条数与实际用上的条数。两者不等必须**显式告诉用户**，不许静默偏离。
    {said, used} 都是 0 表示这次没有从话里读出条数（走默认口径）。 */
 let _tpCount = { said: 0, used: 0 };
 
 export function resetTaskPack() {
+    invalidateRequest(_tpRequests);
+    invalidateRequest(_tpBuildRequests);
     /* 下载队列状态在 downloads.js（不在本文件），重置面板**不再**触碰队列——
        结果重渲/换查询把面板清掉后，下载面板下次重开时队列记录原样复活（dlqRender 重画）。
        旧 _dl 守卫（下载中跳过重置）随之退役：现在没有任何「重置能杀掉的在途状态」。 */
@@ -125,7 +128,9 @@ export async function previewTaskPack(opts) {
     // 这次话里说的条数（0 = 没说）。档位按它取，勾选按它截。
     const wantSaid = Math.max(0, parseInt(opts.count, 10) || 0);
     const want = wantSaid > 50 ? 50 : wantSaid;
-    const myGen = ++_tpSeq;
+    const token = beginRequest(_tpRequests);
+    invalidateRequest(_tpBuildRequests);
+    _tpBusy = false;
     /* 2026-08-16：预览**不再自动打开面板**（原 panel.hidden=false 在此 + renderTaskPackPlan 末尾，
        连「下载top5」这类自动打包都会把面板弹到用户脸上；且用户手动关面板后迟到的 fetch 会把它重开
        ——此 race 随本处一并消掉）。显式开面板的调用方（toggleTaskPackPanel /
@@ -144,7 +149,7 @@ export async function previewTaskPack(opts) {
         payload = await res.json();
         if (!res.ok || !payload.ok) throw new Error(payload.detail || "没能整理出这一批的清单");
     } catch (err) {
-        if (myGen !== _tpSeq) return { ok: false, stale: true, error: "已被更晚的一次预览取代" };
+        if (!token.isCurrent()) return { ok: false, stale: true, error: "已被更晚的一次预览取代" };
         // **失败必须作废上一份清单**。以前这里只改 panel 就 return，`_tpPlan` 原封不动——
         // 而 buildTaskPack 的全部前置条件只有 `_tpPlan && _tpChosen.size`。于是「预览失败 → 接着产包」
         // 会拿**上一条查询**的候选池产出一个货真价实的 zip，四道 409 锁一个都不会响
@@ -155,9 +160,9 @@ export async function previewTaskPack(opts) {
         panel.innerHTML = '<p class="tp-msg">没能整理出这一批的清单：' + escapeHtml(msg) + "</p>";
         return { ok: false, error: msg };
     }
-    if (myGen !== _tpSeq) return { ok: false, stale: true, error: "已被更晚的一次预览取代" };
+    if (!token.isCurrent()) return { ok: false, stale: true, error: "已被更晚的一次预览取代" };
     await tpIdentityLookup();   // 同名行身份锚点（发表日期）用的全库索引；本地服务亚秒级，失败静默降级
-    if (myGen !== _tpSeq) return { ok: false, stale: true, error: "已被更晚的一次预览取代" };
+    if (!token.isCurrent()) return { ok: false, stale: true, error: "已被更晚的一次预览取代" };
     if (!payload.plan) {
         _tpPlan = null; _tpChosen = new Set(); _tpCount = { said: 0, used: 0 };
         const msg = payload.message_zh || "这次检索没有可以打包的内容。";
@@ -343,6 +348,10 @@ async function tpEnqueueChosen() {
     const uids = Array.from(_tpChosen);
     if (!uids.length) { toast("先勾选至少一个数据集"); return; }
     const res = await dlqEnqueueDatasets(uids, { auto: true });
+    if (res.switched) {   // 换账户导致清单作废——如实说，不假装下了/没得下
+        toast("账户已切换，这次下载没有开始；切回原账户后再点一次即可");
+        return;
+    }
     if (!res.queued) {
         if (res.already && !res.unsupported.length && !res.failed.length) {
             toast("这批主文件都已在下载队列里或已交给浏览器，没有重复下载；要重下请点对应行的「重下」");
@@ -359,10 +368,13 @@ async function tpPackForUnsupported(uids) {
     const keep = (uids || []).filter(function (uid) { return _tpPlan && _tpChosen.has(uid); });
     if (!keep.length) { toast("这些数据集不在当前清单的勾选里，没法为它们生成任务包"); return; }
     const saved = _tpChosen;
+    const token = beginRequest(saved, () => _tpPlan);
     _tpChosen = new Set(keep);
     try { await buildTaskPack(); } finally {
-        _tpChosen = saved;
-        if (_tpPlan) renderTaskPackPlan(_tpPlan);
+        if (token.isCurrent()) {
+            _tpChosen = saved;
+            if (_tpPlan) renderTaskPackPlan(_tpPlan);
+        }
     }
 }
 
@@ -406,6 +418,9 @@ export async function buildTaskPack() {
     if (!_tpPlan) return { ok: false, error: "现在没有可用的打包清单" };
     if (_tpBusy) return { ok: false, error: "上一次打包还在进行中" };
     if (!_tpChosen.size) { toast("先勾选至少一个数据集"); return { ok: false, error: "还没有勾选任何数据集" }; }
+    const token = beginRequest(_tpBuildRequests, () => _tpPlan);
+    const chosen = Array.from(_tpChosen);
+    const count = Object.assign({}, _tpCount);
     const btn = $("taskPackBuildBtn");
     _tpBusy = true;
     let replaced = false;   // 面板已被别的内容接管（例如 409 的「没有生成任何文件」）
@@ -415,7 +430,7 @@ export async function buildTaskPack() {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 plan_token: _tpPlan.plan_token,
-                selected_uids: Array.from(_tpChosen),
+                selected_uids: chosen,
                 snapshot_id: _tpPlan.retrieval.snapshot_id,
                 content_digest: _tpPlan.retrieval.content_digest,
                 retrieval_date: _tpPlan.retrieval.date,
@@ -424,8 +439,10 @@ export async function buildTaskPack() {
                 format: "zip"
             })
         });
+        if (!token.isCurrent()) return { ok: false, stale: true };
         if (res.status === 409) {
             const info = await res.json();
+            if (!token.isCurrent()) return { ok: false, stale: true };
             tpShowStale(info);
             replaced = true;   // 下面的 finally 不许再重画清单，否则这条提示当场被盖掉
             outcome = { ok: false, stale: true, error: info.message_zh || TP_STALE_FALLBACK };
@@ -434,32 +451,37 @@ export async function buildTaskPack() {
         if (!res.ok) {
             let detail = "生成失败";
             try { const j = await res.json(); detail = j.message_zh || j.detail || detail; } catch (_e) {}
+            if (!token.isCurrent()) return { ok: false, stale: true };
             toast(detail);
             outcome = { ok: false, error: detail };
             return outcome;
         }
         const blob = await res.blob();
+        if (!token.isCurrent()) return { ok: false, stale: true };
         const name = dlqFilenameFrom(res.headers.get("content-disposition")) || "biodata-task-pack.zip";
         dlqFireBlob(name, blob, { kind: "pack" });   // 单通道：zip 也进统一下载引擎（队列留痕）
         // 只在**真拿到产物之后**记 —— 记在函数入口会把失败的打包也算成成功，
         // 那就成了「反馈包自己在撒谎」，正是这个项目一直在修的那类毛病。
-        usageLog(USAGE_KINDS.dl, { what: "pack", n: _tpChosen.size });
+        usageLog(USAGE_KINDS.dl, { what: "pack", n: chosen.length });
         toast("任务包已生成，解压后先看 00-START-HERE.txt");
         outcome = {
             ok: true,
             artifact: { filename: name, bytes: blob.size },
-            requested: { n_datasets: _tpChosen.size, count: Object.assign({}, _tpCount) }
+            requested: { n_datasets: chosen.length, count: count }
         };
         return outcome;
     } catch (err) {
+        if (!token.isCurrent()) return { ok: false, stale: true };
         const msg = String((err && err.message) || err);
         toast("生成失败：" + msg);
         outcome = { ok: false, error: msg };
         return outcome;
     } finally {
-        _tpBusy = false;
-        if (btn) { btn.disabled = false; }
-        if (_tpPlan && !replaced) renderTaskPackPlan(_tpPlan);
+        if (token.isCurrent()) {
+            _tpBusy = false;
+            if (btn) { btn.disabled = false; }
+            if (_tpPlan && !replaced) renderTaskPackPlan(_tpPlan);
+        }
     }
 }
 

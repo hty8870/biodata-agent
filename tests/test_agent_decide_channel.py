@@ -602,13 +602,17 @@ def test_parallel_tool_calls_disabled_and_tier_choices():
     # 2026-08-17 rb1 刻意更新：curate.rollback 入列（回滚动词化），9 loop + 2 控制。
     # 2026-08-18 四工具批刻意更新：compare.datasets / cite.export / compat.find /
     # fair.check 入列（环内结果处理四工具），13 loop + 2 控制。
+    # 2026-09-13 rerank 处置批刻意更新：results_show 入列（屏态唯一出口动词，
+    # general 继承 search 套件面），14 loop + 2 控制。
+    # 2026-09-14 YOLO 批刻意更新：ask_relax 入列（「问用户放松哪个条件」选择卡，
+    # general 继承 search 套件面），15 loop + 2 控制。
     assert decide_tools == {
         "curate_check_updates", "curate_search_online", "curate_sync_updates",
         "curate_db_status", "search_rerun", "rank", "rerank", "route_request",
         "curate_rollback", "compare_datasets", "cite_export", "compat_find",
-        "fair_check",
+        "fair_check", "results_show", "ask_relax",
         "finish", "unsupported_next_step",
-    }, "decide 工具面 = 13 loop + 2 控制（不是全动词表，评审；2026-08-18 新增 compare/cite/compat/fair）"
+    }, "decide 工具面 = 15 loop + 2 控制（不是全动词表，评审；2026-09-14 新增 ask.relax）"
 
 
 def test_understand_accepts_first_of_multiple_tool_calls(_tmp_project_root):

@@ -228,7 +228,7 @@ def _term_in_vocabulary(term: str) -> bool:
 
     只读 `vocabulary.CATALOG`——日志落盘时未收录的词可能后来进了词表，
     报告必须如实标注「已收录」而不是把旧账当成待办。"""
-    from dataset_recommender.retrieval.vocabulary import CATALOG
+    from dataset_recommender.domains.biodata.vocabulary import CATALOG
 
     t = str(term or "").strip().lower()
     if not t:

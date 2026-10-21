@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,32 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import installer_e2e as e2e  # noqa: E402
+
+
+def test_installer_timeout_preserves_unrelated_same_image_process():
+    # 两个同名 Python 进程模拟并行工具；只终止本次安装调用，不能按映像名清理。
+    unrelated = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            e2e._innocmd(Path(sys.executable), ["-c", "import time; time.sleep(30)"], timeout=0.3)
+        assert unrelated.poll() is None
+    finally:
+        unrelated.terminate()
+        unrelated.wait(timeout=5)
+
+
+def test_installer_uses_single_tree_runner(monkeypatch):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 7, "out", "err")
+
+    monkeypatch.setattr(e2e, "run_process_tree", run)
+    assert e2e._innocmd(Path("installer.exe"), ["/SILENT"], timeout=12) == (7, "outerr")
+    assert calls[0][1]["timeout"] == 12
+    assert not hasattr(e2e, "_kill_stray_installers")
 
 
 # ===========================================================================

@@ -116,7 +116,7 @@
         ["{python}", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]
       ],
       "required_tools": ["python"],
-      "timeout_seconds": 900,
+      "timeout_seconds": 1800,
       "offline": true,
       "network": "forbidden",
       "secrets": "forbidden",
@@ -197,7 +197,7 @@
       "id": "installer-contracts",
       "description": "Installer pipeline contract tests: installer contract (tests/test_installer_contract.py), frozen runtime contract (tests/test_frozen_runtime_contract.py), migration and end-to-end contracts (tests/test_migrate_from.py, tests/test_installer_e2e.py). Files are referenced by name; any not yet present are skipped with a printed note, but when none exist the gate fails closed so the installer surface can never be silently unguarded. Also covered by the pytest-suite gate; this gate makes the installer contract matrix explicit and self-contained.",
       "commands": [
-        ["{python}", "-c", "import pathlib, sys, pytest\ndeclared = ['tests/test_installer_contract.py', 'tests/test_frozen_runtime_contract.py', 'tests/test_migrate_from.py', 'tests/test_installer_e2e.py']\npresent = [p for p in declared if pathlib.Path(p).is_file()]\nmissing = [p for p in declared if p not in present]\nif missing:\n    print('installer-contracts: in-flight files referenced by name, skipped: ' + ', '.join(missing))\nsys.exit(pytest.main(['-q', '-p', 'no:cacheprovider'] + present))"]
+        ["{python}", "-c", "import pathlib, sys, pytest\ndeclared = ['tests/test_installer_contract.py', 'tests/test_frozen_runtime_contract.py', 'tests/test_migrate_from.py', 'tests/test_installer_e2e.py']\npresent = [p for p in declared if pathlib.Path(p).is_file()]\nmissing = [p for p in declared if p not in present]\nif missing:\n    print('installer-contracts: declared contract files missing in this checkout, NOT covered by this run: ' + ', '.join(missing))\nif not present:\n    print('installer-contracts: FAIL - none of the declared contract files exist; refusing to run an empty/unbounded selection: ' + ', '.join(declared), file=sys.stderr)\n    sys.exit(2)\nsys.exit(pytest.main(['-q', '-p', 'no:cacheprovider'] + present))"]
       ],
       "triggers": [
         "packaging/**",

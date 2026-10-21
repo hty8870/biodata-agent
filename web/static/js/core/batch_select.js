@@ -318,9 +318,12 @@ export function selectDisplayBatch(reply, currentView) {
 }
 
 /* ============================================================================
- * 零命中救回链退役 —— 纯逻辑核（board.js 渲染选择条用；本文件只放纯函数，node 可测）
- * 救回选项不再以 sys 气泡出现；改为贴输入框上沿的选择条。这里把「从零命中批派生选项 /
- * 判定哪批是最新结果」的确定性逻辑集中成纯函数，供 board.js 与 node 规格共用。
+ * 零命中放松收编为单一通道（2026-09-14）——纯逻辑核（board.js 渲染选择卡用；
+ * 本文件只放纯函数，node 可测）。「放松哪个条件」的用户触点统一为 ask.relax 选择卡：
+ * 渲染唯一（board.js askRelaxShow）、执行唯一（cbChoose askrelax → cbCommit suppressed）、
+ * 数据源唯一（retriever.relaxation_options，include_dead=False）。触发点两个：环内 LLM
+ * （agent 路径，degenerate 机械闸）+ 本函数的零命中自动弹卡兜底（非 agent 路径也有救回）。
+ * 旧「救回选择条 / 空态卡 chips / 换词兜底」三套平行实现已全部退役。
  * ========================================================================== */
 
 /* 批是否零命中：payload.results 是数组且 length 0。 */
@@ -330,91 +333,37 @@ export function isZeroHitBatch(b) {
     return Array.isArray(p.results) && p.results.length === 0;
 }
 
-/* 把一次放宽目标做成「用户下一句」的可读文本（drop=去掉一个条件 / only=只按一个条件搜）。
-   没有可读标签 → null，应跳过该目标。 */
-function _relaxUtterance(kind, label) {
-    const name = String(label || "").trim();
-    if (!name) return null;
-    return (kind === "only") ? `只按「${name}」搜，其它条件都放开` : `去掉「${name}」条件再搜`;
-}
-
-/* 从零命中批派生选择条选项。返回数组每项：
-   { id, kind, label, count, summary, full, submitText, source, short }
-   summary=一行放不下的摘要（选择条里显示的短文案）；full=完整文案（hover 浮窗/title）；
-   submitText=点提交后成为「用户下一句」的文本；short=true 表示可整行显示、无需摘要截断。
-   数据源优先级：payload.relaxation_options → payload.degraded_search → payload.query_constraints → 兜底换词。 */
-export function deriveRescueOptions(batch, opts) {
-    opts = opts || {};
-    if (!batch) return [];
+/* 从零命中批载荷派生 ask.relax 选择卡 payload（与环内 ask.relax 渲同一张卡）。
+   返回 { query, reason:"", options:[{key,kind,label,count,suppress}] }；
+   批非零命中 / relaxation_options 为空（死维不给选）→ null（调用方不弹卡）。
+   suppress 由后端按「整组替换」语义预先合并好（请求级已忽略+本项放松量），前端原样下发、
+   零合并逻辑。选项不带 preview（2026-09-14 用户评审：示例名塞按钮信息效率太低；
+    relaxation_options[].results 预览仍是 HTTP 契约，本卡不再消费）。 */
+export function deriveRelaxCard(batch) {
+    if (!isZeroHitBatch(batch)) return null;   // 非零命中批不弹卡（防御：调用方已查 pill 零命中）
     const p = (batch.payload && typeof batch.payload === "object") ? batch.payload : {};
-    const q = String(batch.query_effective || batch.label || batch.query_raw || "").trim();
-    const max = (typeof opts.max === "number" && opts.max > 0) ? opts.max : 8;
-    const out = [];
-    const seen = new Set();
-
-    /* ① 后端预算的放宽项（drop/only，见 retriever.relaxation_options）。 */
-    (Array.isArray(p.relaxation_options) ? p.relaxation_options : []).forEach(function (o, i) {
-        const lbl = String((o && o.label) || "").trim();
-        const kind = ((o && o.kind) === "only") ? "only" : "drop";
-        const sub = _relaxUtterance(kind, lbl);
-        if (!sub || seen.has(sub)) return;
-        seen.add(sub);
-        const count = (typeof o.count === "number") ? o.count : null;
-        const full = sub + ((count != null && count > 0) ? (`（预计可救回 ${count} 条）`) : "");
-        out.push({
-            id: String((o && o.key) || ("relax:" + i)),
-            kind: kind, label: lbl, count: count,
-            summary: sub, full: full, submitText: sub,
-            source: "relax", short: sub.length <= 16,
+    const raw = Array.isArray(p.relaxation_options) ? p.relaxation_options : [];
+    const options = [];
+    raw.forEach(function (o) {
+        if (!o || typeof o !== "object") return;
+        const label = String(o.label || "").trim();
+        const suppress = (Array.isArray(o.suppress) ? o.suppress : [])
+            .map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+        if (!label || !suppress.length) return;   // 没有可执行放松量的项不给选（防死卡）
+        options.push({
+            key: String(o.key || ""),
+            kind: (o.kind === "only") ? "only" : "drop",
+            label: label,
+            count: (typeof o.count === "number") ? o.count : 0,
+            suppress: suppress,
         });
     });
-
-    /* ② 未收录词降级（忽略某个看不懂的说法再搜；仅 resolution_status=abstained 弃权时给出）。 */
-    if (p.degraded_search && Array.isArray(p.degraded_search.ignored_terms) && p.degraded_search.ignored_terms.length) {
-        const terms = p.degraded_search.ignored_terms.map(function (t) { return "「" + String(t) + "」"; }).join("、");
-        const sub = `忽略${terms}这个说法再搜`;
-        seen.add(sub);
-        const count = (typeof p.degraded_search.count === "number") ? p.degraded_search.count : null;
-        out.push({
-            id: "degrade:terms", kind: "degrade", label: `忽略${terms}`, count: count,
-            summary: sub, full: sub + ((count != null && count > 0) ? (`（预计 ${count} 条）`) : ""),
-            submitText: sub, source: "degrade", short: sub.length <= 16,
-        });
-    }
-
-    /* ③ 无后端放宽项（桩/直发 /api/recommend 的零命中未带 relaxation_options）→ 从 query_constraints
-       派生「去掉某条件 / 把排除项也纳入」；排除项翻成「也纳入」而不是「去掉」（语义才成立）。 */
-    if (out.length === 0 && Array.isArray(p.query_constraints)) {
-        p.query_constraints.forEach(function (c, i) {
-            const lbl = String((c && c.label) || "").trim();
-            const vals = ((c && Array.isArray(c.values) && c.values.length) ? c.values.join("/") : "");
-            const name = lbl ? (vals ? (lbl + "=" + vals) : lbl) : vals;
-            if (!name) return;
-            const pol = String((c && c.polarity) || "include");
-            const sub = (pol === "exclude") ? `把「${name}」也纳入再搜` : `去掉「${name}」条件再搜`;
-            if (seen.has(sub)) return;
-            seen.add(sub);
-            out.push({
-                id: "qc:" + i, kind: (pol === "exclude") ? "include" : "drop", label: name,
-                count: null, summary: sub, full: sub, submitText: sub,
-                source: "constraint", short: sub.length <= 16,
-            });
-        });
-    }
-
-    /* ④ 兜底「换个说法」——任何零命中都至少给一个可用救回句。 */
-    if (out.length === 0) {
-        const sub = "换个说法再查一次";
-        out.push({
-            id: "reword", kind: "reword", label: "换个说法", count: null,
-            summary: sub,
-            full: (q ? `换个说法，用更宽泛的关键词重新搜「${q}」` : sub),
-            submitText: (q ? q : sub),
-            source: "reword", short: true,
-        });
-    }
-
-    return out.slice(0, max);
+    if (!options.length) return null;
+    return {
+        query: String(batch.query_effective || batch.label || batch.query_raw || ""),
+        reason: "",
+        options: options,
+    };
 }
 
 /* 最新结果判定：最后一个带 pill 的回执 entry 的活跃批 id。

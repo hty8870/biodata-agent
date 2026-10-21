@@ -2,6 +2,8 @@
 
 约束：date_from/date_to 默认空串 → 官方评测/CLI 不传时整段 no-op，确定性门不受影响。
 """
+import pytest
+
 from dataset_recommender.llm.config import get_settings
 from dataset_recommender.corpus.data_loader import load_raw_records
 from dataset_recommender.retrieval.normalizer import normalize_records
@@ -75,3 +77,52 @@ def test_empty_date_range_is_noop():
     i1.date_from, i1.date_to = "", ""
     same = [c.record.dataset_name for c in r.retrieve(recs, i1, top_k=8)]
     assert base == same
+
+
+@pytest.mark.parametrize("expression,lo,hi", [
+    ("2024年12月", "2024-12-01", "2024-12-31"),
+    ("2024年12月31日", "2024-12-31", "2024-12-31"),
+    ("2024-12-31", "2024-12-31", "2024-12-31"),
+    ("2024-02", "2024-02-01", "2024-02-29"),
+    ("2023年2月", "2023-02-01", "2023-02-28"),
+    ("2024年2月29日", "2024-02-29", "2024-02-29"),
+    ("2024-01-15到2024年2月", "2024-01-15", "2024-02-29"),
+    ("2024年12月以后", "2024-12-01", ""),
+    ("before 2024-12-31", "", "2024-12-30"),
+])
+def test_parser_date_precision_and_spans(expression, lo, hi):
+    from dataset_recommender.retrieval.query_parser import annotate_query_spans
+
+    query = expression + " 人类肺数据"
+    intent = parse_query(query)
+    assert intent.parse_status == "executable"
+    assert (intent.date_from, intent.date_to) == (lo, hi)
+    assert [s["text"] for s in annotate_query_spans(query) if s["kind"] == "date"] == [expression]
+
+
+@pytest.mark.parametrize("expression,inside,outside", [
+    ("2024年12月", "2024-12-31T23:59:59Z", "2024-01-01"),
+    ("2024年12月31日", "2024-12-31", "2024-12-30"),
+    ("2024-12-31", "2024-12-31T12:00:00Z", "2025-01-01"),
+])
+def test_retrieval_honors_date_precision(expression, inside, outside):
+    from dataset_recommender.retrieval.normalizer import normalize_dataset_record
+
+    records = [normalize_dataset_record({
+        "dataset_name": name, "species": "Human", "tissue": "Lung", "published_date": value,
+    }, "synthetic") for name, value in (("inside", inside), ("outside", outside))]
+    out = DatasetRetriever().retrieve(records, parse_query(expression + " 人类肺数据"))
+    assert [c.record.dataset_name for c in out] == ["inside"]
+
+
+def test_parser_date_precision_in_preferences_and_exclusions():
+    intent = parse_query("人类 优先2024-02 不要小鼠")
+    assert intent.parse_status == "executable"
+    assert (intent.preferred_date_from, intent.preferred_date_to) == ("2024-02-01", "2024-02-29")
+    assert intent.date_from == intent.date_to == ""
+    assert intent.excluded_constraints["species"] == ["mouse"]
+
+
+@pytest.mark.parametrize("expression", ["2023-02-29", "2024-13-01", "2024-00"])
+def test_parser_invalid_iso_date_is_not_broadened(expression):
+    assert parse_query(expression + " 人类").abstain_reason == "invalid_date"

@@ -315,6 +315,26 @@ begin
   end;
 end;
 
+{ 边缘修复第 3 项（GUI 收口）：上面的 /DIR 检查只在命令行显式给了 /DIR 时执行——
+  用户在 SelectDir 页改选目录不受它约束，而升级清理会递归删除**新 {app}** 的内容并
+  孤儿化旧安装（若用户选到含个人文件的目录即是删用户文件）。PrepareToInstall 在向导
+  已存在后、任何文件删除/复制之前执行：用 WizardDirValue 取最终落点，与 InstallLocation
+  再核一次（SameInstallDir 同判据）；不一致即返回错误消息中止安装。GUI 与 /DIR 两条路径
+  都被覆盖，且不提供绕过捷径。}
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Installed, InstalledLoc, TargetDir: string;
+begin
+  Result := '';
+  if not TryReadInstalledVersion(Installed) then
+    Exit;
+  if not ReadInstalledLocation(InstalledLoc) or (InstalledLoc = '') then
+    Exit;
+  TargetDir := WizardDirValue;
+  if not SameInstallDir(InstalledLoc, TargetDir) then
+    Result := FmtMessage(CustomMessage('DirMismatchInstalled'), [InstalledLoc, TargetDir]);
+end;
+
 { ── 删除边界：可选「同时删除我的本地数据」的精确路径校验 ──────────────
   NormalizePath 加固：不再是纯字符串变换——GetFullPathName 真实规范化 +
   拒绝含 `..` 段/非绝对盘符路径/`\\?\` 前缀的输入（fail-closed 返回空串）。

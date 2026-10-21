@@ -1,7 +1,13 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,3 +76,28 @@ def test_all_workflows_use_only_reviewed_full_sha_references() -> None:
                 path,
                 reference,
             )
+
+
+@pytest.mark.parametrize("codes", [(7, 0, 0), (0, 7, 0), (0, 0, 7), (0, 0, 0)])
+def test_unpacked_smoke_propagates_each_native_failure(codes) -> None:
+    """执行 workflow 原 try 块；仅把三个外部 smoke 换成可控退出码子进程。"""
+    shell = shutil.which("powershell.exe") or shutil.which("pwsh")
+    if not shell:
+        pytest.skip("PowerShell unavailable")
+    step = _workflow().split("- name: Smoke-test the unpacked artifact", 1)[1]
+    body = re.search(r"try \{\n(.*?)\n\s*\}\n\s*finally", step, re.S).group(1)
+    commands = re.findall(r"(?m)^\s*python -B .+$", body)
+    assert len(commands) == len(codes)
+    executable = sys.executable.replace("'", "''")
+    for i, (command, code) in enumerate(zip(commands, codes)):
+        body = body.replace(command, f"& '{executable}' -B -c \"import sys; print('smoke-{i}'); sys.exit({code})\"", 1)
+    result = subprocess.run(
+        [shell, "-NoProfile", "-NonInteractive", "-Command",
+         "$ErrorActionPreference = 'Stop'\n" + textwrap.dedent(body)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert (result.returncode == 0) == (not any(codes)), result.stdout + result.stderr
+    if any(codes):
+        failed = next(i for i, code in enumerate(codes) if code)
+        assert f"smoke-{failed}" in result.stdout
+        assert all(f"smoke-{i}" not in result.stdout for i in range(failed + 1, 3))

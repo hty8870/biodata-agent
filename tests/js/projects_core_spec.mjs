@@ -8,8 +8,8 @@
  * 的规格构造是否与 /api/watch/check 入参逐字段对齐、上下文卡序列化是否守 2000 字
  * 硬 cap 且不静默截断、上次检查文案是否如实——这些是用户可见核心逻辑，错一处全歪。
  *
- * 纯函数直测：projects_core.js 只相对 import artifacts.js（同为零 DOM 纯模块），
- * node 直接相对路径 import，无 fake IndexedDB 需求。
+ * 纯函数直测：projects_core.js 走 `#artifacts` 取纯数据层（有 importmap 键的模块须走 `#键`，
+ * 见 FRONTEND.md §4 通道规则）；node 经 package.json imports 解析到同一份，无 fake IndexedDB 需求。
  * ========================================================================== */
 
 import * as P from "../../web/static/js/core/projects_core.js";

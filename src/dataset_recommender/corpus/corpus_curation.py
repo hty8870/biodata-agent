@@ -78,7 +78,8 @@ from . import corpus_enrich
 from . import corpus_net
 from . import fs_utils
 from .corpus_net import ORGANISM_COMMON
-from .corpus import EXTERNAL_DIR_NAME, _cmp_key_cached, invalidate_external_cache
+from .corpus import (EXTERNAL_DIR_NAME, _cmp_key_cached, invalidate_external_cache,
+                     publish_corpus_write)
 from .data_loader import extract_records
 from .provenance import (
     SOURCE_10X,
@@ -168,7 +169,9 @@ CURATE_SYNC_NOTE = "对话式管护 curate.sync_updates 入库（在线比对发
 CurateCode = Literal[
     "bad_action", "bad_param", "token_mismatch", "invalid_json", "no_records", "too_large",
     "duplicate_content", "network_error", "source_not_registered", "no_candidates",
-    "unknown_file", "not_curatable", "sync_busy", "unknown_operation",
+    "unknown_file", "not_curatable", "sync_busy", "unknown_operation", "journal_failed", "move_partial", "coverage_limited",
+    # 2026-10-04：写目标经目录链接/联接映射进冻结基准/只读层（守卫在 fs_utils）。
+    "bad_store_path",
 ]
 
 
@@ -259,20 +262,21 @@ def _external_dir(project_root: Path) -> Path:
     return instance_data_dir_for(Path(project_root), EXTERNAL_DIR_NAME)
 
 
-def _recycle_dir(project_root: Path) -> Path:
+def recycle_dir(project_root: Path) -> Path:
     return instance_data_dir_for(Path(project_root), USERDATA_DIR_NAME) / RECYCLE_DIR_NAME
 
 
-def _recycle_manifest(project_root: Path) -> Path:
-    return _recycle_dir(project_root) / RECYCLE_MANIFEST_NAME
+def recycle_manifest(project_root: Path) -> Path:
+    return recycle_dir(project_root) / RECYCLE_MANIFEST_NAME
 
 
 def _net_ledger_path(project_root: Path) -> Path:
     return corpus_net._net_ledger_path(Path(project_root))
 
 
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+# _now_iso 真源 2026-10-01 起收敛到 `corpus/net_ledger.now_iso`（同一实现）；
+# 此处保留私有别名兼容本模块与下游既有引用，不再自行实现。
+from .net_ledger import now_iso as _now_iso  # noqa: E402
 
 
 def _leaf_name(filename: Any) -> str:
@@ -297,9 +301,15 @@ def _append_jsonl(path: Path, entry: dict) -> None:
     corpus_net._append_jsonl(path, entry)
 
 
+def _append_net_ledger(path: Path, entry: dict) -> None:
+    """联网/审计账本追加的兼容 seam：转发 net_ledger 的打主体单锚点——
+    状态摘要按主体过滤，查询与错误文本不再跨账户可见。"""
+    corpus_net._append_net_ledger(path, entry)
+
+
 def _read_manifest(project_root: Path) -> list[dict]:
     """读回收站 manifest.jsonl（缺失 → 空；单行损坏跳过不连累其它行）。"""
-    path = _recycle_manifest(project_root)
+    path = recycle_manifest(project_root)
     if not path.is_file():
         return []
     out: list[dict] = []
@@ -366,7 +376,7 @@ def list_curations(*, project_root: Path) -> dict:
             last_remove[str(entry["recycle_name"])] = entry
 
     recycle: list[dict] = []
-    rec_dir = _recycle_dir(root)
+    rec_dir = recycle_dir(root)
     if rec_dir.is_dir():
         for p in sorted(rec_dir.glob("*.json")):
             if not p.is_file():
@@ -435,12 +445,6 @@ def _probe_sources_and_warnings(records: list[dict], payload: Any, form_source: 
         payload, records, form_source
     )
     return source_counts, _ingest_warnings(missing_name, unknown_species)
-
-
-def _find_duplicate_files(records: list[dict], project_root: Path) -> list[str]:
-    """整集内容指纹与 external 各既有文件逐一比对，返回撞重的文件名列表（同序无关、剔除 source 口径）。"""
-    matched, _total = _scan_external_files(records, project_root)
-    return matched
 
 
 #: external 全库累计条数上限（真源在写入汇
@@ -566,23 +570,29 @@ def apply_import(
 
     - token 不一致 → token_mismatch，**零写入**；
     - 内容撞重且非 force → duplicate_content，零写入；
-    - 通过则复用 ingest_dataset 全部校验/落盘/缓存失效（只进 external，upload_ 前缀命名空间）。"""
-    preview = plan_import(payload_bytes, filename, source, project_root=project_root)  # 重算指纹
-    _check_token(preview["confirm_token"], confirm_token)
-    if preview["duplicate"]["is_duplicate"] and not force:
-        raise CurateError(
-            "duplicate_content",
-            f"内容与既有文件整集重复（{'、'.join(preview['duplicate']['matched_files'])}）。"
-            "没有写入；确认仍要入库的话，请在确认时声明「允许重复」。",
+    - 通过则复用 ingest_dataset 全部校验/落盘/缓存失效（只进 external，upload_ 前缀命名空间）。
+
+    最终查重与落盘同住**摄取临界区**（与 apply_search_online 同口径）——此前现查去重
+    在临界区之外，两个并发 apply 可同时通过查重、再依次落盘成两份重复文件。plan 侧只读预览
+    不变；显式 force 语义不变（仍跳过查重、照常入库）。"""
+    root = Path(project_root)
+    with ingest_critical_section(root):
+        preview = plan_import(payload_bytes, filename, source, project_root=root)  # 重算指纹
+        _check_token(preview["confirm_token"], confirm_token)
+        if preview["duplicate"]["is_duplicate"] and not force:
+            raise CurateError(
+                "duplicate_content",
+                f"内容与既有文件整集重复（{'、'.join(preview['duplicate']['matched_files'])}）。"
+                "没有写入；确认仍要入库的话，请在确认时声明「允许重复」。",
+            )
+        safe_name = new_upload_name(preview["filename"])
+        res = ingest_dataset(
+            raw_bytes=payload_bytes,
+            safe_name=safe_name,
+            project_root=root,
+            form_source=str(source or ""),
+            note=CURATE_IMPORT_NOTE,
         )
-    safe_name = new_upload_name(preview["filename"])
-    res = ingest_dataset(
-        raw_bytes=payload_bytes,
-        safe_name=safe_name,
-        project_root=Path(project_root),
-        form_source=str(source or ""),
-        note=CURATE_IMPORT_NOTE,
-    )
     return {
         "action": "curate.import",
         "dry_run": False,
@@ -654,7 +664,8 @@ def _fetch_logged(
         fetcher=lambda tries: _fetch(
             url, timeout=_FETCH_TIMEOUT, method=method, body=body, headers=headers,
             min_interval=min_interval, attempts=tries),
-        ledger_append=_append_jsonl, ledger_path=_net_ledger_path,
+        # 账本写入打上主体（append_net_ledger 单锚点）——状态摘要按主体过滤。
+        ledger_append=_append_net_ledger, ledger_path=_net_ledger_path,
     )
 
 
@@ -1610,7 +1621,13 @@ def _search_scp(
     n_detail_fail = 0
     n_backfill_species = 0
     pub_doi_accessions = 0
-    for row in candidates[:limit]:
+    # 给了 species 时，limit 是**最终合格结果**预算——逐条富化/反标/过滤后计数，
+    # 达到预算即停。旧实现先富化 candidates[:limit] 再按物种过滤，Human 匹配排在
+    # 前 limit 条之后时（`lung+Human+limit=1` 的首条是 Mouse）会被误报 no_candidates。
+    # 无物种条件仍保持「处理前 limit 条」的历史行为。
+    sp = species.lower() if species else ""
+    scan = candidates if sp else candidates[:limit]
+    for row in scan:
         accession = str(row.get("accession") or "").strip()
         rec = _scp_to_record(row)
         detail: dict | None = None
@@ -1628,10 +1645,11 @@ def _search_scp(
         report = corpus_enrich.backfill_record(rec)   # 端点不供的 species/tissue/disease/chemistry → 反标
         if "species" in report["filled"]:
             n_backfill_species += 1
+        if sp and sp not in str(rec.get("species") or "").lower():
+            continue   # 物种不合格：不计入结果预算（它已花掉的详情调用不追回）
         records.append(rec)
-    if species:
-        sp = species.lower()
-        records = [r for r in records if sp in str(r.get("species") or "").lower()]
+        if len(records) >= limit:
+            break
     if n_detail_fail:
         warnings.append(
             f"{n_detail_fail} 条详情拉取失败：description/count/文件信息停留在列表口径，"
@@ -1659,11 +1677,9 @@ def _search_scp(
 # 标题/描述/entryId 匹配关键词（全库仅 532 项、size≤75，全量 8 页代价可忽略）。
 # ==============================================================================================
 
-AZUL_PROJECTS_API = "https://service.azul.data.humancellatlas.org/index/projects"
+AZUL_PROJECTS_API = corpus_net.AZUL_PROJECTS_API
 HCA_SOURCE_LABEL = "Human Cell Atlas"
 HCA_STUDY_TMPL = "https://data.humancellatlas.org/explore/projects/{project_id}"
-_AZUL_PAGE_SIZE = 75    # 实测 size 上限（>75 → 400）
-_AZUL_MAX_PAGES = 12    # 全库 532 项全量 8 页即可拉完；页数上限只是防分页游标失控的兜底
 
 #: 通用名（小写）→ Azul genusSpecies facet 词表值（学名）：由 ORGANISM_COMMON 反推，
 #: 同名取先见的规范二名（拼写变体如 homo sapien 排后自然不覆盖）；表内键是小写学名，
@@ -1673,6 +1689,30 @@ _SPECIES_TO_LATIN: dict[str, str] = {}
 for _latin, _common in ORGANISM_COMMON.items():
     _SPECIES_TO_LATIN.setdefault(_common.lower(), _latin.capitalize())
 del _latin, _common
+
+
+# ---------------------------------------------------------------- 直查（按编号）物种政策
+#
+# 10x slug / Zenodo id / refine.bio accession 的直查路径命中即返回，绕过了关键词
+# 分支的物种政策——`visium-hd-rat-liver + species=Human` 会返回 Rat 且候选可继续入库。
+# 下列两个共用判定 + 一个拒绝构造函数，让三条直查与各自关键词路径**同政策**。
+
+def _species_matches_record(species: str, record_species: Any) -> bool:
+    """本地子串物种判定（10x/GEO/AE/refine.bio 关键词路径同口径）：用户词（小写）出现在
+    记录 species（小写）里即一致；记录 species 缺失 → 不一致（不静默放行）。"""
+    sp = str(species or "").strip().lower()
+    return bool(sp) and sp in str(record_species or "").lower()
+
+
+def _direct_species_conflict(source_label: str, ident: str, species: str,
+                             record_species: Any) -> CurateError:
+    """直查命中但物种冲突 → no_candidates 如实拒绝（把冲突原因带给用户，不静默返回）。"""
+    return CurateError(
+        "no_candidates",
+        f"{source_label} 的记录 {ident} 物种是「{str(record_species or '').strip() or '（未标注）'}」，"
+        f"与本次请求的物种「{str(species).strip()}」不一致——按物种条件没有返回它；"
+        "去掉物种条件或换一个编号再试。未写入任何内容。",
+    )
 
 
 def _azul_field_values(groups: object, field: str) -> list[str]:
@@ -1773,61 +1813,16 @@ def _search_hca(
     limit: int = 20,
     project_root: Path,
 ) -> tuple[list[dict], list[str]]:
-    """HCA（Azul）facet 过滤 + 分页拉取 + 客户端关键词匹配 → 候选记录（不落盘）。
-
-    无服务端全文检索：query 小写分词后对 标题/描述/entryId 连接文本子串匹配（多词 AND）——
-    entryId 进匹配域是为了让 sync_updates「按编号搜回」能命中（uuid 不是标题词）。
-    物种在词表内 → 服务端 genusSpecies facet 精确过滤；词表外 → 映射后本地子串过滤
-    （AE 同口径）。分页跟随 pagination.next（键集分页，size=75）。返回 (records, warnings)。"""
-    latin = _SPECIES_TO_LATIN.get(species.lower()) if species else None
-    url: str | None = f"{AZUL_PROJECTS_API}?size={_AZUL_PAGE_SIZE}"
-    if latin:
-        filters = json.dumps({"genusSpecies": {"is": [latin]}}, separators=(",", ":"))
-        url += f"&filters={urllib.parse.quote(filters)}"
-    terms = [t for t in re.split(r"\s+", query.lower()) if t]
-
-    records: list[dict] = []
-    seen: set[str] = set()
-    pages = 0
-    while url and len(records) < limit and pages < _AZUL_MAX_PAGES:
-        payload = _fetch_logged(url, project_root=project_root, endpoint=AZUL_PROJECTS_API, query=query)
-        pages += 1
-        hits = payload.get("hits") if isinstance(payload, dict) else None
-        if not isinstance(hits, list):
-            # Azul 无公开 OpenAPI 文档（/openapi 实测要鉴权）：形状漂移 fail-closed 如实报错，不硬解析。
-            raise CurateError(
-                "network_error",
-                "HCA（Azul）接口的响应形状变了（该服务无公开 API 文档，可能随版本静默变更）："
-                "缺 hits 列表。本次没有拿回任何记录；可到 https://data.humancellatlas.org/ 人工核对。",
-            )
-        for hit in hits:
-            if not isinstance(hit, dict):
-                continue
-            projects = hit.get("projects")
-            proj = projects[0] if (isinstance(projects, list) and projects
-                                   and isinstance(projects[0], dict)) else {}
-            text = " ".join([
-                str(proj.get("projectTitle") or ""),
-                str(proj.get("projectDescription") or ""),
-                str(hit.get("entryId") or ""),
-            ]).lower()
-            if not all(t in text for t in terms):
-                continue
-            rec = _azul_to_record(hit)
-            if rec is None or rec["dataset_uid"] in seen:
-                continue
-            seen.add(rec["dataset_uid"])
-            records.append(rec)
-            if len(records) >= limit:
-                break
-        pagination = payload.get("pagination") if isinstance(payload, dict) else None
-        nxt = pagination.get("next") if isinstance(pagination, dict) else None
-        # 只跟随同服务绝对 URL（防响应里混入奇怪链接被当成下一页）。
-        url = nxt if (isinstance(nxt, str) and nxt.startswith(AZUL_PROJECTS_API)) else None
-    if species and not latin:  # 词表外物种：本地子串过滤（作用于映射后的通用名）
-        sp = species.lower()
-        records = [r for r in records if sp in str(r.get("species") or "").lower()]
-    return records[:limit], []
+    """共用 HCA 分页/匹配结果，只投影完整入库记录；传输仍走管护账本接缝。"""
+    try:
+        hits, note = corpus_net.search_hca_hits(
+            query, species=species, limit=limit, project_root=project_root, fetcher=_fetch_logged)
+    except corpus_net._NetError as exc:
+        raise CurateError("network_error", str(exc)) from exc
+    records = [record for hit in hits if (record := _azul_to_record(hit)) is not None]
+    if note and not records:
+        raise CurateError("coverage_limited", note)
+    return records, [note] if note else []
 
 
 # ==============================================================================================
@@ -1963,7 +1958,11 @@ def _search_tenx(
         probe = query_s.lower()
         hits = [r for r in results if str(r.get("slug") or "").strip().lower() == probe]
         if hits:
-            return [_tenx_to_record(hits[0])], []
+            rec = _tenx_to_record(hits[0])
+            # 直查与关键词路径共用物种政策——冲突不静默放行。
+            if species and not _species_matches_record(species, rec.get("species")):
+                raise _direct_species_conflict("10x 官网", query_s, species, rec.get("species"))
+            return [rec], []
 
     params = ["document=dataset", f"search={urllib.parse.quote(query_s)}",
               f"limit={int(limit)}", "offset=0", "sort=publishedAt%20DESC"]
@@ -2219,8 +2218,10 @@ def _zenodo_to_record(hit: dict) -> dict | None:
     """一条 Zenodo 记录（已过 `_zenodo_core_ok` 形状闸）→ 本项目记录 schema。
 
     字段口径（2026-08-08 实测响应形状，调研 §1）：accession/url 用数字 record id；
-    collection_doi 取 conceptdoi（指向「所有版本的最新版」，比版本 doi 稳定），缺失回退
-    doi / RDM pids.doi.identifier；description 是 HTML，剥标签后截 400；species 从
+    Zenodo 的 conceptdoi（「所有版本的最新版」，比版本 doi 稳定；缺失回退 doi / RDM
+    pids.doi.identifier）是**数据记录自己的 DOI**：原样写 collection_doi 供
+    标识符直查，并按对象类型另写 dataset_doi；出口不把它当论文 DOI。
+    description 是 HTML，剥标签后截 400；species 从
     title+description 抠既有物种词表（抠不到 None，不编）；resource_type 非 dataset 的
     混入条目 → None（type=dataset 是服务端过滤，混入即跳过）。
     Zenodo 无组织/疾病/建库方案/文件清单结构化字段 → tissue/disease/chemistry/platform/
@@ -2250,7 +2251,11 @@ def _zenodo_to_record(hit: dict) -> dict | None:
         "dataset_name": title,
         "source": ZENODO_SOURCE_LABEL,
         "public_accession": str(rid),
+        # 这是**数据记录自己的 DOI**（不是论文 DOI）——原样保留在 collection_doi
+        # 供编号/标识符直查（identifiers 匹配该字段），同时按正确对象类型写进 dataset_doi；
+        # 出口（provenance.collection_doi）对 Zenodo 一律不把它当论文 DOI 展示。
         "collection_doi": doi or None,
+        "dataset_doi": doi or None,
         "species": _zenodo_species_from_text(title, desc) or None,  # 文本抠取，不全
         "tissue": None,           # Zenodo 无组织结构化字段（槽位放弃，不猜值）
         "disease": None,          # 同上
@@ -2309,7 +2314,17 @@ def _search_zenodo(
                 "没有入库；可到 https://zenodo.org/ 人工核对。",
             )
         rec = _zenodo_to_record(payload)
-        return ([rec] if rec is not None else []), []
+        if rec is None:
+            return [], []
+        # 直查与关键词路径共用文本级物种政策（词表内→学名，词表外→原词，
+        # 在标题/描述原文里找）——冲突不静默放行。
+        if species:
+            word = (_SPECIES_TO_LATIN.get(str(species).lower()) or str(species)).lower()
+            text = (str(rec.get("dataset_name") or "") + " "
+                    + str(rec.get("description") or "")).lower()
+            if word not in text:
+                raise _direct_species_conflict("Zenodo", query_s, species, rec.get("species"))
+        return [rec], []
 
     kw = _zenodo_lucene_quote(query_s)
     parts = [f'(metadata.title:"{kw}" OR metadata.description:"{kw}")']
@@ -2619,6 +2634,18 @@ def _search_refinebio(
                 f"refine.bio 实验 {query_s} 的响应形状变了（缺 accession_code/标题）。本次没有拿回"
                 "任何记录、没有入库；可到 https://www.refine.bio/ 人工核对。",
             )
+        # 直查与关键词路径共用物种政策——词表内物种按本地子串核对，冲突拒绝；
+        # 词表外物种保留既有「不假过滤、明确提示」行为（不过滤但原因用户可见）。
+        if str(species or "").strip():
+            organism = _refinebio_organism_param(species)
+            rec = _refinebio_to_record(payload)
+            if organism and not _species_matches_record(species, rec.get("species")):
+                raise _direct_species_conflict("refine.bio", query_s, species, rec.get("species"))
+            notes: list[str] = []
+            if not organism:
+                notes.append(
+                    f"物种词「{str(species).strip()}」不在已知词表里，这次没有按物种过滤。")
+            return [rec], notes
         return [_refinebio_to_record(payload)], []
 
     url = f"{REFINEBIO_SEARCH_API}?search={urllib.parse.quote(query_s)}&limit={min(int(limit), _REFINEBIO_MAX_LIMIT)}"
@@ -3072,7 +3099,9 @@ def _patch_plan_remove(filename: Any, *, project_root: Path, account_id: str) ->
     if not uid:
         raise CurateError("bad_param", "请给出要删除/屏蔽记录的数据集编号（dataset_uid）。")
     patch = pp.load_patch(project_root, account_id)
-    own = [r for r in patch["adds"] if pp.record_uid(r) == uid]
+    # 匹配用比较键（与定位同口径）——大小写/零宽/NFC 变体同判，展示仍用原文。
+    uid_k = pp.uid_key(uid)
+    own = [r for r in patch["adds"] if pp.uid_key(pp.record_uid(r)) == uid_k]
     if own:
         kind = "trash"
         rec = own[0]
@@ -3080,10 +3109,10 @@ def _patch_plan_remove(filename: Any, *, project_root: Path, account_id: str) ->
         src = str(rec.get("source") or "")
         effect = "从你的补丁包删除（先入回收区，可恢复）。"
     else:
-        if uid in {str(u) for u in patch["blocks"]}:
+        if uid_k in {pp.uid_key(u) for u in patch["blocks"]}:
             raise CurateError("bad_param", f"编号 {uid} 已在你的屏蔽列表里，无需重复屏蔽。")
-        visible = pp.effective_visible_uids(project_root, account_id)
-        if uid not in visible:
+        visible = pp.effective_visible_uids(project_root, account_id)   # 比较键集合
+        if uid_k not in visible:
             raise CurateError(
                 "unknown_file",
                 f"你的语料视图中没有编号为 {uid} 的记录（补丁形态下只能删除自己的新增，"
@@ -3094,7 +3123,7 @@ def _patch_plan_remove(filename: Any, *, project_root: Path, account_id: str) ->
         from .corpus import load_full_corpus  # 惰性；绑定上下文内即本人视图
         for r in load_full_corpus(project_root / "database" / "base", project_root):
             raw = r.raw if isinstance(getattr(r, "raw", None), dict) else {}
-            if pp.record_uid(raw) == uid:
+            if pp.uid_key(pp.record_uid(raw)) == uid_k:
                 name = r.dataset_name
                 src = str(raw.get("source") or "")
                 break
@@ -3156,11 +3185,12 @@ def _patch_plan_restore(recycle_name: Any, *, project_root: Path, account_id: st
     if not uid:
         raise CurateError("bad_param", "请给出要恢复记录的数据集编号（dataset_uid）。")
     patch = pp.load_patch(project_root, account_id)
-    trash_uids = {pp.record_uid(r) for r in patch["trash"] if pp.record_uid(r)}
-    if uid in trash_uids:
+    uid_k = pp.uid_key(uid)
+    trash_uids = {pp.uid_key(pp.record_uid(r)) for r in patch["trash"] if pp.record_uid(r)}
+    if uid_k in trash_uids:
         kind = "untrash"
         effect = "从回收区放回你的补丁包。"
-    elif uid in {str(u) for u in patch["blocks"]}:
+    elif uid_k in {pp.uid_key(u) for u in patch["blocks"]}:
         kind = "unblock"
         effect = "解除屏蔽（该记录重新出现在你的视图中）。"
     else:
@@ -3255,6 +3285,29 @@ def plan_remove(filename: Any, *, project_root: Path) -> dict:
     }
 
 
+def _move_with_manifest(target: Path, dest: Path, root: Path, entry: dict) -> None:
+    """回收、恢复和批量撤回共用：记账失败回滚；库态变过就必须清缓存。
+    写目标（dest）先过目录链接守卫——不得把恢复/撤回写进冻结基准或只读层。"""
+    try:
+        fs_utils.assert_writable_dir(dest, project_root=root)
+    except fs_utils.WritableRootError as exc:
+        raise CurateError("bad_store_path", str(exc)) from None
+    shutil.move(str(target), str(dest))
+    try:
+        _append_jsonl(recycle_manifest(root), entry)
+    except OSError as exc:
+        try:
+            shutil.move(str(dest), str(target))
+        except OSError as rollback_exc:
+            raise CurateError(
+                "move_partial", f"文件已移动到「{dest.name}」，但记账及回滚失败；"
+                "检索缓存已失效，请核对文件位置后重试。") from rollback_exc
+        raise CurateError("journal_failed", "回收站记账失败，文件移动已回滚；请检查账本可写性后重试。") from exc
+    finally:
+        invalidate_external_cache()
+        publish_corpus_write(root)   # 跨进程写入代际标记（独立 reader 立刻可见）
+
+
 def apply_remove(filename: Any, *, confirm_token: Any, project_root: Path) -> dict:
     """curate.remove 第二步：token 比对 → **移动**到 `.userdata/recycle/<timestamp>_<filename>`
     + 追加 manifest.jsonl + invalidate_external_cache()（即时不可见）。
@@ -3267,21 +3320,19 @@ def apply_remove(filename: Any, *, confirm_token: Any, project_root: Path) -> di
     records = _load_file_records(target)  # 重算内容指纹：plan→apply 之间文件被改 → token_mismatch
     _check_token(make_confirm_token(_remove_preimage(name, records)), confirm_token)
 
-    rec_dir = _recycle_dir(root)
+    rec_dir = recycle_dir(root)
     rec_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     dest = rec_dir / f"{stamp}_{name}"
     while dest.exists():  # 同微秒防冲突：绝不覆盖回收站里已有文件
         dest = rec_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{name}"
-    shutil.move(str(target), str(dest))
-    _append_jsonl(_recycle_manifest(root), {
+    _move_with_manifest(target, dest, root, {
         "ts": _now_iso(),
         "action": "remove",
         "original_path": f"{EXTERNAL_DIR_NAME}/{name}",
         "recycle_name": dest.name,
         "record_count": len(records),
     })
-    invalidate_external_cache()
     return {
         "action": "curate.remove",
         "dry_run": False,
@@ -3303,7 +3354,7 @@ def _restore_preimage(recycle_name: str, records: list[dict]) -> dict:
 
 def _recycle_file(recycle_name: Any, project_root: Path) -> tuple[str, Path]:
     name = _leaf_name(recycle_name)
-    target = _recycle_dir(project_root) / name
+    target = recycle_dir(project_root) / name
     if not target.is_file():
         raise CurateError("unknown_file", f"回收站中不存在文件 {name}。")
     return name, target
@@ -3335,7 +3386,10 @@ def plan_restore(recycle_name: Any, *, project_root: Path) -> dict:
 
 def apply_restore(recycle_name: Any, *, confirm_token: Any, project_root: Path) -> dict:
     """curate.restore 第二步：token 比对 → 从回收站移回 external 原文件名 + manifest + 缓存失效。
-    绑定补丁作用域时走补丁形态（untrash / unblock）。"""
+    绑定补丁作用域时走补丁形态（untrash / unblock）。
+
+    恢复在**摄取临界区内**重检全库累计上限（与 import 同一闸）——「导入满→删除→
+    补满→恢复」不再能绕过 ;  写回目标过目录链接守卫。"""
     root = Path(project_root)
     scope = _patch_scope()
     if scope:
@@ -3346,22 +3400,28 @@ def apply_restore(recycle_name: Any, *, confirm_token: Any, project_root: Path) 
     records = _load_file_records(target)
     _check_token(make_confirm_token(_restore_preimage(name, records)), confirm_token)
 
-    dest = _external_dir(root) / original
-    if dest.exists():
-        raise CurateError(
-            "bad_param",
-            f"外部库已存在同名文件「{original}」，为避免覆盖没有恢复；请先处理该文件。",
-        )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(target), str(dest))
-    _append_jsonl(_recycle_manifest(root), {
-        "ts": _now_iso(),
-        "action": "restore",
-        "recycle_name": name,
-        "restored_to": f"{EXTERNAL_DIR_NAME}/{original}",
-        "record_count": len(records),
-    })
-    invalidate_external_cache()
+    with ingest_critical_section(root):
+        dest = _external_dir(root) / original
+        try:
+            fs_utils.assert_writable_dir(dest, project_root=root)
+        except fs_utils.WritableRootError as exc:
+            raise CurateError("bad_store_path", str(exc)) from None
+        if dest.exists():
+            raise CurateError(
+                "bad_param",
+                f"外部库已存在同名文件「{original}」，为避免覆盖没有恢复；请先处理该文件。",
+            )
+        # 累计条数闸（与 import 同一真源）：恢复同样要占额度，超限零落盘变化。
+        _matched, external_total = _scan_external_files([], root)
+        _check_external_total_budget(len(records), external_total)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _move_with_manifest(target, dest, root, {
+            "ts": _now_iso(),
+            "action": "restore",
+            "recycle_name": name,
+            "restored_to": f"{EXTERNAL_DIR_NAME}/{original}",
+            "record_count": len(records),
+        })
     return {
         "action": "curate.restore",
         "dry_run": False,
@@ -3577,7 +3637,8 @@ def _ae_endpoint_drift_note(payload: Any) -> str:
     return ""
 
 
-def _fill_online_check(entry: dict, spec: dict, local_count: int, path: Path, root: Path) -> None:
+def _fill_online_check(entry: dict, spec: dict, local_count: int, path: Path, root: Path,
+                       *, candidate_limit: int | None = _NEW_CANDIDATES_SHOW) -> None:
     """在线比对（仅有适配器的源）：拉官方源「最近条目」与本地 accession 比对。网络失败不抛，如实写明。"""
     query = "single cell"  # 宽查询：要的是按发布日期排序的「最近条目」，不是主题过滤
     url = (f"{AE_SEARCH_API}?query={urllib.parse.quote(query)}&pageSize={_AE_RECENT_LIMIT}"
@@ -3608,7 +3669,7 @@ def _fill_online_check(entry: dict, spec: dict, local_count: int, path: Path, ro
         note = f"已在线比对：官方源最近 {len(recent)} 条目录里都有了（目录共收录 {local_count} 条）。"
     entry.update({
         "online_recent": len(recent),
-        "new_candidates": new[:_NEW_CANDIDATES_SHOW],
+        "new_candidates": new[:candidate_limit],
         "new_count": len(new),
         "note_zh": _snapshot_corrupt_note(local_errs) + note + drift_zh,
     })
@@ -3815,7 +3876,8 @@ _ONLINE_CHECK_NET: dict[str, dict[str, Any]] = {
 }
 
 
-def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path, root: Path) -> None:
+def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path, root: Path,
+                           *, candidate_limit: int | None = _NEW_CANDIDATES_SHOW) -> None:
     """encode/10x/hca/geo/zenodo 在线比对：经 corpus_net 拉最新清单 → 与本地键集合差分 → 如实报新增候选。
 
     corpus_net 一律返回 {ok, items, ...} 不抛异常；ok=False（网络失败/parse_changed）→ 降级 snapshot。"""
@@ -3881,15 +3943,17 @@ def _fill_online_check_net(entry: dict, spec: dict, local_count: int, path: Path
         note = f"已在线比对：{scope_zh} {len(recent)} 条目录里都有了（目录共收录 {local_count} 条）。"
     entry.update({
         "online_recent": len(recent),
-        "new_candidates": new[:_NEW_CANDIDATES_SHOW],
+        "new_candidates": new[:candidate_limit],
         "new_count": len(new),
         "note_zh": channel_note + _snapshot_corrupt_note(local_errs) + note,
     })
 
 
-def check_updates(sources: Any = None, *, project_root: Path) -> dict:
+def check_updates(sources: Any = None, *, project_root: Path,
+                  candidate_limit: int | None = _NEW_CANDIDATES_SHOW) -> dict:
     """curate.check_updates 能力本体：检查来源有没有更新。**只读、不落盘、不抛异常**。
 
+    - `candidate_limit` 默认限制展示候选；内部同步传 None 读取完整候选，不改变导入预算。
     - `sources=None` → 检查注册表全部来源；给列表 → 逐个按口语名解析（认不出的给
       `mode="unknown"` 条目如实说明，不因一个名字连累其余）。
     - 有在线通道的源（ArrayExpress / ENCODE / 10x / HCA / GEO / Zenodo / refine.bio）→ `mode="online"`：
@@ -3935,9 +3999,10 @@ def check_updates(sources: Any = None, *, project_root: Path) -> dict:
         if spec["online"]:
             entry["mode"] = "online"
             if spec.get("net_kind"):
-                _fill_online_check_net(entry, spec, local_count, path, root)  # 失败会降级 snapshot
+                _fill_online_check_net(entry, spec, local_count, path, root,
+                                       candidate_limit=candidate_limit)  # 失败会降级 snapshot
             else:
-                _fill_online_check(entry, spec, local_count, path, root)
+                _fill_online_check(entry, spec, local_count, path, root, candidate_limit=candidate_limit)
         else:
             if not path.is_file():
                 note = (f"本地没有找到这个来源的快照文件（{spec['file']}）。可到官网 {spec['site_url']} 核对；"
@@ -4058,7 +4123,9 @@ def _sync_collect_records(
     identity_index, dedup_skipped = _external_identity_index(root)   # 实体级库态（一趟扫）
     if dedup_skipped:
         warnings.append(_dedup_skipped_note(dedup_skipped))
-    for cand in candidates[:max_import]:
+    for cand in candidates:
+        if len(records) >= max_import:
+            break
         acc = str(cand.get("accession") or "").strip()
         if not acc:
             continue
@@ -4088,20 +4155,30 @@ def _sync_collect_records(
             if uid and uid not in seen:
                 seen.add(uid)
                 records.append(record)
+                identity_index.update(keys)
+                if len(records) >= max_import:
+                    break
     return records, warnings, skipped
 
 
-def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, project_root: Path) -> dict:
+def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT,
+                 total_max_import: Any = _SYNC_TOTAL_MAX_IMPORT,
+                 project_root: Path) -> dict:
     """curate.sync_updates 能力本体：**检查更新 → 有新增则自动入库**的确定性复合流。
 
     步骤顺序写死在本函数里（不交给 LLM 编排）：
       1. `check_updates` 只读在线比对（同一真源；网络失败按既有契约如实降级，不抛）；
       2. 对每个「mode=online 且有疑似新增且有入库适配器」的来源：逐编号搜回完整记录
-         （每源最多 `max_import` 条、全请求累计最多 `_SYNC_TOTAL_MAX_IMPORT` 条；
-         外部库已有的跳过不重复入库），合并成**一个**
-         sync 批次文件经 `uploads.ingest_dataset` 入库（与 apply_search_online 同一落盘
-         管线、同一 upload_* 命名空间、同一本账——回收站可撤回）；
+         （每源最多 `max_import` 条、全请求累计最多 `total_max_import` 条，
+         后者 clamp 到 [1, _SYNC_TOTAL_MAX_IMPORT]；外部库已有的跳过不重复入库），
+         合并成**一个** sync 批次文件经 `uploads.ingest_dataset` 入库（与 apply_search_online
+         同一落盘管线、同一 upload_* 命名空间、同一本账——回收站可撤回）；
       3. 闭不了环的来源（只有离线快照 / 无入库适配器）在条目 note_zh 如实写明哪段做不到。
+
+    `total_max_import`：调用方（agent 环内工具）按本轮**剩余写入额度**
+    传入的跨来源总上限——先 search 后 sync 的两步写链不再可能合计越过 40 条；缺省 = 现有
+    30 条历史预算，行为逐位不变。收窄发生在**写前**（per_source_cap 与逐源预算闸同源），
+    被预算挡下的新增在条目 note_zh 如实点名「再说一次即可继续」，不静默截用户选择。
 
     外部库去重扫描遇坏 JSON：跳过不炸，坏文件名在返回的
     `skipped_files` 清单里如实列出（hint_zh 同步提示），不静默失明。
@@ -4125,13 +4202,20 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
         cap = max(1, min(20, int(max_import)))
     except (TypeError, ValueError):
         cap = _SYNC_MAX_IMPORT
+    # 调用方给的跨来源总预算（agent 环内按本轮剩余写入额度传入）——clamp 到
+    # [1, _SYNC_TOTAL_MAX_IMPORT]；缺省/非法 = 历史 30 条预算，行为逐位不变。
+    try:
+        total_cap = max(1, min(int(_SYNC_TOTAL_MAX_IMPORT), int(total_max_import)))
+    except (TypeError, ValueError):
+        total_cap = _SYNC_TOTAL_MAX_IMPORT
     # 整任务跨进程锁（检查+联网+入库全程）。锁被占（另一进程/线程的
     # sync 正在跑）→ 立即 CurateError(sync_busy)，不排队——sync 是分钟级任务，排队等于
     # 假装会很快；写侧在 ingest_critical_section 里还有一层收口，但「按旧比对结果重写库」
     # 的重活发生在锁外，必须整任务锁住（见 sync_updates_critical_section 注释）。
     operation_id = _new_operation_id()
     with sync_updates_critical_section(root):
-        checked = check_updates(sources, project_root=root)
+        # 展示摘要上限不参与同步预算；先排除已入库项，再收集实际待导入记录。
+        checked = check_updates(sources, project_root=root, candidate_limit=None)
         existing_uids, skipped_files = _external_dataset_uids(root)
         importable = set(SOURCE_ADAPTERS)  # 有入库适配器的来源才可能闭环
 
@@ -4162,13 +4246,14 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
                 )
                 entries.append(out)
                 continue
-            # 全请求总预算闸：跨来源累计写入了了 `_SYNC_TOTAL_MAX_IMPORT`
-            # 条后不再写——本源的疑似新增如实报「预算用完」，用户再说一次即可续跑。
-            remaining_budget = _SYNC_TOTAL_MAX_IMPORT - imported_total
+            # 全请求总预算闸：跨来源累计写入了 `total_cap` 条后不再写——本源的疑似新增
+            # 如实报「预算用完」，用户再说一次即可续跑。收窄发生在**写前**（per_source_cap），
+            # 不静默截断用户选择：被预算挡下的条数与原因写进 note_zh。
+            remaining_budget = total_cap - imported_total
             if remaining_budget <= 0:
                 out["note_zh"] = (
                     f"检到疑似新增 {new_count} 条，但本次请求的自动入库总预算"
-                    f"（{_SYNC_TOTAL_MAX_IMPORT} 条）已用完，一条都没有自动入库"
+                    f"（{total_cap} 条）已用完，一条都没有自动入库"
                     "——再说一次「检查更新并同步」即可继续。"
                 )
                 entries.append(out)
@@ -4218,7 +4303,7 @@ def sync_updates(sources: Any = None, *, max_import: Any = _SYNC_MAX_IMPORT, pro
                 if new_count > len(records) + skipped:
                     if per_source_cap < cap:
                         notes.append(f"另有 {new_count - len(records) - skipped} 条没有自动入库"
-                                     f"（本次请求的自动入库总预算 {_SYNC_TOTAL_MAX_IMPORT} 条将用尽），"
+                                     f"（本次请求的自动入库总预算 {total_cap} 条将用尽），"
                                      "再说一次「检查更新并同步」即可继续")
                     elif new_count > per_source_cap:
                         notes.append(f"另有 {new_count - len(records) - skipped} 条没有自动入库"
@@ -4623,7 +4708,7 @@ def recall_sync_operation(operation_id: Any, *, project_root: Path) -> dict:
             "或到「同步状态」查最近一次操作的 operation_id。",
         )
     files = [str(f) for f in (op.get("created_files") or []) if str(f).strip()]
-    rec_dir = _recycle_dir(root)
+    rec_dir = recycle_dir(root)
     rec_dir.mkdir(parents=True, exist_ok=True)
     recalled: list[str] = []
     skipped: list[str] = []
@@ -4638,21 +4723,18 @@ def recall_sync_operation(operation_id: Any, *, project_root: Path) -> dict:
             dest = rec_dir / f"{stamp}_{name}"
             while dest.exists():       # 同微秒防冲突：绝不覆盖回收站里已有文件（与 apply_remove 同口径）
                 dest = rec_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{name}"
-            shutil.move(str(target), str(dest))
-            _append_jsonl(_recycle_manifest(root), {
+            _move_with_manifest(target, dest, root, {
                 "ts": _now_iso(),
                 "action": "recall",
                 "operation_id": op_id,
                 "original_path": f"{EXTERNAL_DIR_NAME}/{name}",
                 "recycle_name": dest.name,
-                "record_count": len(_load_file_records(dest)),
+                "record_count": len(_load_file_records(target)),
             })
             recalled.append(name)
         except Exception as exc:
             hint = getattr(exc, "hint", None) or str(exc)
             failed.append({"filename": name, "error": type(exc).__name__, "hint": str(hint)})
-    if recalled:
-        invalidate_external_cache()
     status = "ok" if not failed else ("partial" if recalled else "failed")
     hint_parts: list[str] = []
     if recalled:

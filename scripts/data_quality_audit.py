@@ -23,7 +23,7 @@ AGENT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENT_ROOT / "src"))
 
 from dataset_recommender.corpus import downloads
-from dataset_recommender.retrieval import vocabulary  # noqa: E402
+from dataset_recommender.domains.biodata import vocabulary  # noqa: E402
 from dataset_recommender.corpus.corpus import load_full_corpus, source_of  # noqa: E402
 from dataset_recommender.corpus.data_quality import DIMS_CHECKED, field_description_conflict  # noqa: E402
 from dataset_recommender.retrieval.normalizer import DatasetRecord  # noqa: E402

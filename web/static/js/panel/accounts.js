@@ -10,16 +10,18 @@ import { renderMemorySuggestions, renderMemoryManager, userMemoryEnabled } from 
 import { LAST_RECOMMEND_DATA, applyRecommendResult } from "#search";
 import { cbClear } from "#board";
 import { renderBrowse } from "#browse";
-import { libRefreshActive, histRefreshActive } from "#shell";
+import { libRefreshActive, histRefreshActive, openSettings } from "#shell";
 import { resetFavFolderState } from "#fav_folders";
 import { resetReuseScope } from "#reuse_pack";
 import { artifactsOnProfileSwitched } from "#artifacts";
+import { COPY } from "../core/copy.js";
 
 /* ---------- 账户切换反转钩子 ----------
    projects.js 经 setAccountChangedHook 注册「切账户后清课题 UI 态」回调。刻意不 import projects
    （projects 反向 import 本文件的 cbClear 等——accounts→projects 会让 projects 经
    interactions→browse→accounts 链路成环；注册反转与 core.js setHistHooks 同一模式）。 */
 let _accountChangedHooks = [];
+let _accountUIEnabled = false;
 export function setAccountChangedHook(fn) {
     if (typeof fn === "function" && !_accountChangedHooks.includes(fn)) _accountChangedHooks.push(fn);
 }
@@ -55,6 +57,8 @@ let _gate = { required: false, invite: false };
 let _authLocked = false;
 
 function syncAccountGateUI() {
+    const passwordNote = $("accountPasswordNote");
+    if (passwordNote) passwordNote.textContent = COPY.account.passwordNotice;
     const inviteRow = $("accountInviteRow");
     if (inviteRow) inviteRow.hidden = !_gate.invite;
     const closeBtn = $("accountModalClose");
@@ -257,6 +261,11 @@ export async function accountSwitchTo(username) {
 
 /* 账户切换后（匿名↔登录、或换账户）：各用户数据视图从新命名空间重渲。 */
 export function onAccountChanged() {
+    if (!_accountUIEnabled) {
+        resetFavFolderState();
+        _accountChangedHooks.forEach((h) => { try { h(); } catch (_e) {} });
+        return;
+    }
     // 收藏夹 UI 态（tab/管理面板/popover）与复用清单范围全部复位——它们属于上一账户的命名空间视图态
     if (typeof resetFavFolderState === "function") resetFavFolderState();
     if (typeof resetReuseScope === "function") resetReuseScope();
@@ -309,11 +318,16 @@ function renderAccountState() {
 /* ---------------- 侧栏账号 chip + 菜单 ---------------- */
 
 export function renderAccountChip() {
-    const name = $("accountChipName"), avatar = $("accountAvatar");
-    if (!name || !avatar) return;
+    // 设置抽屉 chip 与左栏账号区 chip 同一口径：用户名（未登录=「未登录」）+ 首字母头像（未登录=「?」）
     const uname = CURRENT_USER ? CURRENT_USER.username : "";
-    name.textContent = uname || "未登录";
-    avatar.textContent = uname ? uname.slice(0, 1).toUpperCase() : "?";
+    const text = uname || "未登录";
+    const initial = uname ? uname.slice(0, 1).toUpperCase() : "?";
+    const pairs = [["accountChipName", "accountAvatar"], ["railAcctName", "railAcctAvatar"]];
+    for (const [nameId, avatarId] of pairs) {
+        const name = $(nameId), avatar = $(avatarId);
+        if (name) name.textContent = text;
+        if (avatar) avatar.textContent = initial;
+    }
 }
 
 let _accountMenuOpen = false;
@@ -416,7 +430,9 @@ async function submitAccount(kind) {
     }
 }
 
-export function initAccounts() {
+export function initAccounts(options) {
+    if (ACCOUNTS_READY) return ACCOUNTS_READY;
+    _accountUIEnabled = !(options && options.identityOnly);
     renderAccountState();
     renderAccountChip();
     installAuthFetchGuard();   // T3：401 auth_required → 自动回登录锁定（护栏模式外 no-op）
@@ -426,6 +442,9 @@ export function initAccounts() {
     // 账号 chip / 菜单（2026-08-03 起在设置·账户块内，登录/注册/登出/切换全走这颗 chip 的菜单）
     const chip = $("accountChip");
     if (chip) chip.addEventListener("click", toggleAccountMenu);
+    // 左栏账号区 chip（三栏导航轨底部）：账号管理入口统一在设置抽屉，点击直达（账户块在抽屉顶部）
+    const railChip = $("railAcctChip");
+    if (railChip) railChip.addEventListener("click", () => openSettings());
     const menu = $("accountMenu");
     if (menu) menu.addEventListener("click", accountMenuClick);
     document.addEventListener("click", (e) => {

@@ -130,7 +130,7 @@ def _serve_capture(order: list) -> None:
 def test_run_web_default_bind_is_loopback(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("BIODATA_WEB_HOST", raising=False)
     monkeypatch.delenv("PORT", raising=False)
-    monkeypatch.setattr(run_web, "warm_web_recall", lambda *a, **k: "unavailable")
+    monkeypatch.setattr(run_web, "start_background_warm", lambda *a, **k: None)
     order: list = []
     monkeypatch.setattr(run_web.uvicorn, "run", _serve_capture(order))
     run_web.main()
@@ -141,7 +141,7 @@ def test_run_web_default_bind_is_loopback(monkeypatch: pytest.MonkeyPatch):
 def test_run_web_web_host_env_overrides_bind(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("BIODATA_WEB_HOST", "0.0.0.0")
     monkeypatch.delenv("PORT", raising=False)
-    monkeypatch.setattr(run_web, "warm_web_recall", lambda *a, **k: "unavailable")
+    monkeypatch.setattr(run_web, "start_background_warm", lambda *a, **k: None)
     order: list = []
     monkeypatch.setattr(run_web.uvicorn, "run", _serve_capture(order))
     run_web.main()
@@ -153,7 +153,7 @@ def test_run_web_blank_web_host_falls_back_to_loopback(
 ):
     monkeypatch.setenv("BIODATA_WEB_HOST", "   ")
     monkeypatch.delenv("PORT", raising=False)
-    monkeypatch.setattr(run_web, "warm_web_recall", lambda *a, **k: "unavailable")
+    monkeypatch.setattr(run_web, "start_background_warm", lambda *a, **k: None)
     order: list = []
     monkeypatch.setattr(run_web.uvicorn, "run", _serve_capture(order))
     run_web.main()

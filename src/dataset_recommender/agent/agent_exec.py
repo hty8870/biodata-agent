@@ -101,14 +101,21 @@ import re
 import sys
 import threading
 import time
+import uuid
+from . import learning_scope as _learning_scope
+from . import run_control as _run_control
 from dataclasses import dataclass, replace as _dataclass_replace
 from pathlib import Path
 from typing import Annotated, Any, Callable, Iterator, TypedDict
 
 from . import action_plan as _ap
+from . import collab_rules as _collab_rules
 from . import hybrid_policy as _hybrid_policy
+from . import decider as _decider
+from . import l0_router as _l0
 from ..retrieval import search_request as _sr
-from ..retrieval import vocabulary as _vocab
+from ..domain.registry import domain_catalog as _domain_catalog, domain_labels_zh as _domain_labels_zh, get_domain as _get_domain
+from ..domain import vocab_tools as _vocab_tools
 #: `_alias_occurrences` 是检索侧别名匹配的唯一真源（ASCII 词边界 + 右侧复数 s 容忍）；
 #: corpus_enrich 因隔离门自抄了一份并背双同步纪律——本模块没有隔离限制，**复用不抄第三份**。
 from ..retrieval.query_parser import _alias_occurrences as _qp_alias_occurrences
@@ -124,7 +131,6 @@ from ..app.runtime_paths import instance_data_dir_for, resource_file_for
 # 可追溯性：trace 挂钩——recorder 经 contextvars 传递
 # （turn/webapp 入口处绑定），本模块全部 emit 点零签名变更、fail-soft、AGENT_TRACE OFF
 # 时零构造零落盘。trace 包自身无 langchain 依赖、corpus 引用全是懒 import，模块级安全。
-from .trace import active_recorder as _trace_active
 from .trace import snapshot_store as _trace_snapshot_store
 from .trace import events as _te
 from .trace import rollback as _trace_rollback
@@ -209,10 +215,19 @@ class _AgentState(TypedDict, total=False):
     search_lenient_dims: Any
     search_date_from: str
     search_date_to: str
+    # 排序杠杆（2026-09-17 三径合一）：环内 rank/rerank 试跑与 pre-loop 摘要、
+    # /api/recommend 同口径——此前环内静默回默认（recall=off/strategy=fixed/
+    # top_k=workflow 缺省），请求级开向量召回时新旧屏面健康对照口径不一。
+    # 缺省 None/"" = 旧行为逐位不变。
+    search_top_k: Any
+    search_recall: str
+    search_strategy: str
     route_scope: str              #: scoped 路由：route_consensus 的共识结果 "search"/"action"/"general"，或端点预置的 "rescue"；route.request 步放行后由 execute 改写（覆写语义）
     required_capabilities: list[dict]  #: 混合诉求能力账（2026-08-22 覆写语义）：机械闸命中时由 route_consensus 产出（{capability, verbs, label_zh, anchor}），finish 机械核销逐项对账，缺项拒收回灌
     artifact_context: str        #: 课题上下文卡：独立字段，只进 route_consensus/understand 的 prompt 作结构化上下文块；缺省空串 = 与旧版逐位一致
     intent_checklist: list[dict]  #: 句内 EXEC 子意图清单 {verb, verb_zh, quoted, plane=inloop|frontend}；decide 逐项核销，frontend 项由前端接管
+    ask_answer: dict | None       #: 放松卡作答续跑（2026-09-14 ask 暂停/重启批，端点下入）：{kind, choice_key, label, message, suppress}；在场时 route_consensus 免投票直定 search、understand 零 LLM 强置首步 rank、decide 注入作答事实段
+    allowed_verbs: "frozenset[str] | None"  #: 建议动作（suggested_recipe）的请求级动词允许集：首步/续步/批量执行共用执行前机械闸（只缩小不扩权；None=不额外收窄）
 
 
 @dataclass(frozen=True)
@@ -236,6 +251,8 @@ class _AgentContext:
     # 按 anonymous + 空端点分区处理。
     principal: str = ""
     endpoint_fp: str = ""
+    project_id: str = ""
+    cancel_check: Any = None
     # on_progress（2026-08-16 信息流升级）：节点/工具「即将开始」的即时回调——
     # plan_with_agent_events 把 on_event 同一回调双通道接进来（tool_start 事件与 step
     # 完成事件同路，webapp 按 kind 透传给前端）；None = 非流式/rescue 路径，自然静默。
@@ -253,6 +270,7 @@ class _AgentContext:
     # 课题上下文卡——understand/route_consensus 的
     # prompt 结构化注入块原料（独立字段，绝不拼进用户原话）；缺省空串 = 旧版逐位不变。
     artifact_context: str = ""
+    history_context: str = ""
 
 
 def agent_available() -> bool:
@@ -359,6 +377,11 @@ def _get_tool_specs() -> tuple[list[dict], dict[str, str]]:
             if _TOOL_SPECS_CACHE is None:
                 _TOOL_SPECS_CACHE = _tool_specs()
     return _TOOL_SPECS_CACHE
+
+
+def _conversation_history_block(messages):
+    from ..app.conversation_contracts import history_block
+    return history_block(messages)
 
 
 def _artifact_context_block_zh(artifact_context: Any) -> str:
@@ -807,6 +830,43 @@ def _rerank_used(steps: list[dict]) -> int:
     return sum(1 for s in steps if str(s.get("verb") or "") == "rerank")
 
 
+#: results.show 独立预算（2026-09-13 rerank 处置批，与 search.rerun 预算同哲学）：
+#: 上屏本身只读，但每跑一次是一遍确定性管线重放 + 载荷重建——一次请求至多 MAX_SHOW 次，
+#: 防 show↔rerank ping-pong；超出由 `_adjudicate_decide_obj` 机械拒绝并如实点名。
+MAX_SHOW = 2
+
+
+def _show_used(steps: list[dict]) -> int:
+    """已用上屏次数（从 steps 现算，同 `_search_rerun_used` 口径：提议过即消耗）。"""
+    return sum(1 for s in steps if str(s.get("verb") or "") == "results.show")
+
+
+#: ask.relax 独立预算（2026-09-14 YOLO 批，与 results.show 预算同哲学）：
+#: 每次提议都会向用户弹一张「放松哪个条件」选择卡——打扰是真成本，一次请求至多
+#: MAX_ASK_RELAX 次；超出由 `_adjudicate_decide_obj` 机械拒绝并如实点名
+#: （口径=提议过即消耗，被闸内情拒绝的提议同样计数）。
+MAX_ASK_RELAX = 1
+
+
+def _ask_relax_used(steps: list[dict]) -> int:
+    """已用放宽询问次数（从 steps 现算，同 `_show_used` 口径：提议过即消耗）。"""
+    return sum(1 for s in steps if str(s.get("verb") or "") == "ask.relax")
+
+
+def _ask_relax_pending(steps: list[dict]) -> dict | None:
+    """环是否正停在一张等作答的放松卡上（2026-09-14 ask 暂停/重启批）：从 steps
+    现算——存在 ok 且 result.asked=True 的 ask.relax 步即「环已暂停等作答」
+    （不落新状态键，与 `_screen_baseline` 的机械现取同哲学）。返回该步（取最近一次）。"""
+    pending: dict | None = None
+    for s in steps:
+        if str(s.get("verb") or "") != "ask.relax":
+            continue
+        result = s.get("result")
+        if s.get("ok") and isinstance(result, dict) and result.get("asked"):
+            pending = s
+    return pending
+
+
 #: 环内结果处理四工具的独立预算（2026-08-18 四工具批，与 rank 预算同哲学：提示不是
 #: 围栏，代码是）：
 #:   · compare.datasets 每跑一次 = 一遍本地检索（取默认对象）+ 一次独立 LLM 措辞调用
@@ -918,6 +978,101 @@ _RERANK_BUDGET_BLOCK_ZH = (
     "本回合不许再提议 rerank；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
 )
 
+#: results.show 预算耗尽的 prompt 机械注入段（2026-09-13 rerank 处置批，同预算哲学）。
+_SHOW_BUDGET_BLOCK_ZH = (
+    "\n----- 上屏预算已用完（机械约束）-----\n"
+    f"本次请求已上屏 {MAX_SHOW} 次（一次请求最多 {MAX_SHOW} 次）："
+    "本回合不许再提议 results.show；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
+)
+
+#: ask.relax 预算耗尽的 prompt 机械注入段（2026-09-14 YOLO 批，同预算哲学）。
+_ASK_RELAX_BUDGET_BLOCK_ZH = (
+    "\n----- 放宽询问预算已用完（机械约束）-----\n"
+    f"本次请求已询问放宽条件 {MAX_ASK_RELAX} 次（一次请求最多 {MAX_ASK_RELAX} 次）："
+    "本回合不许再提议 ask.relax；没有可做的事就 finish（JSON 通道回 {\"done\": true}）。"
+)
+
+#: 作答续跑的 decide prompt 机械注入段（2026-09-14 ask 暂停/重启批）：用户刚在环内
+#: 放松卡上做了选择、首步 rank 已按所选忽略条件机械重跑——把「发生了什么、接下来
+#: 怎么裁决」的事实段摆给模型。动态部分只有用户所选的 label/message（来自
+#: state.ask_answer，由服务端校验组装，非用户自由文本直拼）。
+def _ask_answer_resume_block_zh(ask_answer: Any) -> str:
+    if not isinstance(ask_answer, dict):
+        return ""
+    label = str(ask_answer.get("label") or "").strip()
+    message = str(ask_answer.get("message") or "").strip()
+    chosen = label or message or "（选项文案缺失）"
+    return (
+        "\n----- 用户已在放松卡上作答（机械事实）-----\n"
+        f"用户选择了「{chosen}」：第 1 步已按此选择忽略对应条件重跑了原查询"
+        "（结果见上方已完成步骤）。接下来由你裁决：重跑结果健康且已自动上屏 → finish "
+        "并如实说明忽略了哪些条件；仍不健康 → 可考虑 rerank 改写、（预算内）再发起 "
+        "ask.relax，或如实 finish 说明现状。"
+    )
+
+
+def _screen_alert_block_zh(steps: list[dict]) -> str:
+    """「结果不健康」告警注入段（2026-09-13 rerank 处置批——**纯情报员**：只注入上下文，
+    不改 workflow 走向）：环内最近一次检索试跑（rank/rerank）被机械健康度谓词判为
+    degenerate（零命中/解析弃权/向量兜底/条件丢失）时成段，把事实与可选对策摆给模型
+    （rerank 是对策之一），选哪个、动不动都归模型裁决。最近试跑非 degenerate 或还没有
+    试跑时恒空段。"""
+    for s in reversed(steps):
+        if not (isinstance(s, dict) and s.get("ok")):
+            continue
+        v = str(s.get("verb") or "")
+        if v not in ("rank", "rerank"):
+            continue
+        r = s.get("result") if isinstance(s.get("result"), dict) else {}
+        if str(r.get("health") or "") != "degenerate":
+            return ""
+        status = str(r.get("resolution_status") or "")
+        total = int(r.get("total") or 0)
+        if r.get("structured_context_lost"):
+            detail = "新查询没能完整保留当前筛选条件（为避免放宽条件，未上屏）"
+        elif status == "abstained":
+            detail = "解析层弃权，检索未真正执行"
+        elif status == "vector_fallback":
+            detail = "条件未能执行，走的是向量语义兜底（未经条件核验）"
+        elif status == "clarification_required":
+            detail = "查询有歧义，需要先澄清"
+        elif total <= 0:
+            detail = "命中 0 条"
+        else:
+            detail = f"命中 {total} 条但未经条件核验"
+        q = str(r.get("query") or r.get("rewritten_query") or "")
+        # ask.relax 适用性情报（2026-09-14 YOLO 批）：试跑结果内嵌的 relax_live
+        # 是零 LLM 确定性预演（「放松哪维能救回几条」）——活选项存在则点名
+        # ask.relax 是对因对策；空清单则如实标注不适用（防模型空撞 no_options
+        # 机械闸）；键缺失（旧步/未探测档）保持通用对策清单不妄断。
+        relax_live = r.get("relax_live")
+        relax_note = ""
+        ask_relax_hint = ("ask.relax（病根在用户条件互相打架或过严时，"
+                          "弹卡问用户放松哪个）/ ")
+        if isinstance(relax_live, list):
+            if relax_live:
+                opts = "；".join(
+                    f"{o.get('key')}（放松「{o.get('label')}」）→ {o.get('count')} 条"
+                    for o in relax_live[:6])
+                relax_note = (
+                    f"确定性预演（零 LLM）：{opts}——放松用户条件能救回结果，"
+                    "病根可能在**用户条件过严/互相打架**；这种情况 ask.relax 是对因对策"
+                    "（把放松选项做成选择卡弹给用户，点选后自动重搜）。\n")
+            else:
+                relax_note = ("确定性预演（零 LLM）：放松任何单一条件都救不回结果——"
+                              "ask.relax 不适用（选了也会被机械拒绝）。\n")
+                ask_relax_hint = ""
+        return (
+            "\n----- 结果不健康告警（机械事实，仅供决策）-----\n"
+            f"最近一次检索「{q}」的结果**不健康**：{detail}——屏面上没有经条件核验的结果。\n"
+            + relax_note
+            + "可选对策：rerank（优化检索词重查，是常用对策之一）/ "
+            + ask_relax_hint
+            + "search.rerun（换词重检）/ rank（换个方向新检索）/ "
+              "如实告知用户后 finish——选哪个由你按原因判断。"
+        )
+    return ""
+
 #: 环内结果处理四工具的预算注入段（2026-08-18 同预算哲学；未用满恒空段）。
 _COMPARE_BUDGET_BLOCK_ZH = (
     "\n----- 数据集对比预算已用完（机械约束）-----\n"
@@ -1004,6 +1159,53 @@ def _write_steps_used(steps: list[dict]) -> int:
     return sum(1 for s in steps if str(s.get("verb") or "") in _WRITE_LOOP_TOOLS
                and not (str(s.get("verb") or "") == "curate.search_online"
                         and str(s.get("error_code") or "") == "network_error"))
+
+
+def _written_files_of_result(verb: str, result: Any) -> list[str] | None:
+    """本步工具**自报**的落盘产物名清单（快照归属过滤用）——单一映射锚点。
+
+    - 联网入库：`filename`（单文件；零写入 → 空清单，明确「本步没有产物」）；
+    - 同步入库：`created_files` 回执（缺省回退逐源 `filename`）；
+    - 其余动词 → None：不设清单（快照保持全目录差分旧行为，不假装知道产物）。"""
+    if not isinstance(result, dict):
+        return None
+    if verb == "curate.search_online":
+        fn = str(result.get("filename") or "").strip()
+        return [fn] if fn else []
+    if verb == "curate.sync_updates":
+        names: list[str] = []
+        for item in list(result.get("created_files") or []):
+            s = str(item or "").strip()
+            if s and s not in names:
+                names.append(s)
+        if names:
+            return names
+        for ent in list(result.get("sources") or []):
+            fn = str((ent or {}).get("filename") or "").strip()
+            if fn and fn not in names:
+                names.append(fn)
+        return names
+    return None
+
+
+def _mutation_receipt_of_result(verb: str, result: Any) -> dict[str, list[str]] | None:
+    """本步工具**自报的变更收据**（归属纪律）。
+
+    - `created` 复用 `_written_files_of_result` 的产物映射；
+    - `modified`/`deleted` 对两个写漏斗恒为空——它们都是「新建一个批次文件」的语义，
+      不会改写/删除既有文件；配成显式空清单后，快照不再把 capture—finalize 窗口内
+      **他人的改写/删除**归给本步（全目录差分只作留痕，不进回滚执行清单）；
+    - 认不出的动词 → None（不设收据；快照保持旧全目录差分行为）。"""
+    created = _written_files_of_result(verb, result)
+    if created is None:
+        return None
+    return {"created": list(created), "modified": [], "deleted": []}
+
+
+def _empty_mutation_receipt() -> dict[str, list[str]]:
+    """失败步的收据 = **全部为空**：工具没跑完、产物清单不可知时，任何窗口内变化都
+    不归给本步（宁可少退不毁数据）；未归因项由快照如实留痕（unattributed_*）。"""
+    return {"created": [], "modified": [], "deleted": []}
 
 
 def _write_records_used(steps: list[dict]) -> int:
@@ -1106,11 +1308,15 @@ def _loop_check_updates(slots: dict, root: Path) -> dict:
     return cc.check_updates([source] if source else None, project_root=root)
 
 
-def _loop_search_online(slots: dict, root: Path) -> dict:
+def _loop_search_online(slots: dict, root: Path, ctx: dict | None = None) -> dict:
     """联网搜 + 立刻入库（plan → apply 图内闭环）：confirm_token 由 plan 结果内部回传——
     这就是全自动化授权的机械确认（后端重算指纹 fail-closed）。keywords 缺失 → CurateError
     如实失败；未注册源（如 10x）在**任何网络请求之前**抛 source_not_registered（fail-fast）。
-    返回 plan/apply 两侧字段的合并 dict（前端 actSearchCardHtml 吃同一份）。"""
+    返回 plan/apply 两侧字段的合并 dict（前端 actSearchCardHtml 吃同一份）。
+
+    `ctx.write_records_remaining` = 执行前现算的本轮剩余写入额度——联网候选数按
+    min(默认 20, 剩余) 收窄，本轮实际写入因此不会越过 40 条上限（旧实现只在写完后扣账，
+    30 + 20 = 50 条）。额度缺席（直调/旧 ctx）→ 默认 20，行为逐位不变。"""
     from ..corpus import corpus_curation as cc
 
     slots = slots or {}
@@ -1124,8 +1330,30 @@ def _loop_search_online(slots: dict, root: Path) -> dict:
         )
     source = str(slots.get("source") or "").strip().lower() or "arrayexpress"
     species = str(slots.get("species") or "").strip() or None
-    pr = cc.plan_search_online(keywords, source, species, project_root=root)
+    limit = 20
+    remaining = (ctx or {}).get("write_records_remaining")
+    capped = False
+    remaining_n = 20
+    if remaining is not None:
+        try:
+            remaining_n = max(0, int(remaining))
+        except (TypeError, ValueError):
+            remaining_n = 20
+        if remaining_n <= 0:
+            raise cc.CurateError(
+                "too_large",
+                "本次请求的写入额度已用完（一次请求最多 40 条），没有执行联网入库，"
+                "也没有写入任何内容；还要入库可以再说一次。")
+        if remaining_n < limit:
+            limit = remaining_n
+            capped = True
+    pr = cc.plan_search_online(keywords, source, species, limit=limit, project_root=root)
     applied = cc.apply_search_online(pr, confirm_token=pr["confirm_token"], project_root=root)
+    warnings = list(pr.get("warnings") or []) + list(applied.get("warnings") or [])
+    if capped:
+        warnings.append(
+            f"本次请求的写入额度只剩 {remaining_n} 条，联网候选按 {limit} 条上限执行"
+            "（其余候选可以再说一次「联网搜…」继续）。")
     return {
         "source_label": pr.get("source_label"),
         "query": pr.get("query"),
@@ -1138,16 +1366,30 @@ def _loop_search_online(slots: dict, root: Path) -> dict:
         "skipped_existing_count": applied.get("skipped_existing_count")
             if applied.get("skipped_existing_count") is not None
             else pr.get("skipped_existing_count") or 0,
-        "warnings": list(pr.get("warnings") or []) + list(applied.get("warnings") or []),
+        "warnings": warnings,
     }
 
 
-def _loop_sync_updates(slots: dict, root: Path) -> dict:
-    """检查更新 → 有新增则自动入库的复合流（corpus_curation.sync_updates 一次原子调用）。"""
+def _loop_sync_updates(slots: dict, root: Path, ctx: dict | None = None) -> dict:
+    """检查更新 → 有新增则自动入库的复合流（corpus_curation.sync_updates 一次原子调用）。
+
+    按 `ctx.write_records_remaining` 在**写前**同时收窄单源（max_import）与
+    跨来源总预算（total_max_import）——先 search 后 sync 的两步写链合计不越过 40 条；
+    被预算挡下的新增由语料侧 note_zh 如实点名（不静默截断）。"""
     from ..corpus import corpus_curation as cc
 
     source = str((slots or {}).get("source") or "").strip()
-    return cc.sync_updates([source] if source else None, project_root=root)
+    kwargs: dict = {}
+    remaining = (ctx or {}).get("write_records_remaining")
+    if remaining is not None:
+        try:
+            remaining_n = max(1, int(remaining))
+        except (TypeError, ValueError):
+            remaining_n = None
+        if remaining_n is not None:
+            kwargs["max_import"] = min(10, remaining_n)
+            kwargs["total_max_import"] = remaining_n
+    return cc.sync_updates([source] if source else None, project_root=root, **kwargs)
 
 
 class _SearchRerunParamError(Exception):
@@ -1205,7 +1447,6 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     「库中共 N 条匹配」、披露句同屏，截断口径上去就是同屏打架：实测 10 → 10 条 vs
     屏上 93 条）。无基准时 n_before_total 与 n_before 同如实记 None。"""
     from ..app import workflow as wf
-    from ..app.recommend_rows import recommend_payload
 
     slots = slots or {}
     ctx = ctx or {}
@@ -1218,19 +1459,11 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
     unresolved = [str(t).strip() for t in (ctx.get("unresolved_terms") or []) if str(t).strip()]
 
     # 2026-08-18 screen-scope：换词只能换 query，不能借机清掉用户已生效的结构化条件。
-    # 净化复用 workflow 公共真源；缺省/旧 ctx → 全空，行为与旧调用逐位一致。
-    facet_filters = wf.sanitize_facet_filters(ctx.get("search_facet_filters"))
-    suppressed_constraints = wf.sanitize_suppressed(ctx.get("search_suppressed_constraints"))
-    lenient_dims = sorted(wf.sanitize_lenient_dims(ctx.get("search_lenient_dims")))
-    date_from = str(ctx.get("search_date_from") or "").strip()
-    date_to = str(ctx.get("search_date_to") or "").strip()
-    structured_kwargs = {
-        "facet_filters": facet_filters,
-        "suppressed_constraints": suppressed_constraints,
-        "lenient_dims": lenient_dims,
-        "date_from": date_from,
-        "date_to": date_to,
-    }
+    # 结构化入参**复用 `_loop_structured_kwargs` 单一锚点**（此前自拼五参数，
+    # 丢掉 top_k/recall/strategy——请求 top_k=50 时重搜静默回落 workflow 默认，
+    # 新旧对照不再属于同一请求配置）；缺省/旧 ctx → 全空，行为与旧调用逐位一致。
+    structured_kwargs = _loop_structured_kwargs(ctx)
+    facet_filters = structured_kwargs["facet_filters"]
 
     flow = wf.DatasetRecommendationWorkflow()
     n_before: int | None = None
@@ -1278,23 +1511,11 @@ def _loop_search_rerun(slots: dict, root: Path, ctx: dict | None = None) -> dict
             query=query, use_llm=False, sources=sources,
             auto_parse_sources=False,
             **structured_kwargs))
-    payload = recommend_payload(meta)
-    # /api/recommend 的三个应用态字段由 Web 层调用现场回显；agent 载荷没有接口层可补，
-    # 故在这里用同一份净化值补齐。随后仍做机械复核：显式日期必须出现在 interpretation，
-    # 三个应用态必须逐位等于输入；任一丢失都拒绝换屏，宁可保留原结果。
-    payload["applied_facets"] = facet_filters
-    payload["applied_suppressed"] = suppressed_constraints
-    payload["applied_lenient"] = lenient_dims
-    interpretation = payload.get("interpretation") if isinstance(payload.get("interpretation"), dict) else {}
-    intent_projection = interpretation.get("intent") \
-        if isinstance(interpretation.get("intent"), dict) else {}
-    scope_kept = (
-        payload.get("applied_facets") == facet_filters
-        and payload.get("applied_suppressed") == suppressed_constraints
-        and payload.get("applied_lenient") == lenient_dims
-        and (not date_from or str(intent_projection.get("date_from") or "") == date_from)
-        and (not date_to or str(intent_projection.get("date_to") or "") == date_to)
-    )
+    # 载荷构造 + 应用态回填 + scope_kept 机械复核与 rank auto-show / results.show 同一份
+    # `_verified_recommend_payload`（2026-09-13 rerank 处置批单通道收编；逐位语义不变：
+    # 显式日期必须出现在 interpretation，三个应用态必须逐位等于输入；任一丢失都拒绝换屏，
+    # 宁可保留原结果）。
+    payload, scope_kept = _verified_recommend_payload(meta, structured_kwargs)
     if not scope_kept:
         return _rejected(
             "structured_context_lost_kept_original",
@@ -1336,24 +1557,29 @@ _QUERY_REWRITE_PROMPT_FALLBACK_ZH = (
     "物种/组织/疾病/平台等实体规范化，去口语化操作词，中文主题词补齐英文对照。"
     "只输出优化后的检索句一行，不要任何解释；改不出更好的就原样输出原句。"
 )
-_QUERY_REWRITE_PROMPT_CACHE: str | None = None
+
+
+def _prompt_resource_text(name: str) -> str:
+    """提示词文本解析（**领域包优先**、骨架 `prompts/` 兜底）。
+
+    领域包 `prompts_dir` 两种形态：绝对路径（外部领域包直读）或 resource 相对路径
+    （与骨架 prompts/ 同一打包通道：source=项目根、frozen=_MEIPASS）。
+    biodata 包指向 `prompts/domains/biodata/`，命中即读；其余名称回落骨架目录。
+    """
+    pack_dir = (_get_domain().prompts_dir or "").strip()
+    if pack_dir:
+        p = Path(pack_dir)
+        cand = (p / name) if p.is_absolute() else resource_file_for(
+            _agent_project_root(), f"{p.as_posix()}/{name}")
+        if cand.is_file():
+            return cand.read_text(encoding="utf-8").strip()
+    return resource_file_for(_agent_project_root(), f"prompts/{name}").read_text(encoding="utf-8").strip()
 
 
 def _query_rewrite_prompt() -> str:
-    """rerank 改写器的系统提示词（`prompts/query_rewrite.md`，文件即真源）——懒加载缓存；
-    文件缺失/读取失败退回内置最小版（降级经 `_warn_once` 留痕，不炸图、不静默）。"""
-    global _QUERY_REWRITE_PROMPT_CACHE
-    if _QUERY_REWRITE_PROMPT_CACHE is None:
-        try:
-            # prompts 是随包静态资源（只读）→ resource 层（frozen = _MEIPASS；source = 项目根）。
-            _QUERY_REWRITE_PROMPT_CACHE = (
-                resource_file_for(_agent_project_root(), "prompts/query_rewrite.md")
-            ).read_text(encoding="utf-8").strip()
-        except Exception:
-            _warn_once("query_rewrite_prompt",
-                       "prompts/query_rewrite.md 读取失败，rerank 改写器用内置最小提示词。")
-            _QUERY_REWRITE_PROMPT_CACHE = _QUERY_REWRITE_PROMPT_FALLBACK_ZH
-    return _QUERY_REWRITE_PROMPT_CACHE
+    """rerank 改写器的系统提示词（领域包 `query_rewrite.md`，文件即真源）——
+    直接委托 `_prompt_md`（同一份缓存/降级/告警机制，不养第二份实现）。"""
+    return _prompt_md("query_rewrite.md", _QUERY_REWRITE_PROMPT_FALLBACK_ZH)
 
 
 #: scoped 路由提示词的内置最小降级版：prompts/ 下的 .md 文件即真源，
@@ -1369,37 +1595,59 @@ _ROUTE_CONSENSUS_FALLBACK_ZH = (
     "action=要动作（下载/联网搜库/检查更新/入库/管护）；general=闲聊/概念问答/混合/拿不准。"
     "只输出一个 JSON 对象：{\"route\": \"search|action|general\", \"reason\": \"一句中文理由\"}。"
 )
-_PROMPT_MD_CACHE: dict[str, str] = {}
+_ROUTE_WRITE_GATE_FALLBACK_ZH = (
+    "你是网关，只判断处理这句话是否需要用到会产生本地下载或数据写入后果的工具："
+    "write=打包下载/导出引文/投稿材料/入库/删除/恢复/同步进外部库；"
+    "read=找数据/改条件/查看重排/对比/兼容/FAIR/查库容/检查更新(只看不同步)/"
+    "联网搜库(只搜不入库)/概念问答/闲聊；拿不准判 read（只读是安全默认）。"
+    "只输出一个 JSON 对象：{\"gate\": \"write|read\", \"reason\": \"一句中文理由\"}。"
+)
+
+#: 分流模式（2026-09-19 分流三改批·任务1）：three_class=既有三分类共识；binary=二元写闸——
+#: 只判「加载写盘工具与否」，read → 「read」套件（general − 写工具），write → 「general」
+#: 全集。env `BIODATA_ROUTE_MODE` ∈ {"", "three_class", "binary"}；空走默认，非法值
+#: warn-once 回默认（分流在热路径，拼写错误不许掀翻全部回合）。二元是新通道
+#: （生产路径实测：金标打标票间一致率 99.83%、抽样 120 例生产共识与金标 100% 一致）；
+#: 三分类保留为文档化兜底通道（只在新通道判不可用时经 env 切回）。
+_ROUTE_MODE_ENV = "BIODATA_ROUTE_MODE"
+_ROUTE_MODE_DEFAULT = "binary"
+#: L0 级联（同批·任务2）：默认开——小模型高置信（≥τ）直采、零 LLM 投票；低置信/模型
+#: 缺席/异常一律升级 LLM 共识（fail-open，现状行为）。τ 默认取工件内嵌工作点
+#: （export 时 cal 选 test 报），`BIODATA_ROUTE_L0_TAU` 显式覆盖；
+#: `BIODATA_ROUTE_L0=0/off` 显式关闭（回纯 LLM 共识）。
+_ROUTE_L0_ENV = "BIODATA_ROUTE_L0"
+_ROUTE_L0_TAU_ENV = "BIODATA_ROUTE_L0_TAU"
+
+
+def _route_mode() -> str:
+    raw = os.environ.get(_ROUTE_MODE_ENV, "").strip().lower()
+    if not raw:
+        return _ROUTE_MODE_DEFAULT
+    if raw in ("three_class", "binary"):
+        return raw
+    _warn_once("route_mode", f"{_ROUTE_MODE_ENV}={raw!r} 非法，回默认 {_ROUTE_MODE_DEFAULT}。")
+    return _ROUTE_MODE_DEFAULT
+
+
+def _env_default_on(name: str) -> bool:
+    """默认开开关：未设/空白 → True；truthy → True；其余显式值（0/off/false/no/…）→ False。"""
+    raw = os.environ.get(name, "").strip().lower()
+    return (not raw) or raw in {"1", "true", "yes", "on"}
+_PROMPT_MD_CACHE: dict[tuple[str, str], str] = {}
 
 
 def _prompt_md(name: str, fallback_zh: str) -> str:
-    """`prompts/<name>` 文件即真源的提示词加载（懒加载缓存）；缺失/读取失败退回内置
-    最小版——降级经 `_warn_once` 留痕，不炸图、不静默（与 `_query_rewrite_prompt` 同纪律）。"""
-    if name not in _PROMPT_MD_CACHE:
+    """`prompts/<name>`（领域包目录优先，见 `_prompt_resource_text`）文件即真源的提示词加载
+    （懒加载缓存，按 (domain_id, name) 分键——换域不串内容）；缺失/读取失败退回内置最小版。"""
+    key = (_get_domain().domain_id, name)
+    if key not in _PROMPT_MD_CACHE:
         try:
             # prompts 是随包静态资源（只读）→ resource 层。
-            _PROMPT_MD_CACHE[name] = (
-                resource_file_for(_agent_project_root(), f"prompts/{name}")
-            ).read_text(encoding="utf-8").strip()
+            _PROMPT_MD_CACHE[key] = _prompt_resource_text(name)
         except Exception:
             _warn_once(f"prompt_md::{name}", f"prompts/{name} 读取失败，用内置最小提示词。")
-            _PROMPT_MD_CACHE[name] = fallback_zh
-    return _PROMPT_MD_CACHE[name]
-
-
-def _md_sections(md: str) -> "dict[str, str]":
-    """把提示词 md 按 `## ` 节头切成有序 dict（导言段键为 "intro"，节内容含节头行）。
-
-    单锚点过滤装配用：rescue 面从同一锚点剔掉面内没有消费工具的整节（依赖占位），
-    其余面整份共享。锚点文件缺失退回内置最小版时没有节头 → 只余 "intro" 一键，
-    过滤退化为原样透传（降级语义一致）。"""
-    sections: dict[str, list[str]] = {}
-    key = "intro"
-    for line in md.splitlines():
-        if line.startswith("## "):
-            key = line[3:].strip()
-        sections.setdefault(key, []).append(line)
-    return {k: "\n".join(v).strip() for k, v in sections.items()}
+            _PROMPT_MD_CACHE[key] = fallback_zh
+    return _PROMPT_MD_CACHE[key]
 
 
 def _route_consensus_prompt() -> str:
@@ -1407,21 +1655,56 @@ def _route_consensus_prompt() -> str:
     return _prompt_md("route_consensus.md", _ROUTE_CONSENSUS_FALLBACK_ZH)
 
 
+def _route_write_gate_prompt() -> str:
+    """二元写闸的系统提示词（`prompts/route_write_gate.md`，文件即真源）——
+    判定定义与 research/route_eval/label_binary_gate.py 的打标口径逐字一致
+    （该脚本内置漂移校验，prompt 改了打标脚本会报错要求重打标）。"""
+    return _prompt_md("route_write_gate.md", _ROUTE_WRITE_GATE_FALLBACK_ZH)
+
+
 def _rewrite_query(model: Any, query: str,
-                   usage_sink: list | None = None) -> tuple[str, bool]:
+                   usage_sink: list | None = None,
+                   probe_zh: str = "", health_zh: str = "",
+                   extra_system_zh: str = "", anchor_zh: str = "",
+                   repair_zh: str = "") -> tuple[str, bool]:
     """rerank 的独立 LLM 改写调用（独立上下文 + 独立系统提示词）+ **机械健全性检查**：
     非空、≤200 字符、与原句不同——任一不过（含模型缺席/调用异常）退回原 query 并
     rewritten=False 如实标注，不靠 LLM 自评。`usage_sink`：
-    给了就把本次改写调用的缓存用量经 `_usage_record` 追加进去（读不到用量自然跳过）。"""
+    给了就把本次改写调用的缓存用量经 `_usage_record` 追加进去（读不到用量自然跳过）。
+    `probe_zh`（2026-09-13 夜批）：约束松弛反事实探测报告，非空时拼在 query 后一并
+    注入（**仅建议**——模型可照建议走 relax 通道、可自由改写、也可弃权）；缺省空串
+    与历史行为逐位一致。
+    `health_zh`（2026-09-16 改写环臂批）：机械健康快照（`_rewrite_health_zh`），非空时
+    按 query → 健康快照 → 探测报告顺序拼进 human；缺省空串逐位不变。
+    `extra_system_zh`（同批，研究臂用）：追加在系统提示词之后（协议包装/few-shot），
+    缺省空串逐位不变。
+    `anchor_zh`（2026-09-17 上下文工程批，借鉴 Aivis 经验八「重点信息多次增强」）：
+    环内 decide 传给 rerank 的 query 可能已被模型转述——与原话有出入时把用户原话
+    作为锚点块注入（紧跟 query 之后），改写语义以原话为准；缺省空串逐位不变。
+    `repair_zh`（2026-09-18 专家化批 WP3）：repair 路由未采纳时的候选菜单
+    （`_rewrite_repair_zh`），非空时按 query → 锚点 → 健康快照 → 候选菜单 →
+    探测报告顺序拼进 human；缺省空串逐位不变。"""
     if model is None:
         return query, False
     t0 = time.monotonic()  # rerank 独立改写调用的 llm_call 留痕
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        parts = [query]
+        if anchor_zh:
+            parts.append(anchor_zh)
+        if health_zh:
+            parts.append(health_zh)
+        if repair_zh:
+            parts.append(repair_zh)
+        if probe_zh:
+            parts.append(probe_zh)
+        human = "\n\n".join(parts)
+        system = _query_rewrite_prompt() + (
+            ("\n\n" + extra_system_zh) if extra_system_zh else "")
         answer = model.invoke([
-            SystemMessage(content=_query_rewrite_prompt()),
-            HumanMessage(content=query),
+            SystemMessage(content=system),
+            HumanMessage(content=human),
         ])
         rec = _usage_record(answer, "rerank_rewrite")
         if rec is not None and usage_sink is not None:
@@ -1452,6 +1735,788 @@ def _rewrite_query(model: Any, query: str,
     return candidate, True
 
 
+def _rewrite_health_zh(*, health: str, total: int, resolution_status: str = "",
+                       filters: Any = (), top_titles: Any = (),
+                       label: str = "当前结果", lite: bool = False) -> str:
+    """rerank 改写/试算反馈的**机械健康快照**（零 LLM，2026-09-16 改写环臂批）：把
+    当前屏面或一次试跑的健康事实压成中文紧凑块注入改写上下文——健康度三态、解析状态、
+    结果数、执行的条件、top 示例。全是机械事实，不评内容质量（与 `_health_of_meta`
+    同纪律）；某一面不可得就如实略过（结果数是底线事实，恒在），不编造。
+    `lite=True`（2026-09-21 注入稀释消融批）：只留健康度+结果数两行最小屏面信号，
+    略去解析状态/执行的条件/top 示例——供「注入量是否稀释关键信号」的消融实验与
+    （若验证成立后的）生产最小注入使用；默认 False 行为逐位不变。"""
+    lines: list[str] = []
+    health_zh = _HEALTH_ZH.get(str(health or ""), "")
+    if health_zh:
+        lines.append(f"- 健康度：{health_zh}")
+    status = str(resolution_status or "").strip()
+    if status and not lite:
+        lines.append(f"- 解析状态：{status}")
+    lines.append(f"- 结果数：{int(total or 0)}")
+    if lite:
+        return f"参考：{label}的健康快照（机械事实，仅供判断）：\n" + "\n".join(lines)
+    conds = "、".join(
+        f"{'排除' if f.get('polarity') == 'exclude' else ''}{f.get('label', '')}="
+        f"{'/'.join(str(v) for v in (f.get('values') or []))}"
+        for f in list(filters or []) if isinstance(f, dict))
+    if conds.strip("、"):
+        lines.append(f"- 执行的条件：{conds.strip('、')}")
+    titles = [str(t or "").strip() for t in list(top_titles or [])][:3]
+    titles = [t for t in titles if t]
+    if titles:
+        lines.append(f"- top 示例：{'；'.join(titles)}")
+    return f"参考：{label}的健康快照（机械事实，仅供判断）：\n" + "\n".join(lines)
+
+
+# ------------------------------------------------------ 实验 J（2026-09-17）：改写语义对比报告
+
+_DIFF_SCENE_KEYS = ("facet_filters", "suppressed_constraints", "lenient_dims",
+                    "date_from", "date_to")
+
+
+def _dim_set_diff(before: dict, after: dict) -> dict:
+    """两个 {dim: [canonical values]} 的值级集合差：kept/added/removed（空类略去）。"""
+    out: dict[str, dict] = {"kept": {}, "added": {}, "removed": {}}
+    for dim in sorted(set(before or {}) | set(after or {})):
+        b, a = set((before or {}).get(dim) or []), set((after or {}).get(dim) or [])
+        for key, vals in (("kept", sorted(b & a)), ("added", sorted(a - b)),
+                          ("removed", sorted(b - a))):
+            if vals:
+                out[key][dim] = vals
+    return out
+
+
+def _role_shift(b_map: dict, a_map: dict) -> dict:
+    """同一 (dim, value) 在两视图间的跨界：b_map→a_map 方向的角色迁移清单。"""
+    out: dict[str, list[str]] = {}
+    for dim in sorted(set(b_map or {}) & set(a_map or {})):
+        moved = sorted(set((b_map or {}).get(dim) or []) & set((a_map or {}).get(dim) or []))
+        if moved:
+            out[dim] = moved
+    return out
+
+
+def _constraint_diff(flow: Any, original: str, rewritten: str,
+                     structured_kwargs: dict | None = None) -> dict:
+    """改写前后约束语义的机械对比（零 LLM，2026-09-17 实验 J）：规则解析器在同一结构化
+    现场下分别解析原句与改写句，逐项比对硬约束（含排除极性）/软偏好/原始数据要求/
+    时间过滤/自由主题词/解析状态/未解析词。
+    `would_block`/`block_reasons` 是**影子闸**（只记录不执行）：硬约束增删、排除变化、
+    软硬角色转换、正负能量翻转、硬日期/原始数据硬要求变化 = 未授权语义变化。
+    解析异常如实入 diff（parse_error + would_block=True），不抛出、不编造。"""
+    scene = {k: v for k, v in dict(structured_kwargs or {}).items() if k in _DIFF_SCENE_KEYS}
+    diff: dict[str, Any] = {"original": original, "rewritten": rewritten}
+    intents: list[Any] = []
+    for q in (original, rewritten):
+        try:
+            intent, *_ = flow._prepare_context(
+                q, sources=None, auto_parse_sources=False, **scene)
+            intents.append(intent)
+        except Exception as exc:  # noqa: BLE001（对比是情报员，异常如实上报不阻塞主路）
+            intents.append(None)
+            diff["parse_error"] = f"{type(exc).__name__}: {str(exc)[:120]}"
+    if intents[0] is None or intents[1] is None:
+        diff["would_block"] = True
+        diff["block_reasons"] = ["parse_error"]
+        return diff
+    b, a = intents
+    diff["status"] = {
+        "before": str(getattr(b, "parse_status", "") or ""),
+        "after": str(getattr(a, "parse_status", "") or ""),
+        "before_reason": str(getattr(b, "abstain_reason", "") or
+                             getattr(b, "clarification_reason", "") or ""),
+        "after_reason": str(getattr(a, "abstain_reason", "") or
+                            getattr(a, "clarification_reason", "") or ""),
+    }
+    hard = _dim_set_diff(getattr(b, "constraints", None), getattr(a, "constraints", None))
+    excl = _dim_set_diff(getattr(b, "excluded_constraints", None),
+                         getattr(a, "excluded_constraints", None))
+    soft = _dim_set_diff(getattr(b, "preferred_constraints", None),
+                         getattr(a, "preferred_constraints", None))
+    diff["hard"], diff["excluded"], diff["soft"] = hard, excl, soft
+    diff["hard_to_soft"] = _role_shift(getattr(b, "constraints", None),
+                                       getattr(a, "preferred_constraints", None))
+    diff["soft_to_hard"] = _role_shift(getattr(b, "preferred_constraints", None),
+                                       getattr(a, "constraints", None))
+    diff["polarity_flip"] = {
+        "include_to_exclude": _role_shift(getattr(b, "constraints", None),
+                                          getattr(a, "excluded_constraints", None)),
+        "exclude_to_include": _role_shift(getattr(b, "excluded_constraints", None),
+                                          getattr(a, "constraints", None)),
+    }
+    diff["raw_required"] = [getattr(b, "has_raw_data_required", None),
+                            getattr(a, "has_raw_data_required", None)]
+    diff["date"] = [[getattr(b, "date_from", ""), getattr(b, "date_to", "")],
+                    [getattr(a, "date_from", ""), getattr(a, "date_to", "")]]
+    diff["soft_raw"] = [getattr(b, "preferred_raw", None), getattr(a, "preferred_raw", None)]
+    diff["soft_date"] = [[getattr(b, "preferred_date_from", ""), getattr(b, "preferred_date_to", "")],
+                         [getattr(a, "preferred_date_from", ""), getattr(a, "preferred_date_to", "")]]
+    diff["soft_sources"] = [list(getattr(b, "preferred_sources", None) or []),
+                            list(getattr(a, "preferred_sources", None) or [])]
+    fb = set(getattr(b, "free_text_terms", None) or [])
+    fa = set(getattr(a, "free_text_terms", None) or [])
+    diff["free_text"] = {"kept": sorted(fb & fa), "added": sorted(fa - fb),
+                         "removed": sorted(fb - fa)}
+    diff["unresolved"] = {"before": list(getattr(b, "unresolved_terms", None) or []),
+                          "after": list(getattr(a, "unresolved_terms", None) or [])}
+    reasons: list[str] = []
+    if hard["added"]:
+        reasons.append(f"硬约束新增:{hard['added']}")
+    if hard["removed"]:
+        reasons.append(f"硬约束丢失:{hard['removed']}")
+    if excl["added"] or excl["removed"]:
+        reasons.append(f"排除变化:加{excl['added']}减{excl['removed']}")
+    if diff["hard_to_soft"]:
+        reasons.append(f"硬转软:{diff['hard_to_soft']}")
+    if diff["soft_to_hard"]:
+        reasons.append(f"软转硬:{diff['soft_to_hard']}")
+    if diff["polarity_flip"]["include_to_exclude"] or diff["polarity_flip"]["exclude_to_include"]:
+        reasons.append(f"极性翻转:{diff['polarity_flip']}")
+    if diff["raw_required"][0] != diff["raw_required"][1]:
+        reasons.append(f"原始数据硬要求:{diff['raw_required'][0]}→{diff['raw_required'][1]}")
+    if diff["date"][0] != diff["date"][1]:
+        reasons.append(f"时间硬过滤:{diff['date'][0]}→{diff['date'][1]}")
+    diff["block_reasons"] = reasons
+    diff["would_block"] = bool(reasons)
+    return diff
+
+
+def _fmt_dim_map_zh(d: dict) -> str:
+    labels = _domain_labels_zh()
+    return "；".join(f"{labels.get(dim, dim)}＝{'/'.join(str(v) for v in vals)}"
+                     for dim, vals in (d or {}).items())
+
+
+def _constraint_diff_zh(diff: dict) -> str:
+    """`_constraint_diff` 的人读版（注入改写循环上下文用）。机械事实，不评好坏、
+    不给改写建议（与 `_rewrite_health_zh` 同纪律）；空类如实略过。"""
+    if not diff:
+        return ""
+    _STATUS_ZH = {"executable": "可执行", "abstained": "弃权",
+                  "clarification_required": "需澄清"}
+    lines = ["参考：改写前后约束对比（机械事实，仅供判断）："]
+    st = diff.get("status") or {}
+    if st:
+        def _st_zh(side: str, reason_key: str) -> str:
+            zh = _STATUS_ZH.get(st.get(side), str(st.get(side) or "未知"))
+            reason = str(st.get(reason_key) or "")
+            return f"{zh}（{reason}）" if reason else zh
+        lines.append(f"- 解析状态：原句 {_st_zh('before', 'before_reason')} → "
+                     f"改写 {_st_zh('after', 'after_reason')}")
+    for key, name in (("hard", "硬约束"), ("excluded", "排除"), ("soft", "软偏好")):
+        seg = diff.get(key) or {}
+        parts = []
+        if seg.get("kept"):
+            parts.append(f"保留[{_fmt_dim_map_zh(seg['kept'])}]")
+        if seg.get("added"):
+            parts.append(f"新增[{_fmt_dim_map_zh(seg['added'])}]")
+        if seg.get("removed"):
+            parts.append(f"丢失[{_fmt_dim_map_zh(seg['removed'])}]")
+        if parts:
+            lines.append(f"- {name}：" + "；".join(parts))
+    for key, name in (("hard_to_soft", "硬转软"), ("soft_to_hard", "软转硬")):
+        if diff.get(key):
+            lines.append(f"- {name}：{_fmt_dim_map_zh(diff[key])}")
+    flips = diff.get("polarity_flip") or {}
+    if flips.get("include_to_exclude") or flips.get("exclude_to_include"):
+        lines.append(f"- 极性翻转：正→负 {_fmt_dim_map_zh(flips.get('include_to_exclude')) or '无'}"
+                     f"；负→正 {_fmt_dim_map_zh(flips.get('exclude_to_include')) or '无'}")
+    def _bool_zh(v: Any) -> str:
+        return {None: "无", True: "要", False: "不要"}.get(v, str(v))
+    rr = diff.get("raw_required") or [None, None]
+    if rr[0] != rr[1]:
+        lines.append(f"- 原始数据硬要求：{_bool_zh(rr[0])} → {_bool_zh(rr[1])}")
+    dt = diff.get("date") or [["", ""], ["", ""]]
+    if dt[0] != dt[1]:
+        lines.append(f"- 时间硬过滤：{dt[0]} → {dt[1]}")
+    sr = diff.get("soft_raw") or [None, None]
+    if sr[0] != sr[1]:
+        lines.append(f"- 软偏好·原始数据：{_bool_zh(sr[0])} → {_bool_zh(sr[1])}")
+    sd = diff.get("soft_date") or [["", ""], ["", ""]]
+    if sd[0] != sd[1]:
+        lines.append(f"- 软偏好·时间：{sd[0]} → {sd[1]}")
+    ss = diff.get("soft_sources") or [[], []]
+    if ss[0] != ss[1]:
+        lines.append(f"- 软偏好·来源：{ss[0]} → {ss[1]}")
+    ft = diff.get("free_text") or {}
+    if ft.get("kept") or ft.get("added") or ft.get("removed"):
+        parts = []
+        if ft.get("kept"):
+            parts.append(f"保留[{'、'.join(ft['kept'])}]")
+        if ft.get("added"):
+            parts.append(f"新增[{'、'.join(ft['added'])}]")
+        if ft.get("removed"):
+            parts.append(f"丢失[{'、'.join(ft['removed'])}]")
+        lines.append("- 自由主题词：" + "；".join(parts))
+    un = diff.get("unresolved") or {}
+    if un.get("before") or un.get("after"):
+        lines.append(f"- 未解析词：原句 {un.get('before') or '[]'} → 改写 {un.get('after') or '[]'}")
+    if diff.get("parse_error"):
+        lines.append(f"- 解析异常：{diff['parse_error']}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+# ---------------------------------------------------- 实体局部纠错（2026-09-18 专家化批 WP3）
+#
+# rerank 处方层的第三术式（比整句改写更窄的干预优先）：原句因未收录词（unresolved_term）
+# 弃权时，先在受控词表上做**零 LLM** 就近纠错——归一化编辑距离扫描 CATALOG 全部 alias；
+# 无歧义且至少一词唯一最近邻才自动打补丁试跑（str.replace 单次替换原片段，无候选的词
+# 原样保留、下游自动降级接力并显著标注）；等距多候选歧义/白名单校验不过 → adopted=False
+# + 候选清单随结果回传（advisory），改写通道照旧兜底。全程确定性代码。
+# 拼音整词纠错（2026-09-18 rerank WP5 批）：词表中文 alias 的拼音连写索引
+# （`domain.vocab_tools.pinyin_alias_index`，活动领域 catalog 派生视图）覆盖两条形态——无空格整串
+# （feixianweihua）与解析器切分碎片的相邻重组（fei xian wei hua）；只采纳**唯一精确**
+# 命中（实测 326 键零同音碰撞），模糊命中一律 advisory 交改写通道/用户裁决。
+
+_REPAIR_MAX_CANDIDATES = 3
+
+
+def _repair_norm(s: str) -> str:
+    """纠错匹配的归一化：NFKC（全半角/兼容字符）→ 小写 → 去全部空白。"""
+    import unicodedata
+    return "".join(unicodedata.normalize("NFKC", str(s or "")).lower().split())
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """经典 Levenshtein（两段短串，O(len·len) 足够）。"""
+    if a == b:
+        return 0
+    la, lb = len(a), len(b)
+    if not la:
+        return lb
+    if not lb:
+        return la
+    prev = list(range(lb + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[lb]
+
+
+def _sub_distance(text: str, pat: str) -> int:
+    """pat 在 text 内的近似**包含**距离（Sellers 变体：D[i][0]=0 免费跳过 text 前缀、
+    答案取末列最小值免费跳过后缀，且**不允许跳过 pat 字符**——pat 的每个字符都必须
+    对齐到 text 的某个字符）——未收录词常带上下文残渣（『里贫雪病』←『脐带血里贫雪
+    病人』），整串距离会被残渣撑大，包含距离才是 typo 的真实距离。允许跳过 pat 字符
+    会把『干性→脑干』一类假包含放进来（2026-09-18 WP3 评测实证），故收紧。"""
+    n, m = len(text), len(pat)
+    if not m:
+        return n
+    if not n:
+        return m
+    prev = list(range(m + 1))
+    best = prev[m]
+    for i in range(1, n + 1):
+        cur = [0] * (m + 1)
+        ca = text[i - 1]
+        for j in range(1, m + 1):
+            # 两项：跳过 text[i-1]（插入，cost 1）或对齐 pat[j-1]（替换/匹配）。
+            cur[j] = min(prev[j] + 1, prev[j - 1] + (ca != pat[j - 1]))
+        best = min(best, cur[m])
+        prev = cur
+    return best
+
+
+def _repair_eligible(term: str) -> bool:
+    """可纠词的资格闸（对抗纪律：正确缩写/编号/大写混写一律不纠——对抗集误纠率必须 0）：
+    归一化后 ≥2 字符、不含数字（GSE/E-MTAB/SRP 等编号形一票否决）、不含 ASCII 大写
+    （HCC/LUAD/snRNA 等缩写形一票否决）。"""
+    norm = _repair_norm(term)
+    if len(norm) < 2:
+        return False
+    if any(ch.isdigit() for ch in norm):
+        return False
+    if any("A" <= ch <= "Z" for ch in str(term)):
+        return False
+    return True
+
+
+def _repair_candidates(term: str) -> list[dict]:
+    """单个未收录词的词表近邻（零 LLM，单一真源 `_domain_catalog()`）：全部 alias 做归一化
+    编辑距离扫描，两档命中——整串距离 ≤1（参与比较两串较短者 ≤6 字符；更长放宽到 2）
+    且**较短者 ≥3 字符**（两字词单字符替换 = 换掉一半内容，证据不足以自动纠错——
+    2026-09-18 WP3 评测实证『开头→舌头』即此档假命中）；或**近似包含**距离 ≤1
+    （别名嵌在词内、词严格长于别名且残渣前后缀合计 ≤2 字符、别名 ≥2 字符——
+    『里贫雪病』→『贫血』一类，残渣是解析器切分的副产品不是语义；纯 ASCII 词
+    （拼音形）别名须 ≥4 字符，防「pinxue→pig」一类假命中）。
+    同一词条多 alias 命中只留最近一个；按 (距离, alias) 升序取前 `_REPAIR_MAX_CANDIDATES`。
+    返回 [{dim, display, alias, targets, absent, dist, via}]——via ∈ edit（整串档）/
+    substring（近似包含档，`_repair_route` 一律不自动采纳、仅 advisory：残渣嵌影
+    证据弱，2026-09-18 WP5『黏液纤毛→血液』红线实证）/pinyin（拼音档）。
+    （absent=词表已知的库中缺席项，
+    纠过去得到「正确地无结果」，合法不算失败）。"""
+    norm = _repair_norm(term)
+    ascii_term = norm.isascii()
+    hits: list[dict] = []
+    for dim, entries in _domain_catalog().items():
+        for e in entries or []:
+            best: dict | None = None
+            for alias in (e.get("aliases") or []):
+                a = _repair_norm(alias)
+                if not a or a == norm:
+                    continue  # 逐字相同的词不会 unresolved，不自我命中
+                limit = 1 if min(len(norm), len(a)) <= 6 else 2
+                d = _edit_distance(norm, a) if min(len(norm), len(a)) >= 3 else 10 ** 9
+                via = "edit"
+                if (d > limit and len(norm) > len(a) >= 2
+                        and len(norm) - len(a) <= 2
+                        and (not ascii_term or len(a) >= 4)):
+                    d_sub = _sub_distance(norm, a)
+                    if d_sub <= 1:
+                        d = d_sub
+                        via = "substring"
+                if d <= limit and (best is None or d < best["dist"]):
+                    best = {"dim": dim, "display": str(e.get("display") or alias),
+                            "alias": str(alias),
+                            "targets": [str(t) for t in (e.get("targets") or [])],
+                            "absent": bool(e.get("absent")), "dist": d, "via": via}
+            if best is not None:
+                hits.append(best)
+    # 拼音通道（2026-09-18 WP5）：无空格整串拼音查拼音连写索引。精确命中 dist=0；
+    # ≥8 字符允许 1 个拼音编辑距离（dist=1，同首字母预筛）——模糊命中仅供
+    # advisory（`_repair_route` 只自动采纳 dist=0 的唯一拼音命中）。
+    if ascii_term and norm.isalpha() and len(norm) >= 5:
+        for h in _repair_pinyin_hits(norm):
+            for old in hits:
+                if old["dim"] == h["dim"] and old["display"] == h["display"]:
+                    if h["dist"] < old["dist"]:
+                        hits.remove(old)
+                        hits.append(h)
+                    break
+            else:
+                hits.append(h)
+    hits.sort(key=lambda h: (h["dist"], h["alias"]))
+    return hits[:_REPAIR_MAX_CANDIDATES]
+
+
+def _repair_pinyin_hits(norm: str) -> list[dict]:
+    """拼音连写索引查找（`domain.vocab_tools.pinyin_alias_index` 单通道）：精确 key 命中 dist=0；
+    ≥8 字符时同首字母 key 允许 1 编辑距离（dist=1）。返回与 `_repair_candidates`
+    同形的候选（带 via=\"pinyin\" 标记）。"""
+    index = _vocab_tools.pinyin_alias_index()
+    if not index:
+        return []
+    out: list[dict] = []
+    for h in index.get(norm) or []:
+        out.append({**h, "dist": 0, "via": "pinyin"})
+    if not out and len(norm) >= 8:
+        first = norm[0]
+        for key, bucket in index.items():
+            if not key or key[0] != first or abs(len(key) - len(norm)) > 1:
+                continue
+            if _edit_distance(norm, key) <= 1:
+                for h in bucket:
+                    out.append({**h, "dist": 1, "via": "pinyin"})
+    return out
+
+
+def _repair_pinyin_spans(query: str, terms: list[str]) -> list[dict]:
+    """相邻纯拼音未收录词的连写重组纠错（2026-09-18 WP5）：解析器按空格切分会把
+    整词拼音切碎（fei xian wei hua → 4 个未收录词，各自太短不够单字纠错资格），
+    本通道把**查询中相邻**（间隔只含空白/标点，不含任何字母数字——「hua de danxibao」
+    里的 de 会正确断开）的纯拼音词逐段拼回长串查拼音索引。
+    只产出候选与坐标，不改动文本；采纳纪律在 `_repair_route`（精确唯一才自动采纳）。
+    返回 [{term(原文片段), candidates, span:(start,end), term_idx:[...]}]。"""
+    if not terms:
+        return []
+    low = str(query or "").lower()
+    pos: list[tuple[int, int]] = []
+    cur = 0
+    for t in terms:
+        p = low.find(str(t).lower(), cur)
+        if p < 0:
+            return []  # 逐字保险丝：任何词定位失败，span 通道整体放弃（逐词通道不受影响）
+        pos.append((p, p + len(str(t))))
+        cur = p + len(str(t))
+    index = _vocab_tools.pinyin_alias_index()
+    if not index:
+        return []
+
+    def _ascii_alpha(t: str) -> bool:
+        n = _repair_norm(t)
+        return bool(n) and n.isascii() and n.isalpha()
+
+    # 划分 run：相邻词的间隔串只含空白/ASCII 标点（含字母数字即断）
+    runs: list[list[int]] = []
+    for i in range(len(terms)):
+        if not _ascii_alpha(terms[i]):
+            continue
+        if runs and pos[i][0] - pos[runs[-1][-1]][1] >= 0:
+            gap = low[pos[runs[-1][-1]][1]:pos[i][0]]
+            prev_end = pos[runs[-1][-1]][1]
+            if pos[i][0] >= prev_end and gap and not any(ch.isalnum() for ch in gap):
+                runs[-1].append(i)
+                continue
+        runs.append([i])
+
+    spans: list[dict] = []
+    for run in runs:
+        if len(run) < 2:
+            continue
+        best: dict | None = None
+        for size in range(len(run), 1, -1):
+            for off in range(0, len(run) - size + 1):
+                window = run[off:off + size]
+                joined = "".join(_repair_norm(terms[i]) for i in window)
+                if len(joined) < 5:
+                    continue
+                exact = [dict(h, dist=0, via="pinyin") for h in index.get(joined) or []]
+                cands = exact
+                if not cands and size == len(run) and len(joined) >= 8:
+                    first = joined[0]
+                    for key, bucket in index.items():
+                        if not key or key[0] != first or abs(len(key) - len(joined)) > 1:
+                            continue
+                        if _edit_distance(joined, key) <= 1:
+                            cands.extend(dict(h, dist=1, via="pinyin") for h in bucket)
+                if not cands:
+                    continue
+                cands.sort(key=lambda h: (h["dist"], h["alias"]))
+                cands = cands[:_REPAIR_MAX_CANDIDATES]
+                i0, i1 = window[0], window[-1]
+                cand = {"term": str(query)[pos[i0][0]:pos[i1][1]],
+                        "candidates": cands, "span": (pos[i0][0], pos[i1][1]),
+                        "term_idx": window}
+                # 同 run 取覆盖最长者；并列更长优先、同长取精确档更优者
+                if (best is None or len(window) > len(best["term_idx"])
+                        or (len(window) == len(best["term_idx"])
+                            and min(c["dist"] for c in cands)
+                            < min(c["dist"] for c in best["candidates"]))):
+                    best = cand
+            if (best is not None
+                    and min(c["dist"] for c in best["candidates"]) == 0):
+                break  # 已有精确命中，不再向更短窗口找（防子串级噪音盖掉整词命中）
+        if best is not None:
+            spans.append(best)
+    return spans
+
+
+_REPAIR_ABSORB_WINDOW = 2
+
+
+def _repair_absorbed(original: str, fixes: list[dict], dim: str, val: str) -> bool:
+    """丢失约束的「被吸收」判定（2026-09-18 专家化批 WP3）：纠错打补丁会让替换词与
+    相邻字粘连成更长实体（『肺』+纤微化→肺纤维化），原句中紧贴替换点的旧条件随之
+    被合并消费——这是纠错的忠实语义产物，不是语义丢失。机械口径：丢失的
+    (dim, target) 对应词表条目的某个 alias 在原句中出现在某处替换点的
+    ±`_REPAIR_ABSORB_WINDOW` 字符窗口内。查不到出处/不在窗口内 → False（不采纳）。"""
+    spans: list[tuple[int, int]] = []
+    for f in fixes or []:
+        term = str(f.get("term") or "")
+        p = original.find(term) if term else -1
+        if p >= 0:
+            spans.append((p, p + len(term)))
+    if not spans:
+        return False
+    low = str(val).lower()
+    for e in (_domain_catalog().get(dim) or []):
+        if low not in {str(t).lower() for t in (e.get("targets") or [])}:
+            continue
+        for alias in (e.get("aliases") or []):
+            a = str(alias)
+            if not a:
+                continue
+            start = original.find(a)
+            while start >= 0:
+                end = start + len(a)
+                if any(s - _REPAIR_ABSORB_WINDOW <= start and end <= t + _REPAIR_ABSORB_WINDOW
+                       for s, t in spans):
+                    return True
+                start = original.find(a, start + 1)
+    return False
+
+
+def _repair_diff_ok(flow: Any, original: str, patched: str, fixes: list[dict],
+                    structured_kwargs: dict) -> "tuple[bool, dict]":
+    """纠错补丁的白名单语义校验（零 LLM，2026-09-18 专家化批 WP3）。
+
+    **对比基线是降级解析，不是弃权解析**：原句弃权时约束为空，拿它当 before 会把
+    上下文条件全记成「新增」而误杀正确纠错（探针实证：『纤微化』→『纤维化』被拒，
+    根因是词表 entry.targets 与解析器语境内解析口径不同——『肺纤维化』语境解析出
+    disease=[pulmonary fibrosis, interstitial lung]，与 alias 条目 targets=[fibrosis]
+    对不上）。诚实口径 = 主管线自动降级同一段 `strip_terms`：before = 剥掉未收录词后
+    的原句解析；after = 补丁句（仍弃权时同样剥掉残余未收录词）的解析。两侧差集即
+    纠错的真实语义产物——凡是纠错引入的新增必然显形，凡与纠错无关的条件必须原样
+    保留。
+
+    白名单：硬/软**新增**必须落在被纠实体的维度内（跨维出现=粘连出意外语义，拒）；
+    硬/软**丢失**逐项过 `_repair_absorbed`（不被吸收的丢失=纠错动了上下文，拒）；
+    排除增删、软硬迁移、极性翻转、原始数据/时间硬要求变化、自由词新增、解析异常
+    一律拒。另要求解析状态改善：未收录词减少或补丁句可执行化。
+    返回 (是否采纳, 记账 dict)——带 authorized_added/lost_absorbed/unresolved 明细。"""
+    info: dict[str, Any] = {"authorized_added": {}, "lost_absorbed": {},
+                            "unresolved": {"before": [], "after": []},
+                            "reject_reason": ""}
+    scene = {k: v for k, v in dict(structured_kwargs or {}).items() if k in _DIFF_SCENE_KEYS}
+
+    def _parse(q: str):
+        intent, *_ = flow._prepare_context(q, sources=None,
+                                           auto_parse_sources=False, **scene)
+        return intent
+
+    def _degraded(q: str):
+        """与主管线自动降级同口径：unresolved_term 弃权时剥词重解析（至多 3 轮）。"""
+        from ..app.workflow import strip_terms
+        live = str(q or "").strip()
+        if not live:
+            return None
+        for _ in range(3):
+            intent = _parse(live)
+            if not (getattr(intent, "abstain", False)
+                    and str(getattr(intent, "abstain_reason", "") or "") == "unresolved_term"):
+                return intent
+            terms = [str(t) for t in (getattr(intent, "unresolved_terms", None) or [])
+                     if str(t).strip()]
+            nxt = " ".join(strip_terms(live, terms).split()).strip()
+            if not nxt or nxt == live:
+                return intent
+            live = nxt
+        return _parse(live)
+
+    try:
+        b0, a0 = _parse(original), _parse(patched)
+    except Exception as exc:  # noqa: BLE001（校验是情报员，异常如实拒，不阻塞主路）
+        info["reject_reason"] = f"parse_error: {type(exc).__name__}"
+        return False, info
+    before_terms = [str(t) for t in (getattr(b0, "unresolved_terms", None) or [])
+                    if str(t).strip()]
+    after_terms = [str(t) for t in (getattr(a0, "unresolved_terms", None) or [])
+                   if str(t).strip()]
+    info["unresolved"] = {"before": before_terms, "after": after_terms}
+    a_exec = (not getattr(a0, "abstain", False)
+              or str(getattr(a0, "parse_status", "") or "") == "executable")
+    if not (a_exec or len(after_terms) < len(before_terms)):
+        info["reject_reason"] = "no_parse_improvement"
+        return False, info
+    try:
+        base, new = _degraded(original), _degraded(patched)
+    except Exception as exc:  # noqa: BLE001
+        info["reject_reason"] = f"parse_error: {type(exc).__name__}"
+        return False, info
+
+    def _view(intent: Any) -> dict:
+        if intent is None:
+            return {"hard": {}, "excluded": {}, "soft": {}, "raw": None,
+                    "date": ["", ""], "free": set()}
+        return {"hard": dict(getattr(intent, "constraints", None) or {}),
+                "excluded": dict(getattr(intent, "excluded_constraints", None) or {}),
+                "soft": dict(getattr(intent, "preferred_constraints", None) or {}),
+                "raw": getattr(intent, "has_raw_data_required", None),
+                "date": [str(getattr(intent, "date_from", "") or ""),
+                         str(getattr(intent, "date_to", "") or "")],
+                "free": set(getattr(intent, "free_text_terms", None) or [])}
+
+    vb, va = _view(base), _view(new)
+    fix_dims = {str(f.get("dim") or "") for f in fixes or []}
+    hard = _dim_set_diff(vb["hard"], va["hard"])
+    soft = _dim_set_diff(vb["soft"], va["soft"])
+    for side, seg in (("hard", hard), ("soft", soft)):
+        for dim, vals in (seg.get("added") or {}).items():
+            if dim not in fix_dims:
+                info["reject_reason"] = f"added_outside_fix_dims:{dim}"
+                return False, info
+            info["authorized_added"].setdefault(side, {}).setdefault(dim, []).extend(vals)
+        for dim, vals in (seg.get("removed") or {}).items():
+            kept = [v for v in vals if _repair_absorbed(original, fixes, dim, v)]
+            if len(kept) != len(vals):
+                info["reject_reason"] = f"lost_not_absorbed:{dim}:{vals}"
+                return False, info
+            if kept:
+                info["lost_absorbed"].setdefault(side, {}).setdefault(dim, []).extend(kept)
+    excl = _dim_set_diff(vb["excluded"], va["excluded"])
+    if excl.get("added") or excl.get("removed"):
+        info["reject_reason"] = "excluded_changed"
+        return False, info
+    if (_role_shift(vb["hard"], va["soft"]) or _role_shift(vb["soft"], va["hard"])
+            or _role_shift(vb["hard"], va["excluded"])
+            or _role_shift(vb["excluded"], va["hard"])):
+        info["reject_reason"] = "role_or_polarity_shift"
+        return False, info
+    if vb["raw"] != va["raw"] or vb["date"] != va["date"]:
+        info["reject_reason"] = "raw_or_date_changed"
+        return False, info
+    if va["free"] - vb["free"]:
+        info["reject_reason"] = "free_text_added"
+        return False, info
+    return True, info
+
+
+def _repair_route(flow: Any, query: str, structured_kwargs: dict) -> dict | None:
+    """repair 路由（改写通道前的零 LLM 局部纠错，2026-09-18 专家化批 WP3）：
+    原句因未收录词弃权（unresolved_term）时，逐词在受控词表上找最近邻 alias——
+    **无歧义且至少一词可唯一采纳**才打补丁（唯一最近邻的词 str.replace 单次替换、
+    无候选的词原样保留——下游自动降级会忽略它并显著标注，纠错+降级两机制接力），
+    再过 `_repair_diff_ok` 白名单校验；有等距多候选的歧义词/白名单不过 →
+    adopted=False + 候选清单（advisory，歧义不靠命中数裁决、「不改」恒保留），
+    调用方走改写兜底。非 unresolved_term 弃权/无未收录词 → None（本术式不适用，
+    照常改写）。返回 {terms: [{term, candidates}], adopted, patched_query,
+    adopted_fixes, diff}。"""
+    scene = {k: v for k, v in dict(structured_kwargs or {}).items() if k in _DIFF_SCENE_KEYS}
+    try:
+        intent, *_ = flow._prepare_context(query, sources=None,
+                                           auto_parse_sources=False, **scene)
+    except Exception:  # noqa: BLE001（诊断是情报员，异常如实不适用，不阻塞主路）
+        return None
+    if not (getattr(intent, "abstain", False)
+            and str(getattr(intent, "abstain_reason", "") or "") == "unresolved_term"):
+        return None
+    terms = [str(t).strip() for t in (getattr(intent, "unresolved_terms", None) or [])
+             if str(t).strip()]
+    if not terms:
+        return None
+    per_term: list[dict] = []
+    for t in terms:
+        cands = _repair_candidates(t) if _repair_eligible(t) else []
+        per_term.append({"term": t, "candidates": cands})
+    # 拼音连写 span（WP5）：相邻纯拼音碎片先拼回整词查拼音索引——比逐词更具体的
+    # 证据优先裁决；被 span 采纳覆盖的词不再参与逐词采纳。
+    spans = _repair_pinyin_spans(query, terms)
+    info: dict[str, Any] = {"terms": per_term + [{"term": s["term"],
+                                                  "candidates": s["candidates"]}
+                                                 for s in spans],
+                            "adopted": False,
+                            "patched_query": "", "adopted_fixes": [], "diff": None}
+    adoptable, ambiguous = [], False
+    span_fixes: list[dict] = []
+    covered: set[int] = set()
+    for s in spans:
+        cands = s["candidates"]
+        # 拼音 span 只自动采纳「精确且唯一」命中；模糊（dist≥1）单候选进 advisory，
+        # 等距多候选（同音）按既有纪律一票否决全部自动采纳。
+        if cands and cands[0]["dist"] == 0 and len(cands) == 1:
+            span_fixes.append(s)
+            covered.update(s["term_idx"])
+        elif len(cands) >= 2 and cands[0]["dist"] == cands[1]["dist"]:
+            ambiguous = True
+    for idx_t, c in enumerate(per_term):
+        if idx_t in covered:
+            continue
+        cands = c["candidates"]
+        if cands and (len(cands) == 1 or cands[0]["dist"] < cands[1]["dist"]):
+            # 拼音逐词命中同样只自动采纳精确档（dist=0）；编辑距离档维持原纪律。
+            if cands[0].get("via") == "pinyin" and cands[0]["dist"] > 0:
+                continue
+            # 近似包含档（via="substring"）证据天然弱——残渣里嵌着 alias 影子
+            # （2026-09-18 WP5 扩容集实证：『黏液纤毛→血液』窗口『黏液』dist=1
+            # 自动采纳后可见误纠上屏，红线事故；『区单细→单核』『艾滋潜伏→艾滋病』
+            # 同档）。一律 advisory 保留情报，不自动采纳。
+            if cands[0].get("via") == "substring":
+                continue
+            adoptable.append(c)
+        elif len(cands) >= 2:  # 等距并列 → 歧义一票否决（不靠命中数裁决）
+            ambiguous = True
+    if ambiguous or (not adoptable and not span_fixes):
+        return info
+    patched = query
+    adopted: list[dict] = []
+    for s in sorted(span_fixes, key=lambda x: -x["span"][0]):  # 倒序替换保坐标
+        pick = s["candidates"][0]
+        start, end = s["span"]
+        patched = patched[:start] + pick["alias"] + patched[end:]
+        adopted.append({"term": s["term"], "alias": pick["alias"],
+                        "dim": pick["dim"], "display": pick["display"],
+                        "targets": pick["targets"]})
+    for c in adoptable:
+        pick = c["candidates"][0]
+        if c["term"] not in patched:  # 逐字保险丝：未收录词必须能在原句定位
+            return info
+        patched = patched.replace(c["term"], pick["alias"], 1)
+        adopted.append({"term": c["term"], "alias": pick["alias"],
+                        "dim": pick["dim"], "display": pick["display"],
+                        "targets": pick["targets"]})
+    if patched == query:
+        return info
+    ok, account = _repair_diff_ok(flow, query, patched, adopted, structured_kwargs)
+    info["patched_query"] = patched
+    info["adopted_fixes"] = adopted
+    info["diff"] = account
+    if not ok:
+        return info
+    info["adopted"] = True
+    return info
+
+
+def _repair_note_zh(repair: dict, empty: bool = False) -> str:
+    """纠错事实句（机械事实，不评好坏）：采纳档列「原词 → 纠正词（维度）」清单，
+    `empty=True`（纠正后试跑零存活）时降级为「仅供参考」措辞——覆盖校验不过
+    的纠正不配断言式呈现（2026-09-18 WP3 评测实证：误纠全部伴随零存活）；
+    未采纳档列候选 advisory（交模型/用户裁决）。"""
+    if not repair:
+        return ""
+    if repair.get("adopted"):
+        fixes = "；".join(f"「{f['term']}」→「{f['alias']}」（{_domain_labels_zh().get(f['dim'], f['dim'])}）"
+                          for f in (repair.get("adopted_fixes") or []))
+        if not fixes:
+            return ""
+        base = f"未收录词已按词表就近纠正：{fixes}。"
+        if empty:
+            return (base + "但纠正后的条件在本库没有存活结果——该纠正仅供参考，"
+                    "请核实是否符合你的意图。")
+        return base
+    parts = []
+    for c in (repair.get("terms") or []):
+        cands = c.get("candidates") or []
+        if cands:
+            opts = "、".join(f"「{h['alias']}」（{_domain_labels_zh().get(h['dim'], h['dim'])}）"
+                             for h in cands)
+            parts.append(f"「{c['term']}」可指 {opts}")
+        else:
+            parts.append(f"「{c['term']}」词表无近邻")
+    return ("未收录词纠错候选（歧义/无把握，未自动采纳）：" + "；".join(parts) + "。"
+            if parts else "")
+
+
+def _rewrite_repair_zh(repair: dict) -> str:
+    """repair 候选菜单的改写注入块（机械事实，2026-09-18 专家化批 WP3）：
+    repair 路由有候选但未自动采纳（歧义/白名单不过）时，把候选清单作为参考事实
+    注入改写调用，**交模型裁决**——可采用候选、可自由改写、也可忽略；无候选的词
+    如实标注「词表无近邻」。空清单/已采纳返回空串（已采纳根本不会走到改写通道）。"""
+    if not repair or repair.get("adopted"):
+        return ""
+    lines: list[str] = []
+    for c in (repair.get("terms") or []):
+        cands = c.get("candidates") or []
+        if cands:
+            opts = "、".join(
+                f"「{h['alias']}」（{_domain_labels_zh().get(h['dim'], h['dim'])}）"
+                for h in cands)
+            lines.append(f"- 「{c['term']}」可指：{opts}")
+        else:
+            lines.append(f"- 「{c['term']}」：词表无近邻")
+    if not lines:
+        return ""
+    return ("参考：原句未收录词的词表近邻候选（机械事实，仅供判断——有把握的可在改写中"
+            "采用，没把握的忽略，不许照抄自己不确定的词）：\n" + "\n".join(lines))
+
+
+def _latest_screen_facts(ctx: dict) -> dict:
+    """`_rewrite_health_zh` 的环内取数器（2026-09-16 改写环臂批）：倒序扫环内 steps 取
+    最近一次检索事实——rank/rerank 试跑结果 dict 直接带出健康度/结果数/解析状态/执行的
+    条件/top 标题；search.rerun 采纳档与 results.show 成功档视同 healthy（与
+    `_screen_baseline` 同口径）；无环内事实按屏面状态退化（有结果 unknown——不假装
+    知道它健不健康；无结果 degenerate）。只读机械事实，不评内容质量。"""
+    for s in reversed(list(ctx.get("steps") or [])):
+        if not (isinstance(s, dict) and s.get("ok")):
+            continue
+        v = str(s.get("verb") or "")
+        r = s.get("result") if isinstance(s.get("result"), dict) else {}
+        if v in ("rank", "rerank") and r.get("health"):
+            return {"health": str(r.get("health")), "total": int(r.get("total") or 0),
+                    "resolution_status": str(r.get("resolution_status") or ""),
+                    "filters": list(r.get("filters") or []),
+                    "top_titles": [t.get("dataset_name") for t in list(r.get("top") or [])
+                                   if isinstance(t, dict)]}
+        if v == "search.rerun" and r.get("adopted"):
+            return {"health": "healthy", "total": int(r.get("n_after_total") or 0)}
+        if v == "results.show" and r.get("shown"):
+            return {"health": "healthy", "total": int(r.get("total") or 0)}
+    if ctx.get("has_results"):
+        return {"health": "unknown", "total": int(ctx.get("result_total") or 0)}
+    return {"health": "degenerate", "total": 0}
+
+
 def _top_digest(rows: Any, n: int = 3) -> list[dict[str, Any]]:
     """top 条目紧凑 digest（rank/rerank 返回契约的 top 键）：七字段——
     dataset_uid（2026-08-20 批补：同批依赖占位的解析源，`$<N>.top[<i>].dataset_uid`）/
@@ -1474,23 +2539,362 @@ def _top_digest(rows: Any, n: int = 3) -> list[dict[str, Any]]:
     return digest
 
 
+# ---------------------------------------------------- 屏态机制（2026-09-13 rerank 处置批）
+#
+# 屏态唯一出口 results.show + 试跑化的 rank/rerank 共用的一组机械件：
+#   · `_health_of_meta`——规则可断言的结果健康度（三态），auto-show/生死线/告警同谓词；
+#   · `_verified_recommend_payload`——recommend 同形载荷构造 + 应用态回填 + scope_kept
+#     机械复核（rank/rerank/search.rerun/results.show 四处只有这一份，单通道原则）；
+#   · `_build_show_batch`——批次原料构造（kind=内容来源动词，前端按 kind 渲染无感）；
+#   · `_screen_baseline` / `_screen_comparison_zh`——rerank 试跑的新旧对照基线与事实句；
+#   · `_resolve_show_handle` / `_loop_show`——句柄解析与屏态出口本体（试跑重放 +
+#     指纹复核，fail-closed）。
+
+
+def _health_of_meta(meta: Any, *, structured_context_lost: bool = False) -> str:
+    """检索结果的**规则可断言健康度**（三态）——只看机械事实，不评内容质量：
+    "degenerate"（零命中 / 解析弃权 / 向量语义兜底 / 查询待澄清 / 结构化现场丢失）
+    ——屏面上没有经条件核验的结果；"healthy"（有命中、未降级、现场完整）——规则程序
+    可断言的好，auto-show 只在本态触发；其余 "watch"（有结果但走了自动降级）。
+    「更好」是内容判断，不归本谓词——双方都健康时机械层只报事实。"""
+    if structured_context_lost:
+        return "degenerate"
+    total = int(getattr(meta, "result_total", 0) or 0)
+    status = str(getattr(meta, "resolution_status", "") or "")
+    if total <= 0 or status in ("abstained", "vector_fallback", "clarification_required"):
+        return "degenerate"
+    if status == "degraded":
+        return "watch"
+    return "healthy"
+
+
+def _verified_recommend_payload(meta: Any, structured_kwargs: dict
+                                ) -> "tuple[dict | None, bool]":
+    """recommend 同形载荷 + 应用态回填 + scope_kept 机械复核——rank auto-show /
+    rerank auto-show / search.rerun 采纳档 / results.show 重放共用（单通道）。
+    显式日期必须出现在 interpretation，三个应用态必须逐位等于输入；任一丢失 →
+    (None, False)，调用方 fail-closed 不出批，宁可保留原结果也不放宽重跑。"""
+    from ..app.conversation_results import complete_payload
+
+    payload = complete_payload(meta, params=structured_kwargs)
+    # /api/recommend 的三个应用态字段由 Web 层调用现场回显；agent 载荷没有接口层可补，
+    # 故在这里用同一份净化值补齐，随后机械复核。
+    payload["applied_facets"] = structured_kwargs["facet_filters"]
+    payload["applied_suppressed"] = structured_kwargs["suppressed_constraints"]
+    payload["applied_lenient"] = structured_kwargs["lenient_dims"]
+    interpretation = payload.get("interpretation") if isinstance(payload.get("interpretation"), dict) else {}
+    intent_projection = interpretation.get("intent") \
+        if isinstance(interpretation.get("intent"), dict) else {}
+    scope_kept = (
+        payload.get("applied_facets") == structured_kwargs["facet_filters"]
+        and payload.get("applied_suppressed") == structured_kwargs["suppressed_constraints"]
+        and payload.get("applied_lenient") == structured_kwargs["lenient_dims"]
+        and (not structured_kwargs["date_from"]
+             or str(intent_projection.get("date_from") or "") == structured_kwargs["date_from"])
+        and (not structured_kwargs["date_to"]
+             or str(intent_projection.get("date_to") or "") == structured_kwargs["date_to"])
+    )
+    if not scope_kept:
+        return None, False
+    return payload, True
+
+
+def _build_show_batch(origin: str, query_effective: str, query_raw: str,
+                      payload: dict) -> dict:
+    """上屏批次原料（turn.py 组卷只认这个形状）：kind = **内容来源**动词
+    （rank/rerank——batch_select/results 两处前端消费点按内容来源分派，show 只是出口，
+    前端无感）；label 截 20 字；query_raw = 本轮用户原话（契约）。"""
+    return {
+        "kind": origin,
+        "label": query_effective[:20],
+        "query_raw": query_raw,
+        "query_effective": query_effective,
+        "payload": payload,
+    }
+
+
+def _screen_baseline(ctx: dict) -> dict:
+    """rerank/ask.relax 闸门的**屏面基线**（机械现取，不落状态）：倒序扫环内 steps，取最近
+    **真实上屏**的批次——
+      · rank/rerank 的 auto-show 成功档（displayed=True 且 batch 非空）；
+      · results.show 的成功档（shown=True 且 batch 非空；幂等档 batch=None 跳过——
+        原批次步在更前面，内容同源）；
+      · search.rerun 采纳档（已过择优/应用态闸门上屏）。
+    2026-09-18 专家化批修正：此前取「最近一次带 health 的 rank/rerank 试跑」，无论它有没有
+    上屏——被拒/仅 advisory 的试跑会冒充屏面（剧本：健康屏 A 在显示 → 试跑 B 被拒留在
+    steps → 下一次调用拿 B 当基线，把健康屏误判为空屏 → auto-show 绕过 LLM 裁决顶掉 A）。
+    试跑只是情报，屏面只认上屏事实。
+    无环内上屏事实时按屏面状态退化：有结果 → "unknown"（屏面内容未经本环核验，机械层
+    不假装知道它健不健康——生死线不触发，全走 advisory）；无结果 → "degenerate"
+    （空屏面：任何健康结果都严格更好，0→N 自动上屏的合法触发面）。
+    合成健康度纪律：results.show/search.rerun 不自带 health 键——按上屏条数合成
+    （total>0 → healthy；==0 → degenerate，空屏不许冒充健康屏）。"""
+    for s in reversed(list(ctx.get("steps") or [])):
+        if not (isinstance(s, dict) and s.get("ok")):
+            continue
+        v = str(s.get("verb") or "")
+        r = s.get("result") if isinstance(s.get("result"), dict) else {}
+        if v in ("rank", "rerank") and r.get("displayed") and r.get("batch"):
+            return {"health": str(r.get("health") or "healthy"),
+                    "total": int(r.get("total") or 0),
+                    "origin": v,
+                    "query": str(r.get("query") or r.get("rewritten_query") or "")}
+        if v == "results.show" and r.get("shown") and r.get("batch"):
+            total = int(r.get("total") or 0)
+            return {"health": "healthy" if total > 0 else "degenerate",
+                    "total": total, "origin": v,
+                    "query": str(r.get("query_effective") or "")}
+        if v == "search.rerun" and r.get("adopted"):
+            total = int(r.get("n_after_total") or 0)
+            return {"health": "healthy" if total > 0 else "degenerate",
+                    "total": total, "origin": v,
+                    "query": str(r.get("query") or "")}
+    if ctx.get("has_results"):
+        return {"health": "unknown", "total": int(ctx.get("result_total") or 0),
+                "origin": "screen", "query": str(ctx.get("current_query") or "")}
+    return {"health": "degenerate", "total": 0, "origin": "screen", "query": ""}
+
+
+_HEALTH_ZH = {"healthy": "条件核验通过", "watch": "走了自动降级（忽略部分条件）",
+              "degenerate": "没有经条件核验的结果", "unknown": "未经本环核验"}
+
+
+def _screen_comparison_zh(baseline: dict, trial_health: str, trial_total: int,
+                          trial_query: str) -> str:
+    """rerank 试跑的新旧对照句（机械事实清单，**不判「更好」**——内容优劣的裁决归模型，
+    经 results.show 表达）。"""
+    if baseline.get("origin") == "screen" and baseline.get("health") == "degenerate":
+        base_desc = "当前屏面：无结果"
+    elif baseline.get("health") == "unknown":
+        base_desc = (f"当前屏面：「{baseline.get('query') or '—'}」"
+                     f"{int(baseline.get('total') or 0)} 条（{_HEALTH_ZH['unknown']}）")
+    else:
+        base_desc = (f"当前屏面：「{baseline.get('query') or '—'}」"
+                     f"{int(baseline.get('total') or 0)} 条"
+                     f"（{_HEALTH_ZH.get(str(baseline.get('health') or ''), '未知')}）")
+    trial_desc = (f"本次试跑：「{trial_query}」命中 {trial_total} 条"
+                  f"（{_HEALTH_ZH.get(trial_health, '未知')}）")
+    return f"新旧对照——{base_desc}；{trial_desc}。"
+
+
+# ---------------------------------------------------- 探测报告与 relax 通道（2026-09-13 夜批）
+#
+# rerank 负资产根治第二批（2026-09-13 夜批）：
+# 盲改写的三层无知（不知成分功能/不知下游后果/输出通道窄）用「确定性反事实探测 + 建议注入 +
+# 双通道出口」对治——机械层算好「放松每维约束各救回多少条」随改写调用注入（仅建议），
+# LLM 可照建议走结构化 relax 通道（零改写、确定性重检）、可无视报告自由改写、也可弃权。
+
+
+class _RerankRelaxParamError(Exception):
+    """rerank 的 relax 槽含非法 key（不是探测报告里的项/该维当前无约束可松）。"""
+
+    code = "bad_param"
+
+    def __init__(self, key: str):
+        super().__init__(key)
+        self.hint = (f"relax 槽里的「{key}」不是本次探测报告给出的可放松项。"
+                     "修正方法：relax 只填报告里列出的 key；或者清空 relax 槽改用改写。")
+
+
+def _relaxation_probe_zh(flow: Any, query: str, sources: Any,
+                         structured_kwargs: dict) -> str:
+    """rerank 改写调用前的**约束松弛反事实探测报告**（零 LLM、纯确定性）：对当前查询
+    解析出的约束集逐维试算「放松它能救回多少条 + top 示例」，作为**建议**注入。
+    复用 `retriever.relaxation_options`（单通道原则；include_dead=True 保留死维——
+    「放松也无救」是信息量）。弃权态/无约束/探测异常都如实说明，不静默吞掉。"""
+    try:
+        intent, _cands, normalized, *_ = flow._prepare_context(
+            query, sources=sources, auto_parse_sources=False, **structured_kwargs)
+    except Exception as exc:  # noqa: BLE001（探测是情报员，失败不阻塞改写主路）
+        return f"（松弛试算未能完成：{type(exc).__name__}——请按原句自行判断是否改写）"
+    if getattr(intent, "abstain", False):
+        return ("参考：本查询未能完整解析出可执行条件，没有可放松的维度——"
+                "这种情况优先考虑改写查询本身（规范实体名、中文主题词补英文对照）。")
+    options = flow.retriever.relaxation_options(
+        normalized, intent, top_k=3, max_options=6, include_dead=True)
+    if not options:
+        return "参考：本查询没有可放松的条件（未解析出硬约束）。"
+    lines = ["参考：当前条件的松弛试算（确定性预演，仅建议——可照做、可自由改写、也可都不做）："]
+    for o in options:
+        names = "、".join(
+            str(getattr(getattr(c, "record", None), "dataset_name", "") or "")
+            for c in list(o.get("candidates") or [])[:2])
+        names = names.strip("、")
+        verb = "只按" if o.get("kind") == "only" else "放松"
+        suffix = "搜" if o.get("kind") == "only" else ""
+        if o.get("count"):
+            example = f"（例：{names}）" if names else ""
+            lines.append(f"- {o['key']}：{verb}「{o['label']}」{suffix}→ {o['count']} 条{example}")
+        else:
+            lines.append(f"- {o['key']}：{verb}「{o['label']}」{suffix}→ 0 条（放松也无救）")
+    lines.append("若决定照某条建议放松，把它加到 relax 槽（可多选）后重发本工具；"
+                 "否则正常输出改写句；两者都不合适就原样输出原句。")
+    return "\n".join(lines)
+
+
+def _relax_live_digest(flow: Any, query: str, sources: Any,
+                       structured_kwargs: dict) -> list[dict] | None:
+    """ask.relax 适用性情报（2026-09-14 YOLO 批；零 LLM 确定性预演）：对查询解析出的
+    约束集逐维试算「放松它能救回几条」，回传紧凑 digest（key/label/count；
+    include_dead=False——「放松也无救」的死维不列）。解析弃权/预演异常 → None
+    （情报不可得，调用方保持通用文案，不妄断）。
+
+    嵌进 degenerate 试跑结果（rank/rerank）的 `relax_live` 键：decide 的
+    「结果不健康告警」（`_screen_alert_block_zh`）据此点名活选项（ask.relax 是
+    对因对策）或如实标注「ask.relax 不适用」——模型不再凭通用对策清单盲选，
+    也不会空撞 no_options 机械闸。与 `_loop_ask_relax` 的弹卡预演同一
+    `retriever.relaxation_options` 真源（单通道原则），此处只做紧凑投影。"""
+    try:
+        intent, _cands, normalized, *_ = flow._prepare_context(
+            query, sources=sources, auto_parse_sources=False, **structured_kwargs)
+    except Exception:  # noqa: BLE001（情报员失败不阻塞检索主路）
+        return None
+    if getattr(intent, "abstain", False):
+        return None
+    try:
+        options = flow.retriever.relaxation_options(
+            normalized, intent, top_k=3, max_options=6, include_dead=False)
+    except Exception:  # noqa: BLE001（同上：情报不可得如实回 None）
+        return None
+    return [{"key": str(o.get("key") or ""), "label": str(o.get("label") or ""),
+             "count": int(o.get("count") or 0)} for o in options]
+
+
+def _relax_to_suppressed(intent: Any, keys: Any) -> list[str]:
+    """把 rerank relax 槽的探测报告 key 翻译成 suppressed_constraints 口径（filter_id
+    极性形式，单通道复用条件板「忽略此条件」的既有执行与呈现）：dim:X→include:X /
+    exclude:X→exclude:X / raw→按当前值 raw:required|raw:forbidden / date→date:range /
+    only:X→删其余全部（其它正向维+全部排除维+FASTQ+时间范围）。
+    翻译真源是 `query_parser.relax_key_to_suppressed`（2026-09-14 收编上移，单锚点）；
+    本层只做 LLM 入参侧的契约适配——非法 key 抛 `_RerankRelaxParamError`（如实拒绝，不静默忽略）。"""
+    from ..retrieval.query_parser import relax_key_to_suppressed
+
+    suppressed: list[str] = []
+    for raw in list(keys or []):
+        key = str(raw or "").strip()
+        if not key:
+            continue
+        try:
+            suppressed.extend(relax_key_to_suppressed(intent, key))
+        except ValueError:
+            raise _RerankRelaxParamError(key)
+    out: list[str] = []
+    for s in suppressed:
+        if s not in out:
+            out.append(s)
+    return out
+
+
+def _resolve_show_handle(handle: str, steps: list[dict]) -> "tuple[int | None, dict | None]":
+    """results.show 的句柄解析：latest（缺省）= 最近一次 rank/rerank 试跑；
+    latest_rank / latest_rerank = 该动词最近一次；数字 = 步号（1 起，与 decide 投影
+    里的执行序号同口径）。只认 ok 且带 health 键的试跑结果（rank/rerank）。
+    返回 (步号, 步实录)；找不到 → (None, None)。"""
+    def _is_trial(s: Any, verb: str | None = None) -> bool:
+        if not (isinstance(s, dict) and s.get("ok")):
+            return False
+        v = str(s.get("verb") or "")
+        if v not in ("rank", "rerank") or (verb and v != verb):
+            return False
+        r = s.get("result")
+        return isinstance(r, dict) and bool(r.get("health"))
+
+    steps = list(steps or [])
+    h = str(handle or "").strip() or "latest"
+    if h.isdigit():
+        idx = int(h)
+        if 1 <= idx <= len(steps) and _is_trial(steps[idx - 1]):
+            return idx, steps[idx - 1]
+        return None, None
+    verb = {"latest": None, "latest_rank": "rank", "latest_rerank": "rerank"}.get(h)
+    if h not in ("latest", "latest_rank", "latest_rerank"):
+        return None, None
+    for i in range(len(steps) - 1, -1, -1):
+        if _is_trial(steps[i], verb):
+            return i + 1, steps[i]
+    return None, None
+
+
+def _loop_show(slots: dict, root: Path, ctx: dict | None = None) -> dict:
+    """results.show：把环内一次 rank/rerank **试跑**结果放上结果区——屏态唯一出口
+    （2026-09-13 rerank 处置批；display 槽已退役，其它工具没有上屏权限，rank/rerank 的
+    auto-show 是本路径不经 LLM 的机械直调）。
+
+    试跑缓存不落 state：句柄解析到 steps 里的试跑记录（rank/rerank 结果 dict 自带
+    生效查询/命中数/health），用记录的生效查询 + **当前**结构化现场重放同一条确定性
+    管线（use_llm=False）重建 recommend 同形载荷，并做指纹复核（命中总数一致 +
+    应用态逐位保留）；无此试跑、记录缺检索句、指纹不符都 fail-closed（shown=False +
+    note_zh 如实说明），绝不拿旧现场的内容冒充现在的。幂等：试跑已上屏（auto-show）
+    时不重复出批。只读；批次 kind = 试跑来源动词，前端按 kind 渲染无感。"""
+    from ..app import workflow as wf
+
+    slots = slots or {}
+    ctx = ctx or {}
+    handle = str(slots.get("handle") or "").strip() or "latest"
+    steps = list(ctx.get("steps") or [])
+    _no, record = _resolve_show_handle(handle, steps)
+    if record is None:
+        return {"shown": False, "handle": handle,
+                "note_zh": f"上屏没有执行：没有找到「{handle}」对应的检索/重查试跑记录。"}
+    origin = str(record.get("verb") or "")
+    res = record.get("result") if isinstance(record.get("result"), dict) else {}
+    query_effective = str(res.get("query") or res.get("rewritten_query") or "").strip()
+    if not query_effective:
+        return {"shown": False, "handle": handle, "origin": origin,
+                "note_zh": "上屏没有执行：试跑记录里没有可重放的检索句。"}
+    if res.get("displayed"):
+        # 幂等档：该试跑已被 auto-show 上屏——不重复出批（turn.py 组卷见不到 batch 就
+        # 不动屏），如实回报。
+        return {"shown": True, "handle": handle, "origin": origin,
+                "query_effective": query_effective,
+                "total": int(res.get("total") or 0), "overridden": False,
+                "batch": None, "displayed": True,
+                "note_zh": "该结果已在结果区，未重复上屏。"}
+    # 重放：与试跑同一条确定性管线、同一份结构化现场（**现取**——现场变了指纹复核会拦）。
+    # 放松档试跑自报的生效放松项一并带上，否则会拿恢复后的条件重放、指纹恒不符。
+    structured_kwargs = _replay_structured_kwargs(ctx, record)
+    flow = wf.DatasetRecommendationWorkflow()
+    meta = flow.run_with_meta(
+        wf.RecommendParams(
+            query=query_effective, use_llm=False,
+            sources=ctx.get("search_sources"),
+            auto_parse_sources=False, **structured_kwargs))
+    payload, scope_kept = _verified_recommend_payload(meta, structured_kwargs)
+    fingerprint_ok = scope_kept and int(meta.result_total or 0) == int(res.get("total") or 0)
+    if not fingerprint_ok:
+        return {"shown": False, "handle": handle, "origin": origin,
+                "query_effective": query_effective,
+                "total": int(res.get("total") or 0),
+                "note_zh": "上屏没有执行：重放结果与试跑时已不一致（结果已过期或现场已变），"
+                           "当前结果区未改动——请重新检索后再上屏。"}
+    batch = _build_show_batch(
+        origin, query_effective,
+        str(ctx.get("utterance") or "").strip() or query_effective, payload)
+    return {"shown": True, "handle": handle, "origin": origin,
+            "query_effective": query_effective,
+            "total": int(meta.result_total or 0),
+            "overridden": bool(ctx.get("has_results")),
+            "batch": batch, "displayed": True}
+
+
 def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """裸新检索：以 query 跑**标准 RAG 管线**（与
-    /api/recommend 同核心的确定性段——`run_with_meta` 规则检索，
-    与 search.rerun 同口径），返回 {total, 生效条件, top digest}。
-    与 search.rerun 的界限：不做机械择优、不与基准比对——只如实回报检索事实；
-    display=true 时构造载荷（recommend 同形）并附批次原料（batch 键）推往前端
-    display=false 时仅 agent 自己可见（不构造载荷，省一遍卡片投影）。
+    """裸新检索（**试跑化**，2026-09-13 rerank 处置批）：以 query 跑标准 RAG 管线
+    （与 /api/recommend 同核心的确定性段——`run_with_meta` 规则检索，与 search.rerun
+    同口径），如实回报 {total, 生效条件, top digest} + 机械健康度（health/
+    resolution_status，`_health_of_meta` 谓词）。
+    **healthy 即自动上屏**（results.show 路径不经 LLM 的机械直调：构造 recommend
+    同形载荷 + 批次原料，displayed=True；应用态丢失则 fail-closed 不上屏并如实标注
+    structured_context_lost）；其余健康度只回报、不占屏面——屏态唯一出口是
+    results.show 动词（display 槽已退役）。
+    与 search.rerun 的界限不变：不做机械择优、不与基准比对。
     只读；query 槽空 → `_SearchRerunParamError`（bad_param，与 search.rerun 同纪律）。"""
     from ..app import workflow as wf
-    from ..app.recommend_rows import recommend_payload
 
     slots = slots or {}
     ctx = ctx or {}
     query = str(slots.get("query") or "").strip()
     if not query:
         raise _SearchRerunParamError()
-    display = slots.get("display") is True
     sources = ctx.get("search_sources")
     # 2026-08-23：rank 与 search.rerun 同口径——必须吃同一份
     # 结构化检索现场（facet/suppressed/lenient/date），否则同词重跑会放宽条件、uid 集合变化，
@@ -1502,139 +2906,389 @@ def _loop_rank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
         wf.RecommendParams(
             query=query, use_llm=False, sources=sources,
             auto_parse_sources=False, **structured_kwargs))
+    health = _health_of_meta(meta)
     batch = None
+    displayed = False
+    structured_lost = False
     rows: Any = meta.retrieved_data
-    if display:
-        payload = recommend_payload(meta)
-        rows = payload.get("results")
-        # 回填并机械复核应用态（与 search.rerun agent_exec.py:1284-1300 同模式）：
-        # 显式日期必须出现在 interpretation，三个应用态必须逐位等于输入；任一丢失都拒绝出批，
-        # 宁可保留原结果也不放宽重跑。
-        payload["applied_facets"] = structured_kwargs["facet_filters"]
-        payload["applied_suppressed"] = structured_kwargs["suppressed_constraints"]
-        payload["applied_lenient"] = structured_kwargs["lenient_dims"]
-        interpretation = payload.get("interpretation") if isinstance(payload.get("interpretation"), dict) else {}
-        intent_projection = interpretation.get("intent") \
-            if isinstance(interpretation.get("intent"), dict) else {}
-        scope_kept = (
-            payload.get("applied_facets") == structured_kwargs["facet_filters"]
-            and payload.get("applied_suppressed") == structured_kwargs["suppressed_constraints"]
-            and payload.get("applied_lenient") == structured_kwargs["lenient_dims"]
-            and (not structured_kwargs["date_from"]
-                 or str(intent_projection.get("date_from") or "") == structured_kwargs["date_from"])
-            and (not structured_kwargs["date_to"]
-                 or str(intent_projection.get("date_to") or "") == structured_kwargs["date_to"])
-        )
-        if not scope_kept:
-            # fail-closed：不回填 batch（turn.py 组卷见不到 payload 就不上屏），如实留痕。
-            return {
-                "query": query, "total": 0, "filters": [],
-                "top": [], "displayed": display, "batch": None,
-                "structured_context_lost": True,
-                "disclosure_zh": "这次检索没能完整保留当前筛选条件，为避免放宽条件后误出结果，已保留原结果。",
-            }
-        batch = {
-            "kind": "rank",
-            "label": query[:20],
-            # query_raw = 本轮用户原话（契约；曾张冠李戴
-            # 填成模型产出的 rank query）——execute 经 ctx 下入；缺席（测试/直调）退回 query。
-            "query_raw": str(ctx.get("utterance") or "").strip() or query,
-            "query_effective": query,
-            "payload": payload,
-        }
-    return {
+    if health == "healthy":
+        # auto-show：规则程序可断言的好 → 不经 LLM 直调上屏路径（payload 构造与
+        # scope_kept 复核与 results.show/search.rerun 同一份 `_verified_recommend_payload`）。
+        payload, scope_kept = _verified_recommend_payload(meta, structured_kwargs)
+        if scope_kept:
+            rows = payload.get("results")
+            displayed = True
+            batch = _build_show_batch(
+                "rank", query, str(ctx.get("utterance") or "").strip() or query, payload)
+        else:
+            # fail-closed：不上屏（屏面保持原样），健康度改判 degenerate 并如实留痕——
+            # total/top 仍如实回报试跑事实（试跑语义：什么都没上屏，不拿 0 冒充）。
+            structured_lost = True
+            health = "degenerate"
+    result = {
         "query": query,
         "total": int(meta.result_total or 0),
         # active_filters 真源是**投影字典的列表**（workflow._active_filters 投影），
         # 原样透传（曾被误当 mapping dict() 强转——有约束的查询必炸，2026-08-17 run2 复盘修）。
         "filters": list(meta.active_filters or []),
         "top": _top_digest(rows),
-        "displayed": display,
+        "displayed": displayed,
         "batch": batch,
+        "health": health,
+        "resolution_status": str(getattr(meta, "resolution_status", "") or ""),
     }
+    if structured_lost:
+        result["structured_context_lost"] = True
+        result["disclosure_zh"] = ("这次检索没能完整保留当前筛选条件，为避免放宽条件后"
+                                   "误出结果，已保留原结果。")
+        return result
+    if health == "degenerate":
+        # ask.relax 适用性情报（2026-09-14 YOLO 批，零 LLM）：degenerate 试跑顺带预演
+        # 「放松哪维有救」——decide 的屏面告警（`_screen_alert_block_zh`）据此点名
+        # ask.relax 或如实标注不适用；healthy（已自动上屏）/应用态丢失档不探。
+        digest = _relax_live_digest(flow, query, sources, structured_kwargs)
+        if digest is not None:
+            result["relax_live"] = digest
+    return result
+
+
+# rerank 触发闸的条数阈值（2026-09-18 触发子集批）：屏面已核验健康/主检索直出且结果
+# 充足（>3 条）时，坏 query 重检只有下行风险。数据真源
+# `research/agent_eval/trigger_subset_gate_0918.py`（`_trigger_subset_gate_0918.json`）：
+# heldout t≤3 触发 20 例、闸后 Δ=0（零风险）；OOD t≤3 转正 +0.005~+0.011；
+# 阈值放宽到 5 增益反而收窄、到 10（≈全量触发）回到负资产。
+# 2026-09-18 专家化批口径复核（`rank_signal_harvest_0918.py` 重跑 414 查询采收
+# health/resolution_status/result_total + `trigger_health_rule_0918.py` 规则扫描）：
+# harness 的 rank_total（len 列表）与生产闸吃的 result_total 在 318/414 查询上背离，
+# 按生产口径 t≤3 fired=91（非旧口径 13），OOD Δ = A +0.0216 / H1 +0.0170 / J +0.0181，
+# 追平 oracle（空∪ndcg<0.5，+0.021）——本闸已是 oracle 级最优，规则面无可部署增强。
+# 反证：watch 触发（health=watch/degraded 即重查）OOD Δ = A −0.0504（灾难 6）/
+# H1 −0.0295（3）/ J −0.0235（3），heldout 151 例零 watch（Δ=0）——降级结果大多
+# 仍是当前最优，重查只引入下行风险，不得纳入触发条件。
+_RERANK_TRIGGER_MAX_TOTAL = 3
 
 
 def _loop_rerank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
-    """坏 query 优化重检：**独立 LLM 改写调用**（独立上下文 +
-    `prompts/query_rewrite.md`，模型经 execute 的 needs_context 注入下入）→
-    机械健全性检查（非空、≤200 字符、与原句不同；任一不过退回原 query 且
-    rewritten=False 如实标注）→ 跑标准管线（与 `_loop_rank` 同口径）→ 返回
-    {original_query, rewritten_query, rewritten, total, filters, top digest}；
-    display=true 产批次原料（label = 生效的 rewritten_query）。
+    """坏 query 优化重检（**试跑化**，2026-09-13 rerank 处置批；双通道 2026-09-13 夜批）：
+    **双通道入口**——
+      · relax 槽非空（结构化放松）：跳过改写（零 LLM），把探测报告 key 翻译成
+        suppressed_constraints 后经标准管线重检**原句**；非法 key 抛
+        `_RerankRelaxParamError`（bad_param，如实拒绝）；
+      · relax 空（默认）：先过 **repair 路由**（2026-09-18 专家化批 WP3，零 LLM
+        局部纠错——原句因未收录词弃权时，受控词表唯一最近邻打补丁试跑，比整句改写
+        更窄的干预优先；不适用/不采纳则候选 advisory 随结果回传），再走
+        **约束松弛反事实探测**（零 LLM，报告仅建议）+ **独立 LLM 改写调用**兜底
+        （报告随调用注入；机械健全性检查兜底，不过退回原句且 rewritten=False
+        如实标注）→ 跑标准管线（与 `_loop_rank` 同口径）。
+    两通道汇流后**只试跑不直接上屏**（display 槽已退役），机械对照新旧结果健康度。
+    **触发闸**（2026-09-18 触发子集批，阈值 `_RERANK_TRIGGER_MAX_TOTAL`）：屏面已核验
+    健康或主检索直出（healthy/unknown）且结果充足（>3 条）时，本工具只有下行风险——
+    如实拒绝（refused=true + refuse_reason=screen_healthy，拒绝是数据不是故障，
+    同 ask.relax 的 screen_not_degenerate 先例；零 LLM、零试跑，换措辞重搜请走
+    search.rerun）。
+    过闸后的三态出口（**语义闸扩档**，2026-09-18 触发子集批——改写定稿与原句经
+    `_constraint_diff` 零 LLM 机械对比，未授权语义变化（硬约束增删/排除变化/软硬转换/
+    极性翻转/原始数据·时间硬要求变化/解析异常）即 semantic_blocked）：
+      ① 屏面健康 + （试跑 degenerate 或 语义被改）→ rejected=true + reject_reason
+         （trial_degenerate / semantic_change）+ comparison_zh 对照（无 batch，屏面不动）；
+      ② 屏面 degenerate + 试跑 healthy → 自动上屏（auto_shown=true，results.show
+         路径不经 LLM 的机械直调；应用态丢失则 fail-closed 退回 advisory）；
+         空屏面下语义被改**放行但如实标注**（disclosure_zh——可能的错误结果远大于
+         什么结果都不给，标注义务不省）；
+      ③ 其余 → 仅 advisory 对照（baseline/comparison_zh 如实给事实，语义被改时附
+         警示，上屏与否归模型经 results.show 裁决；双方都健康时机械层只报事实不判
+         「更好」）。
+    返回 {original_query, rewritten_query, rewritten, applied, relaxed, total, filters,
+    top digest, health, resolution_status, baseline, comparison_zh, rejected, auto_shown,
+    reject_reason, semantic_blocked（+ 拒绝档 refused/refuse_reason/note_zh，
+    + 放行标注 disclosure_zh，+ repair 纠错情报——None=未触发；applied="repair" 时
+    为采纳档：terms/adopted_fixes/patched_query，未采纳档为候选 advisory）}。
     只读；query 槽空 → `_SearchRerunParamError`（bad_param，同纪律）。"""
     from ..app import workflow as wf
-    from ..app.recommend_rows import recommend_payload
 
     slots = slots or {}
     ctx = ctx or {}
     query = str(slots.get("query") or "").strip()
     if not query:
         raise _SearchRerunParamError()
-    display = slots.get("display") is True
     sources = ctx.get("search_sources")
     # 2026-08-23（与 _loop_rank 同纪律）：坏 query 改写只换检索句
     # 不得借机丢掉用户已生效的结构化条件（facet/suppressed/lenient/date）——同词重跑却放宽条件
     # 是弱批顶掉好结果的根因。吃同一份结构化现场，缺失即 fail-closed。
     structured_kwargs = _loop_structured_kwargs(ctx)
 
-    rewritten_query, rewritten = _rewrite_query(ctx.get("chat_model"), query,
-                                                usage_sink=ctx.get("usage_sink"))
+    # 触发闸（2026-09-18 触发子集批）：屏面已核验健康/主检索直出且结果充足时，
+    # 坏 query 重检只有下行风险——如实拒绝（零 LLM、零试跑；拒绝是数据不是故障）。
+    # 拒绝步 health=""（无检索事实）：`_screen_baseline`/`_latest_screen_facts`/
+    # `_screen_alert_block_zh` 三处扫描都要求 health 非空，空值自然跳过——
+    # 否则拒绝步会以「healthy + total=0」冒充新基线，触发闸下次即被绕过。
+    baseline = _screen_baseline(ctx)
+    if (str(baseline.get("health") or "") in ("healthy", "unknown")
+            and int(baseline.get("total") or 0) > _RERANK_TRIGGER_MAX_TOTAL):
+        return {
+            "original_query": query, "rewritten_query": query, "rewritten": False,
+            "applied": "none", "relaxed": [], "probe_zh": "", "total": 0,
+            "filters": [], "top": [], "displayed": False, "batch": None,
+            "health": "", "resolution_status": "",
+            "baseline": baseline, "comparison_zh": "", "rejected": False,
+            "auto_shown": False, "reject_reason": "", "semantic_blocked": False,
+            "refused": True, "refuse_reason": "screen_healthy",
+            "note_zh": (f"当前结果区已有不错的结果（{int(baseline.get('total') or 0)} 条、"
+                        "状态健康）——优化检索词重检只适用于结果差/零结果的场景，本次"
+                        "没有执行。想换个措辞重搜请走 search.rerun；结果变差或零结果时"
+                        "再用我不迟。"),
+        }
+
+    relax_keys = slots.get("relax")
+    if isinstance(relax_keys, str):
+        relax_keys = [relax_keys]
+    relax_keys = [str(k).strip() for k in (relax_keys or []) if str(k).strip()]
 
     flow = wf.DatasetRecommendationWorkflow()
+    relaxed: list[str] = []
+    probe_zh = ""
+    repair: dict | None = None
+    effective_kwargs = structured_kwargs
+    if relax_keys:
+        # relax 通道（零 LLM）：探测报告 key → suppressed_constraints，重检原句。
+        intent, _c, _n, *_ = flow._prepare_context(
+            query, sources=sources, auto_parse_sources=False, **structured_kwargs)
+        relaxed = _relax_to_suppressed(intent, relax_keys)  # 非法 key 在此抛 bad_param
+        effective_kwargs = {
+            **structured_kwargs,
+            "suppressed_constraints": list(structured_kwargs["suppressed_constraints"]) + relaxed,
+        }
+        rewritten_query, rewritten, applied = query, False, "relax"
+    else:
+        # repair 路由（2026-09-18 专家化批 WP3，**比整句改写更窄的干预优先**）：
+        # 原句因未收录词弃权时先试零 LLM 局部纠错（`_repair_route`——唯一最近邻才
+        # 自动打补丁；候选不足/歧义/白名单不过 → 不采纳，候选清单随结果 advisory
+        # 回传）；本术式不适用或不采纳时照常走改写通道兜底。
+        repair = _repair_route(flow, query, structured_kwargs)
+        if repair and repair.get("adopted"):
+            rewritten_query, rewritten, applied = repair["patched_query"], True, "repair"
+        else:
+            # 改写通道：探测报告先行（零 LLM，仅建议）→ 独立改写调用（报告随注入；
+            # 2026-09-16 改写环臂批：机械健康快照 `_latest_screen_facts` 随调用一并注入——
+            # WP5 臂 H1 数据落地（heldout +0.115 / OOD 干净子集 +0.081，双过落地门））。
+            probe_zh = _relaxation_probe_zh(flow, query, sources, structured_kwargs)
+            health_zh = _rewrite_health_zh(**_latest_screen_facts(ctx), label="当前结果")
+            # 用户原话锚点（2026-09-17，借鉴 Aivis 经验八「重点信息多次增强」）：
+            # decide 传进来的 query 可能已被模型转述——与原话有出入时把原话作为锚点注入，
+            # 改写语义以原话为准（逐字相同则免注，防冗余 token）。
+            utterance = str(ctx.get("utterance") or "").strip()
+            anchor_zh = (f"用户原话（转述如有出入，语义以此为准，不许偏离它）：{utterance}"
+                         if utterance and utterance != query else "")
+            # repair 未采纳但有候选时，候选菜单随改写调用注入（`_rewrite_repair_zh`——
+            # advisory 交模型裁决；已采纳不会走到这里，repair=None 时为空串逐位不变）。
+            repair_zh = _rewrite_repair_zh(repair) if repair else ""
+            rewritten_query, rewritten = _rewrite_query(
+                ctx.get("chat_model"), query, usage_sink=ctx.get("usage_sink"),
+                probe_zh=probe_zh, health_zh=health_zh, anchor_zh=anchor_zh,
+                repair_zh=repair_zh)
+            applied = "rewrite" if rewritten else "none"
+
     meta = flow.run_with_meta(
         wf.RecommendParams(
             query=rewritten_query, use_llm=False, sources=sources,
-            auto_parse_sources=False, **structured_kwargs))
+            auto_parse_sources=False, **effective_kwargs))
+    health = _health_of_meta(meta)
+    total = int(meta.result_total or 0)
+    comparison_zh = _screen_comparison_zh(baseline, health, total, rewritten_query)
+    if applied == "relax":
+        comparison_zh += f"本次为定向放松重检（已放松：{'、'.join(relax_keys)}），条件放松部分未经原条件核验。"
+    if repair:
+        # repair 事实句（2026-09-18 专家化批 WP3）：采纳档列「原词→纠正词」清单，
+        # 试跑零存活时降级为「仅供参考」措辞（覆盖校验）；未采纳档列候选 advisory
+        # （歧义不靠命中数裁决，交模型/用户）。
+        comparison_zh += _repair_note_zh(repair, empty=(health == "degenerate"))
+    # 语义闸（2026-09-18 触发子集批）：改写通道定稿 vs 原句的约束语义机械对比
+    # （`_constraint_diff`，零 LLM，单通道）——未授权语义变化即 semantic_blocked。
+    # relax 通道不改写查询，恒不涉及；repair 通道的 diff 在 `_repair_route` 内已过
+    # 白名单校验（授权差集=被纠实体新增），到这里的纠错补丁语义上恒干净。
+    semantic_blocked = False
+    reject_reason = ""
+    diff_zh = ""
+    if applied == "rewrite" and rewritten:
+        _diff = _constraint_diff(flow, query, rewritten_query, structured_kwargs)
+        semantic_blocked = bool(_diff.get("would_block"))
+        if semantic_blocked:
+            diff_zh = _constraint_diff_zh(_diff)
+    rejected = False
+    auto_shown = False
     batch = None
+    displayed = False
+    structured_lost = False
     rows: Any = meta.retrieved_data
-    if display:
-        payload = recommend_payload(meta)
-        rows = payload.get("results")
-        # 回填并机械复核应用态（与 _loop_rank 同模式；显式日期必须出现在 interpretation，
-        # 三个应用态逐位等于输入；任一丢失都拒绝出批）。
-        payload["applied_facets"] = structured_kwargs["facet_filters"]
-        payload["applied_suppressed"] = structured_kwargs["suppressed_constraints"]
-        payload["applied_lenient"] = structured_kwargs["lenient_dims"]
-        interpretation = payload.get("interpretation") if isinstance(payload.get("interpretation"), dict) else {}
-        intent_projection = interpretation.get("intent") \
-            if isinstance(interpretation.get("intent"), dict) else {}
-        scope_kept = (
-            payload.get("applied_facets") == structured_kwargs["facet_filters"]
-            and payload.get("applied_suppressed") == structured_kwargs["suppressed_constraints"]
-            and payload.get("applied_lenient") == structured_kwargs["lenient_dims"]
-            and (not structured_kwargs["date_from"]
-                 or str(intent_projection.get("date_from") or "") == structured_kwargs["date_from"])
-            and (not structured_kwargs["date_to"]
-                 or str(intent_projection.get("date_to") or "") == structured_kwargs["date_to"])
-        )
-        if not scope_kept:
-            return {
-                "original_query": query, "rewritten_query": rewritten_query,
-                "rewritten": rewritten, "total": 0, "filters": [],
-                "top": [], "displayed": display, "batch": None,
-                "structured_context_lost": True,
-                "disclosure_zh": "这次检索没能完整保留当前筛选条件，为避免放宽条件后误出结果，已保留原结果。",
-            }
-        batch = {
-            "kind": "rerank",
-            "label": rewritten_query[:20],
-            # query_raw = 本轮用户原话（契约，同 _loop_rank 的中6 修复口径）
-            # 原始坏 query 本身在结果顶层 original_query 键里，不丢。
-            "query_raw": str(ctx.get("utterance") or "").strip() or query,
-            "query_effective": rewritten_query,
-            "payload": payload,
-        }
-    return {
+    if str(baseline.get("health")) == "healthy" and (health == "degenerate" or semantic_blocked):
+        # 生死线（2026-09-18 扩档）：健康屏面被试跑搞没，或改写带未授权语义变化——
+        # 机械驳回（无 batch），对照事实照给；语义变化明细如实附后。
+        rejected = True
+        reject_reason = "trial_degenerate" if health == "degenerate" else "semantic_change"
+        if diff_zh:
+            comparison_zh += diff_zh
+    elif str(baseline.get("health")) == "degenerate" and health == "healthy":
+        # 0→N：规则程序可断言的严格更好 → 自动上屏（results.show 的机械直调，
+        # 载荷/复核与 rank auto-show、results.show 同一份 `_verified_recommend_payload`）。
+        payload, scope_kept = _verified_recommend_payload(meta, effective_kwargs)
+        if scope_kept:
+            rows = payload.get("results")
+            displayed = True
+            auto_shown = True
+            batch = _build_show_batch(
+                "rerank", rewritten_query,
+                str(ctx.get("utterance") or "").strip() or query, payload)
+        else:
+            structured_lost = True
+            health = "degenerate"
+            comparison_zh = _screen_comparison_zh(baseline, health, total, rewritten_query)
+    elif semantic_blocked and diff_zh:
+        # advisory 档的语义警示（屏面 watch/unknown 等）：机械层只报事实不拦，
+        # 但「改写改了条件语义」必须如实告知裁决方。
+        comparison_zh += "改写相对原句有约束语义变化（未经屏面核验不建议直接上屏）：" + diff_zh
+    result = {
         "original_query": query,
         "rewritten_query": rewritten_query,
         "rewritten": rewritten,
-        "total": int(meta.result_total or 0),
+        "applied": applied,
+        "relaxed": relaxed,
+        # 探测报告回传（仅改写通道生成）：decide 侧据此决定下一轮是否走 relax 通道
+        # （报告里的 key 即 relax 槽的合法取值）——改写模型与 decide 看到的是同一份。
+        "probe_zh": probe_zh,
+        # repair 情报（2026-09-18 专家化批 WP3，additive；diff 全量不入结果——
+        # 授权新增清单已折进 adopted_fixes）：None=本术式未触发。
+        "repair": ({k: v for k, v in repair.items() if k != "diff"}
+                   if repair else None),
+        "total": total,
         # active_filters 真源是投影字典的列表，原样透传（同 _loop_rank 的修复口径）。
         "filters": list(meta.active_filters or []),
         "top": _top_digest(rows),
-        "displayed": display,
+        "displayed": displayed,
         "batch": batch,
+        "health": health,
+        "resolution_status": str(getattr(meta, "resolution_status", "") or ""),
+        "baseline": baseline,
+        "comparison_zh": comparison_zh,
+        "rejected": rejected,
+        "auto_shown": auto_shown,
+        "reject_reason": reject_reason,
+        "semantic_blocked": semantic_blocked,
     }
+    if auto_shown and semantic_blocked:
+        # 空屏面放行（2026-09-18 触发子集批）：原屏无结果可失去，可能的错误结果
+        # 远大于什么结果都不给——但语义变化明细必须如实标注，核验义务交给用户。
+        result["disclosure_zh"] = (
+            "这次改写相对原查询有语义变化（"
+            + "；".join(str(r)[:120] for r in (_diff.get("block_reasons") or []))
+            + "）。因原结果区没有结果，仍按改写句上屏——请对照原查询核实是否符合你的意图。")
+    if auto_shown and applied == "repair":
+        # repair 空屏放行标注（2026-09-18 专家化批 WP3）：就近纠错是词表证据下的
+        # 判断，不是断言——纠正明细必须随上屏如实标注，核验义务交给用户。
+        result["disclosure_zh"] = (
+            _repair_note_zh(repair)
+            + "因原结果区没有结果，已按纠正后的查询上屏——请核实纠正是否符合你的意图。")
+    if structured_lost:
+        result["structured_context_lost"] = True
+        result["disclosure_zh"] = ("这次检索没能完整保留当前筛选条件，为避免放宽条件后"
+                                   "误出结果，已保留原结果。")
+        return result
+    if health == "degenerate":
+        # ask.relax 适用性情报（2026-09-14 YOLO 批，与 _loop_rank 同径）：按**生效检索句**
+        # （rewritten_query）+ 原始结构化现场预演——与 `_loop_ask_relax` 弹卡的口径
+        # （`_loop_effective_query` + `_loop_structured_kwargs`）同源。
+        digest = _relax_live_digest(flow, rewritten_query, sources, structured_kwargs)
+        if digest is not None:
+            result["relax_live"] = digest
+    return result
+
+
+def _loop_ask_relax(slots: dict, root: Path, ctx: dict | None = None) -> dict:
+    """ask.relax（2026-09-14 YOLO 批）：「问用户放松哪个条件」——LLM 判定坏结果的
+    病根在**用户条件本身**（互相打架/过严，而非措辞差）时，把「放松哪个条件、各能救回
+    多少条」做成选择卡弹给用户（载荷经结果 `ask_relax` 键 → turn.py 组卷透传 →
+    前端渲染；用户点选后前端以原查询 + 所选 suppressed_constraints 重搜，零 LLM，
+    复用条件板既有通道）。
+
+    机械闸（与 rerank 生死线同哲学——提示不是围栏，代码是）：只在屏面
+    **degenerate**（`_screen_baseline`：无经条件核验的结果）时放行。屏面健康时
+    问用户没有意义；unknown/watch 档系统已自动降级过、用户能看到结果，也不打扰——
+    均如实拒绝（refuse_reason=screen_not_degenerate）。
+    选项由 `retriever.relaxation_options` 确定性预演（零 LLM；include_dead=False——
+    「放松也无救」的死维不给用户选）；每选项的 suppress 清单随预演携带（翻译真源
+    `query_parser.relax_key_to_suppressed` 单锚点），此处只**与当前已生效的
+    suppressed_constraints 合并去重**（前端整组替换语义，服务端合并好不丢既有忽略）。
+    本工具不上屏（屏态唯一出口仍是 results.show）、不改查询、不落状态。
+    拒绝档 ok 恒 True——拒绝是数据不是故障（同 rerank rejected 哲学）。
+
+    环暂停语义（2026-09-14 ask 暂停/重启批，取代「之后请调 finish 收尾」旧口径）：
+    asked=True 一落地，本批剩余续步被跳过、环直去 narrate 做确定性说明，**不再发起
+    下一次 LLM 调用**；用户作答经 /api/utterance 的 `ask_answer` 字段以新回合重新入环
+    （route_consensus 免投票直定 search、understand 零 LLM 强置首步 rank 按所选
+    suppressed_constraints 重跑，decide 注入 resume_block 后由 LLM 裁决上屏/finish/
+    再追问）——环能看到作答与重跑结果，不再是「弹卡后环外零 LLM 直落屏」。"""
+    from ..app import workflow as wf
+
+    slots = slots or {}
+    ctx = ctx or {}
+    reason = str(slots.get("reason") or "").strip()
+
+    def _refuse(code: str, note: str, query: str = "") -> dict:
+        return {"asked": False, "refuse_reason": code, "query": query,
+                "reason": reason, "options": [], "ask_relax": None,
+                "note_zh": note}
+
+    query = _loop_effective_query(ctx)
+    if not query:
+        return _refuse("no_query", "没有可询问的原查询（环内还没有检索事实，"
+                                 "现场也没有当前检索句）——放宽询问没有执行。")
+    baseline = _screen_baseline(ctx)
+    if str(baseline.get("health") or "") != "degenerate":
+        return _refuse("screen_not_degenerate",
+                       "屏面上已有可看的结果（未经核验的坏屏面才值得打扰用户）——"
+                       "放宽询问没有执行；结果质量问题请走 rerank/results.show。",
+                       query)
+    structured_kwargs = _loop_structured_kwargs(ctx)
+    flow = wf.DatasetRecommendationWorkflow()
+    try:
+        intent, _cands, normalized, *_ = flow._prepare_context(
+            query, sources=ctx.get("search_sources"),
+            auto_parse_sources=False, **structured_kwargs)
+    except Exception as exc:  # noqa: BLE001（弹卡是增量便利，失败如实拒绝不炸环）
+        return _refuse("parse_error",
+                       f"条件预演未能完成（{type(exc).__name__}）——放宽询问没有执行；"
+                       "可改用 rerank 优化检索词重查。", query)
+    if getattr(intent, "abstain", False):
+        return _refuse("abstain",
+                       "本查询未能完整解析出可执行条件，没有可放松的维度——"
+                       "放宽询问没有执行；这种情况请改用 rerank 改写查询本身。", query)
+    options = flow.retriever.relaxation_options(
+        normalized, intent, top_k=3, max_options=6, include_dead=False)
+    if not options:
+        return _refuse("no_options",
+                       "本查询没有放松后能救回结果的条件（各维试算均零新增）——"
+                       "放宽询问没有执行；可改用 rerank 或如实告知用户后 finish。", query)
+    card_options: list[dict] = []
+    digest_options: list[dict] = []
+    for o in options:
+        key = str(o.get("key") or "")
+        kind = str(o.get("kind") or "drop")
+        label = str(o.get("label") or "")
+        count = int(o.get("count") or 0)
+        relaxed = [str(s) for s in (o.get("suppress") or [])]  # 真源已翻译（与 intent 同源，恒合法）
+        suppress = list(dict.fromkeys(
+            list(structured_kwargs["suppressed_constraints"]) + relaxed))
+        # 卡层不带 preview（2026-09-14 用户评审：示例名塞按钮信息效率太低；救回多少条
+        # 由 count 表达即可，示例候选仍留在 relaxation_options 的检索事实里）。
+        card_options.append({"key": key, "kind": kind, "label": label,
+                             "count": count, "suppress": suppress})
+        digest_options.append({"key": key, "kind": kind, "label": label,
+                               "count": count})
+    payload = {"query": query, "reason": reason, "options": card_options}
+    return {"asked": True, "query": query, "reason": reason,
+            "options": digest_options, "ask_relax": payload,
+            "note_zh": (f"已向用户发起放宽询问（{len(card_options)} 个选项）——"
+                        "环已暂停等作答，不要再调用任何工具：用户选完会按其选择自动"
+                        "重跑检索并回到环内，届时再裁决上屏/继续改写/收尾。")}
 
 
 # ---------------------------------------------------------------- 环内结果处理四工具
@@ -1648,23 +3302,51 @@ def _loop_rerank(slots: dict, root: Path, ctx: dict | None = None) -> dict:
 # 快照锚定）；其余三个只读。
 
 def _loop_structured_kwargs(ctx: dict) -> dict:
-    """环内检索的结构化现场（facet/suppressed/lenient/date）——与 search.rerun 同口径
-    （`wf.sanitize_*` 公共真源净化），新四工具的默认对象重跑管线用。"""
+    """环内检索的**完整确定性入参**——与 search.rerun / pre-loop 摘要 / /api/recommend
+    同口径（`wf.sanitize_*` 公共真源净化）：结构化现场（facet/suppressed/lenient/date）
+    + 排序杠杆（top_k/recall/strategy，2026-09-17 三径合一——此前环内试跑静默回默认，
+    请求级开向量召回时新旧屏面健康对照口径不一）。环内确定性段恒 rerank=off /
+    use_llm=False / llm_available=False（与 pre-loop 同纪律：不付 LLM 重排）。
+    ctx 缺键（旧会话/测试/harness 空 ctx）→ 全部回 workflow 默认，逐位不变。"""
     from ..app import workflow as wf
 
-    return {
+    kw = {
         "facet_filters": wf.sanitize_facet_filters(ctx.get("search_facet_filters")),
         "suppressed_constraints": wf.sanitize_suppressed(ctx.get("search_suppressed_constraints")),
         "lenient_dims": sorted(wf.sanitize_lenient_dims(ctx.get("search_lenient_dims"))),
         "date_from": str(ctx.get("search_date_from") or "").strip(),
         "date_to": str(ctx.get("search_date_to") or "").strip(),
+        "llm_available": False,
     }
+    top_k = ctx.get("search_top_k")
+    try:
+        top_k = int(top_k)
+        if not 1 <= top_k <= 50:
+            top_k = None
+    except (TypeError, ValueError):
+        top_k = None
+    if top_k is not None:
+        kw["top_k"] = top_k
+    recall = str(ctx.get("search_recall") or "").strip().lower()
+    # vector 是 Web 入口与 vector_recall 的正式后端（`resolve_auto_recall_preference`
+    # 的首选），此前白名单漏了它 → 请求级 recall=vector 被静默改回 off，重搜回落默认。
+    if recall not in ("off", "dense", "cross_encoder", "vector"):
+        recall = "off"
+    kw["recall_backend"] = recall
+    if str(ctx.get("search_strategy") or "").strip().lower() == "auto":
+        kw["strategy"] = "auto"
+        # auto 偏好解析唯一真源（vector > cross_encoder）——与 pre-loop、/api/recommend 同。
+        from ..retrieval.vector_recall import resolve_auto_recall_preference
+        preferred, available = resolve_auto_recall_preference()
+        kw["preferred_recall"] = preferred
+        kw["recall_available"] = available
+    return kw
 
 
-def _loop_effective_query(ctx: dict) -> str:
-    """「最近一批检索结果」的生效查询：**最近一次成功的环内检索步**（rank 的 query /
-    rerank 的 rewritten_query / search.rerun 采纳档的 query——从 steps 实录现取，不采信
-    自述），无则退回现场 current_query。空 → 无结果可依（调用方如实降级）。"""
+def _recent_effective_step(ctx: dict) -> tuple[dict | None, str]:
+    """「最近一批检索结果」的**生效检索步**与其生效查询：最近一次成功的环内检索步
+    （rank 的 query / rerank 的 rewritten_query / search.rerun 采纳档的 query——
+    从 steps 实录现取，不采信自述）；无 → (None, "")。"""
     for step in reversed(list((ctx or {}).get("steps") or [])):
         if not step.get("ok"):
             continue
@@ -1679,8 +3361,38 @@ def _loop_effective_query(ctx: dict) -> str:
         else:
             continue
         if q:
-            return q
+            return step, q
+    return None, ""
+
+
+def _loop_effective_query(ctx: dict) -> str:
+    """「最近一批检索结果」的生效查询；无 → 退回现场 current_query（调用方如实降级）。"""
+    _step, q = _recent_effective_step(ctx)
+    if q:
+        return q
     return str((ctx or {}).get("current_query") or "").strip()
+
+
+def _replay_structured_kwargs(ctx: dict, record: dict | None = None) -> dict:
+    """重放/默认对象定位的**完整有效检索入参** = 结构化现场 + 该次试跑自报的生效放松项。
+
+    rerank 放松档只在局部 `effective_kwargs` 追加 suppression；其后「导出当前结果 /
+    对比前两条」若只继承 query（`_loop_structured_kwargs`）会恢复刚放松的条件，
+    重跑出空集/异集，批次范围对不上。`record` 精确给出试跑记录（results.show）；
+    缺省取最近一次生效检索步的实录（默认对象定位/重放同源）。"""
+    kw = _loop_structured_kwargs(ctx)
+    res = record.get("result") if isinstance(record, dict) else None
+    if not isinstance(res, dict):
+        step, _q = _recent_effective_step(ctx)
+        res = ((step or {}).get("result") or {})
+    relaxed = [str(t).strip() for t in (res.get("relaxed") or []) if str(t).strip()]
+    if relaxed:
+        base = list(kw.get("suppressed_constraints") or [])
+        for term in relaxed:
+            if term not in base:
+                base.append(term)
+        kw["suppressed_constraints"] = base
+    return kw
 
 
 def _recent_result_records(ctx: dict, root: Path) -> tuple[list | None, Any]:
@@ -1700,7 +3412,7 @@ def _recent_result_records(ctx: dict, root: Path) -> tuple[list | None, Any]:
         wf.RecommendParams(
             query=query, use_llm=False, sources=(ctx or {}).get("search_sources"),
             auto_parse_sources=False,
-            **_loop_structured_kwargs(ctx)))
+            **_replay_structured_kwargs(ctx)))
     return list(meta.retrieved_data or []), meta
 
 
@@ -1991,11 +3703,15 @@ def _loop_cite_export(slots: dict, root: Path, ctx: dict | None = None) -> dict:
             "n_datasets": 0, "uids": [], "files": [], "out_dir": "",
             "note_zh": "这些数据集在当前库中都解析不到，没有可导出的引文。",
         }
-    out_dir = instance_data_dir_for(Path(root), ".userdata") / "citations"
+    from ..app.runtime_paths import account_data_dir_for
+    from ..corpus.patch_package import current_patch_scope
+
+    out_dir = account_data_dir_for(Path(root), ".userdata/citations", current_patch_scope())
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
-    ris_name = f"reused-public-datasets-{ts}.ris"
-    bib_name = f"reused-public-datasets-{ts}.bib"
+    artifact_id = uuid.uuid4().hex
+    ris_name = f"reused-public-datasets-{ts}-{artifact_id}.ris"
+    bib_name = f"reused-public-datasets-{ts}-{artifact_id}.bib"
     ris_path = out_dir / ris_name
     bib_path = out_dir / bib_name
     ris_path.write_text(ris, encoding="utf-8")
@@ -2191,6 +3907,9 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
     "curate.search_online": {
         "run": _loop_search_online, "label_zh": _ap.VERB_BY_NAME["curate.search_online"].zh, "card_kind": "search_online",
         "readonly": False,
+        # 吃执行前算好的剩余写入额度（ctx.write_records_remaining）——
+        # 一次可能写超过剩余额度的写工具必须按剩余上限执行，不许写满 40 条再说。
+        "needs_context": True,
         # B1a：条件成立后该步被放弃（j03/l07/b04 型）——锚定「下一步就是我」。
         # 互指：keywords 出处判定句共两语境变体——此处 decide_zh
         # （decide 工具描述）与 agent_schemas._SLOT_DESCRIPTIONS_ZH["keywords"]
@@ -2211,6 +3930,8 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
     "curate.sync_updates": {
         "run": _loop_sync_updates, "label_zh": _ap.VERB_BY_NAME["curate.sync_updates"].zh, "card_kind": "sync_updates",
         "readonly": False,
+        # 同 search_online——按剩余写入额度收窄本次同步的采集/入库上限。
+        "needs_context": True,
         # B1a：「联网搜 X 入库」被磁吸（k08）——抽象边界补一个具体反例。
         # 互指：sync 主题限定判定句的 decide 面变体（第一人称）；
         # 全量口径在 action_plan.VERB_SPECS 本动词的 when_zh（第三人称），改动须同步评估。
@@ -2237,29 +3958,71 @@ LOOP_TOOLS: dict[str, dict[str, Any]] = {
     },
 }
 
-# rank / rerank：环内检索工具组，
+# rank / rerank / results.show：环内检索工具组，
 # 只读、本地管线（不触网，不进 _NETWORK_LOOP_TOOLS——归类由 tests/test_rag_tools.py 显式
-# 钉住）。needs_context=True：execute 注入现场（search_sources；rerank 另取 chat_model 做
-# 独立改写调用——ctx 只被 run 消费、不落 steps）。
+# 钉住）。needs_context=True：execute 注入现场（search_sources、屏面状态与 steps 实录；
+# rerank 另取 chat_model 做独立改写调用——ctx 只被 run 消费、不落 steps）。
+# 2026-09-13 rerank 处置批：display 槽退役——屏态唯一出口是 results.show；rank/rerank
+# 只试跑（机械健康度 + 新旧对照），healthy 结果由后端不经 LLM 自动上屏（auto-show）。
 LOOP_TOOLS["rank"] = {
     "run": _loop_rank, "label_zh": _ap.VERB_BY_NAME["rank"].zh, "card_kind": "rank",
     "readonly": True, "needs_context": True,
     "decide_zh": ("用一条检索句在本地库做**新检索**（只读，跑与主检索同一条管线，如实回报"
-                  "命中总数/生效条件/top 条目——top 每条含 dataset_uid 与 rank 序号，"
+                  "命中总数/生效条件/健康度/top 条目——top 每条含 dataset_uid 与 rank 序号，"
                   "后续对比/FAIR/兼容/引文可引用）。槽位 query 必填（完整检索句）。"
-                  "检索本身就是用户的诉求时 display=true（结果更新到结果区）；"
-                  "只是为后续动作探路、中间看一眼时不填 display。"
+                  "结果健康（有命中且条件核验通过）时会**自动上屏**，无需额外动作；"
+                  "不健康时会附健康度标注与告警，按告警给出的对策处理。"
                   "换词重检已有查询是 search.rerun，坏 query 先优化再查是 rerank——"
                   "裸新检索才选我。"),
 }
 LOOP_TOOLS["rerank"] = {
     "run": _loop_rerank, "label_zh": _ap.VERB_BY_NAME["rerank"].zh, "card_kind": "rerank",
     "readonly": True, "needs_context": True,
-    "decide_zh": ("当前检索句**质量差**（太口语化、实体写法不规范、中英错位）时，先由独立"
-                  "改写器优化检索句再重查（只读；改写不过机械健全性检查会如实退回原句、"
-                  "rewritten=false）。槽位 query 必填（填**原始**的差 query，不要自己先改）、"
-                  "reason 可选。display 口径同 rank：用户等着看结果才 true；"
-                  "top 条目同 rank 含 dataset_uid 与 rank 序号，可被后续结果处理引用。"),
+    "decide_zh": ("当前检索句**质量差**（太口语化、实体写法不规范、中英错位）或**条件过严"
+                  "零结果**时重查（只读）。**收到「结果不健康」告警时本工具是对策之一**。"
+                  "执行前系统先给出当前条件的松弛试算报告（确定性预演，仅建议）——"
+                  "两通道任选：①照报告建议放松：relax 槽填报告里的 key（可多选），"
+                  "零改写确定性重检原句；②不给 relax：独立改写器优化检索句再重查"
+                  "（改写不过机械健全性检查会如实退回原句、rewritten=false）。"
+                  "槽位 query 必填（填**原始**的差 query，不要自己先改）、reason 可选。"
+                  "执行后只**试跑**、不直接上屏：系统给出新旧结果的健康度对照——"
+                  "试跑明显更好时用 results.show 上屏；试跑会把健康结果搞没时机械驳回"
+                  "（rejected=true），当前结果区不动。"
+                  "两道机械闸（2026-09-18 起）：①当前结果区健康且充足（>3 条）时本工具"
+                  "直接拒绝执行（refused=true, refuse_reason=screen_healthy）——好结果"
+                  "不需要重查，换措辞请走 search.rerun；②改写若引入未授权的约束语义变化"
+                  "（硬约束增删/排除变化/软硬偏好互转/极性翻转/原始数据或时间硬要求变化），"
+                  "健康屏面上机械驳回（rejected=true, reject_reason=semantic_change），"
+                  "空屏面上放行但如实标注（disclosure_zh）。"
+                  "top 条目同 rank 含 dataset_uid 与 "
+                  "rank 序号，可被后续结果处理引用。"),
+}
+LOOP_TOOLS["results.show"] = {
+    "run": _loop_show, "label_zh": _ap.VERB_BY_NAME["results.show"].zh,
+    "card_kind": "results_show",
+    "readonly": True, "needs_context": True,
+    "decide_zh": ("把环内一次检索/重查的**试跑结果**放上结果区——屏面唯一出口（只读，"
+                  "重放与试跑同一条确定性管线重建载荷 + 指纹复核，现场已变会如实拒绝）。"
+                  "槽位 handle 可选：latest（缺省 = 最近一次试跑）/ latest_rank / "
+                  "latest_rerank / 步号。仅当试跑结果**明显好于**当前屏面时才调用；"
+                  "屏面已是该结果时本工具幂等，不要重复调用。"),
+}
+# ask.relax（2026-09-14 YOLO 批）：「问用户放松哪个条件」——病根在用户条件互相打架/
+# 过严时的环内出口。只读、本地管线（零 LLM 确定性预演，不进 _NETWORK_LOOP_TOOLS）。
+# needs_context=True：屏面基线/结构化现场/生效查询都由 execute 经 ctx 注入。
+LOOP_TOOLS["ask.relax"] = {
+    "run": _loop_ask_relax, "label_zh": _ap.VERB_BY_NAME["ask.relax"].zh,
+    "card_kind": "ask_relax",
+    "readonly": True, "needs_context": True,
+    "decide_zh": ("屏面**没有经条件核验的结果**、且病根在**用户条件互相打架或过严**"
+                  "（如同时限定矛盾条件、年份过严）时，弹一张「放松哪个条件」选择卡问用户"
+                  "（只读，不改查询、不上屏）。选项与各选项能救回多少条由系统确定性预演，"
+                  "用户点选后自动按所选放松条件重搜。槽位 reason 可选（为什么判定条件"
+                  "不合理，一句中文，会展示给用户）。**收到「结果不健康」告警且原因在"
+                  "条件本身时本工具是对策之一**；屏面健康、或问题在措辞/实体写法/"
+                  "中英错位时不选我（那是 rerank）；解析弃权时也别选我（没有可放松的"
+                  "条件，会被拒绝）。每轮至多 1 次；调用后请调 finish 并说明正在等"
+                  "用户作答。"),
 }
 
 # ---------------------------------------------------------------- 环内结果处理四工具
@@ -2313,7 +4076,7 @@ LOOP_TOOLS["fair.check"] = {
 
 #: 四套完整工具面。route_consensus 只会产生前三种；rescue 由救回端点显式预置。
 _CONSENSUS_ROUTES: tuple[str, ...] = ("search", "action", "general")
-_SCOPED_ROUTES: tuple[str, ...] = (*_CONSENSUS_ROUTES, "rescue")
+_SCOPED_ROUTES: tuple[str, ...] = (*_CONSENSUS_ROUTES, "rescue", "read")
 #: route.request 是常规套件之间的单次逃生口，不得进入 rescue。
 _ROUTE_REQUEST_TARGETS: tuple[str, ...] = _CONSENSUS_ROUTES
 
@@ -2415,9 +4178,9 @@ def _loop_curate_rollback(slots: dict, root: Path, ctx: dict | None = None) -> d
             segs.append(f"{len(recycled)} 个新文件移入回收站")
         if restored:
             segs.append(f"{len(restored)} 个文件恢复原字节")
-        n_applied = len(recycled) + len(restored)
         n_bad = len(res.get("unrestorable") or []) + len(res.get("errors") or [])
-        rolled_back = n_applied > 0 and n_bad == 0
+        # 完成语义由回退层唯一裁决，包含版本冲突等拒动项。
+        rolled_back = bool(res.get("rolled_back"))
         skipped = list(res.get("skipped") or [])
         if rolled_back:
             prefix = f"已回滚「{verb_zh}」这一步："
@@ -2508,16 +4271,31 @@ def _execute_detail_zh(spec: dict, result: dict) -> str:
         return "重新检索未执行，结果区未改动。"
     if kind == "rank":
         shown = str(result.get("query") or "")
-        suffix = "，结果区已更新" if result.get("displayed") else ""
+        suffix = "，结果区已自动上屏" if result.get("displayed") else ""
         return f"检索（{shown}）：命中 {int(result.get('total') or 0)} 条{suffix}。"
     if kind == "rerank":
+        if result.get("refused"):
+            # 触发闸拒绝档（2026-09-18 触发子集批）：note_zh 是工具按真实屏面
+            # 写实的拒绝理由——摘要直接引用，不二次概括（同生死线驳回档哲学）。
+            return str(result.get("note_zh") or "") or \
+                "优化检索词重查没有执行：当前结果区状态良好，不需要重查。"
         total = int(result.get("total") or 0)
-        suffix = "，结果区已更新" if result.get("displayed") else ""
+        if result.get("rejected"):
+            # 生死线驳回档：对照句是机械事实写实（与四工具 note_zh 同哲学），
+            # 摘要直接引用，不二次概括。
+            return str(result.get("comparison_zh") or "") or \
+                "优化检索词重查被驳回：新结果不如当前结果健康，结果区未改动。"
+        suffix = "，结果区已自动上屏" if result.get("auto_shown") else ""
         if result.get("rewritten"):
             return (f"优化检索词重查（{str(result.get('original_query') or '')} → "
                     f"{str(result.get('rewritten_query') or '')}）：命中 {total} 条{suffix}。")
         return (f"优化检索词重查：改写未通过检查，按原句"
                 f"（{str(result.get('original_query') or '')}）重查，命中 {total} 条{suffix}。")
+    if kind == "results_show":
+        if result.get("shown"):
+            return (f"结果区已更新为「{str(result.get('query_effective') or '')}」"
+                    f"（{int(result.get('total') or 0)} 条）。")
+        return str(result.get("note_zh") or "") or "上屏没有执行。"
     if kind == "route_request":
         target = str(result.get("requested_route") or "")
         return f"已切换处理路线（→ {target}），按新路线继续。"
@@ -2572,10 +4350,10 @@ def _audit_loop_tool(root: Path, verb: str, slots: dict, ok: bool, note: str,
     records 只在工具真带回条数时写实数（如 search_online 入库 N 条）；只读工具没有
     「写入条数」可记，字段整个省略——恒 0 会让账本统计口径失真。"""
     try:
-        from ..corpus.corpus_curation import _append_jsonl, _net_ledger_path, _now_iso
+        from ..corpus.net_ledger import append_net_ledger, net_ledger_path, now_iso
 
         row = {
-            "ts": _now_iso(),
+            "ts": now_iso(),
             "endpoint": f"agent_exec:{verb}",
             "query": json.dumps(dict(slots or {}), ensure_ascii=False)[:120],
             "ok": bool(ok),
@@ -2583,7 +4361,8 @@ def _audit_loop_tool(root: Path, verb: str, slots: dict, ok: bool, note: str,
         }
         if records is not None:
             row["records"] = int(records)
-        _append_jsonl(_net_ledger_path(Path(root)), row)
+        # 打主体（当前账户作用域）——状态摘要按主体过滤，账户间互不可见。
+        append_net_ledger(net_ledger_path(Path(root)), row)
     except Exception as exc:
         # 账本写失败不再零痕迹——观测设施自身故障必须可观测。
         _warn_once(f"net_ledger_write::{type(exc).__name__}",
@@ -2599,10 +4378,10 @@ def _audit_fallback(root: Path, node: str, reason: str, utterance: str, model: s
     `.userdata/agent_fallbacks.jsonl`（ts/node/reason/model/utterance 截断）。
     与联网账本同目录同纪律：审计自身失败绝不掀翻主流程。"""
     try:
-        from ..corpus.corpus_curation import _append_jsonl, _net_ledger_path, _now_iso
+        from ..corpus.net_ledger import append_jsonl, net_ledger_path, now_iso
 
-        _append_jsonl(_net_ledger_path(Path(root)).parent / "agent_fallbacks.jsonl", {
-            "ts": _now_iso(),
+        append_jsonl(net_ledger_path(Path(root)).parent / "agent_fallbacks.jsonl", {
+            "ts": now_iso(),
             "node": str(node or ""),
             "reason": str(reason or "")[:200],
             "model": str(model or ""),
@@ -2628,38 +4407,45 @@ _EXAMPLES_MIN_OVERLAP = 2         # 入选的最少共享二元字组数（低�
 
 
 def _examples_ledger_path(root: Path) -> Path:
-    from ..corpus.corpus_curation import _net_ledger_path
+    from ..corpus.net_ledger import net_ledger_path
 
-    return _net_ledger_path(Path(root)).parent / _EXAMPLES_LEDGER_NAME
+    return net_ledger_path(Path(root)).parent / _EXAMPLES_LEDGER_NAME
 
 
 def _example_candidates_path(root: Path) -> Path:
     return _examples_ledger_path(Path(root)).parent / _EXAMPLE_CANDIDATES_NAME
 
 
-def _read_example_rows(path: Path) -> list[dict]:
-    """jsonl 账本全量读出（坏行跳过）。调用方自行保证只在账本尺度（≤200 行）使用。
-    坏行不再零痕迹跳过前 `_warn_once` 留一行——否则「账本损坏」
-    与「本来就是空的」事后不可区分。"""
-    rows: list[dict] = []
-    if path.is_file():
-        for line in path.read_text(encoding="utf-8").splitlines():
+def _iter_example_rows(path: Path) -> Iterator[dict]:
+    """JSONL 共用流式解析锚点；坏行留痕但不回显正文，内存不随历史行数增长。"""
+    if not path.is_file():
+        return
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
             line = line.strip()
             if not line:
                 continue
             try:
-                rows.append(json.loads(line))
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    raise ValueError("ledger_row_not_object")
             except Exception as exc:
                 _warn_once(f"example_ledger_bad_line::{type(exc).__name__}",
                            f"经验库账本 {path.name} 有无法解析的行（{type(exc).__name__}），"
                            "已跳过——若跳光等价于账本损坏，请检查该文件。")
                 continue
-    return rows
+            yield row
+
+
+def _read_example_rows(path: Path, *, streaming: bool = False) -> list[dict] | Iterator[dict]:
+    """旧调用仍返回可修改列表；长历史读面显式选流式并先过滤/预算，不另建解析器。"""
+    rows = _iter_example_rows(path)
+    return rows if streaming else list(rows)
 
 
 def _write_example_rows(path: Path, rows: list[dict]) -> None:
-    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
-                    encoding="utf-8")
+    from ..app.conversation_runs import RunError
+    raise RunError('knowledge_legacy_write_disabled', '原账本仅作迁移留档，修改须经过统一知识道闸。')
 
 
 def _endpoint_fp_from_config(config: Any) -> str:
@@ -2680,11 +4466,12 @@ def _example_args_zh(verb: str, slots: dict) -> str:
     return f"{verb}（{'，'.join(parts)}）" if parts else verb
 
 
+@_learning_scope.synchronized_bank
 def _maybe_record_success(root: Path, utterance: str, plan: dict, steps: list,
                           *, principal: str = "anonymous", endpoint_fp: str = "",
                           mode: str = "tools", repairs: int = 0, finish_vetoes: int = 0,
                           reask_write_count: int = 0, truncated: bool = False,
-                          checklist_dropped: int = 0) -> None:
+                          checklist_dropped: int = 0, project_id: str | None = None) -> None:
     """成功收尾机械追加一行进**候选池**（2026-08-13 起不直接进正式库——用户在记忆模块
     预览勾选后才由 `approve_example_candidates` 迁入，注入侧只读正式库）。
     **机械判据**（不问 LLM）：有真跑的工具步、每步都 ok、至少一步是 curate.* 管护动词、
@@ -2712,30 +4499,18 @@ def _maybe_record_success(root: Path, utterance: str, plan: dict, steps: list,
         text = str(utterance or "").strip()[:120]
         if not text:
             return
-        from ..corpus.corpus_curation import _append_jsonl, _now_iso
-
         principal = str(principal or "anonymous")
         endpoint_fp = str(endpoint_fp or "")
-        path = _example_candidates_path(root)
-        rows = _read_example_rows(path)
+        project_id = _learning_scope.resolve_project_id(project_id)
         step_rows = [{"verb": v, "args": _example_args_zh(v, dict(s.get("slots") or {}))}
                      for s, v in zip(steps, verbs)]
-        if rows and str(rows[-1].get("utterance") or "") == text \
-                and [r.get("verb") for r in (rows[-1].get("steps") or [])] == verbs \
-                and str(rows[-1].get("principal") or "anonymous") == principal \
-                and str(rows[-1].get("endpoint_fp") or "") == endpoint_fp:
-            return  # 与最后一行逐字重复（同分区同句同动作序列）→ 不录
-        row = {"ts": _now_iso(), "utterance": text, "steps": step_rows,
-               "principal": principal, "endpoint_fp": endpoint_fp}
-        row["id"] = hashlib.sha256(
-            json.dumps([row["ts"], text, step_rows], ensure_ascii=False).encode("utf-8")
-        ).hexdigest()[:12]
-        rows.append(row)
-        if len(rows) > _EXAMPLES_MAX_ROWS:
-            rows = rows[-_EXAMPLES_MAX_ROWS:]
-            _write_example_rows(path, rows)
-            return
-        _append_jsonl(path, rows[-1])
+        service = _example_knowledge(root)
+        after = {'kind': 'example', 'title': '', 'text': text, 'trigger': '', 'tier': 'explicit',
+            'permanence': 'persistent', 'payload': {'utterance': text, 'steps': step_rows, 'verified_success': False}, 'links': []}
+        service.propose(principal, endpoint_fp, project_id,
+            request_id='runtime-example:' + _collab_rules.content_fingerprint([project_id, after])[:32],
+            operations=[{'op': 'create', 'after': after}], actor='model',
+            source_refs=[{'type': 'user', 'text': text, 'project_id': project_id}])
     except Exception as exc:
         # 成功经验候选池写失败不再静默——用户得到的是"已收录"语义，
         # 候选池里却没有时，至少要有一行可定位的痕迹。
@@ -2743,93 +4518,83 @@ def _maybe_record_success(root: Path, utterance: str, plan: dict, steps: list,
                    f"成功经验候选池写盘失败（{type(exc).__name__}），本次收录可能未落盘。")
 
 
-def _example_partition_of(row: dict) -> tuple[str, str]:
+def _example_partition_of(row: dict) -> tuple[str, str, str]:
     """分区标：缺字段的存量行按 （"anonymous","") 计——与 `_load_success_examples` 同口径。"""
-    return (str(row.get("principal") or "anonymous"), str(row.get("endpoint_fp") or ""))
+    return _learning_scope.partition_of(row)
 
 
-def _example_same_partition(row: dict, principal: "str | None", endpoint_fp: "str | None") -> bool:
+def _example_same_partition(row: dict, principal: "str | None", endpoint_fp: "str | None",
+                            project_id: str | None = None, *, inherit_global: bool = False) -> bool:
     """principal=None = 内部直调/测试不过滤（旧行为逐位不变）；否则双键全等才同区。"""
-    if principal is None:
-        return True
-    return _example_partition_of(row) == (str(principal or "anonymous"), str(endpoint_fp or ""))
+    return _learning_scope.matches(row, principal, endpoint_fp, project_id, inherit_global=inherit_global)
+
+
+def _example_knowledge(root):
+    from ..app.conversation_store import ConversationStore
+    from ..app.knowledge_service import KnowledgeService
+    return KnowledgeService(ConversationStore(Path(root)))
 
 
 def list_example_candidates(root: Path, *, principal: "str | None" = None,
-                            endpoint_fp: "str | None" = None) -> list[dict]:
-    """候选池里本分区（双键全等）的待选行，新的在前（给用户倒序挑）。账本异常 → 空表。"""
-    try:
-        rows = [r for r in _read_example_rows(_example_candidates_path(Path(root)))
-                if r.get("id") and str(r.get("utterance") or "").strip() and r.get("steps")
-                and _example_same_partition(r, principal, endpoint_fp)]
-        return list(reversed(rows))
-    except Exception as exc:
-        # 读盘失败（含账本损坏）不再静默当空——返回形状不变，stderr 留痕。
-        _warn_once(f"example_candidates_read::{type(exc).__name__}",
-                   f"经验候选池读盘失败（{type(exc).__name__}），按空表返回。")
+                            endpoint_fp: "str | None" = None, project_id: str | None = None) -> list[dict]:
+    if principal is None:
         return []
+    service = _example_knowledge(root)
+    project = _learning_scope.resolve_project_id(project_id)
+    items, offset = [], 0
+    while True:
+        page = service.changes(principal, endpoint_fp or '', project, offset=offset, limit=200)
+        for change in page['items']:
+            if change['status'] in {'committed', 'rejected'}:
+                continue
+            for op in change['operations']:
+                after = op.get('after', {})
+                if after.get('kind') == 'example':
+                    items.append(dict(after['payload'], id=change['id'], status=change['status'],
+                        change_id=change['id'], change_revision=change['revision'], fingerprint=change['fingerprint'],
+                        assessment=change.get('assessment'), assessment_id=change.get('assessment_id'), project_id=project))
+        offset = page['next_offset']
+        if offset is None:
+            return items
+
+
+def _example_change(service, principal, endpoint, change_id, project):
+    from ..app.conversation_runs import RunError
+    try:
+        row = service.change(principal, endpoint, change_id)
+    except RunError as exc:
+        if exc.code != 'knowledge_change_not_found':
+            raise
+        migrated = service.store.resolve_legacy_id(principal, endpoint, change_id, filename='curate_example_candidates.jsonl')
+        row = service.change(principal, endpoint, migrated)
+    if row['project_id'] != project or not any(op.get('after', {}).get('kind') == 'example' for op in row['operations']):
+        raise RunError('knowledge_scope_conflict', '这不是当前项目的示例提案。')
+    return row
 
 
 def approve_example_candidates(root: Path, ids: Any, *, principal: "str | None" = None,
-                               endpoint_fp: "str | None" = None) -> dict:
-    """勾选入库：候选池里同分区且 id 命中的行迁入正式库（注入侧只读正式库）。
-    正式库已有同分区同句同动作序列的行 → 跳过计 duplicated；命中行无论迁入与否都从池里
-    清掉（用户的勾选意图已兑现，不留残影）。账本自身失败不掀翻主流程（返回零计数）。"""
-    try:
-        wanted = {str(i) for i in (ids or [])}
-        cpath = _example_candidates_path(Path(root))
-        keep, moved = [], []
-        for row in _read_example_rows(cpath):
-            if str(row.get("id") or "") in wanted and _example_same_partition(row, principal, endpoint_fp):
-                moved.append(row)
-            else:
-                keep.append(row)
-        approved = duplicated = 0
-        if moved:
-            lpath = _examples_ledger_path(Path(root))
-            ledger = _read_example_rows(lpath)
-            for row in moved:
-                verbs = [str(s.get("verb") or "") for s in (row.get("steps") or [])]
-                dup = any(str(old.get("utterance") or "") == str(row.get("utterance") or "")
-                          and [str(s.get("verb") or "") for s in (old.get("steps") or [])] == verbs
-                          and _example_partition_of(old) == _example_partition_of(row)
-                          for old in ledger)
-                if dup:
-                    duplicated += 1
-                    continue
-                ledger.append(row)
-                approved += 1
-            if len(ledger) > _EXAMPLES_MAX_ROWS:
-                ledger = ledger[-_EXAMPLES_MAX_ROWS:]
-            _write_example_rows(lpath, ledger)
-            _write_example_rows(cpath, keep)
-        return {"approved": approved, "duplicated": duplicated}
-    except Exception as exc:
-        # 账本异常 → 零计数的口径不变，但失败本身必须可观测。
-        _warn_once(f"example_approve::{type(exc).__name__}",
-                   f"经验库勾选入库失败（{type(exc).__name__}），按零计数返回。")
-        return {"approved": 0, "duplicated": 0}
+                               endpoint_fp: "str | None" = None, project_id: str | None = None) -> dict:
+    from ..app.conversation_runs import RunError
+    if principal is None or type(ids) is not list or not 1 <= len(ids) <= 32:
+        raise RunError('knowledge_invalid_operations', '示例提案需要本人身份及有界编号清单。')
+    service, project = _example_knowledge(root), _learning_scope.resolve_project_id(project_id)
+    rows = [_example_change(service, principal, endpoint_fp or '', cid, project) for cid in ids]
+    return {'approved': 0, 'duplicated': 0, 'stage': 'draft', 'changes': rows,
+        'detail': '示例仍未生效；请在知识审查中评估并真人提交。'}
 
 
 def dismiss_example_candidates(root: Path, ids: Any, *, principal: "str | None" = None,
-                               endpoint_fp: "str | None" = None) -> dict:
-    """忽略：从候选池删掉同分区且 id 命中的行（不进正式库）。账本失败 → 零计数。"""
-    try:
-        wanted = {str(i) for i in (ids or [])}
-        cpath = _example_candidates_path(Path(root))
-        pool = _read_example_rows(cpath)
-        keep = [r for r in pool
-                if not (str(r.get("id") or "") in wanted
-                        and _example_same_partition(r, principal, endpoint_fp))]
-        dismissed = len(pool) - len(keep)
-        if dismissed:
-            _write_example_rows(cpath, keep)
-        return {"dismissed": dismissed}
-    except Exception as exc:
-        # 同 approve——零计数口径不变，失败留痕。
-        _warn_once(f"example_dismiss::{type(exc).__name__}",
-                   f"经验候选池忽略操作失败（{type(exc).__name__}），按零计数返回。")
-        return {"dismissed": 0}
+                               endpoint_fp: "str | None" = None, project_id: str | None = None) -> dict:
+    from ..app.conversation_runs import RunError
+    if principal is None or type(ids) is not list or not 1 <= len(ids) <= 32:
+        raise RunError('knowledge_invalid_operations', '驳回需要本人身份及有界编号清单。')
+    service, project = _example_knowledge(root), _learning_scope.resolve_project_id(project_id)
+    receipts = []
+    for cid in ids:
+        row = _example_change(service, principal, endpoint_fp or '', cid, project)
+        receipts.append(service.reject(principal, endpoint_fp or '', project,
+            change_id=row['id'], expected_change_revision=row['revision']))
+    return {'ok': all(row['ok'] for row in receipts), 'dismissed': sum(row['ok'] for row in receipts), 'changes': receipts}
 
 
 def _char_bigrams(text: str) -> set:
@@ -2844,75 +4609,42 @@ def _char_bigrams(text: str) -> set:
 def _load_success_examples(root: Path, utterance: str,
                            limit: int = _EXAMPLES_INJECT_LIMIT,
                            *, principal: "str | None" = None,
-                           endpoint_fp: "str | None" = None) -> list[dict]:
-    """按关键词重叠（共享二元字组数）从账本检索 top-N 相似成功样例。任何异常 → 空表。
-
-    分区：principal 非 None 时只取**同分区**行
-    （principal 与 endpoint_fp 双键全等；缺字段的存量行按 ("anonymous","") 计——它们产自
-    分区前的匿名时代，只回灌给匿名+空端点指纹的调用，宁可少注不泄漏）。
-    principal=None = 内部直调/工具层，不过滤（旧行为逐位不变）。"""
-    try:
-        path = _examples_ledger_path(root)
-        if not path.is_file():
-            return []
-        rows: list[dict] = []
-        for line in path.read_text(encoding="utf-8").splitlines()[-500:]:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except Exception as exc:
-                # 与 `_read_example_rows` 同纪律——坏行跳过但留一行痕迹。
-                _warn_once(f"example_ledger_bad_line::{type(exc).__name__}",
-                           f"经验库账本 {path.name} 有无法解析的行（{type(exc).__name__}），"
-                           "已跳过——若跳光等价于账本损坏，请检查该文件。")
-                continue
-            if str(row.get("utterance") or "").strip() and row.get("steps"):
-                if principal is not None:
-                    if str(row.get("principal") or "anonymous") != principal:
-                        continue
-                    if str(row.get("endpoint_fp") or "") != str(endpoint_fp or ""):
-                        continue
-                rows.append(row)
-        if not rows:
-            return []
-        query_grams = _char_bigrams(utterance)
-        if not query_grams:
-            return []
-        scored = []
-        for idx, row in enumerate(rows):
-            overlap = len(query_grams & _char_bigrams(str(row.get("utterance") or "")))
-            if overlap >= _EXAMPLES_MIN_OVERLAP:
-                scored.append((overlap, idx, row))
-        scored.sort(key=lambda t: (-t[0], -t[1]))   # 重叠优先；同分取更近的
-        return [row for _o, _i, row in scored[:max(1, int(limit))]]
-    except Exception as exc:
-        # 注入侧静默降级回纯静态 few-shot 的口径不变，但「账本坏了所以
-        # 没注入」与「没有匹配样例」必须可区分（此前两者同形，行为变了无人知晓）。
-        _warn_once(f"success_examples_read::{type(exc).__name__}",
-                   f"成功经验库读盘失败（{type(exc).__name__}），本次按无样例注入。")
+                           endpoint_fp: "str | None" = None, project_id: str | None = None) -> list[dict]:
+    """旧读取名仅投影已确认知识，不把迁移示例当成可核验成功。"""
+    from .knowledge import legacy_examples
+    if principal is None:
         return []
+    snapshot = _example_knowledge(root).snapshot(principal, endpoint_fp or '',
+        _learning_scope.resolve_project_id(project_id))
+    return legacy_examples(snapshot['items'])
+
+
+def _knowledge_context_safe(root, utterance, *, principal, endpoint_fp, project_id,
+                            phase, available_tools) -> str:
+    """统一知识投影的消费层护栏：道闸 RunError（超预算/作用域失效等）降级为空段并经
+    _warn_once 留痕，绝不抛穿主轮（知识是增益注入，不是执行前提）；编程错误
+    （非 RunError）仍原样抛出。降级不等于截断——条目一条不丢，恢复后完整注入。"""
+    from .knowledge import knowledge_context
+    from ..app.conversation_runs import RunError
+    try:
+        return knowledge_context(root, utterance, principal=principal,
+            endpoint_fp=endpoint_fp or '', project_id=project_id, phase=phase,
+            available_tools=available_tools)
+    except RunError as exc:
+        _warn_once(f"knowledge_context::{exc.code}",
+                   f"已确认知识投影本轮降级为空（{exc.code}）；未截断未丢弃，恢复后完整注入。")
+        return ''
 
 
 def _examples_prompt_zh(root: Path, utterance: str, *,
                         principal: "str | None" = None,
-                        endpoint_fp: "str | None" = None) -> str:
-    """understand 的动态示例段（空串 = 没样例可注，prompt 与静态版逐位一致）。
-    principal 非 None 时只检索同分区样例（跨账户/跨端点原话不进 prompt）。"""
-    rows = _load_success_examples(root, utterance, principal=principal, endpoint_fp=endpoint_fp)
-    if not rows:
-        return ""
-    lines = []
-    for row in rows:
-        actions = "；".join(str(s.get("args") or s.get("verb") or "")
-                            for s in (row.get("steps") or []) if isinstance(s, dict))
-        if actions:
-            lines.append(f"用户说：「{row['utterance']}」→ 正确动作：{actions}")
-    if not lines:
-        return ""
-    return ("----- 历史成功操作（这位用户此前的成功管护记录，仅供对齐表达习惯；"
-            "语义以当前这句为准，不许照抄槽位值） -----\n" + "\n".join(lines))
+                        endpoint_fp: "str | None" = None, project_id: str | None = None,
+                        available_tools=None) -> str:
+    from .knowledge import registered_tools
+    return _knowledge_context_safe(root, utterance, principal=principal,
+        endpoint_fp=endpoint_fp or '',
+        project_id=_learning_scope.resolve_project_id(project_id), phase='understand',
+        available_tools=registered_tools() if available_tools is None else available_tools)
 
 
 def _step_projection(step: dict, *, reasked_write: bool = False) -> dict:
@@ -2986,12 +4718,34 @@ def _step_projection(step: dict, *, reasked_write: bool = False) -> dict:
             proj["result_total"] = (r["payload"] or {}).get("result_total")
         out["result"] = proj
     elif kind in ("rank", "rerank"):
-        # 检索事实投影：裁决/计数/生效条件/top digest 给 decide/narrate
+        # 检索事实投影：裁决/计数/生效条件/健康度与新旧对照/top digest 给 decide/narrate
         # 当事实；batch（含 recommend 同形 payload）太大不进 prompt——与 search.rerun 同口径。
-        out["result"] = {
+        # 2026-09-13 rerank 处置批：health/resolution_status/baseline/comparison_zh/
+        # rejected/auto_shown 入投影——「结果不健康告警」的对策决策吃的就是这几个键。
+        # 2026-09-18 触发子集批：refused/refuse_reason（触发闸）与 reject_reason/
+        # semantic_blocked/note_zh/disclosure_zh（语义闸）入投影——闸后裁决的事实源。
+        proj_rr: dict[str, Any] = {
             k: r.get(k)
             for k in ("query", "original_query", "rewritten_query", "rewritten",
-                      "total", "filters", "top", "displayed")
+                      "total", "filters", "top", "displayed", "health",
+                      "resolution_status", "rejected", "auto_shown", "baseline",
+                      "relax_live", "refused", "refuse_reason", "reject_reason",
+                      "semantic_blocked")
+            if r.get(k) is not None
+        }
+        if r.get("comparison_zh"):
+            proj_rr["comparison_zh"] = str(r.get("comparison_zh"))[:400]
+        for k in ("note_zh", "disclosure_zh"):
+            if r.get(k):
+                proj_rr[k] = str(r.get(k))[:300]
+        out["result"] = proj_rr
+    elif kind == "results_show":
+        # 屏态出口投影：shown/handle/origin/生效查询/命中数/是否覆盖/拒绝原因
+        # 给 decide/narrate 当事实；batch（recommend 同形 payload）太大不进 prompt。
+        out["result"] = {
+            k: r.get(k)
+            for k in ("shown", "handle", "origin", "query_effective", "total",
+                      "overridden", "note_zh")
             if r.get(k) is not None
         }
     elif kind == "route_request":
@@ -3115,9 +4869,11 @@ def _report_with_llm(chat_model: Any, obs: dict, usage_sink: list | None = None)
 #: decide 动词清单的**显式顺序**（prompt 文本稳定，不随 dict 序漂移）。
 #: rank / rerank / route.request 常驻（原两开关分支合并为单表）。
 #: 2026-08-18 四工具批：compare.datasets / cite.export / compat.find / fair.check 常驻。
+#: 2026-09-14 YOLO 批：ask.relax 紧随 results.show（检索族）。
 _DECIDE_VERB_ORDER: tuple[str, ...] = (
     "curate.check_updates", "curate.search_online", "curate.sync_updates", "curate.db_status",
-    "curate.rollback", "search.rerun", "rank", "rerank", "route.request",
+    "curate.rollback", "search.rerun", "rank", "rerank", "results.show", "ask.relax",
+    "route.request",
     "compare.datasets", "cite.export", "compat.find", "fair.check",
 )
 
@@ -3273,10 +5029,17 @@ _DECIDE_TOOL_SPECS, _DECIDE_TOOL_NAME_TO_VERB = _build_decide_tool_specs()
 #: 2026-08-18 四工具批：环内结果处理四工具（compare/cite/compat/fair）同时入 search 与
 #: action 套件——真机实测「找和第一条元数据兼容的数据集」「对比前两条结果」这类**检索后
 #: 追问**被分流到 search 线（找数据语义），只有 action 面会让它们无工具可选而误跑 rank。
-#: 两线共享四工具 = 结果处理；差异留在各自专属工具（search=rank/rerank/search.rerun，
-#: action=curate.*）。
+#: 两线共享四工具 = 结果处理；差异留在各自专属工具（search=rank/rerank/results.show/
+#: search.rerun，action=curate.*）。
+#: 2026-09-13 rerank 处置批：results.show（屏态唯一出口）装 search + general 套件；
+#: rescue 不装——救回采纳走 search.rerun 自己的自动上屏，不经 show。
+#: 2026-09-14 YOLO 批：ask.relax（问用户放松哪个条件）装 search + general 套件；
+#: action/rescue 不装——动作面没有检索屏面现场，救回面只许换词重检或诚实收尾。
+#: understand 首步面刻意不装（同 results.show：首步没有环内现场，屏面无从判 degenerate）。
 _SUITE_LOOP_VERBS: dict[str, tuple[str, ...]] = {
-    "search": tuple(v for v in ("rank", "rerank", "search.rerun", "curate.db_status",
+    "search": tuple(v for v in ("rank", "rerank", "results.show", "ask.relax",
+                                "search.rerun",
+                                "curate.db_status",
                                 "compare.datasets", "cite.export",
                                 "compat.find", "fair.check")
                     if v in LOOP_TOOLS),
@@ -3289,6 +5052,11 @@ _SUITE_LOOP_VERBS: dict[str, tuple[str, ...]] = {
     "general": tuple(LOOP_TOOLS),
     # 救回不是端点特判，而是正式第四套件：仅允许换词重检或诚实收尾。
     "rescue": tuple(v for v in ("search.rerun",) if v in LOOP_TOOLS),
+    # 「read」套件（2026-09-19 分流三改批·任务1 二元写闸）：general 全集剔两个
+    # 正向写工具（curate.search_online / curate.sync_updates）——二元闸判 read 的
+    # 回合写工具机械缺席（纵深防御：写预算闸之上再加一道加载闸）；判错有
+    # route.request → general 逃生口（每轮至多 1 次，既有机械闸不变）。
+    "read": tuple(v for v in LOOP_TOOLS if v not in _WRITE_LOOP_TOOLS),
 }
 
 #: decide 套件面：从真面**滤**（不建第二份拷贝，rescue 先例）——套件 loop 工具
@@ -3328,6 +5096,10 @@ def _understand_suite_verbs(suite: str) -> tuple[str, ...]:
             if s.kind == _ap.EXEC and s.verb not in LOOP_TOOLS]
     elif suite == "rescue":
         verbs = ["search.rerun"]
+    elif suite == "read":
+        # read 套件（二元写闸）：general 首步面剔两个正向写动词（与套件 loop 面同口径）。
+        verbs = [s.verb for s in _ap.VERB_SPECS
+                 if s.kind == _ap.EXEC and s.verb not in _WRITE_LOOP_TOOLS]
     else:
         # general = 全集（现状行为安全地板）：全部 EXEC（含 LOOP 全集与单步）。
         verbs = [s.verb for s in _ap.VERB_SPECS if s.kind == _ap.EXEC]
@@ -3726,6 +5498,22 @@ _CHECKLIST_ANCHOR_MIN = 4     #: 锚点最小长度（过短锚点无判别力�
 #: 与能力账 search 项共用同一真源，不许两处各写一份。
 _SEARCH_SETTLE_VERBS: tuple[str, ...] = ("rank", "rerank", "search.rerun")
 
+
+def _is_search_settle_step(s: dict) -> bool:
+    """检索半核销的**证据步判定**（2026-09-14 YOLO 批把消费口径从裸元组收进本助手）：
+    ok ∧（verb ∈ `_SEARCH_SETTLE_VERBS`，或 verb=="ask.relax" 且真发起了询问
+    （result.asked 为真）——混合句的「找数据」一半在弹卡等用户作答时也算有交代，
+    不许 finish 闸把「等作答」误杀成「没做」；被闸拒绝（asked=False）的提议不算核销）。"""
+    if not bool(s.get("ok")):
+        return False
+    v = str(s.get("verb") or "")
+    if v in _SEARCH_SETTLE_VERBS:
+        return True
+    if v == "ask.relax":
+        r = s.get("result") if isinstance(s.get("result"), dict) else {}
+        return bool(r.get("asked"))
+    return False
+
 #: 全角 → 半角折叠表（anchor 子串校验口径：模型把全角标点抄成半角不算幻觉）。
 #: 映射逐对钉死（初版曾有 。→; / ；→: 错配）：，→, 。→. ；→; ！→! ？→?
 #: （）→() 【】→[] ：→: ‘’→' “→" 全角空格→空格；顿号、两侧同形保留。
@@ -3930,13 +5718,13 @@ def _task_settled_by(task: dict, steps: list[dict]) -> bool:
     任一来源缺证据/有新增都不豁免）；未点名来源 → 任一 ok check 零新增即豁免。
     失败步/无关来源的 check 不出具豁免资格。
     expect=rank：混合句的检索半——任一 ok 的 rank/rerank/search.rerun 步
-    即核销（`_SEARCH_SETTLE_VERBS`；检索覆盖全库，**忽略来源对账**）。"""
+    即核销；ask.relax 真发起询问（弹卡等用户作答）也算有交代
+    （`_is_search_settle_step` 单点口径；检索覆盖全库，**忽略来源对账**）。"""
     expect = str(task.get("expect_verb") or "")
     wanted_sources = set(task.get("sources") or [])
 
     if expect == "rank":
-        return any(bool(s.get("ok")) and str(s.get("verb") or "") in _SEARCH_SETTLE_VERBS
-                   for s in steps)
+        return any(_is_search_settle_step(s) for s in steps)
     if not wanted_sources:
         if any(_step_ok_verb(step, expect) for step in steps):
             return True
@@ -3991,11 +5779,11 @@ def _checklist_item_states(checklist: list[dict], steps: list[dict],
                 out.append({"task_id": tid, "text": text, "status": "missing", "step_no": None})
             continue
         # 直接 ok 步核销（含来源覆盖对账）：证据步 = 首个同动词 ok 步的步骤号
-        # （expect=rank 同 `_task_settled_by` 口径：rank/rerank/search.rerun 都算证据步）
+        # （expect=rank 同 `_task_settled_by` 口径：`_is_search_settle_step`——
+        # rank/rerank/search.rerun 与真发起的 ask.relax 都算证据步）
         if expect == "rank":
             step_no = next((i for i, s in enumerate(steps, 1)
-                            if bool(s.get("ok"))
-                            and str(s.get("verb") or "") in _SEARCH_SETTLE_VERBS), None)
+                            if _is_search_settle_step(s)), None)
         else:
             step_no = next((i for i, s in enumerate(steps, 1)
                             if _step_ok_verb(s, expect)), None)
@@ -4544,6 +6332,22 @@ def _adjudicate_decide_obj(obj: dict, state: "_AgentState", *,
                       "这一步没有再执行，按「已完成」收尾。"), (
                       f"你要的「优化检索词重查」这一步没有做——一次请求最多优化重检 "
                       f"{MAX_RERANK} 次，预算已用完。"), ""
+    # results.show 预算闸（2026-09-13 rerank 处置批，同 rank 预算哲学）：已用满后再提议 →
+    # 机械拒绝，按 done 收尾、note 如实点名。动词常驻 LOOP_TOOLS，闸恒可达。
+    if verb == "results.show" and \
+            _show_used(list(state.get("steps") or [])) >= MAX_SHOW:
+        return None, (f"本次请求已上屏 {MAX_SHOW} 次（一次请求最多 {MAX_SHOW} 次），"
+                      "这一步没有再执行，按「已完成」收尾。"), (
+                      f"你要的「更新结果区」这一步没有做——一次请求最多上屏 "
+                      f"{MAX_SHOW} 次，预算已用完。"), ""
+    # ask.relax 预算闸（2026-09-14 YOLO 批，同 results.show 预算哲学）：弹卡打扰是
+    # 真成本，已用满后再提议 → 机械拒绝，按 done 收尾、note 如实点名。
+    if verb == "ask.relax" and \
+            _ask_relax_used(list(state.get("steps") or [])) >= MAX_ASK_RELAX:
+        return None, (f"本次请求已询问放宽条件 {MAX_ASK_RELAX} 次（一次请求最多 "
+                      f"{MAX_ASK_RELAX} 次），这一步没有再执行，按「已完成」收尾。"), (
+                      f"你要的「询问放宽条件」这一步没有做——一次请求最多询问放宽条件 "
+                      f"{MAX_ASK_RELAX} 次，预算已用完。"), ""
     # 环内结果处理四工具的独立预算闸（2026-08-18 同 rank 预算哲学）：
     # compare 含一次本地检索 + 一次独立 LLM 措辞调用；cite.export 落盘引文产物；
     # compat/fair 只读但缺省对象要重跑本地检索——各自独立计数，超出机械拒绝并如实点名。
@@ -5358,7 +7162,7 @@ def _utterance_topic_alias(utterance: str) -> str | None:
     「检查HCA更新并同步」曾被误判成限定主题而拦死 sync（来源名不是主题）。"""
     low = _sr.mask_source_spans(str(utterance or "")).lower()
     for dim in _TOPIC_GATE_DIMS:
-        for entry in _vocab.CATALOG.get(dim, []):
+        for entry in _domain_catalog().get(dim, []):
             for alias in entry.get("aliases", []):
                 alias = str(alias).lower().strip()
                 if alias and _qp_alias_occurrences(low, alias):
@@ -5884,7 +7688,7 @@ def _ungrounded_keyword_tokens(keywords: Any, utterance: str) -> list[str]:
     if not tokens:
         return []
     entries: list[tuple[set[str], bool]] = []  # (该词条的别名/target 集合, 词条是否被原话提及)
-    for catalog_entries in _vocab.CATALOG.values():
+    for catalog_entries in _domain_catalog().values():
         for entry in catalog_entries:
             aliases = {str(a).lower() for a in entry.get("aliases", [])}
             aliases |= {str(t).lower() for t in entry.get("targets", [])}
@@ -6054,11 +7858,20 @@ _hybrid_intent_gate = _hybrid_policy.hybrid_intent_gate
 _hybrid_required_capabilities = _hybrid_policy.required_capabilities
 
 
-def _parse_route_vote(content: str) -> tuple[str, str, bool]:
+def _parse_route_vote(content: str, *, mode: str = "three_class") -> tuple[str, str, bool]:
     """单票解析（route_consensus）：{"route": ..., "reason": ...}——route 非法/解析不出
     都记**废票**（("", "", False)），废票不投给任何路线（不许把「没读懂」折算成 general
-    的一票——兜底是显式规则，不是暗箱加权）。"""
+    的一票——兜底是显式规则，不是暗箱加权）。
+    二元写闸模式：票面是 {"gate": "write"|"read"}——write → 「general」套件（全集含
+    写工具），read → 「read」套件（general − 写工具）；返回的 route 是**套件名**，
+    下游装配路径与三分类同构。"""
     obj = _ap.parse_action_response(str(content or ""))
+    if mode == "binary":
+        gate = str(obj.get("gate") or "").strip().lower()
+        if gate not in ("write", "read"):
+            return "", "", False
+        return ("general" if gate == "write" else "read",
+                str(obj.get("reason") or "").strip()[:80], True)
     route = str(obj.get("route") or "").strip()
     if route not in _CONSENSUS_ROUTES:
         return "", "", False
@@ -6066,17 +7879,24 @@ def _parse_route_vote(content: str) -> tuple[str, str, bool]:
 
 
 def _run_route_consensus(model: Any, prompt: str,
-                         usage_sink: list | None = None) -> tuple[str, list[dict]]:
+                         usage_sink: list | None = None,
+                         *, mode: str = "three_class") -> tuple[str, list[dict]]:
     """分流共识（2026-08-17 钉死点 1：共识帽 + 机械兜底）：**并行** 2 次独立调用
     （温度岔开 0.0/0.8 保独立性——bind 不支持温度就退回原模型并在票上如实记 bound=False）；
     两张有效票一致即定；不一致加第 3 次；多数决（唯一最高票且 ≥2 张有效票）；三方平票、
     有效票不足或无有效票 → 机械兜底 general（安全地板，不许临场发挥）。返回 (route, votes)
     ——votes 是**全部原始投票**（温度/原文/解析结果），由节点落 trace 附加字段（错误
     分析的第一现场）。`usage_sink`：给了就把每票的缓存
-    用量经 `_usage_record` 追加进去（读不到用量的替身/老 provider 自然跳过）。"""
+    用量经 `_usage_record` 追加进去（读不到用量的替身/老 provider 自然跳过）。
+    `mode`（2026-09-19 分流三改批）：binary → 系统提示词与票面解析走二元写闸
+    （`prompts/route_write_gate.md`），机械兜底同样是 general（全集安全地板：
+    能力不缺位，写工具另有 MAX_WRITE_STEPS/MAX_WRITE_RECORDS 预算闸硬约束）。"""
     from concurrent.futures import ThreadPoolExecutor
 
     from langchain_core.messages import HumanMessage, SystemMessage
+
+    system_prompt = (_route_write_gate_prompt() if mode == "binary"
+                     else _route_consensus_prompt())
 
     def _vote(temp: float) -> dict:
         m, bound = model, False
@@ -6088,7 +7908,7 @@ def _run_route_consensus(model: Any, prompt: str,
         vote: dict[str, Any] = {"temperature": temp, "bound": bound}
         t0 = time.monotonic()  # 票级延迟进 vote 实录（节点代发 llm_call 用）
         try:
-            answer = m.invoke([SystemMessage(content=_route_consensus_prompt()),
+            answer = m.invoke([SystemMessage(content=system_prompt),
                                HumanMessage(content=prompt)])
             rec = _usage_record(answer, "route_consensus")
             if rec is not None and usage_sink is not None:
@@ -6103,7 +7923,7 @@ def _run_route_consensus(model: Any, prompt: str,
                          "error": type(exc).__name__,
                          "ms": int((time.monotonic() - t0) * 1000)})
             return vote
-        route, reason, ok = _parse_route_vote(raw)
+        route, reason, ok = _parse_route_vote(raw, mode=mode)
         vote.update({"raw": raw[:500], "route": route, "reason": reason, "ok": ok,
                      "ms": int((time.monotonic() - t0) * 1000)})
         return vote
@@ -6141,6 +7961,72 @@ def _notify_route_verdict(ctx: Any, route: str) -> None:
                        "route_consensus verdict hook 抛异常（仅记类型），已忽略。")
 
 
+def _l0_route_verdict(utterance: str, mode: str) -> tuple[str, dict] | None:
+    """小模型级联第一级（2026-09-19 分流三改批·任务2；同日复刻批升级**双判官**）：
+    高置信直采，返回 (套件名, 实录)；低置信/分歧/显式关闭/模型缺席/任何异常
+    → None（升级 LLM 共识，现状行为逐位不变——fail-open 不成为新单点）。
+
+    - binary（默认通道）：**双判官一致闸**——decider（Jev 复刻，语义模型）与
+      L0（字符 n-gram 线性）判决一致即采（评测：OOD 一致 88.9% 覆盖下 96/96=100%、
+      ID 98.2% 覆盖下 604/605=99.83%，一致性本身就是闸，不再叠 τ）；分歧 → None
+      升级 LLM（分歧案例对错各半，正是需要 LLM 的地方）。只有一官可用时
+      （CPU 部署无 GPU decider / 工件缺席）退化为单官 τ 闸（各自工件工作点）。
+    - route3（兜底通道）：单链 prefer L0（其 OOD 83.3% 优于 decider 76.9%），τ 闸。
+    τ 默认取工件内嵌工作点（cal 选 test 报），env `BIODATA_ROUTE_L0_TAU` 显式覆盖；
+    级联默认开（`BIODATA_ROUTE_L0=0/off` 显式关闭）；decider 可用性见 decider.py。"""
+    if not _env_default_on(_ROUTE_L0_ENV):
+        return None
+    try:
+        if mode == "binary":
+            decider_mode = _decider._env()
+            d = _decider.score("binary", utterance) if decider_mode != "off" else None
+            l = (None if decider_mode == "only"
+                 else _l0.score(_l0.ROUTE_BINARY, utterance))
+            hit: dict | None = None
+            if d is not None and l is not None:
+                if str(d["label"]) != str(l["label"]):
+                    return None  # 双判官分歧 → 升级 LLM 共识
+                hit = {"label": d["label"], "impl": "dual",
+                       "confidence": min(float(d["confidence"]), float(l["confidence"])),
+                       "probs": d["probs"],
+                       "dual": {"decider_conf": round(float(d["confidence"]), 6),
+                                "l0_conf": round(float(l["confidence"]), 6)}}
+                tau = 0.0  # 一致即采，无 τ
+            elif d is not None or l is not None:
+                single, impl = (d, "decider") if d is not None else (l, "l0")
+                assert single is not None
+                tau = _decider.tau_with_fallback(
+                    "binary", _ROUTE_L0_TAU_ENV, "tau", impl, 1.1)
+                if float(single["confidence"]) < tau:
+                    return None
+                hit = dict(single)
+                hit["impl"] = impl
+            else:
+                return None
+        else:
+            hit = _decider.score_with_fallback("route3", utterance,
+                                               prefer=("l0", "decider"))
+            if hit is None:
+                return None
+            tau = _decider.tau_with_fallback("route3", _ROUTE_L0_TAU_ENV, "tau",
+                                             str(hit.get("impl") or ""), 1.1)
+            if float(hit["confidence"]) < tau:
+                return None
+        label = str(hit["label"])
+        suite = ({"write": "general", "read": "read"}.get(label) if mode == "binary"
+                 else (label if label in _CONSENSUS_ROUTES else None))
+        if suite is None:
+            return None
+        info = {"label": label, "confidence": round(float(hit["confidence"]), 6),
+                "tau": round(tau, 6), "impl": str(hit.get("impl") or ""),
+                "model": str(hit.get("impl") or "")}
+        if hit.get("dual"):
+            info["dual"] = hit["dual"]
+        return suite, info
+    except Exception:
+        return None
+
+
 def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
     """环首分流共识节点（转正后常驻入图）：无条件进环后的第一次 LLM
     调用，只决定「装哪套工具 + 哪套系统提示词」——路由定义与示例在
@@ -6158,6 +8044,14 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
         return {"route_scope": "rescue",
                 "trace": _trace_entry("route_consensus", "分流共识",
                                       "端点已预置「rescue」套件，不发起分流投票。", True, started)}
+    if isinstance(state.get("ask_answer"), dict):
+        # 作答续跑（2026-09-14 ask 暂停/重启批）：用户在环内放松卡上作答后以新回合回环——
+        # 路由是机械事实（按所选忽略条件重跑检索），跳过 LLM 投票直定 search 套件。
+        _notify_route_verdict(ctx, "search")
+        return {"route_scope": "search",
+                "trace": _trace_entry("route_consensus", "分流共识",
+                                      "放松卡作答续跑：直定「search」套件，不发起分流投票。",
+                                      True, started)}
     if getattr(ctx, "on_progress", None) is not None:
         ctx.on_progress("tool_start", {"verb": "node", "label_zh": "分流共识", "detail": ""})
     # 混合诉求机械预闸：动作信号 ∧ 检索信号同句 → 跳过 LLM 投票
@@ -6177,6 +8071,22 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
         return {"route_scope": "general", "trace": [entry], "usage_ledger": [],
                 "required_capabilities": caps}
     model = ctx.decide_model or ctx.chat_model
+    # 分流模式（任务1：three_class|binary）与 L0 级联（任务2）——L0 高置信直采时
+    # 零 LLM 投票；低置信/缺席/异常一律落 LLM 共识（现状行为）。
+    mode = _route_mode()
+    l0_hit = _l0_route_verdict(state["utterance"], mode)
+    if l0_hit is not None:
+        l0_route, l0_info = l0_hit
+        entry = _trace_entry(
+            "route_consensus", "分流共识",
+            f"L0 小模型高置信直采（{l0_info['label']} conf={l0_info['confidence']:.4f} "
+            f"≥ τ={l0_info['tau']:.4f}）→ 走「{l0_route}」路线（未发起 LLM 投票）。",
+            True, started)[0]
+        entry["route_votes"] = []   # 一票未发，如实留空
+        entry["route_l0"] = l0_info
+        _te.emit_route_consensus_votes(l0_route, [])
+        _notify_route_verdict(ctx, l0_route)
+        return {"route_scope": l0_route, "trace": [entry], "usage_ledger": []}
     # 现场段用分流专用构造器：与 understand 同上下文面
     # 但检索概览只报状态与命中数——`_context_zh` 会带结果集标题（top_titles），
     # 违反「模型永远不直接碰结果集内容」的诚实不变量；原话尾段在这里拼一次（专用
@@ -6196,12 +8106,14 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
     _ctx_card = _artifact_context_block_zh(state.get("artifact_context"))
     if _ctx_card:
         context = context + "\n\n" + _ctx_card
+    context += getattr(ctx, "history_context", "")
     prompt = context + "\n\n----- 用户原话 -----\n" + state["utterance"]
     usage_local: list = []   # 埋点同口径：本节点全部投票调用的缓存用量（return 增量带出）
-    route, votes = _run_route_consensus(model, prompt, usage_sink=usage_local)
+    route, votes = _run_route_consensus(model, prompt, usage_sink=usage_local, mode=mode)
     n_valid = sum(1 for v in votes if v.get("ok"))
     agreed = (n_valid == 2 and len(votes) == 2)
     detail = (f"{len(votes)} 票（有效 {n_valid}）→ 走「{route}」路线"
+              + ("（二元写闸）" if mode == "binary" else "")
               + ("。" if agreed else "（分歧加投/机械兜底）。"))
     entry = _trace_entry("route_consensus", "分流共识", detail, True, started)[0]
     entry["route_votes"] = votes  # 全部原始投票落 trace 附加字段（前端不渲染，复盘可查）
@@ -6223,14 +8135,27 @@ def route_consensus(state: _AgentState, *, runtime: Any) -> dict:
     return {"route_scope": route, "trace": [entry], "usage_ledger": usage_local}
 
 
+def _scoped_face_verbs(state: "_AgentState") -> frozenset[str]:
+    """套件面 ∩ 请求级建议动作允许集（`state.allowed_verbs`）。
+
+    understand/repair 的工具面、validate 的首步复核与 decide 的续步面共用这一处——
+    不允许子集只进枚举/保底规划而不进执行边界：首步、续步、批量执行都必须吃同一道
+    执行前机械闸（工具先执行、事后收窄会把「不执行」答成发生过的事）。"""
+    scope = str(state.get("route_scope") or "")
+    face = set(_SUITE_UNDERSTAND_VERBS.get(scope) or _SUITE_UNDERSTAND_VERBS["general"])
+    allowed = state.get("allowed_verbs")
+    if allowed:
+        face &= set(allowed)
+    return frozenset(face)
+
+
 def _scoped_understand_face(state: "_AgentState"
                             ) -> tuple[list[dict] | None, dict[str, str] | None, list | None]:
     """按 state.route_scope 返回 understand/repair 套件收窄面。
 
     search/action/general/rescue 均经过这一条装配路径。"""
     tools, name_to_verb = _get_tool_specs()
-    scope = str(state.get("route_scope") or "")
-    face = set(_SUITE_UNDERSTAND_VERBS.get(scope) or _SUITE_UNDERSTAND_VERBS["general"])
+    face = _scoped_face_verbs(state)
     tools = [t for t in tools
              if name_to_verb.get(str((t.get("function") or {}).get("name") or "")) in face]
     name_to_verb = {n: v for n, v in name_to_verb.items() if v in face}
@@ -6253,6 +8178,27 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     # label_zh 与本节点 trace 行「理解意图」逐字一致（前端 pending 行按 label 匹配）。
     if getattr(ctx, "on_progress", None) is not None:
         ctx.on_progress("tool_start", {"verb": "node", "label_zh": "理解意图", "detail": ""})
+    if isinstance(state.get("ask_answer"), dict):
+        # 作答续跑（2026-09-14 ask 暂停/重启批）：用户在环内放松卡上作答后以新回合回环——
+        # 首步是机械事实（按所选忽略条件重跑原查询），零 LLM 强置 rank，不发起意图理解
+        # 调用、不起 flight、不碰 retrieval_provider（检索由 rank 步自跑，经
+        # ctx.search_suppressed_constraints 吃前端覆写的忽略清单）。quoted=原话自身：
+        # 过 `raw_shape_violations` 的 EXEC quoted 闸（逐字出自原话）。retrieval 原样
+        # 透传供下游 None 安全读取；vote 如实记 mode="forced"（一票未发，是机械强置）。
+        answer = state.get("ask_answer") or {}
+        label = str(answer.get("label") or "").strip()
+        raw = {"verb": "rank", "query": state["utterance"], "quoted": state["utterance"]}
+        _te.emit_understand_vote(raw, "forced")
+        return {
+            "raw": raw, "mode": "forced",
+            "retrieval": state.get("retrieval"),
+            "raw_batch": [], "usage_ledger": [],
+            "trace": _trace_entry(
+                "understand", "理解意图",
+                "放松卡作答续跑：零 LLM 强置首步「关键词检索」"
+                + (f"（用户选择：{label}）" if label else "")
+                + "，按其忽略条件重跑原查询。", True, started),
+        }
     # 四套件均按 state.route_scope 收窄首步面；route.request 不进首步面。
     rescue = str(state.get("route_scope") or "") == "rescue"
     scoped_tools, scoped_names, face_specs = _scoped_understand_face(state)
@@ -6276,13 +8222,11 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
         retrieval=resolved, current_query=state.get("current_query") or "",
         current_filters=state.get("current_filters"),
     )
-    # 成功经验 few-shot（2026-08-09 五机制批）：从 `.userdata/curate_examples.jsonl` 按
-    # 关键词重叠检索 top-3 注入——静态示例讲通用边界，动态示例对齐这位用户的表达习惯。
-    # 空账/读账失败 → 空串，双通道 prompt 与历史逐位一致（fail-open）。
-    # 只注入同分区（同账户 + 同端点指纹）的成功样例——跨账户/跨端点的原话不进 prompt。
     examples_zh = _examples_prompt_zh(
         _agent_project_root(), state["utterance"],
-        principal=ctx.principal or "anonymous", endpoint_fp=ctx.endpoint_fp)
+        principal=ctx.principal or "anonymous", endpoint_fp=ctx.endpoint_fp,
+        available_tools=[spec.verb for spec in face_specs] if face_specs is not None else LOOP_TOOLS,
+        **_learning_scope.context_kwargs(ctx))
     context = _context_zh(state["utterance"], examples_zh=examples_zh,
                           artifact_context=str(state.get("artifact_context") or ""),
                           **call_kwargs)
@@ -6290,7 +8234,8 @@ def understand(state: _AgentState, *, runtime: Any) -> dict:
     if face_specs is not None:
         # JSON 兜底壳的动词表同口径收窄（verbs 缺省 = 全表，rescue 面不变）。
         prompt_kwargs["verbs"] = face_specs
-    json_prompt = _ap.build_action_prompt(state["utterance"], **prompt_kwargs)
+    context += getattr(ctx, "history_context", "")
+    json_prompt = _ap.build_action_prompt(state["utterance"], **prompt_kwargs) + getattr(ctx, "history_context", "")
     # 课题上下文卡只进 agent prompt——主通道的 context 已带
     # （_context_zh），JSON 兜底壳是工具通道失败后的独立重问（只发 json_prompt），
     # 同口径补一块，避免兜底请求丢上下文；block 只在非空时拼（缺省逐位不变）。
@@ -6416,13 +8361,14 @@ def validate(state: _AgentState, *, runtime: Any) -> dict:
     violations = _validate_raw(
         raw, state["utterance"], steps=list(state.get("steps") or []))
     # 四套件共用的首步闸：提示面不是围栏，所以仍用注册表投影机械复核。
+    # 面 = 套件面 ∩ 建议动作允许集（同 understand 的工具面一处装配）——
+    # 首步与续步/批量共用同一道闸，建议动作不会被越界工具顶掉。
     if not list(state.get("steps") or []):
         verb_now = str(raw.get("verb") or "")
         if verb_now:
-            scope = str(state.get("route_scope") or "")
-            face = set(_SUITE_UNDERSTAND_VERBS.get(scope)
-                       or _SUITE_UNDERSTAND_VERBS["general"])
+            face = _scoped_face_verbs(state)
             if verb_now not in face:
+                scope = str(state.get("route_scope") or "")
                 violations = list(violations) + [
                     f"本回合走「{scope or 'general'}」路线，首步只能选本路线的动作"
                     f"（{'、'.join(sorted(face))}）——「{verb_now}」不在本路线面内"]
@@ -6530,7 +8476,7 @@ def repair(state: _AgentState, *, runtime: Any) -> dict:
         current_filters=state.get("current_filters"))
     if face_specs is not None:
         prompt_kwargs["verbs"] = face_specs
-    json_prompt = _ap.build_action_prompt(state["utterance"], **prompt_kwargs)
+    json_prompt = _ap.build_action_prompt(state["utterance"], **prompt_kwargs) + getattr(ctx, "history_context", "")
     prompt = (
         json_prompt
         + "\n\n你上一次的输出违反了护栏：\n" + feedback
@@ -6664,14 +8610,19 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                      "write_records": _write_records_used(live),
                      "search_rerun": _search_rerun_used(live)})
 
-    def _trace_snapshot_finalize(sid: str | None, v: str) -> None:
-        """写动词操作后 finalize（diff 出 created/modified/deleted）
-        并发 state_snapshot——rollback 的锚。快照自身故障 fail-soft，绝不掀翻主流程。"""
+    def _trace_snapshot_finalize(sid: str | None, v: str,
+                                 mutation: dict | None = None,
+                                 patch_mutations: list | None = None) -> None:
+        """写动词操作后 finalize 并发 state_snapshot；trace 故障不掀翻主流程。
+        目录模式按工具结果归属；补丁模式只认 RMW 临界区的真实收据，失败后已提交的
+        写入也如实留锚，无写入的失败/零写成功用空收据。"""
         if sid is None:
             return
         try:
+            if patch_mutations is not None:
+                mutation = dict(mutation or {}, patch=patch_mutations)
             store = _trace_snapshot_store(root)
-            diff = store.finalize(sid)
+            diff = store.finalize(sid, mutation=mutation)
             meta = store.load(sid)
             _te.emit_state_snapshot(
                 snapshot_id=sid, verb=v,
@@ -6689,6 +8640,16 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         nonlocal any_failure
         v = str(act.get("verb") or "")
         sp = LOOP_TOOLS[v]
+        # 执行前机械闸（最后一道，覆盖主步/续步/批量）：建议动作允许集在
+        # understand/decide 收窄**提示面**，这里做**执行面**兜底——越界动作不许真跑，
+        # 更不许「先执行、事后收窄」把已发生的操作答成没做。
+        allowed = state.get("allowed_verbs")
+        if allowed and v not in set(allowed):
+            new_trace.extend(_trace_entry(
+                "execute", f"建议动作收窄 · {sp['label_zh']}",
+                "这一步不在本次建议动作允许的能力里，没有执行；按建议动作面继续。",
+                True, time.monotonic()))
+            return None
         slots = dict(act.get("slots") or {})
         verb_zh = str(act.get("verb_zh") or sp["label_zh"])
         #工具「即将」执行的即时事件——label_zh 与下方 execute trace 行的
@@ -6708,6 +8669,19 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
             except Exception as exc:
                 _warn_once(f"trace_snapshot_capture::{type(exc).__name__}",
                            "trace 快照 capture 失败（仅记异常类型），本步无回退锚。")
+        patch_mutations: list = []
+
+        def _run_tool(*args):
+            if sid is None:
+                return sp["run"](*args)
+            from ..corpus.patch_package import collect_patch_mutations
+
+            with collect_patch_mutations() as receipts:
+                try:
+                    return sp["run"](*args)
+                finally:
+                    patch_mutations.extend(receipts)
+
         try:
             if sp.get("needs_context"):
                 # 现场上下文注入（2026-08-16 search.rerun）：从 state 现取——择优基准
@@ -6720,7 +8694,9 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                 # （契约 = 本轮用户原话）；usage_sink 下入收改写调用的缓存用量。
                 # rb1：steps 实录下入供 curate.rollback 的机械闸现定回退
                 # 目标——同一批 dict 引用（只读消费，工具不回写）；其它工具忽略此键。
-                result = sp["run"](slots, root, {
+                # 2026-09-13 rerank 处置批：has_results/result_total 下入供 rerank 的
+                # 屏面基线（`_screen_baseline`）与 results.show 的 overridden 判定。
+                result = _run_tool(slots, root, {
                     "current_query": str(state.get("current_query") or ""),
                     "search_sources": state.get("search_sources"),
                     "search_facet_filters": state.get("search_facet_filters"),
@@ -6728,6 +8704,9 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                     "search_lenient_dims": state.get("search_lenient_dims"),
                     "search_date_from": str(state.get("search_date_from") or ""),
                     "search_date_to": str(state.get("search_date_to") or ""),
+                    "search_top_k": state.get("search_top_k"),
+                    "search_recall": str(state.get("search_recall") or ""),
+                    "search_strategy": str(state.get("search_strategy") or ""),
                     "replace_screen": str(state.get("route_scope") or "") == "rescue",
                     "unresolved_terms": list(
                         (state.get("retrieval") or {}).get("unresolved_terms") or []),
@@ -6735,9 +8714,15 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                     "utterance": str(state.get("utterance") or ""),
                     "usage_sink": usage_local,
                     "steps": base_steps + new_steps,
+                    "has_results": bool(state.get("has_results")),
+                    "result_total": int(state.get("result_total") or 0),
+                    # **执行前**现算的本轮剩余写入额度（不是写完后扣账）——
+                    # 写工具据此收窄本次采集/入库上限，40 条总预算因此对下一步也成立。
+                    "write_records_remaining": max(
+                        0, MAX_WRITE_RECORDS - _write_records_used(base_steps + new_steps)),
                 })
             else:
-                result = sp["run"](slots, root)
+                result = _run_tool(slots, root)
             # run() 出口的**形状闸**：返回契约模型
             # model_validate 一遍——返回形状残缺/类型不对 = ValidationError，与工具
             # 自身抛异常同路（下方统一记 ok=False，不炸图）。step.ok 语义由此升级为
@@ -6769,8 +8754,8 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
             new_steps.append(step)
             _audit_loop_tool(root, v, slots, False, str(exc))
             any_failure = True
-            # 失败也 finalize（半写现场如实 diff）+ 工具步留痕（ok=False）。
-            _trace_snapshot_finalize(sid, v)
+            _trace_snapshot_finalize(sid, v, mutation=_empty_mutation_receipt(),
+                                     patch_mutations=patch_mutations)
             _trace_step(step)
             # 失败语义二分（ToolFailed 侧）：终态码失败的 (verb, 目标源) 记死路账，
             # decide 据它机械拦截同目标重试——死路账随 state 走，不进 plan（前端契约不变）。
@@ -6791,7 +8776,9 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         ).model_dump(exclude_none=True)
         new_steps.append(step)
         # 成功步 finalize 快照（写动词；sid=None 时零操作）+ 工具步留痕。
-        _trace_snapshot_finalize(sid, v)
+        # 能自报产物的写动词传归属清单——并发窗口里他人的新文件不进本步 created。
+        _trace_snapshot_finalize(sid, v, mutation=_mutation_receipt_of_result(v, result),
+                                 patch_mutations=patch_mutations)
         _trace_step(step)
         if sp.get("observation"):
             # db_status 的既有契约：产出同时挂 plan.observation 与
@@ -6809,13 +8796,24 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
     main_step = _run_one(active)
     if main_step and main_step.get("ok") and isinstance(main_step.get("result"), dict):
         resolved_results[main_ordinal] = main_step["result"]
+    # ask.relax 弹卡 = 环暂停（2026-09-14 ask 暂停/重启批）：本批任一步弹出等作答的
+    # 放松卡，本批剩余续步全部跳过（留 trace 如实交代）、环直去 narrate 做确定性说明，
+    # 不再发起下一次 LLM 调用；用户作答经 ask_answer 新回合回环续跑。从实录现算
+    # （`_ask_relax_pending`），不落新状态键。
+    extras = list(state.get("loop_batch") or [])
+    if _ask_relax_pending(base_steps + new_steps) is not None and extras:
+        new_trace.extend(_trace_entry(
+            "execute", "环已暂停等作答",
+            f"放松选择卡已弹出：本批剩余 {len(extras)} 个续步不再执行，"
+            "待用户作答后以新回合回环续跑。", True, time.monotonic()))
+        extras = []
     # 同批只读续步（已过 decide 初筛 + validate 复检双闸；占位接地续步为延迟通道，执行时
     # 解析后再过全闸）：紧随主步逐个执行。
     # 2026-08-15 **批内熔断**：初筛对的是**批前**状态
     # 主步/前序 extra 的失败会改变事实（联网二连败触发暂停、非网二连败触发禁提）——
     # 每个 extra 执行前用**当前**实录重过这两道闸；被熔断的 extra 不执行、不记步，
     # 不连坐其余 extra（闸只挡谁就剔谁），剩余缺口由 decide 带新状态下一轮重判，不丢事。
-    for loop_idx, extra in enumerate(list(state.get("loop_batch") or [])):
+    for loop_idx, extra in enumerate(extras):
         if not (isinstance(extra, dict) and not extra.get("cancelled")):
             continue
         ev = str(extra.get("verb") or "")
@@ -6904,6 +8902,15 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
         step = _run_one(act)
         if step and step.get("ok") and isinstance(step.get("result"), dict):
             resolved_results[batch_pos] = step["result"]
+        # 续步弹出等作答的放松卡 → 环暂停：本批剩余续步不再执行（同主步口径）。
+        if _ask_relax_pending(base_steps + new_steps) is not None:
+            remaining = len(extras) - (loop_idx + 1)
+            if remaining > 0:
+                new_trace.extend(_trace_entry(
+                    "execute", "环已暂停等作答",
+                    f"放松选择卡已弹出：本批剩余 {remaining} 个续步不再执行，"
+                    "待用户作答后以新回合回环续跑。", True, time.monotonic()))
+            break
     # plan.steps 恒为**全量快照**（base_steps 是 reducer 应用后的既有全量）；
     # 返回给 state 的只是增量 new_steps。
     plan["steps"] = base_steps + new_steps
@@ -6928,6 +8935,27 @@ def execute(state: _AgentState, *, runtime: Any) -> dict:
                 out["route_scope"] = target
     out["trace"] = new_trace
     return out
+
+
+def _narrow_decide_face(specs: list[dict], names: dict[str, str],
+                        allowed_verbs: Any) -> tuple[list[dict], dict[str, str]]:
+    """decide 工具面按建议动作允许集收窄（续步/批量共用首步的同一道面）。
+
+    - 控制工具（finish / unsupported_next_step 不在 `names` 映射里）与 route.request
+      逃生口保留——它们不直接执行动作；
+    - 动作工具须在允许集内，面外工具从工具表里消失（提示层收窄；执行面兜底在 execute）。"""
+    if not allowed_verbs:
+        return specs, names
+    allowed = set(allowed_verbs)
+
+    def _kept(name: str) -> bool:
+        verb = names.get(name)
+        return verb is None or verb in allowed or verb == "route.request"
+
+    return (
+        [t for t in specs if _kept(str((t.get("function") or {}).get("name") or ""))],
+        {n: v for n, v in names.items() if _kept(n)},
+    )
 
 
 def decide(state: _AgentState, *, runtime: Any) -> dict:
@@ -7043,6 +9071,11 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
                         or _DECIDE_TOOL_SPECS_BY_SUITE["general"])
     decide_names = dict(_DECIDE_TOOL_NAME_TO_VERB_BY_SUITE.get(scope)
                         or _DECIDE_TOOL_NAME_TO_VERB_BY_SUITE["general"])
+    # 建议动作允许集同样收窄**续步/批量**面（首步面在 understand；执行前闸
+    # 在 execute `_run_one`）——控制工具（finish/unsupported/route.request）不属动作面，
+    # 不受 verb 允许集约束。
+    decide_specs, decide_names = _narrow_decide_face(
+        decide_specs, decide_names, state.get("allowed_verbs"))
     if route_req_out:
         decide_specs = [t for t in decide_specs
                         if str((t.get("function") or {}).get("name") or "")
@@ -7070,6 +9103,16 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     # rank / rerank 预算耗尽注入段（2026-08-17 同口径；未用满恒空段）。
     rank_block = _RANK_BUDGET_BLOCK_ZH if _rank_used(steps) >= MAX_RANK else ""
     rerank_block = _RERANK_BUDGET_BLOCK_ZH if _rerank_used(steps) >= MAX_RERANK else ""
+    # results.show 预算耗尽注入段 + 「结果不健康」告警段（2026-09-13 rerank 处置批；
+    # 未用满/无 degenerate 试跑恒空段）。告警是纯情报员：只把机械事实摆进上下文，
+    # 不改 workflow——对策（rerank 是其一）与处置归模型。
+    show_block = _SHOW_BUDGET_BLOCK_ZH if _show_used(steps) >= MAX_SHOW else ""
+    # ask.relax 预算耗尽注入段（2026-09-14 YOLO 批，同口径；未用满恒空段）。
+    ask_relax_block = (_ASK_RELAX_BUDGET_BLOCK_ZH
+                       if _ask_relax_used(steps) >= MAX_ASK_RELAX else "")
+    # 作答续跑注入段（2026-09-14 ask 暂停/重启批；非续跑回合恒空段）。
+    resume_block = _ask_answer_resume_block_zh(state.get("ask_answer"))
+    screen_alert_block = _screen_alert_block_zh(steps)
     # 环内结果处理四工具预算耗尽注入段（2026-08-18 同口径；未用满恒空段）。
     compare_block = _COMPARE_BUDGET_BLOCK_ZH if _compare_used(steps) >= MAX_COMPARE else ""
     cite_block = _CITE_EXPORT_BUDGET_BLOCK_ZH if _cite_export_used(steps) >= MAX_CITE_EXPORT else ""
@@ -7087,8 +9130,15 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     # 执行状态栏（B2）：代码维护的机械账本，decide 双壳恒注入尾部（动态信息在末尾，保 prefix）。
     status_block = _agent_status_block_zh(state, steps=steps, moratorium=moratorium,
                                           ban_verbs=ban_verbs)
+    rules_block = _knowledge_context_safe(
+        _agent_project_root(), state["utterance"],
+        principal=ctx.principal or "anonymous", endpoint_fp=ctx.endpoint_fp,
+        project_id=_learning_scope.resolve_project_id(getattr(ctx, 'project_id', None)),
+        phase='decide', available_tools=set(decide_names.values()))
     tools_prompt = (
         tools_rules
+        + rules_block
+        + getattr(ctx, "history_context", "")
         + "\n----- 用户原话 -----\n" + state["utterance"]
         + "\n----- 已完成步骤（JSON）-----\n" + projections
         + searched_block
@@ -7098,6 +9148,10 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         + rerun_block
         + rank_block
         + rerank_block
+        + show_block
+        + ask_relax_block
+        + resume_block
+        + screen_alert_block
         + compare_block
         + cite_block
         + compat_block
@@ -7110,6 +9164,8 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
     )
     json_prompt = (
         json_rules
+        + rules_block
+        + getattr(ctx, "history_context", "")
         + "\n----- 用户原话 -----\n" + state["utterance"]
         + "\n----- 已完成步骤（JSON）-----\n" + projections
         + searched_block
@@ -7119,6 +9175,10 @@ def decide(state: _AgentState, *, runtime: Any) -> dict:
         + rerun_block
         + rank_block
         + rerank_block
+        + show_block
+        + ask_relax_block
+        + resume_block
+        + screen_alert_block
         + compare_block
         + cite_block
         + compat_block
@@ -7493,7 +9553,18 @@ def narrate(state: _AgentState, *, runtime: Any) -> dict:
         detail += "；附「未另外核对」标注。"
     steps = list(state.get("steps") or [])
     spec = LOOP_TOOLS.get(str(plan.get("verb") or ""))
-    if (len(steps) <= 1 and spec and spec.get("report") and plan.get("observation")
+    if _ask_relax_pending(steps) is not None:
+        # 环暂停等作答（2026-09-14 ask 暂停/重启批）：不再发起下一次 LLM 调用——
+        # 确定性说明 = 弹卡理由（ask.relax 提议步自报的 reason，可空）+ 固定的等作答
+        # 事实句；用户作答后以新回合回环续跑，由那回合的 narrate 汇报重跑结果。
+        ask_payload = ((_ask_relax_pending(steps).get("result") or {})
+                       .get("ask_relax") or {})
+        reason = str(ask_payload.get("reason") or "").strip()
+        waiting = "选完我会按你的选择自动重跑检索并继续。"
+        plan["report_zh"] = (reason.rstrip("。") + "。" if reason else "") + waiting
+        plan["report_source"] = "deterministic"
+        detail += "；环已暂停等作答，说明按确定事实如实写出。"
+    elif (len(steps) <= 1 and spec and spec.get("report") and plan.get("observation")
             and not plan.get("cancelled")):
         # 单步 db_status 的既有汇报路径（READ_TOOLS 时代）逐位保留：同一批事实、
         # 同一份 _REPORT_RULES_ZH、同一个确定性兜底——既有测试断言的措辞不变。
@@ -7617,6 +9688,10 @@ def _route_after_validate(state: _AgentState) -> str:
 
 
 def _route_after_execute(state: _AgentState) -> str:
+    # ask.relax 弹卡 = 环暂停（2026-09-14 ask 暂停/重启批）：直去 narrate 做确定性说明，
+    # 跳过 decide（不再发起下一次 LLM 调用）；用户作答经 ask_answer 新回合回环。
+    if _ask_relax_pending(list(state.get("steps") or [])) is not None:
+        return "narrate"
     # 这一遍真跑了工具 → decide 判断下一步；空过（非注册表动词 / 取消态）→ 直接 narrate。
     return "decide" if state.get("last_ran") else "narrate"
 
@@ -7643,15 +9718,15 @@ def _get_graph() -> Any:
                 from langgraph.graph import END, START, StateGraph
 
                 graph = StateGraph(_AgentState, context_schema=_AgentContext)
-                graph.add_node("understand", understand)
-                graph.add_node("validate", validate)
-                graph.add_node("repair", repair)
-                graph.add_node("execute", execute)
-                graph.add_node("decide", decide)
-                graph.add_node("narrate", narrate)
+                graph.add_node("understand", _run_control.cancellable_node(understand))
+                graph.add_node("validate", _run_control.cancellable_node(validate))
+                graph.add_node("repair", _run_control.cancellable_node(repair))
+                graph.add_node("execute", _run_control.cancellable_node(execute))
+                graph.add_node("decide", _run_control.cancellable_node(decide))
+                graph.add_node("narrate", _run_control.cancellable_node(narrate))
                 # scoped 路由（转正后常驻）：环首分流共识节点——
                 # 无条件进环后的第一次 LLM 调用只决定装哪套工具/提示词。
-                graph.add_node("route_consensus", route_consensus)
+                graph.add_node("route_consensus", _run_control.cancellable_node(route_consensus))
                 graph.add_edge(START, "route_consensus")
                 graph.add_edge("route_consensus", "understand")
                 graph.add_edge("understand", "validate")
@@ -7694,6 +9769,10 @@ def plan_with_agent_events(
     search_lenient_dims: Any = None,
     search_date_from: str = "",
     search_date_to: str = "",
+    # 排序杠杆透传（2026-09-17 三径合一；缺省 = 旧版逐位不变）。
+    search_top_k: Any = None,
+    search_recall: str = "",
+    search_strategy: str = "",
     #（并发分流与确定性 RAG 策略）三缝透传——缺省 None/"" = 今天逐位
     # 不变（既有测试的 monkeypatch seam 全保）。
     retrieval_provider: Any = None,
@@ -7706,6 +9785,15 @@ def plan_with_agent_events(
     # （{verb, verb_zh, quoted, plane=inloop|frontend}），图入口一次写入 state；
     # decide 状态栏逐项现算、finish 闸对 plane=inloop 逐项核销。缺省 None = 旧版逐位不变。
     intent_checklist: list[dict] | None = None,
+    # 放松卡作答续跑（2026-09-14 ask 暂停/重启批）：用户在环内放松卡作答后，
+    # turn 把 {kind, choice_key, label, message, suppress} 下入图状态——route_consensus
+    # 免投票直定 search、understand 零 LLM 强置首步 rank、decide 注入作答事实段。
+    # 缺省 None = 非续跑回合，旧行为逐位不变。
+    ask_answer: dict | None = None,
+    # 建议动作（suggested_recipe）的请求级动词允许集：首步面/续步面/批量执行
+    # 共用同一道执行前机械闸——只缩小不扩权；缺省 None = 旧行为逐位不变。
+    allowed_verbs: "frozenset[str] | None" = None,
+    conversation_history: list[dict] | None = None,
 ) -> tuple[dict, list[dict]]:
     """一句话 → (plan, trace)。plan 形状与 `action_plan.plan_action` 输出逐位同形，
     仅 `source="agent"`、`llm_status="ok"`，并附 `trace`（节点步骤，供前端行动流渲染）。
@@ -7781,7 +9869,8 @@ def plan_with_agent_events(
     context = _AgentContext(
         chat_model=chat_model, model_name=str(getattr(config, "model", "") or ""),
         decide_model=decide_model, decide_model_name=decide_model_name, decide_lane=lane,
-        principal=principal_norm, endpoint_fp=endpoint_fp,
+        principal=principal_norm, endpoint_fp=endpoint_fp, project_id=_learning_scope.current_project_id(),
+        cancel_check=_run_control.current_check(),
         # tool_start/node_start 即时事件与 step 完成事件同一条回调通道。
         on_progress=on_event,
         #三缝。
@@ -7789,7 +9878,8 @@ def plan_with_agent_events(
         on_route_verdict=on_route_verdict,
         route_extra_zh=route_extra_zh,
         # 课题上下文卡进 context，供 prompt 注入消费。
-        artifact_context=str(artifact_context or ""))
+        artifact_context=str(artifact_context or ""),
+        history_context=_conversation_history_block(conversation_history))
     initial: _AgentState = {
         "utterance": text,
         "artifact_context": str(artifact_context or ""),
@@ -7807,6 +9897,9 @@ def plan_with_agent_events(
         "search_lenient_dims": search_lenient_dims,
         "search_date_from": str(search_date_from or ""),
         "search_date_to": str(search_date_to or ""),
+        "search_top_k": search_top_k,
+        "search_recall": str(search_recall or ""),
+        "search_strategy": str(search_strategy or ""),
         "raw": {},
         "violations": [],
         "repairs": 0,
@@ -7817,6 +9910,10 @@ def plan_with_agent_events(
         "last_ran": False,
         # 「不少于我」（2026-09-01）：句内动作清单图入口一次写入（覆写语义；空 = 缺席）。
         "intent_checklist": [dict(it) for it in (intent_checklist or []) if isinstance(it, dict)],
+        # 放松卡作答续跑（2026-09-14）：仅作答回合非 None；节点从 state 现算，不落新键。
+        "ask_answer": dict(ask_answer) if isinstance(ask_answer, dict) else None,
+        # 建议动作允许集：None/空 = 不额外收窄（旧调用逐位不变）。
+        "allowed_verbs": (frozenset(allowed_verbs) if allowed_verbs else None),
     }
 
     # 逐节点推进（values 模式：每节点完成后 yield 一次全量 state，末帧即终态）。
@@ -7908,6 +10005,9 @@ def plan_with_agent(
     search_lenient_dims: Any = None,
     search_date_from: str = "",
     search_date_to: str = "",
+    search_top_k: Any = None,
+    search_recall: str = "",
+    search_strategy: str = "",
     #三缝透传（与 plan_with_agent_events 同名同义；缺省 = 今天逐位不变）。
     retrieval_provider: Any = None,
     on_route_verdict: Any = None,
@@ -7916,6 +10016,11 @@ def plan_with_agent(
     artifact_context: str = "",
     # 「不少于我」下限合同（2026-09-01）：句内动作清单，与 plan_with_agent_events 同义。
     intent_checklist: list[dict] | None = None,
+    # 放松卡作答续跑（2026-09-14 ask 暂停/重启批），与 plan_with_agent_events 同义。
+    ask_answer: dict | None = None,
+    # 建议动作允许集，与 plan_with_agent_events 同义。
+    allowed_verbs: "frozenset[str] | None" = None,
+    conversation_history: list[dict] | None = None,
 ) -> tuple[dict, list[dict]]:
     """`plan_with_agent_events` 的无回调薄封装——
     返回值/异常契约与旧版逐位不变，调用方（turn.route_turn 非流式路径）无需任何改动。"""
@@ -7932,9 +10037,14 @@ def plan_with_agent(
         search_suppressed_constraints=search_suppressed_constraints,
         search_lenient_dims=search_lenient_dims,
         search_date_from=search_date_from, search_date_to=search_date_to,
+        search_top_k=search_top_k, search_recall=search_recall,
+        search_strategy=search_strategy,
         retrieval_provider=retrieval_provider,
         on_route_verdict=on_route_verdict,
         route_extra_zh=route_extra_zh,
         artifact_context=artifact_context,
         intent_checklist=intent_checklist,
+        ask_answer=ask_answer,
+        allowed_verbs=allowed_verbs,
+        conversation_history=conversation_history,
     )

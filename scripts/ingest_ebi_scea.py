@@ -39,14 +39,21 @@ tissue/disease 从哪来（修复，见下「历史教训」）：
 诚实地记录一个局限，和把局限当既成事实接受，是两回事。
 
 设计约束（与 ingest_cellxgene.py 一致）：不动 `database/base/`；纯标准库；复用 cxg 助手保持单一真源。
-冻结隔离：本快照写 `database/external/`，官方 767 评测走 base-only（`corpus.load_normalized_corpus(sources=None)`
+冻结隔离：本快照写 `database/external/`，官方 784 评测走 base-only（`corpus.load_normalized_corpus(sources=None)`
 只装 base，已读码确认）→ 本文件产物**结构上**不影响冻结基准。
 数据许可：EMBL-EBI SCEA 数据开放；两个端点均为公开接口，仅抓元数据 + 门户直链。
 
+快照写入安全（助手来自 ingest_cellxgene，四个 ingest 脚本同口径）：完整默认运行才写
+`database/external/ebi_scea.json`；`--limit` / `--no-enrich` 这类快速或降级模式必须显式 `--out`；
+`--dry-run` 不写任何文件；抓取失败或零记录时非零退出且原快照字节不变。
+
 用法：
-    py -3 scripts/ingest_ebi_scea.py
-    py -3 scripts/ingest_ebi_scea.py --limit 50
-    py -3 scripts/ingest_ebi_scea.py --no-enrich   # 跳过 design 取样（快，但 tissue/disease 留空）
+    py -3 scripts/ingest_ebi_scea.py                       # 抓全量 → database/external/ebi_scea.json
+    py -3 scripts/ingest_ebi_scea.py --dry-run             # 只抓取/打印，不写任何文件
+    py -3 scripts/ingest_ebi_scea.py --limit 50 --out /tmp/scea.json
+                                                           # 快速自测（不得覆写正式快照）
+    py -3 scripts/ingest_ebi_scea.py --no-enrich --out /tmp/scea-noenrich.json
+                                                           # 跳过 design 取样（tissue/disease 留空）
 """
 from __future__ import annotations
 
@@ -353,8 +360,21 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="只取前 N 条（0=全量）")
     ap.add_argument("--no-enrich", action="store_true",
                     help="跳过 design 端点取样（快；但 tissue/disease 留空、provenance 标 skipped）")
+    ap.add_argument("--out", type=str, default=None,
+                    help=f"输出路径（默认 {OUT_PATH}）；--limit / --no-enrich 必须显式指定")
+    ap.add_argument("--dry-run", action="store_true", help="只抓取/打印，不写任何文件")
     args = ap.parse_args()
     enrich = not args.no_enrich
+
+    # 快速（--limit）或降级（--no-enrich，tissue/disease 恒空）运行不得覆写正式快照；
+    # --dry-run 不写盘，故不进入 partial 判定。
+    partial = (bool(args.limit) or not enrich) and not args.dry_run
+    try:
+        out_path = cxg.resolve_out_path(args.out, OUT_PATH, partial=partial,
+                                        script_name="ingest_ebi_scea.py")
+    except cxg.SnapshotTargetError as exc:
+        print(f"REFUSED: {exc}")
+        return 2
 
     print(f"fetching {API_URL} ...")
     try:
@@ -388,7 +408,10 @@ def main() -> int:
         if args.limit and len(records) >= args.limit:
             break
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not records:
+        print("没有取到任何记录，不写快照。")
+        return 1
+
     payload_out = {
         "source": SOURCE_LABEL,
         "source_url": API_URL,
@@ -399,8 +422,11 @@ def main() -> int:
         "record_count": len(records),
         "records": records,
     }
-    OUT_PATH.write_text(json.dumps(payload_out, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"wrote {len(records)} records -> {OUT_PATH}")
+    if args.dry_run:
+        print(f"--dry-run：不写任何文件（{out_path} 未动）。")
+        return 0
+    cxg.write_snapshot(out_path, payload_out, indent=2)
+    print(f"wrote {len(records)} records -> {out_path}")
 
     specs: dict[str, int] = {}
     for r in records:

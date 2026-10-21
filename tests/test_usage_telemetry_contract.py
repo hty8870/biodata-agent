@@ -260,6 +260,33 @@ def test_training_consent_is_separate_opt_in_and_contract_is_versioned() -> None
     assert "opts.trainingConsent === true" in usage_core, "训练授权必须 fail-closed，不能 truthy 放行"
 
 
+def test_privacy_copy_follows_the_configured_channel_not_a_fixed_protocol_or_ttl() -> None:
+    """教程里的采集承诺必须跟着「运营方配置的通道」走，不得写死协议或保留天数。
+
+    2026-10-04 用户可见事实错误：教程第 0 步与结尾「使用反馈」步曾逐字宣称
+    「经明文 HTTP 上传到项目所有者的服务器（保留 90 天）」。真实合同不是这一条——
+    `_ingestConfig` 只在 endpoint + token 都配置时给出通道（未配置 = 零上传），公网只默认
+    放行 HTTPS（明文主机必须运营方显式登记进 allow-insecure 白名单），保留期由运营方政策
+    决定。文案替运营方许诺其中任何一种都是撒谎；教程两步因此改取 `COPY.privacy` 单一锚点。
+    """
+    upload = _strip_js_comments(UPLOAD.read_text(encoding="utf-8"))
+    assert "if (!endpoint || !token) return null;" in upload, (
+        "未配置通道必须零上传——教程文案里的条件句要跟这条运行时行为一致"
+    )
+    assert 'u.protocol !== "https:"' in upload, "公网默认只放行 HTTPS（明文需显式白名单）"
+    ob = _strip_js_comments((JS_DIR / "core" / "onboarding.js").read_text(encoding="utf-8"))
+    copy_js = _strip_js_comments((JS_DIR / "core" / "copy.js").read_text(encoding="utf-8"))
+    assert ob.count("COPY.privacy.commitment") == 2, "教程两步共用同一段承诺（第 0 步 + 结尾管理步）"
+    for forbidden in ("明文 HTTP", "保留 90 天", "上传到项目所有者的服务器"):
+        assert forbidden not in ob and forbidden not in copy_js, f"运行期文案不得写死：{forbidden}"
+    assert "只有运营方配置了上传通道时才会自动上传" in copy_js
+    assert "上传通道和保留时间以当前服务说明为准" in copy_js
+    # 训练授权不在采集承诺里顺手给：独立开关、独立 per-profile 键（见上一个测试）。
+    # 且不能只写「不训练」让用户以为独立 opt-in 没有入口——必须写明另行同意、可撤回。
+    assert "这项授权不包含模型训练或微调" in copy_js
+    assert "训练需要另行同意，可随时在设置里撤回" in copy_js
+
+
 def test_optional_experiment_assignment_is_executable_and_default_off() -> None:
     """不只留 nullable schema：配置后须真改请求参数；空配置不产生 control 假标签。"""
     html = INDEX.read_text(encoding="utf-8")
@@ -688,15 +715,19 @@ def test_schema_v3_impression_label_and_seen_wiring() -> None:
     assert "[object Object]" in core and "sorted-key JSON" in CORE.read_text(encoding="utf-8"), (
         "helper 必须显式兜住结构化 policy_id，不能再隐式 String(object)")
 
+    # policy 消费点（必须走统一 helper 规范化）。results.js 不在正钉列：2026-09-14 收编后
+    # 它只透传 search.js 已规范化的 imp.policy，自身不再读 data.policy_id（唯一消费点
+    # applyRelaxation 随救回预览链退役）；但它仍受负钉约束，不得把结构体压成 [object Object]。
     consumers = {
         "search.js": ROOT / "web/static/js/search/search.js",
-        "results.js": ROOT / "web/static/js/search/results.js",
         "projects.js": ROOT / "web/static/js/core/projects.js",
         "artifacts.js": ROOT / "web/static/js/core/artifacts.js",
     }
     for name, path in consumers.items():
         source = _strip_js_comments(path.read_text(encoding="utf-8"))
         assert "usagePolicyRef(" in source, f"{name} 漏接统一 policy helper"
+    for name, path in {**consumers, "results.js": ROOT / "web/static/js/search/results.js"}.items():
+        source = _strip_js_comments(path.read_text(encoding="utf-8"))
         assert "String(data.policy_id" not in source and "String((data && data.policy_id)" not in source, (
             f"{name} 仍会把结构体压成 [object Object]")
 

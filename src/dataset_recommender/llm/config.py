@@ -121,10 +121,11 @@ def load_env_candidates(project_root: Path) -> Path | None:
     # Client/process env has highest priority because every file loader uses setdefault.
     # The project-external file is loaded before project-local fallbacks, so 实现 and
     # 实现 Code can share one secret file without storing the key in either client config.
-    # 所有存在的候选**都加载**（setdefault 语义下排前者优先，
-    # 既有优先级不变）——此前在第一个存在的文件处即 return，.env 与 .env.zhipu 并存时
-    # 后者静默失效且零日志。返回第一个被加载的文件（供既有调用点/测试断言）。
-    first_loaded: Path | None = None
+    # 来源隔离：**外部文件一旦生效，就不再回落项目 `.env`**——项目文件里的通用
+    # `LLM_BASE_URL` 等会补进同一个 os.environ，压过外部 provider 别名，把外部 Key 发往
+    # 项目残留的旧端点（违 MODULES 的外部来源隔离契约）。进程环境仍是最高优先级
+    # （所有文件加载都走 setdefault），未配置/不可用外部文件时项目回落行为不变。
+    # 项目候选之间仍全加载（.env 与 .env.zhipu 并存时后者不静默失效）。
     external_raw = (os.getenv(EXTERNAL_LLM_ENV_VAR) or "").strip()
     if external_raw:
         external = Path(external_raw).expanduser()
@@ -134,10 +135,11 @@ def load_env_candidates(project_root: Path) -> Path | None:
             except Exception:
                 pass
             load_env_file(external)
-            first_loaded = external
             # 只记来源变量名，不记路径/键值（与 external_llm_env_status 的脱敏口径一致）。
             logger.info("loaded external LLM env file (%s)", EXTERNAL_LLM_ENV_VAR)
+            return external
 
+    first_loaded: Path | None = None
     candidates = [
         project_root / ".env",
         project_root / ".env.zhipu",

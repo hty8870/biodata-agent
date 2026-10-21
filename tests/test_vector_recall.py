@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 import sys
+import pytest
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -216,8 +217,42 @@ def test_expand_query_no_terms_is_identity():
 def test_cosine_basics():
     assert vector_recall._cosine([1.0, 0.0], [1.0, 0.0]) == 1.0
     assert vector_recall._cosine([1.0, 0.0], [0.0, 1.0]) == 0.0
-    assert vector_recall._cosine([1.0, 0.0], []) == 0.0        # 退化/长度不符 → 0，不抛
+    with pytest.raises(ValueError, match="invalid_vector"):
+        vector_recall._cosine([1.0, 0.0], [])
     assert vector_recall._cosine([0.0, 0.0], [1.0, 1.0]) == 0.0  # 零向量 → 0
+
+
+@pytest.mark.parametrize("bad", [[], [1.0], [float("nan"), 0.0], [float("inf"), 0.0]])
+@pytest.mark.parametrize("backend", ["dense", "vector"])
+def test_recall_bad_vector_never_becomes_a_normal_zero_score(bad, backend):
+    candidates = _cands(2)
+    trace = {}
+    out = vector_recall.recall_rerank(
+        "query", candidates, backend=backend, alpha=1, fusion="linear",
+        embedder=lambda texts: [[1.0, 0.0], [-1.0, 0.0], bad], trace=trace,
+    )
+    assert out == candidates
+    assert trace["status"] == "fallback"
+    assert trace["reason"] == "invalid_vectors"
+    assert trace["fusion"] == "rule-order"
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_semantic_fallback_filters_nonfinite_documents(monkeypatch, bad):
+    from dataset_recommender.retrieval import vector_index
+
+    records = [_rec("bad"), _rec("good")]
+    for record in records:
+        record.raw["dataset_uid"] = record.dataset_name
+    good = [1.0] + [0.0] * (vector_index.EMBED_DIMENSIONS - 1)
+    store = {"bad": {"v": [bad] * len(good)}, "good": {"v": good}}
+    monkeypatch.setattr(vector_index, "ensure_index", lambda *a, **k: store)
+    monkeypatch.setattr(vector_recall, "load_embedder", lambda *a: lambda texts: [good])
+    out = vector_recall.semantic_fallback_recall(records, "query")
+    assert _names(out) == ["good"]
+    assert out[0].score == 1.0
+    monkeypatch.setattr(vector_recall, "load_embedder", lambda *a: lambda texts: [[bad] * len(good)])
+    assert vector_recall.semantic_fallback_recall(records, "query") is None
 
 
 def test_minmax_norm():
@@ -274,21 +309,47 @@ def test_rrf_is_scale_invariant():
     assert _names(out1) == _names(out2)
 
 
-def test_rrf_default_fusion_is_linear_byte_equivalent():
-    # 默认参数（不传 fusion）必须与显式 linear 逐位一致——历史行为字节等价（冻结纪律）。
-    c1 = _cands(4)
-    out_default = vector_recall.recall_rerank("QRY", c1, backend="dense", alpha=0.5, embedder=_mock_embedder)
-    c2 = _cands(4)
-    out_linear = vector_recall.recall_rerank("QRY", c2, backend="dense", alpha=0.5,
-                                             fusion="linear", embedder=_mock_embedder)
+def test_default_fusion_is_explicit_ltr_byte_equivalent(monkeypatch):
+    # 默认参数（不传 fusion）必须与显式 ltr 逐位一致——ltr 是 dense/vector 的缺省融合。
+    # 伪 scorer 钉住「工件可用」情形，不依赖本机 models/ltr 与 torch。
+    # 特征名镜像 models/ltr/ltr_spec.json 的 feature_order 契约。
+    names = (
+        "lex_norm", "vec_norm", "has_vec", "inv_pos",
+        "matched_species", "matched_tissue", "matched_disease",
+        "matched_has_raw_data", "raw_required",
+    )
+
+    def scorer(batch):
+        return [float(dict(zip(names, row))["inv_pos"]) for row in batch]
+
+    scorer.ltr_feature_order = list(names)
+    monkeypatch.setattr(vector_recall, "load_ltr_scorer", lambda *a, **k: scorer)
+    intent = SimpleNamespace(constraints={}, preferred_constraints={}, has_raw_data_required=False)
+    out_default = vector_recall.recall_rerank("QRY", _cands(4), backend="dense", alpha=0.5,
+                                              embedder=_mock_embedder, intent=intent)
+    out_ltr = vector_recall.recall_rerank("QRY", _cands(4), backend="dense", alpha=0.5,
+                                          fusion="ltr", embedder=_mock_embedder, intent=intent)
+    assert _names(out_default) == _names(out_ltr)
+
+
+def test_default_fusion_without_artifact_is_linear_byte_equivalent(monkeypatch):
+    # 工件不可用（load_ltr_scorer → None）时默认融合 fail-soft 回退 linear，
+    # 与显式 linear 逐位一致——无工件环境与历史默认行为字节等价（冻结纪律）。
+    monkeypatch.setattr(vector_recall, "load_ltr_scorer", lambda *a, **k: None)
+    intent = SimpleNamespace(constraints={}, preferred_constraints={}, has_raw_data_required=False)
+    out_default = vector_recall.recall_rerank("QRY", _cands(4), backend="dense", alpha=0.5,
+                                              embedder=_mock_embedder, intent=intent)
+    out_linear = vector_recall.recall_rerank("QRY", _cands(4), backend="dense", alpha=0.5,
+                                             fusion="linear", embedder=_mock_embedder, intent=intent)
     assert _names(out_default) == _names(out_linear)
 
 
 def test_rrf_unknown_fusion_falls_back_to_linear():
-    # 非法 fusion 值不当 rrf 处理（安全默认 = 历史 linear 行为），也不许炸。
+    # 非法 fusion 值不当 ltr/rrf 处理（安全默认 = 历史 linear 行为），也不许炸。
     c = _cands(3)
     out = vector_recall.recall_rerank("QRY", c, backend="dense", fusion="bogus", embedder=_mock_embedder)
-    out_linear = vector_recall.recall_rerank("QRY", _cands(3), backend="dense", embedder=_mock_embedder)
+    out_linear = vector_recall.recall_rerank("QRY", _cands(3), backend="dense",
+                                             fusion="linear", embedder=_mock_embedder)
     assert _names(out) == _names(out_linear)
 
 
@@ -515,17 +576,19 @@ def test_vector_injected_reorders_and_is_permutation():
     c = _cands(3)
     out = vector_recall.recall_rerank("QRY", c, backend="vector", embedder=_mock_embedder)
     assert _is_permutation(out, c)
-    # 缺省 rrf：与 dense+rrf 同一融合算法、同输入 → 同名次。
+    # 缺省 ltr 在无 intent 时 fail-soft 到 rrf：与 dense+rrf 同一融合算法、同输入 → 同名次。
     out_dense_rrf = vector_recall.recall_rerank("QRY", _cands(3), backend="dense",
                                                 fusion="rrf", embedder=_mock_embedder)
     assert _names(out) == _names(out_dense_rrf)
 
 
-def test_vector_default_fusion_is_rrf():
+def test_vector_default_fusion_fails_soft_to_rrf():
+    # vector 缺省 ltr；无 intent（约束解析缺席）→ ltr 不可用，fail-soft 回退 rrf 并留痕。
     trace: dict = {}
     vector_recall.recall_rerank("QRY", _cands(3), backend="vector",
                                 embedder=_mock_embedder, trace=trace)
     assert trace.get("fusion") == "rrf"
+    assert trace.get("ltr_status") == "fallback"
     assert trace.get("status") == "used"
 
 

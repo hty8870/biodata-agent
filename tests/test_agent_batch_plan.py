@@ -226,7 +226,7 @@ def test_batch_filter_truncates_illegal_placeholder(monkeypatch):
     模型的依赖链已不可信，不冒险只剔一个。"""
     _install_registry(monkeypatch)
     calls = [
-        {"name": "rank", "args": {"query": "人类肺", "display": True}},
+        {"name": "rank", "args": {"query": "人类肺"}},
         {"name": "compare_datasets",
          "args": {"quoted": "对比前两条", "a": "$2.top[0].dataset_uid"}},
         {"name": "fair_check", "args": {"quoted": "给第一条做FAIR", "uid": "$1.top[0].dataset_uid"}},
@@ -241,7 +241,7 @@ def test_batch_filter_truncates_out_of_matrix_flow(monkeypatch):
     """矩阵外流向截断：check_updates 的 source 槽带占位（非矩阵槽）→ 截断整尾。"""
     _install_registry(monkeypatch)
     calls = [
-        {"name": "rank", "args": {"query": "人类肺", "display": True}},
+        {"name": "rank", "args": {"query": "人类肺"}},
         {"name": "curate_check_updates",
          "args": {"quoted": "检查更新", "source": "$1.top[0].dataset_uid"}},
     ]
@@ -263,7 +263,7 @@ def test_single_call_placeholder_resolves_on_main_step_end_to_end(monkeypatch):
         return _compare_result(slots.get("a"), slots.get("b"))
     _install_registry(monkeypatch, cmp_run=_cmp)
     model = _FakeModel(
-        _tool_call("rank", query="人类肺", display=True, quoted="搜人类肺数据"),
+        _tool_call("rank", query="人类肺", quoted="搜人类肺数据"),
         _tool_call("compare.datasets", quoted="对比前两条",
                    a="$1.top[0].dataset_uid", b="$1.top[1].dataset_uid"),
         _finish("1. 检索：已做（第1步）。\n2. 对比前两条：已做（第2步）。"),
@@ -290,7 +290,7 @@ def test_batch_rank_compare_resolves_placeholders_end_to_end(monkeypatch):
     _install_registry(monkeypatch, cmp_run=_cmp)
     model = _FakeModel(
         _tool_call("curate.db_status", quoted="看下库里多少条"),
-        _batch(("rank", {"query": "人类肺", "display": True, "quoted": "搜人类肺数据"}),
+        _batch(("rank", {"query": "人类肺", "quoted": "搜人类肺数据"}),
                ("compare.datasets", {"quoted": "对比前两条", "a": "$2.top[0].dataset_uid",
                                      "b": "$2.top[1].dataset_uid"})),
         _finish("1. 看库里多少条：已做（第1步）。\n2. 检索：已做（第2步）。\n"
@@ -316,7 +316,7 @@ def test_dependency_unavailable_cascades_skip_with_trace(monkeypatch):
     依赖/原引用/原因）；跳过不吃失败预算（dead_ends 只记 rank 自身）。"""
     _install_registry(monkeypatch, fail_rank=True)
     model = _FakeModel(
-        _tool_call("rank", query="人类肺", display=True, quoted="搜人类肺数据"),
+        _tool_call("rank", query="人类肺", quoted="搜人类肺数据"),
         _tool_call("compare.datasets", quoted="对比前两条",
                    a="$1.top[0].dataset_uid", b="$1.top[1].dataset_uid"),
         _finish("1. 检索：做不到（网络失败）。\n2. 对比：没做。"),
@@ -337,7 +337,7 @@ def test_resolver_error_index_out_of_range_not_banned(monkeypatch):
     不触发 _failed_tool_ban（后续同一 compare 单步仍可执行）、不写假 step。"""
     _install_registry(monkeypatch, rank_top=["UID-A"])
     model = _FakeModel(
-        _tool_call("rank", query="人类肺", display=True, quoted="搜人类肺数据"),
+        _tool_call("rank", query="人类肺", quoted="搜人类肺数据"),
         _tool_call("compare.datasets", quoted="对比前两条",
                    a="$1.top[0].dataset_uid", b="$1.top[1].dataset_uid"),
         # 下一轮：compare 不带占位单步重提（resolver_error 不算工具失败——不被禁提）
@@ -364,7 +364,7 @@ def test_cancelled_placeholder_extra_rejected_at_decide(monkeypatch):
     _install_registry(monkeypatch)
     model = _FakeModel(
         _tool_call("curate.db_status", quoted="看下库里多少条"),
-        _batch(("rank", {"query": "人类肺", "display": True, "quoted": "搜人类肺数据"}),
+        _batch(("rank", {"query": "人类肺", "quoted": "搜人类肺数据"}),
                ("compare.datasets", {"quoted": "对比前两条", "cancelled": True,
                                      "a": "$2.top[0].dataset_uid"})),
         _tool_call("compare.datasets", quoted="对比前两条"),
@@ -461,7 +461,7 @@ def test_batch_id_is_per_execute_local(monkeypatch):
     """批 id 每次 execute 递增且只用于 trace——同一会话两批各得各的 id（不跨批复用）。"""
     _install_registry(monkeypatch)
     model = _FakeModel(
-        _tool_call("rank", query="人类肺", display=True, quoted="搜人类肺数据"),
+        _tool_call("rank", query="人类肺", quoted="搜人类肺数据"),
         _tool_call("compare.datasets", quoted="对比前两条",
                    a="$1.top[0].dataset_uid", b="$1.top[1].dataset_uid"),
         _finish("1. 检索：已做（第1步）。\n2. 对比前两条：已做（第2步）。"),

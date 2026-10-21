@@ -600,6 +600,89 @@ def test_verify_rejects_forbidden_token_in_archive(tmp_path: Path) -> None:
         build_release.verify_release(rewritten)
 
 
+#: 运行时拼接的假 key 形状（不落完整 secret 字面量，避免交付门误报夹具自身）。
+_FAKE_SECRET = "sk-" + "test" * 5
+
+
+def test_build_rejects_secret_value_in_allowlisted_file(tmp_path: Path) -> None:
+    """allowlist 文本里误粘一个完整 key 形状：打包必须拦（此前只有禁词门，值级零检测）。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    (root / "README.md").write_text(f"# Demo\nkey={_FAKE_SECRET}\n", encoding="utf-8")
+    with pytest.raises(build_release.ReleaseError, match="secret-like value"):
+        build_release.build_release(root, tmp_path / "out")
+
+
+def test_verify_rejects_secret_value_in_archive(tmp_path: Path) -> None:
+    """归档复验同样拦 secret 值：源与 zip 两处共用同一份值级检测。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    result = build_release.build_release(root, tmp_path / "out")
+    rewritten = tmp_path / "tainted.zip"
+
+    def add_secret(payloads, _manifest):
+        payloads["README.md"] = payloads["README.md"] + f"\nkey={_FAKE_SECRET}\n".encode("utf-8")
+
+    _rewrite_self_consistent_candidate(Path(result["archive"]), rewritten, add_secret)
+    with pytest.raises(build_release.ReleaseError, match="secret-like value"):
+        build_release.verify_release(rewritten)
+
+
+def test_verify_rejects_unscannable_utf16_text(tmp_path: Path) -> None:
+    """UTF-16 文本（扫描器零命中）在复验里 fail-closed：不可扫不得静默出包。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    result = build_release.build_release(root, tmp_path / "out")
+    rewritten = tmp_path / "utf16.zip"
+
+    def to_utf16(payloads, _manifest):
+        payloads["README.md"] = f"# Demo\nkey={_FAKE_SECRET}\n".encode("utf-16")
+
+    _rewrite_self_consistent_candidate(Path(result["archive"]), rewritten, to_utf16)
+    with pytest.raises(build_release.ReleaseError, match="not scannable"):
+        build_release.verify_release(rewritten)
+
+
+def test_build_rejects_secret_in_no_suffix_text(tmp_path: Path) -> None:
+    """反例：`.gitignore`/`.gitattributes` 等**无后缀**文本此前按 suffix 判据整类漏扫；
+    源门必须按整名识别并拦下误粘的 key（与交付门同一判据）。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    (root / ".gitignore").write_text(f"*.zip\nkey={_FAKE_SECRET}\n", encoding="utf-8")
+    with pytest.raises(build_release.ReleaseError, match="secret-like value"):
+        build_release.build_release(root, tmp_path / "out")
+
+
+def test_verify_rejects_secret_in_no_suffix_text(tmp_path: Path) -> None:
+    """反例（zip 复验侧）：自洽候选里的无后缀文本同样必须被值级门拦下。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    result = build_release.build_release(root, tmp_path / "out")
+    rewritten = tmp_path / "tainted2.zip"
+
+    def add_secret(payloads, _manifest):
+        payloads[".gitignore"] = f"*.zip\nkey={_FAKE_SECRET}\n".encode("utf-8")
+
+    _rewrite_self_consistent_candidate(Path(result["archive"]), rewritten, add_secret)
+    with pytest.raises(build_release.ReleaseError, match="secret-like value"):
+        build_release.verify_release(rewritten)
+
+
+def test_build_rejects_utf16_no_suffix_text(tmp_path: Path) -> None:
+    """无后缀文本的 UTF-16（扫描器零命中）必须 fail-closed，不得静默跳过。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _minimal_project(root)
+    (root / ".gitattributes").write_text(f"* text=auto\nkey={_FAKE_SECRET}\n", encoding="utf-16")
+    with pytest.raises(build_release.ReleaseError, match="not scannable"):
+        build_release.build_release(root, tmp_path / "out")
+
+
 def test_content_gate_allows_clean_allowlist(tmp_path: Path) -> None:
     """干净树应过：无禁词的 allowlist 不触发门。"""
     root = tmp_path / "repo"

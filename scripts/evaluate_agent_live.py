@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
-"""执行侧 agent 的**集成性能验证**（报告含「失败聚类」段与
+r"""执行侧 agent 的**集成性能验证**（报告含「失败聚类」段与
 number_grounded「汇报数字出处」不变量维度）。
 
 与单测的本质区别：单测用 fake model 钉行为（永远满分，无评估意义）；本验证用**真实 LLM**
 （`load_llm_config()` 的当前配置）+ **剧本化工具结果**（LOOP_TOOLS 整体换成假工具——
 可控地制造 new_count=0 / 网络失败 / 来源认不出 / 形状残缺等边缘情形）+ **沙箱项目根**
-（每用例一个 tmp 目录，账本/外部库全落 tmp，**绝不碰真库、绝不真联网下载**）。
+（每用例一个 tmp 目录，账本/外部库全落 tmp，**绝不碰真库、绝不真联网下载**）；
+沙箱根内**复制一份真源 `prompts/`**（`_stage_prompts`）——运行期经 `_prompt_md` 加载的
+提示词由此读到线上真源文件，而不是内置降级常量（后者会让探针测错对象：
+`route_write_gate.md` 真源 1150 字节 / 降级常量 215 字）。真源搬不进来时 stderr 留痕、
+仍按降级常量跑（**降级常量是生产保命档，语义不动**）。
 
 被测对象 = LLM 的三处出口：understand（动词与槽位 fidelity）、decide（续步/停环判断）、
 narrate（汇报忠实度）。机械护栏不在被测之列（那是单测的地），但护栏**拦截事件**是
@@ -167,6 +171,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -179,8 +184,43 @@ sys.path.insert(0, str(ROOT / "src"))
 from dataset_recommender.agent import action_plan as _ap  # noqa: E402
 from dataset_recommender.agent import agent_exec as ax  # noqa: E402
 from dataset_recommender.agent import agent_schemas as _schemas  # noqa: E402
+from dataset_recommender.app.runtime_paths import resource_file_for  # noqa: E402
 from dataset_recommender.retrieval import search_request as _sr  # noqa: E402
 from dataset_recommender.llm.llm_client import load_llm_config  # noqa: E402
+
+# --------------------------------------------------------------------------- 沙箱提示词保真
+#: 提示词真源 `prompts/`（沙箱保真度，2026-09-30 P1）：走与
+#: `agent_exec._prompt_resource_text` **同一个资源解析入口**（frozen 布局自动落
+#: resource_root）。**导入期取一次**——`_execute_case` 之后会把
+#: `ax._agent_project_root` 猴补丁成沙箱根，届时再解析只会指到空沙箱。
+#: 不用脚本自己的 `ROOT`：GEPA harness 把本文件逐字节复制到研究区跑（ROOT 不是仓库），
+#: 而 `ax` 永远来自真源包 ⇒ 以它解析出的项目根为准。
+_PROMPTS_SRC: Path = resource_file_for(ax._agent_project_root(), "prompts")
+_PROMPTS_SRC_WARNED = False
+
+
+def _stage_prompts(sandbox_root: Path, src: Path | None = None) -> bool:
+    """把真源 `prompts/` 整树复制进沙箱根——沙箱内 `_prompt_md` 读到的 = 线上真源。
+
+    不搬运就是静默失真的探针：`_prompt_md` 在沙箱根下解析 `prompts/<name>` 失败后退回
+    内置最小常量（那是**生产保命档，不是线上提示词**），实测 `route_write_gate.md` 会从
+    真源 1150 字节掉成 215 字常量。复制而非链接（不依赖 Windows 符号链接权限），整树复制
+    而非白名单（提示词增删自动跟着保真，探针里不再维护第二份清单）。
+    真源缺失/不可读时不静默：stderr 留一行、保持降级语义（探针照跑，失真可见）。
+    """
+    source = Path(src) if src is not None else _PROMPTS_SRC
+    try:
+        shutil.copytree(source, Path(sandbox_root) / "prompts", dirs_exist_ok=True)
+    except OSError as err:
+        if src is None:  # 注入源的失败由调用方自己断言；只有真源缺失才需要留痕
+            global _PROMPTS_SRC_WARNED
+            if not _PROMPTS_SRC_WARNED:
+                _PROMPTS_SRC_WARNED = True
+                print(f"[prompts] 真源 {source} 搬进沙箱失败（{type(err).__name__}: {err}）："
+                      f"本探针的提示词走内置降级常量，测的不是线上提示词。", file=sys.stderr)
+        return False
+    return True
+
 
 # --------------------------------------------------------------------------- 剧本化工具负载
 # 形状与 agent_schemas.LOOP_RESULT_MODELS 的真实出口契约逐位一致（假工具也过形状闸；
@@ -1203,7 +1243,7 @@ _INT_RE = re.compile(r"\d+")
 
 
 def _number_grounded_misses(steps: list[dict], report: str) -> list[str]:
-    """汇报整数的出处核对（无出处清单，空 = 全部有出处）。
+    r"""汇报整数的出处核对（无出处清单，空 = 全部有出处）。
     提取汇报里的全部整数（先剥千分位逗号），每个数字必须能在 steps 的工具返回
     JSON（每步 result 的序列化文本）中作为**数值相等**出现——词边界正则
     `(?<![0-9])N(?![0-9])`，「2」不许在「12」里命中；前导零写法按数值等价
@@ -1547,6 +1587,9 @@ def main() -> int:
         started = time.monotonic()
         with tempfile.TemporaryDirectory() as tmp:
             ax.LOOP_TOOLS = build_tools(case.get("tools") or {})
+            # 沙箱根只该承载写盘（账本/外部库）；提示词是只读真源资源，必须搬进来——
+            # 否则运行期 `_prompt_md` 静默退回降级常量，本例测的不是线上提示词。
+            _stage_prompts(Path(tmp))
             ax._agent_project_root = lambda: Path(tmp)
             try:
                 # 可选屏上语境（缺省保持「无结果」现状，旧用例行为逐位不变）

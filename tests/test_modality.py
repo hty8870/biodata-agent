@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from dataset_recommender.retrieval.vocabulary import derive_modality  # noqa: E402
+from dataset_recommender.domains.biodata.vocabulary import derive_modality  # noqa: E402
 from dataset_recommender.retrieval.query_parser import parse_query
 from dataset_recommender.llm.config import get_settings
 from dataset_recommender.corpus.corpus import load_normalized_corpus, load_full_corpus

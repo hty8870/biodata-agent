@@ -68,7 +68,7 @@ def test_rollback_picks_latest_snapshot_step_and_recycles(tmp_path):
     assert recycle.is_dir() and any(p.name.endswith("upload_new.json")
                                     for p in recycle.iterdir())
     # 回收站 manifest 如实标 trace_rollback（移动而非删除的纪律留痕）
-    manifest = _cc._recycle_manifest(tmp_path)
+    manifest = _cc.recycle_manifest(tmp_path)
     rows = [json.loads(ln) for ln in manifest.read_text(encoding="utf-8").splitlines()
             if ln.strip()]
     assert any(r.get("action") == "trace_rollback" and r.get("snapshot_id") == sid
@@ -184,6 +184,25 @@ def test_rollback_incomplete_is_not_reported_or_marked_as_rolled_back(tmp_path):
     assert [x["name"] for x in result["unrestorable"]] == ["existing.json"]
     assert "没有完成回滚" in result["note_zh"] and "1 项未能恢复" in result["note_zh"]
     assert not store.load(sid).get("rolled_back_at"), "未完整回滚不能伪装成已回过后跳过"
+
+
+def test_partial_rollback_with_version_conflict_is_not_reported_complete(tmp_path):
+    """全量 preflight CAS：一个目标被后续编辑 → **整体零修改**——
+    无冲突的 `unchanged.json` 也不先回收；绝不覆盖后来的同账户编辑。"""
+    ext = _make_ext(tmp_path)
+    store = snapshot_store(tmp_path)
+    sid = store.capture("curate.sync_updates")
+    (ext / "unchanged.json").write_text("original", encoding="utf-8")
+    (ext / "edited.json").write_text("original", encoding="utf-8")
+    store.finalize(sid)
+    (ext / "edited.json").write_text("later edit", encoding="utf-8")
+    result = AX._loop_curate_rollback({}, tmp_path, {"steps": [_step("curate.sync_updates", sid)]})
+    assert result["recycled"] == [], "任一 CAS 冲突 → 连无冲突目标也不先写"
+    assert result["rolled_back"] is False and result["reason"] == "rollback_incomplete"
+    assert "没有完成回滚" in result["note_zh"] and "跳过" in result["note_zh"]
+    assert (ext / "edited.json").read_text(encoding="utf-8") == "later edit"
+    assert (ext / "unchanged.json").read_text(encoding="utf-8") == "original", \
+        "无冲突目标保持原样（等冲突解决后整体重跑）"
 
 
 def test_rollback_has_separate_budget_from_forward_writes():

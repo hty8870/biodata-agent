@@ -3,7 +3,7 @@
 归一成本项目的记录 schema，写入 `database/external/cellxgene.json`（外部平台库，opt-in）。
 
 为什么这么做（设计约束）：
-- **不动 `database/base/`**：官方 54 题评测冻结在原始 767 条 10x 语料上；外部平台库是**独立、默认关**的
+- **不动 `database/base/`**：官方 54 题评测冻结在 784 条 base 语料上；外部平台库是**独立、默认关**的
   附加语料，只有网页端显式勾选「包含外部平台库」时才并入 → 确定性二元门与评测基线不受任何影响。
 - **运行时不联网**：与 `downloads.py` 一致——这里一次性抓快照落地，查询期只读本地 JSON。
 - **物种归一**：硬过滤按子串匹配 `record.species`，而 CELLxGENE 存「Homo sapiens」。必须映射成词表
@@ -14,14 +14,22 @@
 数据许可：CELLxGENE Discover 数据为 CC-BY，curation API 为公开、面向程序化访问的官方接口。
 仅抓取元数据 + 官方资产直链，合规。零第三方依赖（纯标准库 urllib）。
 
+快照写入安全（与 ingest_hca / ingest_ebi_scea / ingest_arrayexpress 共用本模块的助手）：
+- 完整默认运行（无参数）才允许写 `database/external/cellxgene.json`；
+- 快速自测（--limit）必须显式 `--out`，否则 fail-closed 拒绝运行；
+- `--dry-run` 只抓取/打印，不写任何文件；
+- 抓取失败/零记录时非零退出，**原快照字节不变**（`write_snapshot` 原子替换，不留半截 JSON）。
+
 用法：
-    py -3 scripts/ingest_cellxgene.py            # 抓全量 → database/external/cellxgene.json
-    py -3 scripts/ingest_cellxgene.py --limit 50 # 只取前 N 条（快速自测）
+    py -3 scripts/ingest_cellxgene.py                          # 抓全量 → database/external/cellxgene.json
+    py -3 scripts/ingest_cellxgene.py --dry-run                # 只抓取/打印，不写任何文件
+    py -3 scripts/ingest_cellxgene.py --limit 50 --out /tmp/cxg.json   # 快速自测（不得覆写正式快照）
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -158,6 +166,55 @@ def pick_asset(assets: object) -> tuple[str, int]:
     return "", 0
 
 
+# ---------------------------------------------------------------- 快照写入安全（四个 ingest 脚本共用）
+# 单一真源：ingest_hca / ingest_ebi_scea / ingest_arrayexpress 都 import 本模块，共用下面两个助手；
+# 别在各自脚本里各写一份（平行实现会漂移出不同的失败语义）。
+
+class SnapshotTargetError(RuntimeError):
+    """输出目标被安全检查拒绝：调用方必须非零退出，且不得写盘。"""
+
+
+def resolve_out_path(out_arg: "str | None", default_path: Path, *, partial: bool,
+                     script_name: str) -> Path:
+    """决定本次运行的快照输出目标；`partial`＝本次写的是不完整/降级数据。
+
+    显式 --out 永远优先（可审计的逃生门）；若不完整运行没有 --out，则 fail-closed 拒绝——
+    快速自测（--limit）与降级模式历史上会直接覆写 database/external 的正式快照。
+    完整默认运行（partial=False）行为不变，仍写 default_path。
+    """
+    if out_arg:
+        return Path(out_arg).expanduser()
+    if partial:
+        raise SnapshotTargetError(
+            f"{script_name}: 快速/降级模式（--limit 等）必须显式 --out <路径> 或 --dry-run；"
+            f"拒绝覆写正式快照 {default_path}")
+    return default_path
+
+
+def write_snapshot(path: Path, payload: dict, *, indent: int = 2,
+                   trailing_newline: bool = False) -> Path:
+    """原子写快照：同目录临时文件 + `os.replace`。
+
+    序列化/落盘/替换任一步失败时，既有文件的字节保持不变，也不留下 .tmp 残片——
+    避免中断留下半截 JSON 冒充完整快照（消费方只认完整记录集）。
+    """
+    text = json.dumps(payload, ensure_ascii=False, indent=indent)
+    if trailing_newline:
+        text += "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
 def to_record(ds: dict) -> dict | None:
     """一条 CELLxGENE 数据集 → 本项目记录 schema（compact）。无有效下载资产则丢弃。"""
     if ds.get("tombstone"):
@@ -212,7 +269,19 @@ def fetch(url: str) -> list:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只取前 N 条（0=全量）")
+    ap.add_argument("--out", type=str, default=None,
+                    help=f"输出路径（默认 {OUT_PATH}）；--limit 快速自测必须显式指定")
+    ap.add_argument("--dry-run", action="store_true", help="只抓取/打印，不写任何文件")
     args = ap.parse_args()
+
+    # --limit 自测不得覆写正式快照；--dry-run 不写盘，故不进入 partial 判定（允许二者组合）。
+    partial = bool(args.limit) and not args.dry_run
+    try:
+        out_path = resolve_out_path(args.out, OUT_PATH, partial=partial,
+                                    script_name="ingest_cellxgene.py")
+    except SnapshotTargetError as exc:
+        print(f"REFUSED: {exc}")
+        return 2
 
     print(f"fetching {API_URL} ...")
     try:
@@ -242,7 +311,10 @@ def main() -> int:
         if args.limit and len(records) >= args.limit:
             break
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not records:
+        print("没有取到任何记录，不写快照。")
+        return 1
+
     payload = {
         "source": SOURCE_LABEL,
         "source_url": API_URL,
@@ -250,8 +322,11 @@ def main() -> int:
         "record_count": len(records),
         "records": records,
     }
-    OUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"wrote {len(records)} records -> {OUT_PATH}")
+    if args.dry_run:
+        print(f"--dry-run：不写任何文件（{out_path} 未动）。")
+        return 0
+    write_snapshot(out_path, payload, indent=2)
+    print(f"wrote {len(records)} records -> {out_path}")
 
     # 平台多样性一览（证明「已拓展到 10x 以外」）
     plats: dict[str, int] = {}

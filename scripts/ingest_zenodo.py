@@ -11,7 +11,7 @@
   剔除理由按类别记录在历史 staging 台账（历史管线产物，不随本仓分发）。
 
 设计约束（与 ingest_hca.py / ingest_cellxgene.py 一致）：
-- **不动 `database/base/`**：官方评测冻结在 774 条 base 语料；外部库默认关
+- **不动 `database/base/`**：官方评测冻结在 784 条 base 语料；外部库默认关
   （sources=None 只装基础语料）→ 确定性二元门不受影响。
 - **运行时不联网**：一次性抓快照落地，查询期只读本地 JSON。
 - **不绕过管护管线**：抓取走 `corpus_curation` 的 Zenodo 适配器原语
@@ -23,7 +23,7 @@
 
 用法：
     python scripts/ingest_zenodo.py            # 抓入选清单 → database/external/zenodo.json
-    python scripts/ingest_zenodo.py --dry-run  # 只抓取并打印复核表，不写任何文件
+    python scripts/ingest_zenodo.py --dry-run  # 只抓取并打印复核表：读 staging/raw 缓存，但不写任何文件
 """
 from __future__ import annotations
 
@@ -120,11 +120,16 @@ def _curated_id_list() -> list[int]:
     return ids
 
 
-def _fetch_record_payload(rid: int, *, project_root: Path, use_cache: bool) -> dict:
+def _fetch_record_payload(rid: int, *, project_root: Path, read_cache: bool,
+                          write_cache: bool) -> dict:
     """按 record id 直查（适配器原语：账本 + 限速 + 形状闸）。raw 摘要缓存在 staging/raw/，
-    复跑/干跑不重复联网；缓存只在本脚本内使用，不进 external/。"""
+    复跑/干跑不重复联网；缓存只在本脚本内使用，不进 external/。
+
+    `read_cache` 管读、`write_cache` 管写：`--dry-run` 语义是「不写任何文件」，但保留读缓存
+    （命中即零联网）——修前只有一个开关，dry-run 会关掉缓存读、强制重联网，与 --no-cache 同形。
+    """
     cache = RAW_DIR / f"{rid}.json"
-    if use_cache and cache.is_file():
+    if read_cache and cache.is_file():
         return json.loads(cache.read_text(encoding="utf-8"))
     payload = cc._fetch_logged(
         f"{cc.ZENODO_API}/{rid}", project_root=project_root,
@@ -137,7 +142,7 @@ def _fetch_record_payload(rid: int, *, project_root: Path, use_cache: bool) -> d
             f"Zenodo 记录 {rid} 的响应形状变了（缺 id/标题）。本条跳过前已按 fail-closed 中止；"
             "可到 https://zenodo.org/ 人工核对。",
         )
-    if use_cache:
+    if write_cache:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     return payload
@@ -162,14 +167,17 @@ def _external_identity_index_without_zenodo(project_root: Path) -> set[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Zenodo 首批经甄别数据集 → external 快照")
     parser.add_argument("--dry-run", action="store_true",
-                        help="只抓取并打印复核表，不写 zenodo.json / staging")
+                        help="只抓取并打印复核表：读 staging/raw 缓存，但不写任何文件")
     parser.add_argument("--no-cache", action="store_true",
                         help="忽略 staging/raw/ 缓存，强制重新联网")
     args = parser.parse_args()
 
+    read_cache = not args.no_cache
+    write_cache = not args.dry_run   # --dry-run 不写任何文件（含 staging/raw 缓存）
+
     ids = _curated_id_list()
     print(f"入选清单 {len(ids)} 条（发现查询 {len(DISCOVERY_QUERIES)} 组）")
-    if not args.dry_run:
+    if write_cache:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
 
     records: list[dict] = []
@@ -177,7 +185,7 @@ def main() -> int:
     for i, rid in enumerate(ids, 1):
         try:
             payload = _fetch_record_payload(rid, project_root=REPO_ROOT,
-                                            use_cache=not args.no_cache and not args.dry_run)
+                                            read_cache=read_cache, write_cache=write_cache)
         except Exception as exc:  # 单条失败不连累整批；如实记录后由人工复核决定是否剔出清单
             failures.append((rid, f"{type(exc).__name__}: {exc}"))
             print(f"[{i:>3}/{len(ids)}] {rid}: 抓取失败 {failures[-1][1]}")

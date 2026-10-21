@@ -14,10 +14,10 @@
   该变量设不设都不影响它消费（但两侧都必须连得上同一个 Redis）。
 
 队列名与状态 key 由 ``rq_jobs`` 定义（单一真源），本文件不重复字面量。worker 侧执行体是
-``rq_jobs.corpus_sync_entry``：跑完 sync + 向量重建后写 Redis 状态 hash 并置跨进程失效旗标，
-由 web 进程读取状态时消费——原因见 ``rq_jobs`` 模块 docstring（worker 进程清不掉 web 进程的
-内存缓存）。连接走 ``redis_store.get_rq_client()``（bytes 模式：RQ job 数据是 zlib 二进制，
-decode 模式连接读不了）。
+``rq_jobs.corpus_sync_entry``：跑完 sync + 向量重建后写终态与共享代际，Web API 入口
+按本进程游标调用既有缓存失效，不依赖任务状态轮询。连接走 ``redis_store.get_rq_client()``
+（bytes 模式：RQ job 数据是 zlib 二进制，decode 模式连接读不了）。Queue、Worker 与
+Job.fetch 的 JSONSerializer 真源也由 rq_jobs 供给；不接受旧 pickle 作业。
 """
 from __future__ import annotations
 
@@ -42,9 +42,9 @@ def main() -> None:
     from . import rq_jobs
 
     connection = redis_store.get_rq_client()
-    queue = rq.Queue(rq_jobs._QUEUE_NAME, connection=connection)
+    queue = rq.Queue(rq_jobs._QUEUE_NAME, connection=connection, serializer=rq_jobs.RQ_SERIALIZER)
     worker_cls = rq.Worker if hasattr(os, "fork") else rq.SimpleWorker
-    worker_cls([queue], connection=connection).work()
+    worker_cls([queue], connection=connection, serializer=rq_jobs.RQ_SERIALIZER).work()
 
 
 if __name__ == "__main__":

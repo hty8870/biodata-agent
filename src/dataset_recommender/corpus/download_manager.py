@@ -29,7 +29,8 @@
   「用户上传」的记录进 unsupported。该开关是策略便利，**不是安全边界**——真正的边界是上面的
   逐跳闸 + IP 闸 + 字节上限（对所有来源无条件生效）。
 - 目标目录由本模块生成在 `Path.home()/Downloads/BioData数据-<时间戳>/`，不落仓库；
-- 磁盘预检：`shutil.disk_usage` 剩余空间 < total_bytes×1.05 → 拒绝（与逐文件硬上限同系数）；
+- 磁盘预检：`shutil.disk_usage` 剩余空间 < 需要×1.05 → 拒绝（与逐文件硬上限同系数；
+  在途追加按「原有队列里未落盘、未移除的剩余 + 新项」合并计算，不只算新项）；
 - 取消：`threading.Event`，chunk 间与文件间检查；取消后保留 `.part`（可续传语义）。
 
 ## 测试接缝
@@ -320,9 +321,11 @@ def build_download_plan(uids: Sequence[str], *, records: "dict | None" = None) -
 # ---------------------------------------------------------------- 目标目录与磁盘预检
 
 def default_download_dir() -> Path:
-    """本机下载根：`~/Downloads/BioData数据-YYYYMMDD-HHMMSS/`。"""
+    """本机下载根：`~/Downloads/<领域品牌前缀>-YYYYMMDD-HHMMSS/`（前缀随活动领域包，biodata=BioData数据）。"""
+    from ..domain.registry import get_domain
+    prefix = get_domain().branding.download_dir_prefix or "BioData数据"
     return (Path.home() / "Downloads"
-            / f"BioData数据-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+            / f"{prefix}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}")
 
 
 def _ensure_disk_space(job_dir: Path, total_bytes: int) -> None:
@@ -337,6 +340,26 @@ def _ensure_disk_space(job_dir: Path, total_bytes: int) -> None:
             f"这批文件共约 {_human(total_bytes)}，按 1.05 倍预留给 {_human(need)}；"
             f"目标盘（{job_dir.drive or '/'}）当前可用 {_human(usage.free)}，空间不足。"
             "请清理磁盘后重试，或改用任务包。")
+
+
+def _remaining_queue_bytes(job: dict) -> int:
+    """任务队列里**还没落盘、也没被移除**的行的剩余预算（声明字节 − 已写字节，负数按 0）。
+
+    在途追加的磁盘预检必须把「原来那批没下完的」一起算上：只对新增项做预检时，
+    队列里已有的 100 GB 未下载 + 新加 1 GB 也能过闸，随后把磁盘写爆。
+    已完成/终端态（ok/size_ok/md5_mismatch/error/skipped/cancelled）的行不再需要空间，
+    被用户移除（_removed_rows）的行也不再下——两者都排除在外。
+    """
+    total = 0
+    for idx, entry in enumerate(job["files"]):
+        if idx in job["_removed_rows"]:
+            continue
+        if entry["status"] not in (FILE_PENDING, FILE_DOWNLOADING):
+            continue
+        remaining = int(entry.get("bytes") or 0) - int(entry.get("done_bytes") or 0)
+        if remaining > 0:
+            total += remaining
+    return total
 
 
 # ---------------------------------------------------------------- job 装配
@@ -562,7 +585,8 @@ def update_job(*, add: "Sequence[str]" = (), remove: "Sequence[str]" = (),
       - 不在队列里的 uid → not_in_job 标注，不报错。
 
     `add`（按 uid）：
-      - 新条目追加到当前 job 队列尾部（与 start_job 同构的 plan 行构造）；已入队 → already_in_queue；
+      - 新条目追加到当前 job 队列尾部（与 start_job 同构的 plan 行构造）；**仍在队列里的** → already_in_queue；
+        已被移除（未落盘）的 uid 可以重新加入：复用原目录名、重建行与行级取消信号；
       - 不可下载的（unsupported）如实追加标注。
 
     无运行中任务 → 抛 `DownloadManagerError("job_not_running", …)`（HTTP 层映射 409）。
@@ -588,12 +612,14 @@ def update_job(*, add: "Sequence[str]" = (), remove: "Sequence[str]" = (),
 
         # fail-closed 预检先于一切变更（含 remove）：磁盘预检若放在 remove 之后，
         # 预检失败时 remove 的跳过/中止信号已生效而端点却报错，调用方会以为整体失败。
-        # 在途追加与 start_job 同一闸，防多次追加撑爆磁盘。
+        # 预算 = **原有队列里未落盘、未移除的剩余** + 新项声明字节（在途追加与 start_job
+        # 同一闸；只算新项时已有的未下载大件会被漏掉，追加后能把磁盘写爆）。
         new_items: list[dict] = []
         if plan:
-            new_items = [it for it in plan["items"] if it["dataset_uid"] not in job["_subdirs"]]
+            new_items = [it for it in plan["items"] if it["dataset_uid"] not in set(job["_queue_uids"])]
             _ensure_disk_space(Path(job["dir"]).parent,
-                               sum(int(it.get("bytes") or 0) for it in new_items))
+                               _remaining_queue_bytes(job)
+                               + sum(int(it.get("bytes") or 0) for it in new_items))
 
         # ---------- remove ----------
         removed: list[dict] = []
@@ -649,11 +675,17 @@ def update_job(*, add: "Sequence[str]" = (), remove: "Sequence[str]" = (),
             new_titles: dict[str, str] = {}
             for it in plan["items"]:
                 uid = it["dataset_uid"]
-                if uid in job["_subdirs"]:
+                # 重复判据 = **有效队列成员**（_queue_uids）。移除后 uid 会从 _queue_uids 消失但
+                # _subdirs 仍留旧名（子目录名要复用），用 _subdirs 判重会把「移除后重新加入」
+                # 误判成 already_in_queue——该 uid 从此永久 skipped，用户重新勾选也下不回来。
+                if uid in job["_queue_uids"]:
                     added.append({"dataset_uid": uid, "dataset_title": it["dataset_title"],
                                   "status": "already_in_queue"})
                     continue
-                new_subdirs[uid] = _subdir_for(it, taken)
+                # 重新加入：复用初次分配的子目录名（不新造 ~2 兄弟目录），但数据行与行级
+                # Event 必须是新的——旧行的下标记号、旧 event 都属于已经结束的旧行。
+                subdir = job["_subdirs"].get(uid) or _subdir_for(it, taken)
+                new_subdirs[uid] = subdir
                 new_titles[uid] = it["dataset_title"]
                 job["_plan_items"].append({
                     "dataset_uid": uid, "dataset_title": it["dataset_title"],
@@ -765,11 +797,10 @@ def _run_job(job: dict, *, opener: "Callable | None" = None,
 
     支持在途增删——`update_job` 移除正在下载的行时只置该行的 `_row_events[idx]`
     （复合取消，见 `_MultiCancel`），`download_one` 随即抛 `DownloadCancelled`，这里据此
-    `continue` 走下一行（而不是把整个 job 标成 cancelled）；移除排队中的行进 status=skipped
-    天然被 `if entry["status"] != FILE_PENDING: continue` 跳过。
+    `continue` 走下一行（而不是把整个 job 标成 cancelled）；移除排队中的行进 status=skipped，
+    领取时在 `_REGISTRY_LOCK` 内复核 pending + 未移除，天然跳过。
     """
     rows = job["_rows"]
-    allowed = job["_allowed"]
     cancel_event = job["_cancel_event"]
     cancelled = False
     try:
@@ -778,10 +809,18 @@ def _run_job(job: dict, *, opener: "Callable | None" = None,
                 cancelled = True
                 break
             entry = job["files"][idx]
-            if entry["status"] != FILE_PENDING:
-                continue
             with _REGISTRY_LOCK:
+                # 领取 = 同一把锁内复核「仍在途」并置 downloading。此前是锁外读
+                # entry["status"]、锁内无条件置 downloading：与 update_job 的 remove
+                # 之间有窗口——被移除的行仍会真下载、完成时还把 `_removed_rows` 撤下
+                # （「下载赢」），于是用户看到 skipped 而磁盘上多出一个文件。
+                # 现在「pending 且在途」是领取的前置条件，remove 一旦标 skipped /
+                # `_removed_rows` 就再也领不走。（下载已开始后的 remove 仍走 abort 语义。）
+                if entry["status"] != FILE_PENDING or idx in job["_removed_rows"]:
+                    continue
                 entry["status"] = FILE_DOWNLOADING
+                # update_job 会替换白名单列表；每个文件都读当前快照，包含在途新增来源。
+                allowed = list(job["_allowed"])
             # opener/sleep 只在注入时才传：显式传 None 会覆盖 download_one 的默认值
             # （_open_stream / time.sleep），真实路径会炸成 "TypeError: 'NoneType' object is not callable"
             # ——测试全部注入 opener，这个洞在集成上才现形（集成 sanity 抓到）。

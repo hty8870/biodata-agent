@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """ 下一步行动 · suggested_recipe 后端契约门（设计约定）。
 
-钉四件事：
+钉三件事：
 1. **allowlist 单一真源**：`action_plan.SUGGESTED_RECIPES` 每项只允许缩小到既有已验证能力
-   （动词 ⊆ VERB_SPECS 封闭词表）；前端 `ladder_core.js` 的 LADDER_RECIPES id 必须是其后端
-   子集、且每项 verb 落在后端 recipe 的动词集内（前端只是文案/模板镜像，不许发明能力）。
+   （动词 ⊆ VERB_SPECS 封闭词表）。（前端 ladder 镜像随阶梯 UI 于 2026-10-10 一并退役，
+   后端 allowlist 与 hint 收窄管道保留。）
 2. **合法 hint 缩小路由**：suggested_recipe 在允许集内 → 动词选择面收窄（plan_action
    allowed_verbs 机械闸；agent 路径产出的 plan 在 turn 层机械收窄，降 none 附如实注记）。
 3. **非法 hint 忽略回普通路由并如实记录**：不在表 → 行为与不传逐位一致 + 响应 recipe_note。
@@ -39,27 +39,6 @@ def test_every_recipe_verb_is_an_existing_capability():
         assert verbs, f"{recipe} 必须有至少一个动词"
         for v in verbs:
             assert v in AP.VERB_BY_NAME, f"recipe {recipe} 引用了不存在的动词 {v}"
-
-
-def test_frontend_recipe_ids_are_subset_of_backend_single_source():
-    """前端 LADDER_RECIPES 是后端 SUGGESTED_RECIPES 的镜像子集（id 与动词都不得越界）。"""
-    import re
-    from pathlib import Path
-    core_js = (Path(__file__).resolve().parents[1]
-               / "web" / "static" / "js" / "search" / "ladder_core.js").read_text(encoding="utf-8")
-    ids = set(re.findall(r"^\s{4}([a-z_]+):\s*\{", core_js, re.M))
-    # 只挑 LADDER_RECIPES 块内的 id（块以注释开头，直接对全体小写 id 断言子集关系更稳：
-    # 前端镜像必须 ⊆ 后端，任何前端新 id 都会在此红）。
-    assert ids, "前端镜像表解析为空"
-    backend = set(AP.SUGGESTED_RECIPES.keys())
-    extra = ids - backend
-    assert not extra, f"前端 LADDER_RECIPES 出现后端 allowlist 没有的 id：{sorted(extra)}"
-    # 每项前端 verb 必须落在后端同 id recipe 的动词集内。
-    for recipe_id in ids:
-        m = re.search(rf"{recipe_id}:\s*\{{[^}}]*?verb:\s*\"([a-z.]+)\"", core_js, re.S)
-        assert m, f"前端 {recipe_id} 缺 verb 声明"
-        assert m.group(1) in AP.SUGGESTED_RECIPES[recipe_id], (
-            f"前端 {recipe_id} 的 verb {m.group(1)} 不在后端 recipe 动词集")
 
 
 def test_resolve_suggested_recipe_allowlist():

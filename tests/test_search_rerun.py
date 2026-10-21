@@ -165,6 +165,59 @@ def test_loop_search_rerun_totals_respect_active_facets():
     assert result["payload"]["audit"]["was_no_result"] is True
 
 
+def test_loop_structured_kwargs_keeps_vector_recall():
+    """vector 是 Web 入口与 vector_recall 的正式后端（auto 首选），
+    白名单漏它会把请求级 recall=vector 静默改回 off。"""
+    kw = agent_exec._loop_structured_kwargs({"search_recall": "vector"})
+    assert kw["recall_backend"] == "vector"
+    # 非法值仍收敛 off（不新开敞口）
+    assert agent_exec._loop_structured_kwargs(
+        {"search_recall": "nonsense"})["recall_backend"] == "off"
+
+
+def test_loop_search_rerun_carries_request_sorting_levers(monkeypatch):
+    """换词重检与 rank/rerank 吃**同一份**结构化入参——请求级 top_k/recall/
+    strategy 不许在重搜时静默回落默认（旧实现自拼五参数，全部丢失）。"""
+    from types import SimpleNamespace
+
+    import dataset_recommender.app.recommend_rows as rr
+    import dataset_recommender.app.workflow as wf
+    from dataset_recommender.retrieval.query_parser import parse_query
+
+    calls: list[dict] = []
+
+    class _Flow:
+        class retriever:
+            @staticmethod
+            def matched_survivors(*_a, **_k):
+                return []
+
+        def _prepare_context(self, query, **kwargs):
+            # [6] = resolution：基准检索的来源范围（生产语义见 _loop_search_rerun）。
+            return (parse_query(query, None), [], [], None, None, None,
+                    SimpleNamespace(sources=None), None)
+
+        def run_with_meta(self, p=None, **kwargs):
+            calls.append(vars(p) if p is not None else dict(kwargs))
+            rows = [{"dataset_name": "DS0", "dataset_uid": "u1", "species": "Human"}]
+            return SimpleNamespace(result_total=1, retrieved_data=rows, active_filters=[])
+
+    monkeypatch.setattr(wf, "DatasetRecommendationWorkflow", _Flow)
+    monkeypatch.setattr(rr, "recommend_payload", lambda meta: {
+        "ok": True, "result_total": meta.result_total, "query_constraints": [],
+        "results": list(meta.retrieved_data)})
+    result = agent_exec._loop_search_rerun(
+        {"query": "mouse brain"}, None,
+        {"current_query": "human blood", "search_sources": None, "replace_screen": False,
+         "search_top_k": 7, "search_recall": "vector", "search_strategy": "fixed"})
+    assert result["adopted"] is True
+    assert calls, "重检必须真跑标准管线"
+    used = calls[-1]
+    assert used["top_k"] == 7, "请求级 top_k 不许在重搜时回落默认"
+    assert used["recall_backend"] == "vector"
+    assert used["strategy"] == "fixed"
+
+
 def test_loop_search_rerun_rejects_payload_that_loses_structured_scope(monkeypatch):
     """ fail-closed 钉：卡片 payload 丢日期时拒绝换屏，不能只把计数算对。"""
     from dataset_recommender.app import recommend_rows

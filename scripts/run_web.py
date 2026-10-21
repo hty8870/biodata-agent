@@ -106,6 +106,52 @@ def warm_web_recall(*, preferred_backend: str = "cross_encoder", log=print) -> s
     return "failed"
 
 
+def start_background_warm(*, log=print) -> threading.Thread:
+    """后台 daemon 线程预热（2026-09-14 冷启动治理）：端口先绑定、模型慢慢装。
+
+    旧路径在 `uvicorn.run` 前同步 `warm_web_recall()`——cross-encoder（~2GB）加载把端口
+    绑定推迟数十秒，且**只暖 cross_encoder**：前端默认 strategy=auto 实际偏好 vector
+    （嵌入器 + 全语料索引 + LTR 融合三层），其冷载（本机实测重启后首条有候选搜索
+    ~910s，含 transformers 对本地缺失可选文件逐个 HEAD 探测 huggingface.co 的网络放大，
+    已由 dense 加载的 `local_files_only=True` 同批治理）全部压在第一条用户搜索上。
+
+    现改为 daemon 线程依次暖 cross_encoder（既有四态口径，经 `warm_web_recall`）与
+    vector（`warm_recall_backend("vector")`：嵌入器 + `vector_index.ensure_index()`
+    + LTR 打分器）。预热期撞进来的首查只是排 `_MODEL_LOCK`/`_INDEX_LOCK` 同一把单飞锁
+    （等待时长相近），health/其它端点全程可用；线程内任何异常自吞，绝不掀翻开服。
+    返回线程对象（测试可 join）。同一进程重复调用幂等（底层加载函数均带正缓存）。
+    """
+
+    def _bg() -> None:
+        warm_web_recall(log=log)
+        # 逃生阀对 vector 段同口径（warm_web_recall 内部只闸 cross_encoder 段）。
+        if os.getenv("BIODATA_SKIP_RECALL_WARM", "").strip().lower() in ("1", "true", "yes", "on"):
+            return
+        try:
+            from dataset_recommender.retrieval.vector_recall import (
+                recall_backend_local_available, warm_recall_backend,
+            )
+        except Exception:
+            return
+        try:
+            if not recall_backend_local_available("vector"):
+                return
+            log("[startup] 后台预热向量召回（嵌入模型 + 语料索引 + LTR 融合）…")
+            started = time.perf_counter()
+            ok = warm_recall_backend("vector")
+            elapsed = time.perf_counter() - started
+            if ok:
+                log(f"[startup] 向量召回预热完成（{elapsed:.1f}s）—— 首条向量检索直接命中缓存。")
+            else:
+                log(f"[startup] 向量召回预热未成功（{elapsed:.1f}s）—— 首查将走请求内惰性加载兜底。")
+        except Exception as exc:  # 防御：预热线程的任何意外都不许掀翻开服
+            log(f"[startup] 向量召回预热异常（{type(exc).__name__}）—— 首查将走请求内惰性加载兜底。")
+
+    thread = threading.Thread(target=_bg, name="biodata-recall-warm", daemon=True)
+    thread.start()
+    return thread
+
+
 def open_browser_when_ready(host: str, port: int, *, timeout_s: float = 90.0,
                             poll_s: float = 0.25, log=print) -> threading.Thread:
     """守护线程：轮询 (host, port) 直到 uvicorn 真正开始监听，再开系统默认浏览器。
@@ -158,7 +204,10 @@ def main() -> int:
     if args.open:
         print("[startup] 已启用 --open：服务就绪后自动打开浏览器。")
         open_browser_when_ready(host, port)
-    warm_web_recall()
+    # 后台预热（2026-09-14 冷启动治理）：daemon 线程起后即返，端口立即绑定；
+    # 预热完成前撞进来的首条向量检索排同一把单飞锁等待（与旧同步预热等效），
+    # 其余端点（health/utterance 等）全程不被拖住。BIODATA_SKIP_RECALL_WARM 闸沿用。
+    start_background_warm()
     print(f"BioData Agent Web UI running at http://{host}:{port}")
     # 下载 job、整库响应缓存与桌面壳活动状态目前是进程内单一真源；显式锁定 1 worker，
     # 防止未来复制启动参数时误开多进程，产生“查不到另一个进程任务”的分裂状态。

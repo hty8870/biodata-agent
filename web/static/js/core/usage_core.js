@@ -66,10 +66,10 @@ export const USAGE_KINDS = {
     context_card_used: "context_card_used", // 追踪上下文卡激活（{once}：会话内同追踪只计一次）
     // ---- 数据集页一键同步----
     sync_button_used: "sync_button_used",   // 点「同步数据集」并拿到回执（带 added/skipped/failed 计数；无文本）
-    // ---- 下一步行动（2026-08-22 全部计数型无文本）----
-    ladder_shown: "ladder_shown",           // 结果页阶梯 chips 展示（带 n=颗数；无文本）
-    ladder_clicked: "ladder_clicked",       // 点某颗阶梯 chip / 收窄建议（带 action=动作 id；无文本）
-    template_originated: "template_originated", // 任务卡/chip 生成文本提交（带 edited=true/false；无文本）
+    // ---- 下一步行动（2026-08-22 全部计数型无文本；阶梯/任务卡 UI 2026-10-10 退役，常量保留只为兼容历史日志聚合）----
+    ladder_shown: "ladder_shown",           // 历史：结果页阶梯 chips 展示（带 n=颗数；无文本）
+    ladder_clicked: "ladder_clicked",       // 历史：点某颗阶梯 chip / 收窄建议（带 action=动作 id；无文本）
+    template_originated: "template_originated", // 历史：任务卡/chip 生成文本提交（带 edited=true/false；无文本）
     // ---- 追踪更新检查闭环----
     watch_checked: "watch_checked",         // 单追踪检查完成（{changed}：1=有 material change，0=无；无文本）
     delta_review_completed: "delta_review_completed",   // 某追踪「待查看更新」被用户逐条处理完（{}；无文本）

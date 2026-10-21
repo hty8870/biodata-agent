@@ -2,6 +2,10 @@
 
 验证应与变更风险匹配。不能用“跑了一个测试”替代所有门，也不能为了文档改动无意义地运行整套昂贵评测。
 
+> **真源说明**：`fast`/`full` 两档 profile 的**门清单与命令以 manifest 为唯一真源**——私/装配仓为
+> `automation/quality-gates.json`，公开仓为 `automation/quality-gates.public.json`；本文档只解释各门
+> 的意图与风险矩阵，与 manifest 不一致时以 manifest 为准（两版文档面向不同受众，门清单不要求逐条同步）。
+
 ## 1. 先解析真实 Python
 
 所有 PowerShell 命令中的 `$Python` 指一个实际存在、版本不低于 3.10、且安装了项目依赖的解释器绝对路径；`$RepoRoot` 指 Git 仓库根绝对路径。不要假设 `py`、`python` 或 `python3` 一定存在，也不要假设当前目录就是仓库根。
@@ -21,7 +25,7 @@ Set-Location -LiteralPath $RepoRoot
 | Profile | 用途 | 门 |
 |---|---|---|
 | `fast` | 每个受支持平台的快速确定性门 | Python AST 编译、浏览器 JS 语法、自动化/CI/发布/项目 skill 契约测试 |
-| `full` | 主 Windows/Python 环境的权威公开离线门 | `fast` 全部内容，加 `pip check`、全量 pytest、项目/Web/MCP smoke、冻结+dev 评测、公开 validation manifest、安装器契约 |
+| `full` | 主 Windows/Python 环境的权威公开离线门 | `fast` 全部内容，加 `pip check`、全量 pytest、项目/Web/MCP smoke、冻结+dev 评测、安装器契约 |
 
 本地执行并保留报告：
 
@@ -186,7 +190,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Web smoke 失败。' }
 ```text
 spawn stdio process
 → initialize
-→ tools/list（19 个预期工具，以 mcp_server.py 的 _EXPECTED_TOOLS 为准）
+→ tools/list（25 个预期工具，以 mcp_server.py 的 _EXPECTED_TOOLS 为准；在线形态 23 个——本机文件系统语义的两个工具不下发）
 → biodata_status
 → biodata_llm_status（默认只读配置、不联网）
 → recommend_datasets（典型查询）

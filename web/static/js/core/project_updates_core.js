@@ -11,8 +11,9 @@
  * - 不是：DOM、IndexedDB、网络、墙钟。时间一律经参数注入（updatesSetClock 注入点，
  *   node 规格可逐字段断言）；请求 /api/watch/check、写库（baseline/候选回填）、
  *   会话内「待查看更新」内存态全在 UI 壳 project_updates.js。
- * - 零 `#` import：本文件只相对 import `./artifacts.js`（纯数据层，同零 DOM）——
- *   不进 import 图、不进环（projects_core.js 同款先例），node 规格直接相对路径 import。
+ * - import 通道 = 目标模块的属性：`#artifacts` 在 importmap 有键，故走 `#artifacts`（拿到与
+ *   别处同一个带令牌实例，不拉第二份）；无键模块才走相对路径。
+ *   本模块仍不进环（projects_core.js → #artifacts 同款单向边），node 规格可直跑。
  *
  * ## diff 的语义边界（逐字对照）
  *
@@ -30,7 +31,7 @@
  *   不一致 → `ruleUpdated=true`（「检索规则已更新」），不伪装成目录变化（§4.3）。
  */
 
-import { artifactsUidSet } from "./artifacts.js";
+import { artifactsUidSet } from "#artifacts";
 
 /* ---------- 常量（数值与逐字对齐；文案是上屏承诺，不许漂） ---------- */
 

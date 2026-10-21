@@ -91,5 +91,21 @@ check("换平台不判重", nearFresh.some(c => c.text === "偏好 ATAC 平台�
 /* ---- dreamNormalize 与 memRank 口径一致（折叠空白 + 小写） ---- */
 check("归一规则", D.dreamNormalize("  A  B\tC ") === "a b c");
 
+/* ---- hist 是**新→旧**（core.pushHist 用 unshift），同 convId 必须留最新一行 ----
+   旧实现按数组位置逐行覆盖：新→旧输入下留下最旧一行（累计 chat 最少），多轮检索后
+   整理漏掉后续纠正/偏好/回复。判定必须按每行自己的 at（与数组顺序无关）。 */
+const twoConvsNewestFirst = [
+    { convId: "cA", query: "甲", at: 300, chat: [{ k: "say", t: "甲1", n: "" }, { k: "sys", t: "甲答", n: "" }] },
+    { convId: "cB", query: "乙", at: 200, chat: [{ k: "say", t: "乙1", n: "" }] },
+    { convId: "cA", query: "甲", at: 100, chat: [{ k: "say", t: "甲1", n: "" }] },
+];
+const newestFirst = D.dreamCollectConversations(twoConvsNewestFirst, 12);
+check("新→旧输入保留最新一行（累计 chat 完整）",
+    newestFirst.find(c => c.query === "甲").chat.length === 2, JSON.stringify(newestFirst));
+check("段排序用最新行的 at（甲 仍是最新一段）", newestFirst[0].query === "甲");
+const oldestFirst = twoConvsNewestFirst.slice().reverse();
+check("旧→新输入同样留最新一行（按 at，不看数组位置）",
+    D.dreamCollectConversations(oldestFirst, 12).find(c => c.query === "甲").chat.length === 2);
+
 console.log(failures === 0 ? "\nDREAM_CORE_SPEC_OK" : `\nDREAM_CORE_SPEC_FAILED (${failures})`);
 process.exit(failures === 0 ? 0 : 1);

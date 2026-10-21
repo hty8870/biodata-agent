@@ -14,16 +14,17 @@
 
 ### 1.1 私库到公开仓的确定性镜像
 
-公开仓不是人工清洗后的第二份源码。镜像合同由三份受版本控制的输入组成：
+公开仓不是人工清洗后的第二份源码。镜像按 profile 组织（默认 `assembled`，另有 `skeleton`、`biodata-pack`），每个 profile 的合同由三份受版本控制的输入组成：
 
-- `packaging/public-mirror/files.txt`：公开输出的完整路径集；
-- `packaging/public-mirror/policy.json`：三个显式映射、禁止路径/文本规则与有限豁免；
+- `packaging/public-mirror/files.txt`：默认 profile 公开输出的完整路径集；其它 profile 用同目录的 `files.skeleton.txt` / `files.biodata-pack.txt`；
+- `packaging/public-mirror/policy.json`：显式映射、禁止路径/文本规则与有限豁免；其它 profile 同样各带一份 `policy.<profile>.json`；
 - `.deliveryignore`：私库 tracked 文件的显式 private 分类。
 
-构建器会要求每个 tracked path 必须属于公开源或 private 分类，并扫描用户主目录路径、未声明邮箱、真实公网 IP 与内部资料引用。日常流程是：
+构建器会要求每个 tracked path 必须属于公开源或 private 分类，并扫描用户主目录路径、未声明邮箱、真实公网 IP 与内部资料引用。各 profile 清单的并集覆盖默认清单（少数装配体独有项除外），由 `tests/test_public_mirror_profiles.py` 机械钉死；profile 的目标仓与内容边界见 [packaging/public-mirror/README.md](../packaging/public-mirror/README.md)。日常流程是：
 
 ```powershell
 python scripts/build_public_mirror.py validate
+python scripts/build_public_mirror.py --profile skeleton validate   # 非默认 profile 须显式传参，且放在子命令之前
 python scripts/build_public_mirror.py apply --public-root <public-worktree>
 python scripts/verify_public_mirror.py --private-root <private-worktree> --public-root <public-worktree>
 ```

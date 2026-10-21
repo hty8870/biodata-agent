@@ -9,8 +9,9 @@
  * → 结果）整条结构化落本机，用户可对轮次选完成度（完成/部分完成/未完成）+ 可选原因、
  * 标有用条目、写评语，最后一键导出 **单个 JSON 文件**（微信当文件发回即可）——为
  * benchmark 制作供数。两条通道共用**同一个开关**（usage_log 的使用反馈开关）、同一批红线：
- * 默认本地采集、部署方配置上传通道后脱敏上传（本文件零出网，唯一出口 usage_upload.js；
- * 生产通道为明文 HTTP，属已知风险裁决，consent 弹窗如实告知）、
+ * 默认本地采集、运营方配置上传通道后脱敏上传（本文件零出网，唯一出口 usage_upload.js；
+ * 公网只收 HTTPS，明文端点须运营方在 meta 显式登记主机白名单——协议与保留期以当前服务说明
+ * 为准，不写死）、
  * api_key 绝不落盘（请求脱敏在 benchfb_core.benchfbStripRequest，契约门另有断言）。
  *
  * ## 采集点（三个调用方，各留一行）
@@ -220,9 +221,10 @@ if (window.addEventListener) {
 
 /* 用户发出一句话（ubSubmit 第一落点）。env 由调用方从 getConfig() 摘好传入——
    本模块不 import shell（那会成 import 环），只收纯数据。
-   opts.templateOriginated（2026-08-22，设计 §5.5）：任务卡/chip 生成文本
+   opts.templateOriginated（2026-08-22，设计 §5.5）：模板生成文本
    提交时由调用方显式带 true（未经编辑）/ false（编辑过）——轮次记录 additive 落
-   `template_originated` 键；普通手打不传 → 无此键。接收端/导出按此排除 benchmark 候选。 */
+   `template_originated` 键；普通手打不传 → 无此键。接收端/导出按此排除 benchmark 候选。
+   （阶梯/任务卡调用方 2026-10-10 退役，管道保留。） */
 export function benchfbTurnBegin(text, opts) {
     opts = opts || {};
     const scope = opts.scope === undefined ? usageScope() : opts.scope;

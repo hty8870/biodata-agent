@@ -10,6 +10,7 @@
   py scripts/evaluate_recommendation.py --queries eval/eval_queries_dev.json \
       --expect-top1 XX --expect-top5 XX --expect-max-violation 0 --expect-min-noresult 1.0
                                                         # 自定阈值看门狗（默认=冻结基线常量，主集行为不变）
+  py scripts/evaluate_recommendation.py --recall dense  # 开召回（默认 dense 融合=ltr）后再判同一套阈值
 
 评测判据（独立于 retriever 自身逻辑的外部裁判）：
   - Top-1 Accuracy : 第 1 条是否满足全部 must_match
@@ -23,6 +24,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import sys
@@ -45,9 +47,10 @@ from dataset_recommender.corpus.data_loader import load_raw_records  # noqa: E40
 from dataset_recommender.retrieval.normalizer import normalize_records, DatasetRecord  # noqa: E402
 from dataset_recommender.retrieval.query_parser import parse_query      # noqa: E402
 from dataset_recommender.retrieval.retriever import DatasetRetriever, normalize_family_key  # noqa: E402
-from dataset_recommender.retrieval.vocabulary import derive_modality, derive_platform_family  # noqa: E402
+from dataset_recommender.domains.biodata.vocabulary import derive_modality, derive_platform_family  # noqa: E402
 
 DEFAULT_QUERIES = AGENT_ROOT / "eval" / "eval_queries.json"
+FROZEN_QUERY_CONTRACT = AGENT_ROOT / "automation" / "frozen-queries.json"
 
 # 冻结基线逐项 pin（正式基线：Top1 97.7% / Top5 97.7%）。
 # 旧门只判 `Top5≥90` floor、从不判 Top1 —— 会让 97.6%→90.x% 的真回退静默全绿，
@@ -121,14 +124,16 @@ def load_pipeline():
     return settings, records
 
 
-def recommend(query: str, records, settings, top_k: int = 5):
+def recommend(query: str, records, settings, top_k: int = 5, recall_backend: str = "off"):
     intent = parse_query(query, settings.keyword_mapping)
     retriever = DatasetRetriever(top_k=top_k)
-    return retriever.retrieve(records, intent, top_k=top_k)
+    return retriever.retrieve(records, intent, top_k=top_k, recall_backend=recall_backend)
 
 
 # ---------- 指标 ----------
-def evaluate(queries, records, settings, top_k: int = 5) -> dict:
+def evaluate(queries, records, settings, top_k: int = 5, recall_backend: str = "off") -> dict:
+    """跑一遍外部裁判。`recall_backend` 缺省 `"off"`——与官方冻结入口逐位一致（不传即老行为）；
+    显式开召回时才走 `retriever.retrieve` 的召回块（dense/vector 缺省融合 `ltr`）。"""
     per_query = []
     top1_hits = top1_total = 0
     top5_hits = top5_total = 0
@@ -148,7 +153,7 @@ def evaluate(queries, records, settings, top_k: int = 5) -> dict:
         _validate_expectation_map(f"{q.get('id')}.must_match", must)
         _validate_expectation_map(f"{q.get('id')}.must_not_match", must_not)
         expect_empty = q.get("no_result_expected", False)
-        results = recommend(q["query"], records, settings, top_k=top_k)
+        results = recommend(q["query"], records, settings, top_k=top_k, recall_backend=recall_backend)
         support = sum(1 for r in records if satisfies_expected(r, must, must_not))
 
         qrow = {
@@ -218,7 +223,7 @@ def evaluate(queries, records, settings, top_k: int = 5) -> dict:
             "fastq_items": fastq_items, "fastq_violations": fastq_violations,
         },
     }
-    return {"metrics": metrics, "per_query": per_query}
+    return {"metrics": metrics, "per_query": per_query, "recall_backend": recall_backend}
 
 
 # ---------- 展示 ----------
@@ -242,7 +247,7 @@ def print_validation(queries, records):
     print(f"共 {len(queries)} 条；问题查询：{problems if problems else '无'}")
 
 
-def print_metrics(report, baseline=None, expect=None):
+def print_metrics(report, baseline=None, expect=None, query_contract=None):
     """expect：达标阈值 dict，键 top1/top5/max_violation/max_fastq_violation/min_noresult_rate；
     None 时用冻结基线常量（主集默认行为逐位不变）。"""
     exp = {
@@ -285,12 +290,18 @@ def print_metrics(report, baseline=None, expect=None):
     except ValueError:
         noresult_rate = None
     ok_noresult = noresult_rate is not None and noresult_rate >= exp["min_noresult_rate"]
+    ok_query_counts = True
+    if query_contract is not None:
+        counts = query_contract["counts"]
+        ok_query_counts = (m.get("n_queries") == counts["total"]
+                           and nt == str(counts["no_result"]))
+        print(f"冻结查询计数 [{'PASS' if ok_query_counts else 'FAIL'}]")
     print(f"验收：硬违规≤{exp['max_violation']}% [{'PASS' if ok_violation else 'FAIL'}]  "
           f"FASTQ违规≤{exp['max_fastq_violation']}% [{'PASS' if ok_fastq else 'FAIL'}]  "
           f"Top1≥{exp['top1']}% [{'PASS' if ok_top1 else 'FAIL'}]  "
           f"Top5≥{exp['top5']}% [{'PASS' if ok_top5 else 'FAIL'}]  "
           f"NoResult={nr}(≥{exp['min_noresult_rate']:.0%}) [{'PASS' if ok_noresult else 'FAIL'}]")
-    return ok_violation and ok_fastq and ok_top1 and ok_top5 and ok_noresult
+    return ok_violation and ok_fastq and ok_top1 and ok_top5 and ok_noresult and ok_query_counts
 
 
 def _load_queries(path: str) -> list:
@@ -298,6 +309,35 @@ def _load_queries(path: str) -> list:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     rows = data if isinstance(data, list) else data.get("queries", [])
     return [r for r in rows if isinstance(r, dict) and r.get("query")]
+
+
+def frozen_query_identity(path: Path) -> dict:
+    """判据与受控重基线共用的输入身份；行尾差异不改变内容指纹。"""
+    raw = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    queries = _load_queries(path)
+    ids = [q.get("id") for q in queries]
+    if not ids or any(not isinstance(qid, str) or not qid.strip() for qid in ids):
+        raise ValueError("frozen queries require non-empty IDs")
+    if len(set(ids)) != len(ids):
+        raise ValueError("frozen query IDs must be unique")
+    if any(type(q.get("no_result_expected", False)) is not bool for q in queries):
+        raise ValueError("no_result_expected must be boolean")
+    empty = sum(q.get("no_result_expected", False) for q in queries)
+    return {
+        "schema_version": 1,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "query_ids": sorted(ids),
+        "counts": {"total": len(ids), "scored": len(ids) - empty, "no_result": empty},
+    }
+
+
+def validate_frozen_queries(path: Path, contract_path: Path) -> dict:
+    """默认主集必须逐项满足独立判据；通用 --queries 评测不自动重基线。"""
+    expected = json.loads(contract_path.read_text(encoding="utf-8"))
+    actual = frozen_query_identity(path)
+    if not isinstance(expected, dict) or any(expected.get(k) != v for k, v in actual.items()):
+        raise ValueError("frozen query identity/counts changed; controlled rebaseline required")
+    return expected
 
 
 def main():
@@ -308,6 +348,10 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--baseline")
     ap.add_argument("--top-k", type=int, default=5)
+    # 召回开关（additive）：缺省 "off" = 官方冻结入口的老行为逐位不变。显式开召回后
+    # 才走 retriever 的召回块（dense/vector 缺省 fusion="ltr"），即"召回开启的 784"门。
+    ap.add_argument("--recall", choices=("off", "dense", "vector"), default="off",
+                    help="召回后端（默认 off；dense/vector 缺省融合 ltr）")
     # 达标阈值参数化（held-out 等非主集用）；默认值=冻结基线常量，主集默认行为逐位不变。
     ap.add_argument("--expect-top1", type=float, default=FROZEN_TOP1,
                     help=f"Top1 达标下限（默认 {FROZEN_TOP1}，即冻结基线）")
@@ -321,15 +365,21 @@ def main():
                     help="NoResult 正确率达标下限（0~1 小数，默认 1.0=全对）")
     args = ap.parse_args()
 
-    settings, records = load_pipeline()
+    contract = None
+    if Path(args.queries).resolve() == DEFAULT_QUERIES.resolve():
+        try:
+            contract = validate_frozen_queries(Path(args.queries), FROZEN_QUERY_CONTRACT)
+        except (OSError, ValueError) as exc:
+            ap.error(str(exc))
     queries = _load_queries(args.queries)
-    print(f"加载 {len(records)} 条记录；{len(queries)} 条评测查询。")
+    settings, records = load_pipeline()
+    print(f"加载 {len(records)} 条记录；{len(queries)} 条评测查询；召回后端={args.recall}。")
 
     if args.validate:
         print_validation(queries, records)
         return
 
-    report = evaluate(queries, records, settings, top_k=args.top_k)
+    report = evaluate(queries, records, settings, top_k=args.top_k, recall_backend=args.recall)
     baseline = None
     if args.baseline and Path(args.baseline).exists():
         baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8"))
@@ -340,7 +390,7 @@ def main():
         "max_fastq_violation": args.expect_max_fastq_violation,
         "min_noresult_rate": args.expect_min_noresult,
     }
-    ok = print_metrics(report, baseline, expect=expect)
+    ok = print_metrics(report, baseline, expect=expect, query_contract=contract)
 
     if args.out:
         Path(args.out).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

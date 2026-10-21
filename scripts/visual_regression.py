@@ -104,10 +104,14 @@ def setup_results(page) -> None:
 
 def setup_sidebar_facets(page) -> None:
     _search(page)
-    page.wait_for_selector("#sideWork:not([hidden])", timeout=10_000)
-    # 分面渲染完再拍。不能用默认的 visible：placeFacetBar 会把 hidden 的 #facetBar
-    # 整块搬进 #sideFacetBody，wait_for_selector 盯着第一个匹配（hidden）干等到超时。
-    page.wait_for_selector("#sideFacetBody *", state="attached", timeout=10_000)
+    # rp2（2026-10-11）：「筛选」摘出侧栏页签——入口 = 结果头行 #facetOpenBtn，点击后
+    # 面板从屏幕右侧推入（#facetDrawer，非模态抽屉）；#facetBar 恒住抽屉内不再搬家。
+    page.wait_for_selector("#facetOpenBtn:not([hidden])", timeout=10_000)
+    page.click("#facetOpenBtn")
+    page.wait_for_selector("#facetDrawer.open", timeout=10_000)
+    # 分面渲染完再拍。盯抽屉内第一个分面元素 attached 而非 visible：
+    # 内容未落地时 #facetBar 带 hidden，visible 会干等到超时。
+    page.wait_for_selector("#facetDrawerBody .facet-chip", state="attached", timeout=10_000)
     page.wait_for_timeout(SETTLE_MS)
 
 

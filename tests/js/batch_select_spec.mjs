@@ -293,10 +293,11 @@ function rerunGateSuite() {
     }
 }
 
-/* ================= 7.：零命中救回链退役 —— 纯逻辑核 =================
-   救回选项不再以 sys 气泡出现；改由 board.js 选择条呈现。这里锁死三件事：
-   ① 批是否零命中（payload.results 空数组）；② 从零命中批派生选择条选项
-   （relaxation_options → degraded_search → query_constraints → 兜底换词）；
+/* ================= 7.：零命中放松单一通道 —— 纯逻辑核 =================
+   「放松哪个条件」收编为 ask.relax 选择卡（2026-09-14）：渲染唯一（board.js askRelaxShow）、
+   执行唯一（cbChoose askrelax → cbCommit suppressed）、数据源唯一（relaxation_options）。
+   这里锁死三件事：① 批是否零命中（payload.results 空数组）；② 从零命中批派生 ask.relax
+   卡 payload（deriveRelaxCard：query/reason/options，suppress 原样透传整组替换语义）；
    ③ 最新结果判定（最后一个带 pill 的回执 entry 的活跃批）。 */ 
 function zeroHitRescueSuite() {
     function zb(id, payload, extra) {
@@ -311,45 +312,47 @@ function zeroHitRescueSuite() {
     check("零命中批（results=[]）→ true", B.isZeroHitBatch(zb("eb", { ok: true, results: [], result_total: 0 })) === true);
     check("results 非数组 → 非零命中", B.isZeroHitBatch(zb("eb", { ok: true, result_total: 0 })) === false);
 
-    /* ② deriveRescueOptions */
-    check("空批 → 空数组", B.deriveRescueOptions(null).length === 0);
+    /* ② deriveRelaxCard（ask.relax 卡 payload 派生，与环内卡同形） */
+    check("null → null", B.deriveRelaxCard(null) === null);
+    check("非零命中批 → null", B.deriveRelaxCard(mkBatch("b1", "rank", "lung", { scope: S, uids: ["A"] })) === null);
+    check("零命中但无 relaxation_options → null", B.deriveRelaxCard(zb("eb", { ok: true, results: [], result_total: 0 })) === null);
     {
         const b = zb("eb", { ok: true, results: [], result_total: 0,
             relaxation_options: [
-                { key: "dim:disease", kind: "drop", label: "疾病", count: 12 },
-                { key: "dim:species", kind: "only", label: "物种", count: 40 },
+                { key: "dim:disease", kind: "drop", label: "疾病", count: 12,
+                    suppress: ["include:disease"],
+                    results: [{ dataset_name: "DS-X" }, { dataset_name: "DS-Y" }, { dataset_name: "DS-Z" }] },
+                { key: "only:tissue", kind: "only", label: "组织", count: 30,
+                    suppress: ["include:species", "include:disease", "raw:required"],
+                    results: [{ dataset_name: "DS-A" }] },
             ] });
-        const o = B.deriveRescueOptions(b);
-        check("relaxation_options 全量派生", o.length === 2, JSON.stringify(o));
-        check("drop 项 summary = 去掉某人话", o[0].summary === "去掉「疾病」条件再搜", o[0].summary);
-        check("drop 项 full 带预计条数", o[0].full.indexOf("12 条") >= 0, o[0].full);
-        check("drop 项 submitText 即下一句", o[0].submitText === "去掉「疾病」条件再搜");
-        check("only 项 summary = 只按某人话", o[1].summary === "只按「物种」搜，其它条件都放开", o[1].summary);
-        check("only 项 kind=only", o[1].kind === "only");
+        const c = B.deriveRelaxCard(b);
+        check("派生卡 payload 三键（query 取批检索词 / reason 空）", !!c && c.query === "猪脑数据" && c.reason === "", JSON.stringify(c));
+        check("选项全量保留", !!c && c.options.length === 2);
+        check("选项形状 key/kind/label/count", !!c && c.options[0].key === "dim:disease" && c.options[0].kind === "drop"
+            && c.options[0].label === "疾病" && c.options[0].count === 12, JSON.stringify(c && c.options[0]));
+        check("suppress 原样透传（整组替换语义，前端零合并）", !!c
+            && JSON.stringify(c.options[0].suppress) === '["include:disease"]'
+            && JSON.stringify(c.options[1].suppress) === '["include:species","include:disease","raw:required"]');
+        check("选项不带 preview（2026-09-14 评审：卡层不消费示例名，results 预览仅属 HTTP 契约）", !!c
+            && !("preview" in c.options[0]) && !("preview" in c.options[1]));
+        check("only 项 kind 保留", !!c && c.options[1].kind === "only");
     }
     {
+        /* 缺 suppress 的项不给选（没有可执行放松量的项点下去是无操作，防死卡） */
         const b = zb("eb", { ok: true, results: [], result_total: 0,
-            degraded_search: { ignored_terms: ["猪", "脑"], count: 7 } });
-        const o = B.deriveRescueOptions(b);
-        check("degraded_search → 忽略词选项", o.length === 1 && o[0].kind === "degrade", JSON.stringify(o));
-        check("degrade summary 指向忽略词", o[0].summary === "忽略「猪」、「脑」这个说法再搜", o[0].summary);
+            relaxation_options: [{ key: "dim:disease", kind: "drop", label: "疾病", count: 12 }] });
+        check("无 suppress 的项被滤尽 → null", B.deriveRelaxCard(b) === null);
     }
     {
+        /* 混合：空 label / 缺 suppress 的项滤掉，合法项保留 */
         const b = zb("eb", { ok: true, results: [], result_total: 0,
-            query_constraints: [
-                { filter_id: "include:disease", polarity: "include", dim: "disease", label: "疾病", values: ["猪乳腺癌"] },
-                { filter_id: "exclude:tissue", polarity: "exclude", dim: "tissue", label: "排除·组织", values: ["肝"] },
+            relaxation_options: [
+                { key: "dim:disease", kind: "drop", label: "", count: 12, suppress: ["include:disease"] },
+                { key: "only:tissue", kind: "only", label: "组织", count: 30, suppress: ["include:species"] },
             ] });
-        const o = B.deriveRescueOptions(b);
-        check("query_constraints 兜底派生（include→去掉 / exclude→纳入）", o.length === 2, JSON.stringify(o));
-        check("include 约束 → 去掉某人话", o[0].summary === "去掉「疾病=猪乳腺癌」条件再搜", o[0].summary);
-        check("exclude 约束 → 纳入某人话", o[1].summary === "把「排除·组织=肝」也纳入再搜", o[1].summary);
-    }
-    {
-        const b = zb("eb", { ok: true, results: [], result_total: 0 });
-        const o = B.deriveRescueOptions(b);
-        check("空载荷兜底换词（至少一个可用句）", o.length === 1 && o[0].kind === "reword", JSON.stringify(o));
-        check("兜底换词 summary", o[0].summary === "换个说法再查一次");
+        const c = B.deriveRelaxCard(b);
+        check("空 label 项滤掉、合法项保留", !!c && c.options.length === 1 && c.options[0].key === "only:tissue", JSON.stringify(c));
     }
 
     /* ③ latestActiveBatchId */

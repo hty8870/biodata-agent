@@ -320,7 +320,7 @@ def test_route_consensus_prompt_carries_card(monkeypatch):
 
     prompts: list = []
     monkeypatch.setattr(agent_exec, "_run_route_consensus",
-                        lambda model, prompt, usage_sink=None: (
+                        lambda model, prompt, usage_sink=None, **_kwargs: (
                             prompts.append(prompt) or ("general", [])))
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=None, decide_model=None, on_progress=None,
@@ -341,7 +341,7 @@ def test_route_consensus_without_card_unchanged(monkeypatch):
 
     prompts: list = []
     monkeypatch.setattr(agent_exec, "_run_route_consensus",
-                        lambda model, prompt, usage_sink=None: (
+                        lambda model, prompt, usage_sink=None, **_kwargs: (
                             prompts.append(prompt) or ("general", [])))
     runtime = SimpleNamespace(context=SimpleNamespace(
         chat_model=None, decide_model=None, on_progress=None,

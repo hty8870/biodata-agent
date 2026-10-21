@@ -196,6 +196,21 @@ def test_enforce_online_policy_llm_params():
     mcp_server._enforce_online_policy("plan_action", {"utterance": "x"})
 
 
+def test_online_upload_path_rejected_before_tool_io(client, monkeypatch):
+    _gate_on(monkeypatch)
+    assert _register(client).status_code == 200
+    token = client.post("/api/account/mcp-token", json={}).json()["token"]
+    monkeypatch.setattr(mcp_server, "ingest_dataset", lambda **kw: pytest.fail("不得摄取服务器文件"))
+    response = _mcp_post(client, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "upload_dataset", "arguments": {"path": "private-export.json"}},
+    }, token=token)
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "online_path_disabled" in result["content"][0]["text"]
+    mcp_server._enforce_online_policy("upload_dataset", {"records": [{"dataset_name": "public"}]})
+
+
 # ---------------------------------------------------------------- ③ HTTP 集成：令牌管理端点
 
 

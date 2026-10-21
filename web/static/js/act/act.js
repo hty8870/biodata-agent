@@ -11,7 +11,7 @@
    2026-08-03 起问卷弹窗（survey.js）退役：管护动词全自动化直推。
    2026-08-16：「按原话重新检索」「以后别自动执行」两颗 chip 退役（agent 能力已足够），
    runRecommend/syncAiGates 随之不再引用。 */
-import { API, $, escapeHtml, isHttp, toast } from "#core";
+import { API, $, currentAccountScope, escapeHtml, isHttp, toast } from "#core";
 import { COPY } from "../core/copy.js";
 import { ACT_BUSY_NOTE, actExcludedFilesNote, actReceiptFrom, actSecondOrderGaps, actWhatHappened, tpBytes } from "#act_core";
 import { planIsRetrievalOnly, planHeadIsGraphDoneRetrieval, PLAN_CANCELLED_FALLBACK_ZH, searchFactsReceiptText } from "#board_core";
@@ -22,9 +22,10 @@ import { dlqEnqueueDatasets, dlqFireBlob } from "#downloads";
 import { autoDownloadReuseTrio, REUSE_FILE_NAMES } from "#reuse_pack";
 import { loadFeasibility, clearActionHint } from "#results";
 import { openFilesModal } from "#cards";
-import { LAST_RECOMMEND_DATA } from "#search";
+import { LAST_RECOMMEND_DATA, invalidateRecommendMemo } from "#search";
+import { startSyncUpdates, awaitSyncJob } from "#sync_button";
 import { getConfig } from "#shell";
-import { cbExecReceiptCovered, cbFetchSearchReply, cbLogPush, cbMarkLastSayAsAction, cbProgressDone, cbProgressDrop, cbRenderHistory, cbSearchReplyFacts, cbUpdateEntry, flowSetPills, ubSubmit } from "#board";
+import { cbConvId, cbExecReceiptCovered, cbFetchSearchReply, cbLogPush, cbMarkLastSayAsAction, cbProgressDone, cbProgressDrop, cbRenderHistory, cbSearchReplyFacts, cbUpdateEntry, flowSetPills, ubSubmit } from "#board";
 import { benchfbTurnAction } from "#benchfb";
 
 /* 一句话执行层的界面侧：**派发既有能力 + 行动流播报 + 由真实产物构造事实句**。
@@ -340,6 +341,27 @@ async function actRunFilesShow() {
 
 /* 两步共用的 POST 壳：后端 CurateError → 400、detail 是「code: hint」，原样取出来给用户看
    （hint 里已经写明「未写入」）；422 / 网络错也都有可读句。返回 {ok, result?, error?}。 */
+/* 任何**真写进外部库**的 curate 写步成功后作废 recommend memo——
+   失效入口的唯一拥有者是 search.js（invalidateRecommendMemo），本文件不自建第二份缓存逻辑。 */
+function _noteCorpusWrite() {
+    try { invalidateRecommendMemo(); } catch (_e) { /* 失效失败不连累回执（下次检索自然重取） */ }
+}
+
+/* 执行身份：一次派发属于「这个账户 × 这段对话」。runner 可能跑很久（联网入库/
+   上游同步分钟级），期间用户切历史/换账户——回包只能落在**发起时**的身份上：旧身份的
+   总结/卡片/回执绝不写进当前对话（不 toast、不上屏、不继续后续写步）。
+   合法历史恢复不受影响：历史回灌走 board 的 restore 通道（fromHistory），不经本函数。 */
+let _actLaunchId = null;   // 当前 runner 发起时的身份（actDispatchPlan 设/清）
+function _actIdentityNow() {
+    return { scope: currentAccountScope(), conv: String(cbConvId() || "") };
+}
+function _actIdentityChangedSince(id) {
+    if (!id) return false;
+    const now = _actIdentityNow();
+    return now.scope !== id.scope || now.conv !== id.conv;
+}
+function _actStale() { return _actIdentityChangedSince(_actLaunchId); }
+
 async function actCuratePost(url, body) {
     let res, data = null;
     try {
@@ -482,10 +504,27 @@ function actSyncUpdatesCardHtml(r) {
 async function actRunCurateSyncUpdates(plan) {
     const src = String(((plan && plan.slots) || {}).source || "").trim();
     arxStep(src ? "检查更新并同步入库：" + src : "检查全部来源的更新并同步入库");
-    const got = await actCuratePost(API.curateSyncUpdates, { sources: src ? [src] : null });
-    if (!got.ok) return { ok: false, error: got.error };
-    const r = got.result;
+    /* 走 sync_button 的 start/await 接口（**唯一**轮询实现，不复制第二条 poll loop）。
+       网页形态响应 202 {async:true, job} 没有 result——旧实现经 actCuratePost 变成 {}，
+       于是 imported_total=0 被写成「没有需要入库的新增，没有改动任何文件」，
+       而后台真实终态（计数/撤回依据）全部丢失。现在等 job 到终态再按真实计数出回执。 */
+    const started = await startSyncUpdates({ sources: src ? [src] : null });
+    if (started.kind === "busy") return { ok: false, error: String(started.detail || "另一个同步任务进行中，请稍候") };
+    if (started.kind === "error") return { ok: false, error: String(started.message || "同步失败") };
+    let r = started.result;
+    if (started.kind === "async") {
+        arxStep("同步在后台进行中，等它跑完…");
+        const done = await awaitSyncJob();
+        if (done.kind === "timeout") {
+            return { ok: false, error: "同步仍在后台进行，稍后可以在数据集页看结果（本次没有拿到终态计数）。" };
+        }
+        if (done.kind === "busy") return { ok: false, error: String(done.detail || "另一个同步任务进行中，请稍候") };
+        if (done.kind !== "result" || !done.result) return { ok: false, error: String(done.message || "同步失败") };
+        r = done.result;
+    }
+    r = r || {};
     const imported = Number(r.imported_total || 0);
+    if (imported > 0) _noteCorpusWrite();   // 真入库了才作废 recommend memo
     const files = (r.sources || []).map(function (s) { return s.filename; }).filter(Boolean);
     const policy = [];
     if (imported > 0 && files.length) {
@@ -546,10 +585,12 @@ async function actRunCurateSearchOnline(plan) {
     arxStep((pr.record_count || 0) > 0
         ? "找到 " + pr.record_count + " 条候选，写入外部库"
         : "候选全部已在库中，不重复入库");
+    if (_actStale()) return { ok: false, switched: true, error: "账户或对话已切换，这一步没有执行。" };
     const applied = await actCuratePost(API.curateApply, {
         action: "search_online", confirm_token: (pr && pr.confirm_token) || "", plan_result: pr,
     });
     if (!applied.ok) return { ok: false, error: applied.error + "；本次没有任何改动" };
+    _noteCorpusWrite();
     const r = applied.result;
     return {
         ok: true,
@@ -642,16 +683,26 @@ function actPickJsonFile() {
         const input = document.createElement("input");
         input.type = "file";
         input.accept = ".json";
+        let settled = false;
+        const done = function (value) {          // 只结算一次（change 与 cancel 可能都到）
+            if (settled) return;
+            settled = true;
+            resolve(value);
+        };
         input.addEventListener("change", function () {
             const file = input.files && input.files[0];
-            if (!file) { resolve(null); return; }
+            if (!file) { done(null); return; }
             const reader = new FileReader();
             reader.onload = function () {
-                resolve({ name: file.name || "", text: String(reader.result || ""), size: file.size || 0 });
+                done({ name: file.name || "", text: String(reader.result || ""), size: file.size || 0 });
             };
-            reader.onerror = function () { resolve(null); };
+            reader.onerror = function () { done(null); };
             reader.readAsText(file, "utf-8");
         });
+        /* 用户**取消**文件对话框（现代浏览器派发 cancel 事件）时 change 永不触发——
+           旧实现因此永不结算：runner 的 finally（_actBusy 闸）到不了，之后每一步都被
+           「上一步还在执行」拦住（永久 execution lock）。这里显式结算一次（仍只一次）。 */
+        input.addEventListener("cancel", function () { done(null); });
         input.click();
     });
 }
@@ -678,11 +729,13 @@ async function actRunCurateImport() {
         arxStep("内容与已有文件完全重复（" + (dup.matched_files || []).join("、") + "）；仍按你的要求入库，已做记录");
     }
     arxStep("写入外部库：" + (pr.record_count || 0) + " 条记录");
+    if (_actStale()) return { ok: false, switched: true, error: "账户或对话已切换，这一步没有执行。" };
     const applied = await actCuratePost(API.curateApply, {
         action: "import", confirm_token: (pr && pr.confirm_token) || "",
         payload_json: picked.text, filename: picked.name, force: !!dup.is_duplicate,
     });
     if (!applied.ok) return { ok: false, error: applied.error + "；本次没有任何改动" };
+    _noteCorpusWrite();
     const r = applied.result;
     const policy = [String(r.write_boundary || "")];
     if (r.forced) policy.push("这次的内容与已有文件完全重复，仍已按你的要求入库，并做了记录。");
@@ -735,8 +788,10 @@ async function actRunCurateRemove(plan) {
     if (!got.ok) return { ok: false, error: got.error };
     const pr = got.result;
     arxStep("移入回收站：" + (pr.record_count || 0) + " 条记录");
+    if (_actStale()) return { ok: false, switched: true, error: "账户或对话已切换，这一步没有执行。" };
     const applied = await actCuratePost(API.curateApply, { action: "remove", confirm_token: (pr && pr.confirm_token) || "", filename: filename });
     if (!applied.ok) return { ok: false, error: applied.error + "；本次没有任何改动" };
+    _noteCorpusWrite();
     // moved_to = ".userdata/recycle/<recycle_name>"——取叶子名供「撤回这次执行」（restore 的定位键）。
     const movedTo = String((applied.result && applied.result.moved_to) || "");
     return {
@@ -780,8 +835,10 @@ async function actRunCurateRestore(plan) {
             + "。为避免覆盖，这次没有移回；请先处理那个文件（改名或移入回收站）再重试。" };
     }
     arxStep("移回外部库：" + (pr.record_count || 0) + " 条记录");
+    if (_actStale()) return { ok: false, switched: true, error: "账户或对话已切换，这一步没有执行。" };
     const applied = await actCuratePost(API.curateApply, { action: "restore", confirm_token: (pr && pr.confirm_token) || "", filename: filename });
     if (!applied.ok) return { ok: false, error: applied.error + "；本次没有任何改动" };
+    _noteCorpusWrite();
     // restored_to = "database/external/<原名>"——取叶子名供「撤回这次执行」（再 remove 的定位键）。
     const restoredTo = String((applied.result && applied.result.restored_to) || "");
     return { ok: true, artifact: { filename: filename, restored_name: restoredTo.split("/").pop() || "", n_records: applied.result.record_count },
@@ -960,7 +1017,7 @@ function actCiteExportCardHtml(r) {
         const href = API.citationsDownload + "?f=" + encodeURIComponent(fn);
         return '<div class="arx-card-row"><span class="arx-card-name">' + escapeHtml(fn)
             + " · " + escapeHtml(String(f.format || "")) + " · " + tpBytes(Number(f.bytes) || 0) + "</span>"
-            + '<a class="btn act-chip" href="' + escapeHtml(href) + '" download>下载</a></div>';
+            + '<a class="btn act-chip" href="' + escapeHtml(href) + '" download data-dlq="cite" data-dlq-name="' + escapeHtml(fn) + '">下载</a></div>';
     }).join("");
     const uids = Array.isArray(r.uids) ? r.uids : [];
     return '<div class="arx-card"><div class="arx-card-title">引文导出 · ' + (Number(r.n_datasets) || 0) + " 个数据集</div>"
@@ -1316,8 +1373,10 @@ async function actUndoRun(btn) {
         fail("外部库里已有同名文件 " + String(pr.target_filename || "") + "；先处理那个文件再撤回");
         return;
     }
+    if (_actStale()) { fail("账户或对话已切换，这次撤回没有执行。"); return; }
     const applied = await actCuratePost(API.curateApply, { action: action, confirm_token: pr.confirm_token || "", filename: file });
     if (!applied.ok) { fail(applied.error + "；本次没有任何改动"); return; }
+    _noteCorpusWrite();
     // 成功：撤回钮原位换成「已撤回」注记。这次撤回本身**不再**挂新钮（它不是新一轮对话里的「最近一次执行」，
     // 再挂会滚出无限撤回链）；想再动那个文件，说一句话就行。
     const done = action === "remove"
@@ -1428,6 +1487,7 @@ export async function actDispatchPlan(plan, said) {
     if (!runner) return false;                            // 词表与派发表不同步 → 交回，不瞎做
     _actLastSaid = String(said || "");   // curate.search_online 的关键词从它做确定性解析（槽位没有时）
     _actBusy = true;
+    _actLaunchId = _actIdentityNow();    // 本轮执行的发起身份（回包只认它）
     // 流式规划：ubSubmit 的 SSE 已开过行动流并播过规划步骤——这里接力续跑
     // 不重开（重开会把已播的规划步骤抹掉）；非流式路径照旧由这里开流。
     if (!arxActive()) arxBegin(plan.verb_zh || "执行");
@@ -1457,6 +1517,9 @@ export async function actDispatchPlan(plan, said) {
             outcome = { ok: false, error: String((err && err.message) || err) };
         }
         outcome = outcome || { ok: false, error: "这一步没有返回结果" };
+        /* 回包闸：等待期间切了对话/账户 → 结果不进当前对话（写步可能已在后端完成，
+           但总结/卡片属于发起时那段对话，绝不画到别人的屏上）。 */
+        if (_actStale()) return true;
         if (outcome.ok || outcome.cancelled) {
             arxFinish();   // 折叠行动流，只留总结泡
             // cancelled（用户叫停，如 import 对话框取消）＝没有执行，不报工具摘要；
@@ -1470,6 +1533,7 @@ export async function actDispatchPlan(plan, said) {
         return true;
     } finally {
         _actBusy = false;
+        _actLaunchId = null;
     }
 }
 
@@ -1507,8 +1571,10 @@ export async function actDispatchPlanList(plans, said) {
        串行 await：actDispatchPlan 的 busy 闸（_actBusy）在每项 finally 释放，下一项正常进闸。
        返回聚合 mark：全接住 → true；否则第一项的非 true mark（字符串注记 / false）。 */
     let firstMark = true;
+    const listId = _actIdentityNow();   // 整条链属于同一身份——换身份即停（后续写步不开始）
     for (const p of (plans || [])) {
         if (!p || p.kind !== "exec" || p.cancelled) continue;   // 取消项由调用方回音，不派
+        if (_actIdentityChangedSince(listId)) break;
         const mark = await actDispatchPlan(p, said);
         if (mark !== true && firstMark === true) firstMark = mark;
     }
@@ -1535,6 +1601,21 @@ function _actPlanDispatchFingerprint(plan) {
     return JSON.stringify([verb, _canonicalPlanSlotValue(slots)]);
 }
 
+/* 「图内已执行且**需要渲染**」的头部判据：四工具专项卡 / 写步产物（撤回与
+   自动下载的依据）只在「图内已执行渲染通道」上屏——只按 report_zh 兜底会把这类头部
+   连同它的卡、汇报与下载整批丢掉，而工具**已经在后端执行过**（steps 是真实记录）。
+   命中的头部不滤除：它进清单后走 actDispatchPlan 的 steps 分支**只渲染不重跑**（双执行红线），
+   与 pending_frontend 的真身动作不重复。纯检索头（无可渲染内容）仍滤除——那正是双泡防线。 */
+var ACT_RENDERABLE_CARD_KINDS = { compare: 1, cite_export: 1, compat_find: 1, fair_check: 1 };
+function _planHasRenderableExecutedContent(item) {
+    var steps = Array.isArray(item && item.steps) ? item.steps : [];
+    return steps.some(function (s) {
+        if (!s) return false;
+        if (s.card_kind && ACT_RENDERABLE_CARD_KINDS[s.card_kind]) return true;
+        return !!(s.ok && s.readonly === false && s.result && s.result.filename);
+    });
+}
+
 export function actCanonicalDispatchPlans(plan) {
     /* 唯一规范清单：兼容旧 intents 时用它作头部，否则用顶层 plan；再接图后
        pending_frontend。只保留非取消 EXEC，按 verb + canonical slots 首见去重。
@@ -1557,11 +1638,25 @@ export function actCanonicalDispatchPlans(plan) {
         seen.add(fingerprint);
         out.push(item);
     };
+    const _excludedHeads = [];
     intents.forEach(function (item) {
-        if (planHeadIsGraphDoneRetrieval(item, plan)) return;
+        if (planHeadIsGraphDoneRetrieval(item, plan) && !_planHasRenderableExecutedContent(item)) {
+            _excludedHeads.push(item); return;
+        }
         _push(item);
     });
     tails.forEach(_push);
+    /* 环内暂停/零上屏回合的回执兜底（2026-09-14 ask 暂停批真机核实）：头部是图内已跑完的
+       检索，但本轮**没有结果批落地**（route=tool 且无 result_payload → 批次回执通道没跑，
+       cbExecReceiptCovered 为假）、清单又为空——滤掉头部会让 narrate 汇报（report_zh）与
+       进度泡双双悬空（屏上永远停在「规划中…」）。此时把头部交回「图内已执行渲染通道」：
+       cbProgressDrop 收泡 + actFinish 落 report_zh（deterministic 不挂 AI 标）。正常带结果
+       的纯检索轮不受影响：_applyBatchDecision 在派发前已把回执标记置位（本兜底不触发）；
+       真走到 actFinish 时其内部「唯一气泡」闸还会再核一次 cbExecReceiptCovered。 */
+    if (!out.length && _excludedHeads.length && !cbExecReceiptCovered()) {
+        const _head = _excludedHeads[0];
+        if (_head && _head.report_zh) out.push(_head);
+    }
     return out;
 }
 

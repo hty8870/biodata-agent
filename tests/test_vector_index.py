@@ -92,6 +92,73 @@ def test_ensure_index_second_run_zero_reembed(idx_file):
     assert enc2.seen == []  # 全部命中索引，零重嵌
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_index_rejects_nonfinite_new_vectors_without_replacing_old(idx_file, value):
+    record = _rec("A", "uid-a")
+    vi.ensure_index([record], embedder=_StubEmbedder())
+    before = idx_file.read_bytes()
+    bad = lambda texts: [[value] * vi.EMBED_DIMENSIONS for _ in texts]
+    assert vi.ensure_index([_rec("A", "uid-a", "new text")], embedder=bad) is None
+    assert idx_file.read_bytes() == before
+    recovered = vi.ensure_index([record], embedder=_StubEmbedder())
+    assert vi.valid_vector(recovered["uid-a"]["v"], vi.EMBED_DIMENSIONS)
+
+
+@pytest.mark.parametrize("cached", [True, False])
+@pytest.mark.parametrize("value", [float("nan"), float("inf")])
+def test_index_repairs_nonfinite_stored_vectors(idx_file, cached, value):
+    record = _rec("A", "uid-a")
+    store = vi.ensure_index([record], embedder=_StubEmbedder())
+    store["uid-a"]["v"][0] = value
+    if not cached:
+        # 模拟历史坏档，不能使用已经禁止非有限值的新写入函数。
+        with gzip.open(idx_file, "wt", encoding="utf-8") as fh:
+            json.dump({"meta": {"model": vi.DEFAULT_EMBEDDING_MODEL,
+                                "dimensions": vi.EMBED_DIMENSIONS}, "vectors": store}, fh)
+        vi.reset_caches_for_test()
+    enc = _StubEmbedder()
+    repaired = vi.ensure_index([record], embedder=enc)
+    assert len(enc.seen) == (0 if cached else 1)
+    assert vi.valid_vector(repaired["uid-a"]["v"], vi.EMBED_DIMENSIONS)
+    assert vi.valid_vector(_read_store(idx_file)["uid-a"]["v"], vi.EMBED_DIMENSIONS)
+
+
+@pytest.mark.parametrize("count", [511, 512, 1025])
+def test_vector_query_missing_documents_respect_worker_limit_and_order(idx_file, monkeypatch, count):
+    from dataset_recommender.retrieval.model_worker import _valid_texts, MAX_TEXTS
+
+    monkeypatch.setattr(vi, "ensure_index", lambda **kwargs: {})
+    seen = []
+    sizes = []
+
+    def encode(texts):
+        assert _valid_texts(list(texts)) is not None
+        sizes.append(len(texts))
+        offset = len(seen)
+        seen.extend(texts)
+        return [[float(i)] * vi.EMBED_DIMENSIONS for i in range(offset, len(seen))]
+
+    records = [_rec(f"item-{i}") for i in range(count)]
+    out = vi.index_dense_vectors("query", [_cand(r) for r in records], embedder=encode)
+    assert max(sizes) <= MAX_TEXTS
+    assert seen == ["query", *[vi._record_text(r) for r in records]]
+    assert [v[0] for v in out] == list(range(count + 1))
+    assert not idx_file.exists()  # 查询补嵌只在内存中组装。
+
+
+def test_vector_query_later_batch_failure_discards_partial_results(idx_file, monkeypatch):
+    monkeypatch.setattr(vi, "ensure_index", lambda **kwargs: {})
+    calls = []
+
+    def encode(texts):
+        calls.append(len(texts))
+        return [[1.0] * vi.EMBED_DIMENSIONS for _ in texts] if len(calls) == 1 else []
+
+    assert vi.index_dense_vectors("query", [_cand(_rec(str(i))) for i in range(512)], embedder=encode) is None
+    assert calls == [512, 1]
+    assert not idx_file.exists()
+
+
 def test_ensure_index_only_stale_reembedded(idx_file):
     vi.ensure_index([_rec("A", "uid-a"), _rec("B", "uid-b", desc="old desc")],
                     embedder=_StubEmbedder())

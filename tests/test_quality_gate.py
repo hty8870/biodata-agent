@@ -5,11 +5,15 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "automation" / "quality-gates.json"
+PUBLIC_MANIFEST = ROOT / "automation" / "quality-gates.public.json"
 RUNNER = ROOT / "scripts" / "quality_gate.py"
 
 
@@ -96,6 +100,51 @@ def test_manifest_is_explicit_offline_and_fail_closed():
     assert not re.search(r"\$\{\{\s*secrets\.", serialized)
 
 
+def _installer_manifest_sources() -> list[Path]:
+    """installer-contracts 门的 manifest 真源集。
+
+    私仓（`.deliveryignore` 分类材料在）要求**私有 + 公开两源**同测——公开变体是
+    公开 manifest 的唯一真源，缺了就是 fail 而不是缩圈；真正的公开投影里 default
+    manifest 就是公开变体映射后的唯一一份，只测它——不因缺变体而 skip 整个门。"""
+    sources = [MANIFEST]
+    if (ROOT / ".deliveryignore").is_file():
+        assert PUBLIC_MANIFEST.is_file(), "私仓缺 automation/quality-gates.public.json（公开 manifest 唯一真源）"
+        sources.append(PUBLIC_MANIFEST)
+    return sources
+
+
+@pytest.mark.parametrize("manifest_path", _installer_manifest_sources(), ids=lambda p: p.name)
+def test_installer_contracts_gate_fails_closed_when_no_targets_exist(manifest_path):
+    """installer-contracts 的 present 为空时必须显式失败：不能让 pytest 无目标裸跑全 suite。
+
+    描述承诺 fail-closed（"when none exist the gate fails closed"），实现也必须如此：
+    空选择 → exit 2 + 明确消息；绝不把「四个声明文件一个都没有」变成静默跑全量或假 skip。
+    """
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    gate = next(g for g in manifest["gates"] if g["id"] == "installer-contracts")
+    assert len(gate["commands"]) == 1 and len(gate["commands"][0]) == 3
+    script = gate["commands"][0][2]
+    assert "sys.exit(2)" in script, "缺 fail-closed 分支"
+    declared = re.search(r"declared = (\[[^\]]*\])", script).group(1)
+    missing_variant = script.replace(declared, "['tests/__missing_a__.py', 'tests/__missing_b__.py']")
+    proc = subprocess.run([sys.executable, "-c", missing_variant], cwd=str(ROOT),
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 2, (proc.returncode, proc.stdout[-200:], proc.stderr[-200:])
+    assert "none of the declared contract files exist" in proc.stderr
+    assert "NOT covered by this run" in proc.stdout      # 部分缺口的表述不许虚声明 skip
+
+
+def test_installer_contracts_command_is_identical_across_manifests():
+    """私有/公开两 manifest 的 installer-contracts 执行字符串必须逐字节一致（防回潮）：
+    公开变体曾长期缺 fail-closed 分支（空 targets 会裸跑全 suite）——两源各写一份必漂移。"""
+    if not (ROOT / ".deliveryignore").is_file():
+        pytest.skip("真正的公开投影里 default manifest 即公开变体的唯一映射，无双源可比")
+    private_gate = next(g for g in _manifest()["gates"] if g["id"] == "installer-contracts")
+    public = json.loads(PUBLIC_MANIFEST.read_text(encoding="utf-8"))
+    public_gate = next(g for g in public["gates"] if g["id"] == "installer-contracts")
+    assert private_gate["commands"] == public_gate["commands"]
+
+
 def test_full_profile_covers_python_web_mcp_and_frozen_evaluation():
     full = set(_manifest()["profiles"]["full"]["gates"])
     assert {
@@ -105,6 +154,23 @@ def test_full_profile_covers_python_web_mcp_and_frozen_evaluation():
         "mcp-protocol-selfcheck",
         "frozen-recommendation-evaluation",
     } <= full
+
+
+def test_private_full_validates_both_actual_public_projections():
+    manifest = _manifest()
+    full = manifest["profiles"]["full"]["gates"]
+    if not (ROOT / ".deliveryignore").is_file():
+        # 公开投影没有私有源分类材料，不能把私仓检查命令带进公开 full。
+        assert "public-mirror-source" not in full
+        return
+    assert "public-mirror-source" in full
+    gate = next(g for g in manifest["gates"] if g["id"] == "public-mirror-source")
+    assert gate["commands"] == [
+        ["{python}", "scripts/build_public_mirror.py", "validate", "--allow-dirty-private"],
+        ["{python}", "scripts/build_public_mirror.py", "--profile", "skeleton", "validate", "--allow-dirty-private"],
+    ]
+    public = json.loads((ROOT / "automation/quality-gates.public.json").read_text(encoding="utf-8"))
+    assert "public-mirror-source" not in public["profiles"]["full"]["gates"]
 
 
 def test_list_describes_profiles_and_safety_policy():
@@ -300,6 +366,72 @@ def test_timed_out_child_fails_closed_and_records_timeout(tmp_path: Path):
     assert report["gates"][0]["failure"] == "timeout (fallback=fail)"
 
 
+def test_quality_timeout_reaps_grandchild(tmp_path):
+    import socket
+    # 子孙持有监听 socket；超时返回后能重新绑定，证明资源随整树回收。
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        port = reserve.getsockname()[1]
+    ready = tmp_path / "ready.txt"
+    child = ("import socket,time,pathlib; s=socket.socket(); "
+             f"s.bind(('127.0.0.1',{port})); s.listen(); "
+             f"pathlib.Path({str(ready)!r}).write_text('ready'); time.sleep(30)")
+    parent = ("import subprocess,sys,time; "
+              f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(30)")
+    manifest = _probe_manifest(tmp_path, parent, timeout_seconds=2)
+    result = _run("--manifest", str(manifest), "--profile", "fast")
+    assert result.returncode == 1 and ready.exists(), result.stderr
+    deadline = time.monotonic() + 3
+    while True:
+        try:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", port))
+            break
+        except OSError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
+
+
+def test_posix_quality_timeout_terminates_owned_group(monkeypatch):
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import process_tree
+    killed, spawned = [], []
+
+    class Process:
+        pid, returncode, text_mode = 12345, -9, False
+        calls = 0
+
+        def communicate(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired(["probe"], 1)
+            return b"partial output", b""
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self):
+            return self.returncode
+
+    monkeypatch.setattr(process_tree, "os", SimpleNamespace(
+        name="posix", fspath=os.fspath, killpg=lambda pid, sig: killed.append((pid, sig))))
+    monkeypatch.setattr(process_tree, "signal", SimpleNamespace(SIGKILL=9))
+
+    def popen(argv, **kwargs):
+        spawned.append(kwargs)
+        return Process()
+
+    monkeypatch.setattr(process_tree.subprocess, "Popen", popen)
+    import pytest
+    with pytest.raises(subprocess.TimeoutExpired) as error:
+        process_tree.run(["probe"], timeout=1)
+    assert error.value.stdout == b"partial output"
+    assert spawned[0]["start_new_session"] is True
+    assert killed and all(item == (12345, 9) for item in killed)
+
+
 def test_manifest_validator_rejects_network_enabled_gate(tmp_path: Path):
     manifest = _manifest()
     manifest["gates"][0]["network"] = "allowed"
@@ -308,3 +440,10 @@ def test_manifest_validator_rejects_network_enabled_gate(tmp_path: Path):
     result = _run("--manifest", str(invalid), "--dry-run")
     assert result.returncode == 2
     assert "must forbid network" in result.stderr
+
+
+def test_smoke_screenshot_output_is_gitignored():
+    result = subprocess.run(
+        ["git", "check-ignore", "--quiet", "--no-index", "--", ".-shots/smoke.png"],
+        cwd=ROOT, capture_output=True, timeout=10, check=False)
+    assert result.returncode == 0, "冒烟截图不得作为未分类产物进入 Git"

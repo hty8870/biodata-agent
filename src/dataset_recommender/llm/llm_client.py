@@ -43,6 +43,12 @@ TRIAL_DEFAULT_MODEL = "deepseek-v4-flash"
 MAX_PROVIDER_ERROR_READ_BYTES = 8192
 MAX_PROVIDER_ERROR_CHARS = 2048
 MAX_PROVIDER_RESPONSE_BYTES = 8 * 1024 * 1024
+ALLOWED_FINISH_REASONS = frozenset({"stop", "normal", "null", ""})
+
+
+def is_complete_finish_reason(value: str | None) -> bool:
+    """文案消费者共用完成判据；兼容未提供原因的旧服务，明确截断/过滤一律拒绝。"""
+    return (value is None or isinstance(value, str)) and (value or "").strip().lower() in ALLOWED_FINISH_REASONS
 
 
 @dataclass(slots=True)
@@ -115,6 +121,21 @@ def _sanitized_api_key(*keys: str) -> str | None:
     if _is_placeholder_secret(value):
         return None
     return value
+
+
+def _read_error_body(exc: urllib.error.HTTPError) -> str:
+    """有界读取 provider 的错误正文；**正文读取本身再失败也不许抛出**。
+
+    错误正文只是诊断附加信息：超时/IncompleteRead/连接重置时返回空串即可，
+    绝不能让「读正文失败」逃出 fail-soft，把可选润色故障升级成整个请求失败。"""
+    try:
+        raw = exc.read(MAX_PROVIDER_ERROR_READ_BYTES + 1)
+    except Exception:  # noqa: BLE001 —— 含 TimeoutError / http.client.IncompleteRead / OSError
+        return ""
+    try:
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _sanitize_provider_error(detail: object, api_key: str | None = None) -> str:
@@ -474,9 +495,7 @@ def _call_chat_completions(
                 )
             response_text = response_bytes.decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = exc.read(MAX_PROVIDER_ERROR_READ_BYTES + 1).decode(
-            "utf-8", errors="ignore"
-        )
+        detail = _read_error_body(exc)       # 正文读取失败也不抛出
         return LLMResult(
             text=None,
             attempted=True,
@@ -587,7 +606,8 @@ def should_use_llm(config: LLMConfig, *, pre=None, post=None, require_enabled=Tr
     判定序：pre(config)（返回非 None 即作为裁决，用于 action_plan 的在线成本闸这类前置条件）→
     mock（mock_llm 或 provider=="mock" 一律判否——call_mock_llm 忽略 prompt、直吐 curator
     markdown 表，让执行/总结/介绍层走它会「荒谬通过」：产出根本不是预期文本）→
-    disabled（require_enabled=False 的消费方跳过本档——dream 只认 key 不认 enable 开关）→
+    disabled（默认检查 enable 开关；`require_enabled=False` 供「不受开关控制」的诊断类闸
+    显式跳过本档——真实 LLM 消费方如 dream 一律照常检查）→
     no_key → post(config)（返回非 None 即作为裁决，用于 intro 的体裁可译性这类附加条件）→ ready。
     """
     if pre is not None:
@@ -808,9 +828,7 @@ def diagnose_network(config: LLMConfig) -> dict[str, str]:
         report["API request"] = "success"
         report["Error"] = "none"
     except urllib.error.HTTPError as exc:
-        detail = exc.read(MAX_PROVIDER_ERROR_READ_BYTES + 1).decode(
-            "utf-8", errors="ignore"
-        )
+        detail = _read_error_body(exc)       # 正文读取失败也不抛出
         report["API request"] = "failed"
         report["Error"] = (
             f"API HTTPError {exc.code}: {_sanitize_provider_error(detail, config.api_key)}"

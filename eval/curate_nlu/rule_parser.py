@@ -35,7 +35,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 try:  # 与 action_plan 极性门同一份语素表（程序引用，防手抄漂移）
-    from dataset_recommender.retrieval import vocabulary as _V
+    from dataset_recommender.retrieval import query_lexicon as _V
     NEG_MORPHEMES_CN = _V.NEG_MORPHEMES_CN
 except Exception:  # pragma: no cover - 仓库结构变化时的兜底（口径见 vocabulary.py:740）
     NEG_MORPHEMES_CN = ("不要", "不用", "先别", "没有", "别", "不", "没", "无")

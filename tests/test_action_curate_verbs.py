@@ -170,19 +170,25 @@ def test_curate_restore_has_graduated_from_the_frontend_exemption_list():
     裁定（改空/同集如实拒绝），前端 runner 直打 /api/recommend 会绕过择优闸换屏。
      钉字更新：curate.rollback（rollback 动词化批）凭同哲学入清单——
     回滚目标由机械闸从本轮 steps 实录里的快照锚现定，前端单步 runner 既没有这个现场、
-    也没有快照锚可传，永久豁免；前端只走 act.js 通用兜底渲染，零新增卡片。"""
+    也没有快照锚可传，永久豁免；前端只走 act.js 通用兜底渲染，零新增卡片。
+     钉字更新：results.show（2026-09-13 rerank 处置批）凭同哲学入清单——屏态唯一出口，
+    handle 句柄指认环内试跑实录并重放确定性管线+指纹复核，前端没有这个现场，环内专属。
+     钉字更新：ask.relax（2026-09-14 YOLO 批）凭同哲学入清单——「问用户放松哪个条件」
+    选择卡由 utterance 响应的 ask_relax 键驱动，无前端 runner 独立入口，环内专属。"""
     assert "curate.restore" not in AP.FRONTEND_UNWIRED_EXEC_VERBS, (
         "curate.restore 前端已接线，不该再留在 FRONTEND_UNWIRED_EXEC_VERBS 豁免清单里"
     )
     assert AP.FRONTEND_UNWIRED_EXEC_VERBS == ("search.rerun", "rank", "rerank",
-                                             "curate.rollback",
+                                             "results.show", "curate.rollback",
                                              "compare.datasets", "compat.find",
-                                             "fair.check"), (
+                                             "fair.check", "ask.relax"), (
         "六个管护动词已全部毕业；清单应只含永久豁免的 search.rerun 与环内专属的 "
-        "rank/rerank（均无前端 runner）以及 "
+        "rank/rerank/results.show（均无前端 runner——results.show 是屏态唯一出口，"
+        "句柄指认环内试跑实录，前端单步 runner 无此现场）以及 "
         "curate.rollback（目标靠本轮 steps 快照锚，前端无现场），"
         "以及 compare.datasets / compat.find / fair.check（"
-        "默认对象靠环内当前结果集现场，前端单步 runner 无此现场）"
+        "默认对象靠环内当前结果集现场，前端单步 runner 无此现场），"
+        "以及 ask.relax（选择卡依赖环内屏面基线与预演现场，无前端 runner 入口）"
     )
     assert set(AP.FRONTEND_UNWIRED_EXEC_VERBS) <= set(AP.EXEC_VERBS)
 

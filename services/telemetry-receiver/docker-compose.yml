@@ -4,8 +4,10 @@ services:
     build: .
     container_name: biodata-telemetry-receiver
     restart: unless-stopped
+    # 本地模板默认只绑宿主回环：由运维的 TLS/网络代理决定对外暴露面。
+    # 容器内仍监听 0.0.0.0:8471（见下方 command），容器网络内可达。
     ports:
-      - "8471:8471"
+      - "127.0.0.1:8471:8471"
     environment:
       INGEST_TOKEN: ${INGEST_TOKEN:?缺少 INGEST_TOKEN，请在 .env 中配置}
       STATS_TOKEN: ${STATS_TOKEN:?缺少 STATS_TOKEN，请在 .env 中配置}

@@ -133,13 +133,25 @@ _EXCLUDES = [
 ]
 
 
+# ── 领域包 hiddenimports（2026-09-23 骨肉分离批）：默认领域包经 `domain.registry`
+# 字符串动态装载，modulegraph 摸不到这条边——两个 EXE 都必须显式收集，否则 frozen 首调
+# get_domain() 即 ModuleNotFoundError。外部领域包（BIODATA_DOMAIN_DIR）按目录读盘、无需收集。
+_DOMAIN_HIDDEN = [
+    "dataset_recommender.domains",
+    "dataset_recommender.domains.biodata",
+    "dataset_recommender.domains.biodata.pack",
+    "dataset_recommender.domains.biodata.dimensions",
+    "dataset_recommender.domains.biodata.vocabulary",
+]
+
+
 # ═══════════════════ Web（BioDataAgent.exe，windowed）═══════════════════
 _a_web = Analysis(
     [_ENTRY_WEB],
     pathex=[_SRC],
     binaries=_WV_BINS,                       # webview 随包 .dll/.so（Web 入口专用；MCP 不依赖壳）
     datas=_DATAS + _WV_DATAS,                # webview/lib 数据（WebView2Loader.dll 等）
-    hiddenimports=["dataset_recommender.app.webapp"] + _WV_HIDDEN,  # webview 子模块；uvicorn.run 字符串导入兜底
+    hiddenimports=["dataset_recommender.app.webapp"] + _WV_HIDDEN + _DOMAIN_HIDDEN,  # webview 子模块；uvicorn.run 字符串导入兜底
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -175,7 +187,7 @@ _a_mcp = Analysis(
     pathex=[_SRC],
     binaries=[],
     datas=[],
-    hiddenimports=_MCP_HIDDEN + _LG_HIDDEN + _LCO_HIDDEN + _LC_HIDDEN + _OPENAI_HIDDEN,
+    hiddenimports=_MCP_HIDDEN + _LG_HIDDEN + _LCO_HIDDEN + _LC_HIDDEN + _OPENAI_HIDDEN + _DOMAIN_HIDDEN,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

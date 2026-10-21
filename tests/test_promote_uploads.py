@@ -25,6 +25,42 @@ import promote_uploads as pu  # noqa: E402
 BASE = pu.BASE_SOURCE  # "10x Genomics"
 
 
+@pytest.mark.parametrize("stage", ["write", "replace"])
+def test_failed_base_replacement_preserves_bytes(tmp_path, monkeypatch, stage):
+    import builtins
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from dataset_recommender.app import runtime_paths as rp
+
+    root = _make_root(tmp_path)
+    target = root / "database/base/10x-synced.json"
+    old = json.dumps([_rec("old")], ensure_ascii=False).encode("utf-8")
+    target.write_bytes(old)
+    _put_upload(root, "upload_new.json", _wrapper([_rec("new")]))
+
+    @contextmanager
+    def broken_open(path, mode, **kwargs):
+        with builtins.open(path, mode, **kwargs) as handle:
+            def partial_write(payload):
+                handle.write(payload[:1])
+                raise OSError("write failed")
+            yield SimpleNamespace(write=partial_write)
+
+    def broken_replace(*args):
+        raise OSError("replace failed")
+
+    if stage == "write":
+        monkeypatch.setattr(rp, "open", broken_open, raising=False)
+    else:
+        monkeypatch.setattr(rp.os, "replace", broken_replace)
+    with pytest.raises(OSError):
+        pu.promote_uploads(root, log=lambda *_: None)
+    assert target.read_bytes() == old
+    assert not list(target.parent.glob(".*.tmp"))
+    assert (root / "database/external/upload_new.json").is_file()
+    assert not _journal_lines(root)
+
+
 def _rec(uid, *, name=None, url=None, source=BASE):
     return {
         "dataset_uid": uid,
@@ -66,6 +102,52 @@ def _journal_lines(root):
 def _synced(root):
     p = root / "database" / "base" / "10x-synced.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+@pytest.mark.parametrize("stage", ["journal", "archive", "manifest", "unlink"])
+def test_batch_failure_restores_every_file(tmp_path, monkeypatch, stage):
+    root = _make_root(tmp_path)
+    for uid in ("a", "b"):
+        _put_upload(root, f"upload_{uid}.json", _wrapper([_rec(uid)]))
+    synced = root / "database/base/10x-synced.json"
+    synced.write_bytes(b"[]\n")
+    archive = root / "research/promotions"
+    archive.mkdir(parents=True)
+    (archive / "upload_a.json.promoted").write_bytes(b"previous archive")
+    journal = root / ".userdata/uploads_journal.jsonl"
+    journal.parent.mkdir()
+    journal.write_bytes(b'{"action":"previous"}\n')
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    real_journal, real_write, real_unlink = pu._journal_promote, pu.atomic_write_bytes, Path.unlink
+    calls = 0
+
+    def write_journal(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        real_journal(*args, **kwargs)
+        if stage == "journal" and calls == 2:
+            raise OSError("second journal failed after append")
+
+    def write_file(path, payload):
+        if ((stage == "archive" and path.name == "upload_b.json.promoted")
+                or (stage == "manifest" and path.name == "upload_b.json.manifest.json")):
+            raise OSError("archive write failed")
+        real_write(path, payload)
+
+    def unlink_file(path, *args, **kwargs):
+        if stage == "unlink" and path.name == "upload_b.json":
+            raise OSError("second input removal failed")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(pu, "_journal_promote", write_journal)
+    monkeypatch.setattr(pu, "atomic_write_bytes", write_file)
+    monkeypatch.setattr(Path, "unlink", unlink_file)
+    report = pu.promote_uploads(root, log=lambda *_: None)
+    assert report["ok"] is False
+    assert report["promoted"] == [] and report["promoted_total"] == 0
+    after = {p: p.read_bytes() for p in root.rglob("*")
+             if p.is_file() and p.name != "upload_ingest.lock"}
+    assert after == before
 
 
 def test_happy_path_promotes_journals_and_archives(tmp_path):

@@ -223,13 +223,26 @@ function _normCheckCondition(cc, nowIso) {
 /* provenance 全字段（为导出与方法草稿服务；范式同 content/task_pack.py 的
    provenance.json：query / retrieval_params / 检索日期 / scope 语义字段）。P5 导出中心
    直接消费本对象，字段语义如下： */
+function _normSearchTrace(v) {
+    /* 后端 search_trace 是**对象**（{version, steps[], total_duration_ms, summary, …}），
+       导出端 content/export_pack._norm_provenance 也只收对象——旧实现只收数组，把真实对象
+       清成 []，导出端再把它清成 {}：provenance.md/recipe.json 的检索轨迹整段丢失并显示
+       「未记录」。这里按对象归一：steps 是数组才留，其余键原样透传（形状与后端
+       同构，前端不重排、不发明）。 */
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    const out = {};
+    for (const key of Object.keys(v)) out[key] = v[key];
+    if (out.steps !== undefined && !Array.isArray(out.steps)) out.steps = [];
+    return out;
+}
+
 function _normProvenance(p) {
     if (!p || typeof p !== "object") return null;
     return {
         query: String(p.query || "").trim(),                          // 原始 query（用户原话）
         retrieval_params: (p.retrieval_params && typeof p.retrieval_params === "object")
             ? p.retrieval_params : {},                                // 确定性请求参数（strategy=fixed 等）
-        search_trace: Array.isArray(p.search_trace) ? p.search_trace : [],  // 检索轨迹（与后端 search_trace 同构）
+        search_trace: _normSearchTrace(p.search_trace),               // 检索轨迹（与后端 search_trace 同构的对象）
         filters: (p.filters && typeof p.filters === "object") ? {
             active: _strList(p.filters.active),       // 生效中的分面筛选
             suppressed: _strList(p.filters.suppressed), // 被抑制的筛选
@@ -595,31 +608,108 @@ function _storeGetAllByScope(db, scope) {
     });
 }
 
+/* 写包装的统一结算点：**请求 onsuccess ≠ 事务提交**。真 IDB 里 put/delete 的请求
+   回调早于事务提交；事务随后 abort（配额、同事务其它请求失败、标签页被关）时写其实没落盘。
+   旧实现把请求成功当结算点：库里的半条记录不存在，调用方的内存缓存/导入计数却已按「成功」
+   更新。故 delete/put 都只在 `tx.oncomplete` resolve，`tx.onabort` 按请求原名 reject
+   （QuotaExceededError 等）。 */
 function _storeDelete(db, scope, projectId) {
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(ARTIFACTS_STORE, "readwrite");
-        const req = tx.objectStore(ARTIFACTS_STORE).delete(artifactsKey(scope, projectId));
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(_requestError(req, "WriteError"));
+        let tx;
+        try { tx = db.transaction(ARTIFACTS_STORE, "readwrite"); }
+        catch (_e) { reject(_idbError("AbortError", "写入事务开启失败")); return; }
+        let settled = false;
+        const settle = (fn, value) => { if (!settled) { settled = true; fn(value); } };
+        let req = null;
+        tx.oncomplete = () => settle(resolve);
+        tx.onabort = () => {
+            const err = (req && req.error) || tx.error;
+            settle(reject, err && err.name
+                ? _idbError(err.name, err.message || err.name)
+                : _idbError("AbortError", "写入事务被中止"));
+        };
+        try { req = tx.objectStore(ARTIFACTS_STORE).delete(artifactsKey(scope, projectId)); }
+        catch (e) { settle(reject, _idbError("AbortError", "写入请求提交失败")); try { tx.abort(); } catch (_e) {} return; }
+        req.onsuccess = () => {};   // 请求成功 ≠ 提交成功：结算统一等 tx.oncomplete
+        req.onerror = () => {};     // 请求错误随事务 abort，统一在 tx.onabort 里取原名上报
     });
 }
 
 /* 写包装（put）：**QuotaExceededError 捕获点**——请求 error 带原名 reject（如
    QuotaExceededError），交易级 onabort 兜底（请求已成功但交易被后续请求中断也算写失败）。
    写入如实报错，绝不静默吞掉「写不进去」这件事。 */
+function _withKeyFields(project, scope) {
+    // pk = 复合主键编码（scope + project_id），keyPath 寻址用；scope = 索引物化列；
+    // 两者读出时由 _stripKeyFields 剥掉
+    return Object.assign({}, project, {
+        pk: artifactsKey(scope, project.project_id),
+        scope: artifactsScope(scope),
+    });
+}
+
 function _storePut(db, scope, project) {
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(ARTIFACTS_STORE, "readwrite");
-        // pk = 复合主键编码（scope + project_id），keyPath 寻址用；scope = 索引物化列；
-        // 两者读出时由 _stripKeyFields 剥掉
-        const req = tx.objectStore(ARTIFACTS_STORE).put(Object.assign({}, project, {
-            pk: artifactsKey(scope, project.project_id),
-            scope: artifactsScope(scope),
-        }));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(_requestError(req, "WriteError"));
+        let tx;
+        try { tx = db.transaction(ARTIFACTS_STORE, "readwrite"); }
+        catch (_e) { reject(_idbError("AbortError", "写入事务开启失败")); return; }
+        let settled = false;
+        const settle = (fn, value) => { if (!settled) { settled = true; fn(value); } };
+        let req = null;
+        tx.oncomplete = () => settle(resolve);     // 只有提交才 resolve（缓存更新随之上移到提交后）
         tx.onabort = () => {
-            if (!req.error) reject(_idbError("AbortError", "写入事务被中止"));
+            const err = (req && req.error) || tx.error;
+            settle(reject, err && err.name
+                ? _idbError(err.name, err.message || err.name)
+                : _idbError("AbortError", "写入事务被中止"));
+        };
+        try { req = tx.objectStore(ARTIFACTS_STORE).put(_withKeyFields(project, scope)); }
+        catch (e) { settle(reject, _idbError("AbortError", "写入请求提交失败")); try { tx.abort(); } catch (_e) {} return; }
+        req.onsuccess = () => {};   // 请求成功 ≠ 提交成功：结算统一等 tx.oncomplete
+        req.onerror = () => {};     // 请求错误随事务 abort，统一在 tx.onabort 里取原名上报
+    });
+}
+
+/* 单事务读-改-写：get → mutator → put 全部在**同一个 readwrite 事务**里完成。
+   浏览器对同一 store 的 readwrite 事务互相串行（第二个事务开始前第一个已提交），
+   把「读」也放进该事务，第二个写者的底稿就必然含第一个写者的字段——不会静默丢更新。
+   mutator 必须同步（事务在它返回后的下一个 tick 就要提交）；任何一步失败即 abort，
+   绝不写半成品。 */
+function _storeUpdate(db, scope, projectId, mutator, opts) {
+    return new Promise((resolve, reject) => {
+        let tx;
+        try { tx = db.transaction(ARTIFACTS_STORE, "readwrite"); }
+        catch (_e) { reject(_idbError("AbortError", "写入事务开启失败")); return; }
+        let settled = false;
+        let prepared = null;
+        let putReq = null;
+        const settle = (fn, value) => { if (!settled) { settled = true; fn(value); } };
+        const fail = (err) => { settle(reject, err); try { tx.abort(); } catch (_e) {} };
+        tx.oncomplete = () => settle(resolve, prepared);
+        tx.onabort = () => {
+            const err = (putReq && putReq.error) || tx.error;
+            settle(reject, err && err.name
+                ? _idbError(err.name, err.message || err.name)
+                : _idbError("AbortError", "写入事务被中止"));
+        };
+        const store = tx.objectStore(ARTIFACTS_STORE);
+        const get = store.get(artifactsKey(scope, projectId));
+        get.onerror = () => fail(_requestError(get, "ReadError"));
+        get.onsuccess = () => {
+            try {
+                const existing = get.result ? _stripKeyFields(get.result) : null;
+                if (!existing) throw _idbError("NotFoundError", "追踪不存在：" + projectId);
+                const next = (typeof mutator === "function") ? mutator(existing) : existing;
+                if (!next) throw _idbError("InvalidStateError", "mutator 返回空——拒绝把追踪写成 null");
+                if (String(next.project_id || "") !== String(projectId)) {
+                    throw _idbError("InvalidStateError", "project_id 不可变（改 id 请走删除+重建）");
+                }
+                prepared = _stampForWrite(next, opts);
+                const errors = artifactsValidateProject(prepared);
+                if (errors.length) throw _idbError("InvalidStateError", "追踪数据不合法：" + errors.join("；"));
+            } catch (e) { fail(e); return; }
+            putReq = store.put(_withKeyFields(prepared, scope));
+            // 请求级错误不在这里处理：事务会 abort，错误在 tx.onabort 里取 putReq.error 上报
+            putReq.onerror = () => {};
         };
     });
 }
@@ -688,23 +778,15 @@ export async function artifactsListProjects(scope, opts) {
 }
 
 export async function artifactsUpdateProject(scope, projectId, mutator, opts) {
-    /* 读-改-写。mutator(project) → 新追踪；project_id 不可变（改 id = 删旧建新，另走接口）；
-       mutator 返回空 → 拒绝写 null（防误删）。 */
+    /* 读-改-写**在同一把 readwrite 事务里**完成（见 _storeUpdate）：
+       旧实现先 readonly 读、再另开 readwrite 整条 put——两个 tab 并发改不同字段时，
+       后写者用自己读到的旧底稿覆盖先写者的字段，双方都成功返回（静默丢更新）。
+       mutator(project) → 新追踪；project_id 不可变；mutator 返回空 → 拒绝写 null（防误删）。 */
     opts = opts || {};
     const db = await artifactsOpen(opts);
     scope = artifactsScope(scope);
     const id = String(projectId || "");
-    const existing = await _storeGet(db, scope, id);
-    if (!existing) throw _idbError("NotFoundError", "追踪不存在：" + projectId);
-    const next = (typeof mutator === "function") ? mutator(existing) : existing;
-    if (!next) throw _idbError("InvalidStateError", "mutator 返回空——拒绝把追踪写成 null");
-    if (String(next.project_id || "") !== id) {
-        throw _idbError("InvalidStateError", "project_id 不可变（改 id 请走删除+重建）");
-    }
-    const project = _stampForWrite(next, opts);
-    const errors = artifactsValidateProject(project);
-    if (errors.length) throw _idbError("InvalidStateError", "追踪数据不合法：" + errors.join("；"));
-    await _storePut(db, scope, project);
+    const project = await _storeUpdate(db, scope, id, mutator, opts);
     _cachePut(scope, project);
     return project;
 }

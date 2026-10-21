@@ -69,6 +69,14 @@ jobs:
       - name: Install the reviewed hash-locked CI environment
         run: "python -m pip install --require-hashes --only-binary=:all: -r requirements/requirements-ci.lock"
 
+      - name: Install hash-locked CPU training test dependencies
+        if: matrix.profile == 'full'
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all:
+          --index-url https://download.pytorch.org/whl/cpu
+          --extra-index-url https://pypi.org/simple
+          -r requirements/requirements-ci-ml.lock
+
       - name: Run the manifest-defined quality profile
         run: >-
           python scripts/quality_gate.py

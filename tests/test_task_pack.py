@@ -7,6 +7,11 @@
 """
 from pathlib import Path
 
+import hashlib
+import os
+import shutil
+import subprocess
+
 import pytest
 
 from dataset_recommender.corpus import download_plan as DP
@@ -15,6 +20,25 @@ from dataset_recommender.corpus import corpus
 from dataset_recommender.content import item_view, task_pack
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _isolate_corpus_write_marker(tmp_path_factory):
+    """把跨进程语料写代际标记的读路径钉进沙箱（与 test_download_manager 同一口径）。
+
+    真实语料装载（`load_full_corpus` → `corpus_write_generation`）会读
+    `<project_root>/.userdata/corpus_write_generation`；离线审计 harness 把 `.userdata`
+    一律当真实用户数据硬阻断，于是本文件依赖 `records` 的测试会在夹具阶段整片报错。
+    标记只是缓存代际令牌、读不到即空串（生产语义），这里用同语义的空沙箱路径隔离。
+    """
+    from dataset_recommender.corpus import corpus as _corpus
+
+    sandbox = tmp_path_factory.mktemp("userdata")
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(_corpus, "_write_marker_path",
+                   lambda root: sandbox / "corpus_write_generation")
+    yield
+    monkey.undo()
 
 
 @pytest.fixture(scope="module")
@@ -448,3 +472,245 @@ def test_page_only_datasets_still_appear_in_the_pack():
     assert plan["items"][0]["rows_planned"] == 0
     assert plan["manual"] and plan["manual"][0]["dataset_uid"] == "ae:E-MTAB-1"
     assert plan["rows"] == []
+
+
+# ----------------------------------------------------------------- 清单注入 / 路径边界
+
+#: source 是数据集元数据，是不可信输入（uploads 记录只 strip）；这里模拟一条能伪造
+#: 整行数据的 source：换行 + 13 列，safe_uid/safe_name 都是 `../../escape*`。
+_FORGED_SOURCE = (
+    "Evil\nfake:uid\t../../escape\tEvil\tpage\tevil.h5ad\t0\t../../escape.h5ad\t1\t-\tsize\t-\t-\t"
+    "https://evil.example.com/x.h5ad"
+)
+
+
+def test_manifest_tsv_is_immune_to_field_injection():
+    """TSV 字段里的换行/制表符 = 伪造整行/整列。
+
+    一个带 `\\n` 的 source 能造出 13 列的伪数据行；脚本照读就会把文件写到 OUT 之外。
+    渲染层必须把控制字符折平：数据行数、列数、uid 集合都只由 plan 决定。
+    """
+    item = {"dataset_uid": "ok:1", "url": "https://example.org/ds/1",
+            "download_url": "https://example.org/ds/1.h5ad", "filesize": 10,
+            "source": _FORGED_SOURCE, "dataset_name": "标题\r带回车"}
+    plan = DP.build_plan([item])
+    assert len(plan["rows"]) == 1
+    text = DS.render_manifest_tsv(plan, {"plan_token": "tok", "snapshot_id": "snap",
+                                         "content_digest": "digest", "retrieval_date": "2026-07-22"})
+    lines = text.split("\n")
+    data = [ln for ln in lines if ln and not ln.startswith("#")]
+    assert len(data) == 1 + len(plan["rows"]), "数据行数只能由 plan 决定"
+    assert all(len(ln.split("\t")) == len(DS._TSV_COLUMNS) for ln in data)
+    assert not any(ln.split("\t")[0] == "fake:uid" for ln in data), "带换行的字段伪造出了新数据行"
+    assert "fake:uid" in text, "恶意内容只能作为字段值如实保留（不再有结构意义）"
+    assert "\r" not in text and "\x00" not in text, "控制字符（含回车）不得留在清单里"
+    groups = [ln for ln in lines if ln.startswith("# ===== ")]
+    assert len(groups) == 1 and groups[0].endswith(" ====="), "组标题行也必须单行化"
+
+
+@pytest.mark.parametrize("name", ["download.sh", "download.ps1"])
+def test_scripts_validate_manifest_paths_before_use(pack, name):
+    """脚本侧纵深防御：safe_uid / safe_name 必须先过边界校验（分隔符 / `.`/`..` /
+    逃出 OUT），不能直接拼进路径——清单是输入，不是可信代码。"""
+    text = {f["path"]: f["text"] for f in task_pack.render_files(pack)}[name]
+    if name == "download.sh":
+        assert "unsafe_component" in text and "目标路径逃出下载目录" in text
+        assert text.index("unsafe_component") < text.index('dir="$OUT/$safe_uid"'), \
+            "校验必须发生在拼路径之前"
+    else:
+        assert "Test-SafeComponent" in text and "目标路径逃出下载目录" in text
+        assert text.index("Test-SafeComponent") < text.index("$dir = Join-Path $Out $safeUid"), \
+            "校验必须发生在拼路径之前"
+
+
+@pytest.mark.parametrize("name", ["download.sh", "download.ps1"])
+def test_scripts_do_not_trust_an_existing_file(pack, name):
+    """已有同名文件不能凭「大小一样」就宣告通过——来源声明了 md5 就必须核 md5。
+
+    只看大小的旧路径会把一个损坏/被替换过、但大小相同的旧文件当成「已下载并核验通过」。
+    """
+    text = {f["path"]: f["text"] for f in task_pack.render_files(pack)}[name]
+    if name == "download.sh":
+        block = text[text.index('if [ -f "$target" ]; then'):text.index('下载中：$safe_uid/$safe_name')]
+        assert 'md5_of "$target"' in block, "跳过前必须真的算一次 md5"
+        assert "已存在且校验和一致" in block
+        assert block.index('md5_of "$target"') < block.index("wc -c"), "md5 优先于大小"
+    else:
+        block = text[text.index("if (Test-Path -LiteralPath $target) {"):text.index('Write-Host "下载中')]
+        assert "Get-FileHash" in block, "跳过前必须真的算一次 MD5"
+        assert "已存在且校验和一致" in block
+
+
+def _fake_curl(tmp_path: Path) -> "tuple[Path, Path]":
+    """造一个假 curl（只认识 -o 参数，写出固定内容并在每次调用时留痕）。"""
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    log = tmp_path / "curl-calls.log"
+    stub = bindir / "curl"
+    stub.write_text(
+        "#!/bin/sh\n"
+        f'echo "$@" >> "{log}"\n'
+        "out=''\n"
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac\n'
+        "done\n"
+        "printf 'NEWCONTENT' > \"$out\"\n",
+        encoding="utf-8", newline="\n")
+    stub.chmod(0o755)
+    return bindir, log
+
+
+def _manifest_with_row(*, safe_uid: str, safe_name: str, size: str, md5: str) -> str:
+    # url 用 `.invalid`（RFC 2606 保留的示例 TLD）。离线保证来自假 curl 截获与
+    # dead-proxy tripwire，不依赖域名本身。
+    return (
+        "# 这是给脚本读的清单；人请看同目录的 file-list.md。\n"
+        "# plan_token: tok\n"
+        "# snapshot_id: snap  content_digest: digest\n"
+        "# retrieval_date: 2026-07-22\n"
+        "# 巡检快照: 未记录（）\n"
+        "# allowed_hosts: files.example.invalid\n"
+        "# md5 语义：来源公布的声明值，本工具没有重新算过。\n"
+        + "\t".join(DS._TSV_COLUMNS) + "\n"
+        + "\t".join(["cxg:1", safe_uid, "示例源", "checksum_verifiable", "f.h5ad", "1",
+                     safe_name, size, md5, "md5", "-", "-",
+                     "https://files.example.invalid/f.h5ad"]) + "\n")
+
+
+def _write_scripts(pack: Path) -> None:
+    """把两个 runner 按真实落盘编码写进包目录（sh: LF；ps1: CRLF + BOM）。"""
+    plan = {"estimate": {}, "scope": DP.SCOPE_PRIMARY}
+    (pack / "download.sh").write_text(DS.render_sh(plan), encoding="utf-8", newline="\n")
+    (pack / "download.ps1").write_text(DS.render_ps1(plan), encoding="utf-8-sig", newline="\r\n")
+
+
+def _decode(raw: bytes) -> str:
+    """PowerShell 5.1 的 stdout 编码随控制台代码页（中文机器上是 GBK）；UTF-8 优先。"""
+    for encoding in ("utf-8", "gbk", "cp936"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", "replace")
+
+
+def _sh_exe() -> str:
+    found = shutil.which("sh")
+    if not found:
+        pytest.skip("未解析到 sh —— 跳过 download.sh 的真行为门（Windows 上由 Git Bash 提供）。")
+    # Git for Windows 的 bin\sh.EXE 是启动器，会无条件把 /mingw64/bin:/usr/bin 插到 PATH
+    # 最前，PATH 前置的假 curl 永远排不到第一。同安装下的 usr\bin\sh.EXE 是真 MSYS2 sh
+    # （POSIX 环境同行为），PATH 前置截获才可靠生效。
+    parent = Path(found).resolve().parent
+    sibling = parent.parent / "usr" / "bin" / "sh.exe"
+    if sibling.is_file() and parent.name.lower() == "bin":
+        return str(sibling)
+    return found
+
+
+def _sh_env(bindir: Path) -> dict:
+    """sh 子进程环境：PATH 规范成单键并前置 fakebin。
+
+    Windows 上 os.environ 常以 `Path` 命名；再塞一个 `PATH` 会在子进程环境块里留下大小写
+    不同的一对同名键，MSYS2 sh 对重复键的取舍无保证——单键化之后截获与平台无关。
+    其余环境原样保留（脚本还需要 grep/sed/cut/wc 等系统工具）。
+    """
+    original = next((v for k, v in os.environ.items() if k.lower() == "path"), "")
+    env = {k: v for k, v in os.environ.items() if k.lower() != "path"}
+    env["PATH"] = f"{bindir}{os.pathsep}{original}"
+    return env
+
+
+def test_sh_refuses_a_manifest_row_that_escapes(tmp_path: Path):
+    """真行为：伪造行（safe_uid=`../../escape`）必须被拒绝，且不发起任何下载。
+
+    用假 curl 放进 PATH——真网络一次都不碰；--go 走完整路径（含 mkdir 与下载分支）。
+    """
+    sh = _sh_exe()
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    _write_scripts(pack)
+    bindir, curl_log = _fake_curl(tmp_path)
+    (pack / "manifest.tsv").write_text(
+        _manifest_with_row(safe_uid="../../escape", safe_name="../../escape.h5ad",
+                           size="10", md5="0" * 32),
+        encoding="utf-8", newline="\n")
+    env = _sh_env(bindir)
+    proc = subprocess.run([sh, "download.sh", "--go"], cwd=str(pack), env=env,
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "路径不安全" in proc.stdout and "将下载" not in proc.stdout
+    assert not (tmp_path / "escape").exists(), "safe_uid 逃出了 OUT"
+    assert not (tmp_path / "escape.h5ad").exists(), "safe_name 逃出了 OUT"
+    assert not curl_log.exists(), "被拒绝的行不得发起任何下载"
+
+
+def test_sh_reverifies_an_existing_file_with_md5(tmp_path: Path):
+    """真行为：同名旧文件大小相同但 md5 不符 → 必须重下，不得跳过。"""
+    sh = _sh_exe()
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    _write_scripts(pack)
+    bindir, curl_log = _fake_curl(tmp_path)
+    expected = b"NEWCONTENT"
+    (pack / "manifest.tsv").write_text(
+        _manifest_with_row(safe_uid="cxg_1", safe_name="f.h5ad",
+                           size=str(len(expected)), md5=hashlib.md5(expected).hexdigest()),
+        encoding="utf-8", newline="\n")
+    target_dir = pack / "data" / "cxg_1"
+    target_dir.mkdir(parents=True)
+    (target_dir / "f.h5ad").write_bytes(b"OLDCONTENT")   # 同样 10 字节，内容不同
+    env = _sh_env(bindir)
+    proc = subprocess.run([sh, "download.sh", "--go"], cwd=str(pack), env=env,
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
+    assert "已存在且校验和一致" not in proc.stdout, "md5 不符的旧文件不得被当成已核验"
+    assert curl_log.exists(), "md5 不符必须重下"
+    assert (target_dir / "f.h5ad").read_bytes() == expected
+    assert "\tok" in (pack / "logs" / "report.tsv").read_text(encoding="utf-8")
+
+
+def _powershell_shells() -> "list[tuple[str, str]]":
+    """可用的真实 PowerShell：5.1（客户路径）优先，pwsh 7 次之（如存在）。
+
+    返回 (可执行路径, 参数化 id)；都没有时返回空列表，由测试体 skip——
+    保持「解析不到 PowerShell 就跳过真行为门」的既有语义。
+    """
+    shells: list[tuple[str, str]] = []
+    for name, label in (("powershell", "powershell-5.1"), ("pwsh", "pwsh-7")):
+        found = shutil.which(name)
+        if found and not any(path == found for path, _ in shells):
+            shells.append((found, label))
+    return shells
+
+
+@pytest.fixture(
+    scope="module",
+    params=[pytest.param(path, id=label) for path, label in _powershell_shells()]
+    or [pytest.param(None, id="no-powershell")],
+)
+def ps_shell(request) -> "str | None":
+    return request.param
+
+
+def test_powershell_script_refuses_a_manifest_row_that_escapes(tmp_path: Path, ps_shell: "str | None"):
+    """真行为（Windows 侧）：ps1 与 sh 同一条边界校验（干跑，零写盘、零网络）。
+
+    每个可用的真实 PowerShell 都跑一遍：5.1 是客户路径（无 BOM 源会乱码、重定向 stdout
+    走控制台代码页），pwsh 7 只是回退——不能只测 pwsh 7 掩盖 5.1 的输出编码问题。
+    """
+    if ps_shell is None:
+        pytest.skip("未解析到 PowerShell —— 跳过 download.ps1 的真行为门。")
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    _write_scripts(pack)
+    (pack / "manifest.tsv").write_text(
+        _manifest_with_row(safe_uid="../../escape", safe_name="../../escape.h5ad",
+                           size="10", md5="0" * 32),
+        encoding="utf-8-sig", newline="\n")
+    proc = subprocess.run([ps_shell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+                           "-File", str(pack / "download.ps1")],
+                          cwd=str(pack), capture_output=True, timeout=120)
+    stdout = _decode(proc.stdout)
+    assert proc.returncode == 0, f"stdout={stdout}\nstderr={_decode(proc.stderr)}"
+    assert "路径不安全" in stdout and "将下载" not in stdout, stdout

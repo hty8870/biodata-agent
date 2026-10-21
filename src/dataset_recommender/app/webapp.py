@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import datetime
 import hashlib
 import hmac
@@ -30,17 +31,18 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..corpus.corpus import available_sources, corpus_cache_generation, corpus_snapshot, invalidate_external_cache, known_source_values, load_full_corpus, load_normalized_corpus, locate_record, BASE_SOURCE
-from ..corpus.downloads import file_count, files_for, primary_url
+from ..corpus.corpus import available_sources, corpus_cache_generation, corpus_snapshot, invalidate_external_cache, known_source_values, load_full_corpus, load_normalized_corpus, locate_record, publish_corpus_write, _base_source as _corpus_base_source
+from ..corpus.downloads import files_for, primary_url
 from . import accounts
 from . import llm_quota
 from . import mcp_tokens  # 在线 MCP 接入令牌库（轻量，import 零 I/O）
 from ..llm import act_summary_llm, dream, search_reply_llm
 from ..content import item_view
 from ..llm.config import get_settings
+from ..domain.registry import get_domain
 from .accounts import AccountError, SESSION_COOKIE
 from ..retrieval.fair import build_fair_report
-from ..llm.llm_client import LLMConfig, diagnose_network, healthcheck, load_llm_config
+from ..llm.llm_client import LLMConfig, diagnose_network, healthcheck, load_llm_config, should_use_llm
 from ..llm.llm_client import _normalize_provider as _llm_normalize_provider
 from ..retrieval.query_parser import parse_query
 from ..content.reuse_pack import ReusePackError, build_pack_for_uids, sanitize_uids, to_bibtex, to_ris
@@ -87,9 +89,10 @@ def _status_for(code: str, table: dict[str, int]) -> int:
     return table.get(code, 400)
 
 
-from .runtime_paths import get_app_paths, instance_data_dir_for, resource_file_for
+from .runtime_paths import get_app_paths, instance_data_dir_for
 from .model_installer import cancel_model_install, model_install_status, start_model_install
 from .limits import MAX_DATASETS_LIMIT  # 全库浏览分页上限单一真源（与 MCP browse_datasets 同源）
+from .limits import CORPUS_SYNC_VECTOR_TIMEOUT_SECONDS
 
 # W1 运行时路径解耦（安装器工程）：单一真源 runtime_paths.get_app_paths()。
 # - PROJECT_ROOT = 实例数据根（source/portable = 项目根，历史逐字节一致；frozen = %LOCALAPPDATA%/BioDataAgent）：
@@ -107,15 +110,39 @@ DATA_DIR = PATHS.shipped_base_dir
 # _new_upload_name / ingest_dataset / UploadError 从那里导入（见上方 import）。
 # 写入恒进 external 的**用户层**（source 下与官方快照同目录），绝不碰 base；来源缺省名/物种词表/文件名正则也在 uploads.py 内。
 
-ENV_LOCK = threading.Lock()
+from .llm_admission import ENV_LOCK
 
-WEB_API_VERSION = "3.0.0"
+# 3.1.1：「同系列」标记（`/api/recommend` 的 `results[]` 加性新增 `collection_doi`）。
+# 3.2.0：协作规则卡（记忆层 RSI 落地，additive）——新增 `/api/rules/list` + `/api/rules/approve`
+#        + `/api/rules/revoke`（用户逐条确认的「助手行为约束」服务端账本 `.userdata/collab_rules.jsonl`，
+#        撤回是 tombstone）；`/api/dream` 响应加性新增 `rules` / `rules_count`
+#        （抽取扩「协作规则」类目——2026-09-29 融合批起原「明确说过的约束」并轨进它，
+#        故抽取 prompt 是三类目；条目加性多 `tier` / `trigger`；`memories` 形状与语义逐位不变）。
+# 3.6.0：共享对话 / 项目 / 复盘服务（additive）——新增 `/api/conversations`（列表/详情/分页游标）、
+#        `/api/conversations/actions`（create/archive/restore/rename/delete/select_frame/branch/import）、
+#        `/api/conversations/{id}/actions`、`/api/conversations/{id}/replay` 与
+#        `/{id}/replay/{action}`（复盘 annotate/snapshot/annotate_snapshot/seen/chat/digest）；同一持久现场同时服务 Web 与
+#        MCP 高层工具（agent_chat/agent_conversations/agent_projects/agent_task/agent_replay），
+#        同 `data_root` + 同身份即同 scope（普通 MCP 不复制图谱 GUI）。
+WEB_API_VERSION = "3.7.0"
 
-app = FastAPI(title="BioData Agent Web UI", version=WEB_API_VERSION)
+
+class _CspStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope: dict) -> Response:
+        response = await super().get_response(path, scope)
+        if path.lower().endswith((".html", ".htm")):
+            full_path, _ = await run_in_threadpool(self.lookup_path, path)
+            if full_path:
+                page_html = await run_in_threadpool(Path(full_path).read_text, encoding="utf-8")
+                response.headers["Content-Security-Policy"] = _content_security_policy(page_html)
+        return response
+
+
+app = FastAPI(title=f"{get_domain().branding.product_name} Web UI", version=WEB_API_VERSION)
 # 大列表/API JSON 在回环上也会占用显著的序列化与 WebView 传输时间。仅压缩 >=1KiB
 # 的响应，小型 health/ack 不付压缩成本；compresslevel=6 取体积/延迟的稳健平衡。
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/static", _CspStaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ---------------------------------------------------------------- 在线 MCP
 # 同一 FastMCP 实例的在线形态：`/mcp` = streamable-HTTP + Bearer 令牌闸（账户级补丁作用域 +
@@ -141,16 +168,21 @@ if _mcp_server is not None:
 
 @asynccontextmanager
 async def _lifespan_with_mcp(_app):
-    """宿主 lifespan：挂载不走子应用 lifespan → 在此驱动 MCP 会话管理器任务组
-    （stateless 模式 handle_request 同样要求任务组已启动，SDK 实读确认）。
-    session manager 每实例只能 run 一次 → 每次进入前先 reset_online_runtime() 重建，
-    测试反复进出 lifespan 由此幂等。无 mcp 包的最小安装（_mcp_server=None）直接空转。"""
-    if _mcp_server is None:
-        yield
-        return
-    _mcp_server.reset_online_runtime()
-    async with _mcp_server.mcp.session_manager.run():
-        yield
+    """宿主驱动 MCP 会话管理器及已有会话维护；无 MCP 时仍恢复持久清理。
+    无待清理项保持 runtime 惰性；本生命周期创建的 runtime 最后一个宿主退出时关闭。"""
+    import anyio
+    token = object()
+    try:
+        await run_in_threadpool(_enter_conversation_lifespan, token)
+        if _mcp_server is None:
+            yield
+        else:
+            _mcp_server.reset_online_runtime()
+            async with _mcp_server.mcp.session_manager.run():
+                yield
+    finally:
+        with anyio.CancelScope(shield=True):
+            await run_in_threadpool(_leave_conversation_lifespan, token)
 
 
 app.router.lifespan_context = _lifespan_with_mcp
@@ -232,6 +264,9 @@ class RecommendRequest(_ExperimentContract):
     facet_filters: list[dict] | None = Field(default=None, max_length=_MAX_FACET_FILTERS_ITEMS, description="分面细化：在当前结果集上按维度精确收窄。value 取 facets[].values[].value 里回传的**分面键**（物种/组织/疾病为小写归一键，如 'homo sapiens'）；None=不细化")
     suppressed_constraints: list[str] | None = Field(default=None, max_length=_MAX_SUPPRESSED_ITEMS, description="忽略查询里已识别出的某个筛选条件（对应网页「查询条件」标签上的「忽略」）：取 query_constraints[].dim（物种/组织/疾病/平台/技术 + has_raw_data + date）。传入则该条件在检索前被放宽；None/空=全部条件照常生效，返回结果与不传本参数完全一致")
     lenient_dims: list[str] | None = Field(default=None, max_length=_MAX_LENIENT_ITEMS, description="把「未标注」的也纳入（对应网页结果区的「也纳入」按钮）：对这些维度（species/tissue/disease/platform/assay/modality）**字段为空的记录视作通过**（无法核验≠不匹配），已知是别的值仍然排除。取 coverage_caveats[].dim；None/空=不放宽，返回结果与不传本参数完全一致")
+    # ---- 复盘会话标识（2026-09-28 复盘批，additive；缺省 = 不落 session log，行为与现状逐位一致）----
+    conv_id: str | None = Field(default=None, max_length=80, description="前端生成的对话 id：本次检索记入该对话的 session log（复盘数据面）；None=不记录")
+    replay_key: str | None = Field(default=None, max_length=64, description="对话的复盘访问 key（匿名分区下防串号的第二道闸）；随 conv_id 生效")
 
 
 class TaskPackPreviewRequest(RecommendRequest):
@@ -324,6 +359,15 @@ class UtteranceRequest(_ExperimentContract):
                     "忽略回普通路由并如实记录（响应 recipe_note）；合法 → 只缩小到既有能力"
                     "（动词选择面收窄），不得绕过参数校验/执行开关/安全闸。编辑过模板 = 普通路由不携带",
     )
+    # ---- 放松卡作答（2026-09-14 ask 暂停/重启批，additive）----
+    ask_answer: dict | None = Field(
+        default=None,
+        description="用户在环内放松卡（ask.relax）上的作答：{kind: 恒 \"ask.relax\", "
+                    "choice_key, label, message, suppress}。在场时本回合语义恒为「按所选忽略条件"
+                    "重跑原查询」：agent 可用 → 续跑 ReAct 环（route_consensus 免投票直定 search、"
+                    "understand 零 LLM 强置首步 rank、decide 注入作答事实段）；不可用 → 回退纯检索"
+                    "路由（等同旧零 LLM 重搜）。suppress 清单过与 suppressed_constraints 同一净化闸",
+    )
     # ---- LLM 配置覆盖（请求级，不持久化）----
     provider: str = Field(default="mock", description=_DESC_PROVIDER)
     use_llm: bool = Field(default=False)
@@ -342,6 +386,13 @@ class UtteranceRequest(_ExperimentContract):
         default=False,
         description="true 时改发 text/event-stream：agent 规划节点 step* → final（final 体与非流式逐位同形）",
     )
+
+    project_id: str | None = Field(default=None, max_length=80, description="对话项目编号；空串为未归类")
+    background: bool = Field(default=False, description="以有界持久任务执行，并返回可恢复的任务编号")
+    shared: bool = Field(default=False, description="显式共享会话；服务器消息、结果帧与现场为真源")
+    expected_revision: int | None = Field(default=None, ge=0)
+    state_patch: dict | None = Field(default=None)
+    ask_choice: str | None = Field(default=None, max_length=80)
     # ---- 幂等请求号（2026-08-08 修复）----
     req_id: str | None = Field(
         default=None,
@@ -353,6 +404,9 @@ class UtteranceRequest(_ExperimentContract):
     # 确定性检索与 preliminary_final 判定，校验口径与 /api/recommend 完全相同。
     top_k: int | None = Field(default=None, ge=1, le=50, description="返回结果最大数量（默认 10，最大 50）")
     rerank: str = Field(default="off", description="可选 LLM 重排：off / llm")
+    rerank_top_n: int | None = Field(default=None, ge=1, le=50)
+    auto_parse_sources: bool = Field(default=False)
+    auto_allow_llm: bool = Field(default=False)
     recall: str = Field(default="off", description="可选向量召回：off / dense / cross_encoder")
     strategy: str = Field(default="fixed", description="检索策略：fixed / auto（同 /api/recommend 口径）")
     facet_filters: list[dict] | None = Field(default=None, max_length=_MAX_FACET_FILTERS_ITEMS, description="分面细化（同 /api/recommend）")
@@ -361,6 +415,9 @@ class UtteranceRequest(_ExperimentContract):
     date_from: str | None = Field(default=None, description="发表时间范围起（ISO YYYY-MM-DD，含）；非法 → 400（同 /api/recommend）")
     date_to: str | None = Field(default=None, description="发表时间范围止（ISO YYYY-MM-DD，含）；非法 → 400（同 /api/recommend）")
     polish: bool = Field(default=True, description="AI 润色推荐说明子开关（同 /api/recommend 缺省口径）；只用于 preliminary_final 判定——polish 实际会跑 = use_llm ∧ polish")
+    # ---- 复盘会话标识（2026-09-28 复盘批，additive；缺省 = 不落 session log，行为与现状逐位一致）----
+    conv_id: str | None = Field(default=None, max_length=80, description="前端生成的对话 id：本轮对话记入该对话的 session log（复盘数据面）；None=不记录")
+    replay_key: str | None = Field(default=None, max_length=64, description="对话的复盘访问 key（匿名分区下防串号的第二道闸）；随 conv_id 生效")
 
 
 class SearchRescueRequest(BaseModel):
@@ -389,6 +446,53 @@ class SearchRescueRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
     base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
     model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
+
+
+class _ReplayBase(BaseModel):
+    """复盘端点公共入参（2026-09-28 复盘批）：对话 id + 访问 key。
+    key 是匿名分区下防串号的第二道闸——服务端首写落 key，之后读写必须匹配，不匹配一律 404。"""
+    model_config = ConfigDict(extra="forbid")
+
+    conv_id: str = Field(..., min_length=1, max_length=80, description="前端生成的对话 id")
+    key: str = Field(default="", max_length=64, description="复盘访问 key（localStorage 随机生成）")
+
+
+class _ReplayLlmBase(_ReplayBase):
+    """带 LLM 配置覆盖的复盘入参（手动整理 / 复盘对话 / 补建；与 /api/recommend 同契约）。"""
+    provider: str = Field(default="mock", description=_DESC_PROVIDER)
+    use_llm: bool = Field(default=False)
+    mock_llm: bool = Field(default=False)
+    api_key: str | None = Field(default=None, max_length=_MAX_API_KEY_CHARS, description=_DESC_REQUEST_API_KEY)
+    base_url: str | None = Field(default=None, description=_DESC_CUSTOM_BASE_URL)
+    model: str | None = Field(default=None, max_length=_MAX_MODEL_CHARS, description=_DESC_CUSTOM_MODEL)
+
+
+class ReplayDigestRequest(_ReplayLlmBase):
+    """手动「重新整理」入参（用户显式触发，同步执行）。"""
+
+
+class ReplayChatRequest(_ReplayLlmBase):
+    text: str = Field(..., min_length=1, max_length=4000, description="sidechat 这一轮的用户文本（标注 pill 已展平拼入）")
+
+
+class ReplayBackfillRequest(_ReplayLlmBase):
+    turns: list[dict] = Field(default_factory=list, max_length=60, description="本机历史补建：[{role: user|assistant, text}]；仅服务端尚无记录时生效")
+
+
+class ReplaySeenRequest(_ReplayBase):
+    """开窗已读的核销入参。`observed_version`/`observed_pids` 是可选的版本绑定（additive）：
+    只核销用户实际看到的那一版条目，后台新落的成果不被吞（缺省＝旧调用语义，核销当前全部）。"""
+    observed_version: "int | None" = Field(
+        default=None, ge=0,
+        description="points 返回的 digest_version（用户实际渲染的那一版）；缺省＝旧调用语义")
+    observed_pids: "list[str] | None" = Field(
+        default=None, max_length=2000,
+        description="可选：用户实际看到并已渲染的 pid 集（精确回显，优先于 observed_version）")
+
+
+class ReplayAnnotateRequest(_ReplayBase):
+    pid: str = Field(..., min_length=1, max_length=32, description="图上条目/边 id（pid 或 eid）")
+    text: str = Field(..., min_length=1, max_length=2000, description="一条用户标注（只记录，不发 LLM）")
 
 
 class InterpretRequest(BaseModel):
@@ -569,6 +673,28 @@ def _sanitize_facet_filters(raw: object) -> list[dict]:
 def _sanitize_suppressed(raw: object) -> list[str]:
     """委托 workflow.sanitize_suppressed（单一真源）。"""
     return sanitize_suppressed(raw)
+
+
+def _sanitize_ask_answer(raw: dict | None) -> dict | None:
+    """放松卡作答净化（2026-09-14 ask 暂停/重启批）：kind 恒 "ask.relax"——
+    不符即 400（与端点其它入参校验同径；合法前端只产这一种）。suppress 过
+    `_sanitize_suppressed`（与 suppressed_constraints 同一真源）；label/message/
+    choice_key 收编为定长截断的纯文本（注入 decide prompt 的机械事实段，先裁再用）。
+    None → None（未携带，绝大多数回合）。"""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or str(raw.get("kind") or "") != "ask.relax":
+        raise HTTPException(
+            status_code=400,
+            detail="ask_answer.kind 目前只支持 \"ask.relax\"（环内放松卡作答）。",
+            headers={"X-Error-Code": "bad_ask_answer"})
+    return {
+        "kind": "ask.relax",
+        "choice_key": str(raw.get("choice_key") or "")[:64],
+        "label": str(raw.get("label") or "")[:200],
+        "message": str(raw.get("message") or "")[:500],
+        "suppress": _sanitize_suppressed(raw.get("suppress")),
+    }
 
 
 def _sanitize_lenient_dims(raw: object) -> list[str]:
@@ -931,9 +1057,15 @@ _AUTH_OPEN_PATHS = frozenset({
 
 
 def _account_gate_required() -> bool:
-    # 请求时读 env（与 _TRUSTED_HOSTS 的启动时读取不同）：测试 monkeypatch 即生效；
-    # 一次 os.getenv 的成本相对请求处理可忽略。
-    return os.getenv(_REQUIRE_ACCOUNT_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+    from .llm_admission import account_gate_required
+    return account_gate_required()
+
+
+def _request_user(request: Request) -> "accounts.PublicUser | None":
+    if not hasattr(request.state, "account_user"):
+        request.state.account_user = accounts.resolve_session(
+            request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
+    return request.state.account_user
 
 
 @app.middleware("http")
@@ -941,17 +1073,14 @@ async def _account_gate(request: Request, call_next):
     path = request.url.path.rstrip("/") or "/"
     user = None
     if path.startswith("/api/"):
-        # 任务 3（2026-08-26 基线+补丁包）：会话解析提前到闸前、且不受护栏开关控制——只要
-        # 请求带有效会话（含本机登录态），本请求的语料读写就绑定该账户的补丁包；无会话/匿名
-        # → user None → 不绑定，读写路径与历史逐字节一致。resolve_session 默认是进程内 dict
-        # 命中（_hydrate_sessions 一次性把会话库载入内存），每请求成本可忽略；opt-in Redis
-        # 会话后端（BIODATA_SESSION_STORE=redis）下是每请求一次 Redis GET，毫秒级。
-        user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
+        user = await run_in_threadpool(_request_user, request)
     if (_account_gate_required() and path.startswith("/api/")
             and path not in _AUTH_OPEN_PATHS and user is None):
         return _json_utf8(
             {"ok": False, "error": "auth_required", "detail": "请先登录后再使用。"},
             status_code=401)
+    if path.startswith("/api/"):
+        await run_in_threadpool(_refresh_shared_corpus_cache)
     if user is not None:
         from ..corpus.patch_package import bind_patch_scope  # 惰性：webapp 模块顶层零新 import 边
         with bind_patch_scope(user.id):
@@ -977,31 +1106,29 @@ async def _require_loopback_host(request: Request, call_next):
             status_code=403,
             content={"detail": _UNTRUSTED_HOST_DETAIL},
         )
-    origin = (request.headers.get("origin") or "").strip()
-    if origin and request.method in _UNSAFE_METHODS:
-        detail = _cross_origin_detail(
-            origin, scheme=request.url.scheme.lower(), hostname=hostname, port=port,
-        )
-        if detail is not None:
-            return JSONResponse(status_code=403, content={"detail": detail})
+    if request.method in _UNSAFE_METHODS:
+        try:
+            _require_same_origin(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     return await call_next(request)
+
+
+def _content_security_policy(page_html: str = "") -> str:
+    hashes = set()
+    normalized = page_html.replace("\r\n", "\n").replace("\r", "\n")
+    for attributes, script in re.findall(r"<script\b([^>]*)>(.*?)</script\s*>", normalized, re.I | re.S):
+        if re.search(r"\bsrc\s*=", attributes, re.I):
+            continue
+        digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
+        hashes.add(f"'sha256-{digest}'")
+    scripts = " ".join(["'self'", *sorted(hashes)])
+    return f"script-src {scripts}; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 
 @app.middleware("http")
 async def _security_headers(request: Request, call_next):
-    """全站安全响应头（xss-sec ：localhost 应用也有点击劫持面——Host 守卫挡不住
-    浏览器带合法 loopback Host 的 <iframe> 导航）。注册在 Host 守卫之后 → 栈上更靠外，
-    守卫直返的 403 也会带上这三个头。
-
-    CSP 刻意**不加**：index/dataset 两页各有一个**内联** ``<script type="importmap">``
-    （ESM 裸标识符映射；importmap 目前无法外链，只能内联），script-src 不放
-    'unsafe-inline' 会直接掐死 importmap、整站起不来，放了又等于白配。点击劫持已由
-    X-Frame-Options 兜住，CSP 的收益/风险不成比例。
-
-    500 档兜底：端点里漏网的未捕获异常由**最外层** ServerErrorMiddleware 兜成 500，
-    本 middleware 的 ``call_next`` 会直接抛出、走不到下面三行打头——500 曾是唯一缺
-    安全头的档位。这里自己接住：完整堆栈留 stderr 供排查，客户端只见通用
-    文案（异常正文可能含本机绝对路径，绝不上屏），三个头照常打上。"""
+    """安全头覆盖错误响应；内联脚本按实际内容哈希授权，不限制下载与遥测连接来源。"""
     try:
         response = await call_next(request)
     except Exception:
@@ -1011,6 +1138,8 @@ async def _security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if not response.headers.get("content-type", "").lower().startswith("text/html"):
+        response.headers.setdefault("Content-Security-Policy", _content_security_policy())
     # 静态资源缓存头：此前裸 StaticFiles 只发 etag/last-modified，
     # 浏览器走启发式缓存——指纹令牌（?v=）本就为破缓存而设（契约门强制内容变则令牌变），
     # 这里把语义写明：带指纹 → immutable 长缓存（内容变令牌必变，安全）；无指纹 → no-cache
@@ -1053,6 +1182,9 @@ def _require_same_origin(request: Request) -> None:
     if not _is_supported_local_request_host(expected.hostname):
         raise HTTPException(status_code=403, detail=_UNTRUSTED_HOST_DETAIL)
 
+    fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+    if fetch_site and fetch_site not in {"same-origin", "none"}:
+        raise HTTPException(status_code=403, detail="禁止跨源请求。")
     origin = (request.headers.get("origin") or "").strip()
     if not origin:
         return
@@ -1094,23 +1226,7 @@ def _rate_limited(key: str, *, limit: int, window: float) -> bool:
         return True
 
 
-@contextmanager
-def _temporary_env(overrides: dict[str, str | None]):
-    old_values: dict[str, str | None] = {}
-    for key, value in overrides.items():
-        old_values[key] = os.environ.get(key)
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
-    try:
-        yield
-    finally:
-        for key, old in old_values.items():
-            if old is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = old
+from .llm_admission import temporary_env as _temporary_env
 
 
 def _build_request_overrides(
@@ -1232,25 +1348,13 @@ def _materialize_request_llm_config(
 
     `within`（可选）在同一 env 窗口内执行——需顺带物化其它对象的调用方
     （/api/recommend 的 workflow 与 auto_llm_available）经它挂上，不另开窗口。"""
-    with ENV_LOCK:
-        # Trust baseline is the server's *actual* configuration (no request
-        # provider override), so a provider switch that would route a generic
-        # server key to another vendor's default endpoint is detected too.
-        server_cfg = load_llm_config(project_root=CONFIG_ROOT)
-        env_overrides = _build_request_overrides(
-            provider=provider,
-            use_llm=use_llm,
-            mock_llm=mock_llm,
-            api_key=(api_key or "").strip() or None,
-            base_url=base_url,
-            model=model,
-            server_provider=server_cfg.provider,
-            server_base_url=server_cfg.base_url,
-        )
-        with _temporary_env(env_overrides):
-            if within is not None:
-                within()
-            return load_llm_config(project_root=project_root)
+    from .llm_admission import materialize
+    return materialize(config_root=CONFIG_ROOT, project_root=project_root,
+        loader=load_llm_config, lock=ENV_LOCK, within=within,
+        overrides_factory=lambda server: _build_request_overrides(
+            provider=provider, use_llm=use_llm, mock_llm=mock_llm,
+            api_key=api_key, base_url=base_url, model=model,
+            server_provider=server.provider, server_base_url=server.base_url))
 
 
 # ---------------------------------------------------------------- LLM 日配额（账号护栏）
@@ -1293,41 +1397,27 @@ def _gate_llm_quota(
     mock_llm: bool,
     api_key: str | None,
     requested_base_url: str = "",
+    require_enabled: bool = True,
 ) -> None:
-    """T3 账号级 LLM 日配额闸：本请求将真实消耗**服务端** LLM → 计数 + 超限 429。
-
-    - `cfg` 已物化 → 直接据它判定；`cfg=None`（流式分支尚未物化）→ ENV_LOCK 内按请求
-      覆盖链复算一份（与端点物化同径，绝不捞到别的请求临时注入的 env）。
-    - BYOK / mock / 未启用 / 服务端无 key → 不计（烧不到服务端配额）。
-    - 豁免名单（`_LLM_QUOTA_EXEMPT_ENV`）与闸关闭（本机形态）直接放行。
-    """
+    """按执行侧有效配置准入；不受 enable 开关控制的能力显式传 require_enabled=False。"""
     if not _account_gate_required():
         return
-    if (api_key or "").strip():
-        return  # BYOK：烧的是用户自己的 key，不占服务端配额
-    provider = _normalize_provider(provider)
-    if provider == "mock" or mock_llm or not use_llm:
+    if not use_llm:
         return
     if cfg is None:
         cfg = _materialize_request_llm_config(
-            provider, use_llm=use_llm, mock_llm=mock_llm,
-            api_key=None, base_url=requested_base_url, model=None)
-    if cfg.mock_llm or not (cfg.enable_llm and cfg.api_key):
-        return  # 服务端没 key / 未启用：LLM 根本不会真烧，不计
-    user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
-    if user is None:
-        return  # 中间件已 401；此处只是纵深防御
-    if user.username.lower() in _quota_exempt_users():
-        return
-    trial = _normalize_provider(cfg.provider) == "trial"
-    per_user = _env_int(_TRIAL_DAILY_PER_USER_ENV, 30) if trial else _env_int(_LLM_DAILY_PER_USER_ENV, 100)
-    global_limit = _env_int(_TRIAL_DAILY_GLOBAL_ENV, 500) if trial else _env_int(_LLM_DAILY_GLOBAL_ENV, 1000)
+            _normalize_provider(provider), use_llm=use_llm, mock_llm=mock_llm,
+            api_key=api_key, base_url=requested_base_url, model=None)
+    from .llm_admission import gate_quota
+    from .durable_jobs import JobStoreError
+    user = _request_user(request)
     try:
-        llm_quota.check_and_increment(
-            PROJECT_ROOT, user.username,
-            trial=trial, per_user_limit=per_user, global_limit=global_limit)
-    except llm_quota.QuotaExceeded as exc:
-        raise HTTPException(status_code=429, detail=str(exc)) from None
+        gate_quota(PROJECT_ROOT, username=getattr(user, "username", ""), cfg=cfg,
+            api_key=api_key, use_llm=use_llm, require_enabled=require_enabled,
+            account_required=_account_gate_required())
+    except JobStoreError as exc:
+        status = {"auth_required": 401, "llm_quota_exceeded": 429}.get(exc.code, 503)
+        raise HTTPException(status_code=status, detail=exc.message) from None
 
 
 def _json_utf8(payload: dict[str, Any], status_code: int = 200) -> JSONResponse:
@@ -1345,6 +1435,10 @@ _TELEMETRY_META_ENV = {
     "<server-ip>": "BIODATA_TELEMETRY_ALLOW_INSECURE",
 }
 
+# 部署注入页脚占位符（index.html 唯一锚点）：备案号等合规信息属部署侧数据，
+# 真实值只存在于服务器 .env，经 BIODATA_SITE_FOOTER_HTML 在运行时原样注入。
+_DEPLOY_FOOTER_PLACEHOLDER = "<!--deploy-footer-->"
+
 
 def _index_html() -> str:
     text = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -1352,6 +1446,11 @@ def _index_html() -> str:
         value = str(os.environ.get(env_name) or "").strip()
         if value:
             text = text.replace(placeholder, _html.escape(value, quote=True))
+    # 页脚与遥测 meta 语义不同：管理侧要输出原始 <a> 标记，故不转义、且空值时也
+    # 清掉占位符（页面不留模板痕迹）。env 与 .env 同属管理侧可信输入，威胁模型同
+    # BIODATA_TRUSTED_HOSTS；非管理侧绝无写入路径。
+    footer = str(os.environ.get("BIODATA_SITE_FOOTER_HTML") or "").strip()
+    text = text.replace(_DEPLOY_FOOTER_PLACEHOLDER, footer)
     return text
 
 
@@ -1361,8 +1460,10 @@ def _index_html() -> str:
 # 混跑 = 新功能静默退回旧样式（2026-08-03 p10 后真机踩到「过时的侧边栏样式」正是这一族）。
 @app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 def index() -> Response:
-    return Response(_index_html(), media_type="text/html; charset=utf-8",
-                    headers={"Cache-Control": "no-cache"})
+    page_html = _index_html()
+    return Response(page_html, media_type="text/html; charset=utf-8",
+                    headers={"Cache-Control": "no-cache",
+                             "Content-Security-Policy": _content_security_policy(page_html)})
 
 
 # 数据集介绍详情页（从模态弹窗改为**独立浏览器标签页**）。查询参数 uid/url/name/source 由页面 JS
@@ -1370,7 +1471,9 @@ def index() -> Response:
 # 渲染——本路由只静态返回页面骨架，**不做服务端渲染、不接受任何写入**，与 index 同为只读静态资源。
 @app.api_route("/dataset", methods=["GET", "HEAD"], include_in_schema=False)
 def dataset_page() -> FileResponse:
-    return FileResponse(STATIC_DIR / "dataset.html", headers={"Cache-Control": "no-cache"})
+    path = STATIC_DIR / "dataset.html"
+    return FileResponse(path, headers={"Cache-Control": "no-cache",
+                        "Content-Security-Policy": _content_security_policy(path.read_text(encoding="utf-8"))})
 
 
 # 站点图标：内联 SVG（wordmark 的「o」标记），免掉浏览器对 /favicon.ico 的自动 404。
@@ -1386,6 +1489,35 @@ _FAVICON_SVG = (
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
     return Response(content=_FAVICON_SVG, media_type="image/svg+xml")
+
+
+@app.get("/api/domain/manifest")
+def api_domain_manifest() -> JSONResponse:
+    """活动领域清单（additive、只读）：品牌/维度/基础来源，供前端与接入方动态化。
+
+    骨肉分离架构（领域包契约见内部架构文档）：前端品牌文案不再硬编码，经本端点
+    读取当前领域包声明；缺省 biodata 与旧版逐位一致。
+    """
+    pack = get_domain()
+    b = pack.branding
+    return JSONResponse({
+        "ok": True,
+        "domain": {
+            "domain_id": pack.domain_id,
+            "name_zh": pack.name_zh,
+            "tagline_zh": pack.tagline_zh,
+            "base_source": pack.base_source,
+            "branding": {
+                "product_name": b.product_name,
+                "page_title": b.page_title,
+                "dataset_page_title": b.dataset_page_title,
+                "download_dir_prefix": b.download_dir_prefix,
+                "corpus_blurb_zh": b.corpus_blurb_zh,
+            },
+            "dimensions": [{"name": d.name, "label_zh": d.label_zh} for d in pack.dimensions],
+            "raw_data_labels": list(pack.raw_data_labels),
+        },
+    })
 
 
 @app.get("/api/health")
@@ -1447,7 +1579,7 @@ def api_health(request: Request) -> JSONResponse:
         # 数据脱敏批：匿名请求再收敛 llm_server——provider/base_url/模型名
         # 是服务端 LLM 出口细节，登录页只需要 account 块与可用性布尔；登录后 health
         # 重取回全量（前端据此做一致性比对/试用模型名上屏，两级互不缺料）。
-        if accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store()) is None:
+        if _request_user(request) is None:
             llm = body.get("llm_server") or {}
             trial = llm.get("trial") or {}
             body["llm_server"] = {
@@ -1530,6 +1662,7 @@ _ACCOUNT_ERROR_STATUS = {
     "bad_username": 400, "weak_password": 400, "store_full": 400,
     "username_taken": 409, "invalid_credentials": 401, "locked": 429,
     "store_corrupt": 503, "store_unavailable": 503,
+    "session_store_unavailable": 503, "redis_package_missing": 503,
 }
 
 
@@ -1630,7 +1763,10 @@ def api_account_login(payload: AccountCredentials, request: Request) -> JSONResp
 def api_account_logout(request: Request) -> JSONResponse:
     """登出：销毁服务端会话（含落盘快照）+ 清除 cookie。"""
     _require_same_origin(request)
-    accounts.destroy_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
+    try:
+        accounts.destroy_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
+    except AccountError as exc:
+        raise _account_http_error(exc) from exc
     resp = _json_utf8({"ok": True})
     resp.delete_cookie(SESSION_COOKIE, path="/")
     return resp
@@ -1639,7 +1775,7 @@ def api_account_logout(request: Request) -> JSONResponse:
 @app.get("/api/account/whoami")
 def api_account_whoami(request: Request) -> JSONResponse:
     """据会话 cookie 返回当前登录账户（无 / 过期 → user:null）；前端据此选记忆命名空间。"""
-    user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
+    user = _request_user(request)
     return _json_utf8({"ok": True, "user": user.as_dict() if user else None})
 
 
@@ -1648,7 +1784,7 @@ def _require_session_user(request: Request) -> "accounts.PublicUser":
     （trial-quota 与在线 MCP 令牌端点共用）。"""
     if not _account_gate_required():
         raise HTTPException(status_code=404, detail="not found")
-    user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
+    user = _request_user(request)
     if user is None:
         raise HTTPException(status_code=401, detail="auth_required")
     return user
@@ -1826,25 +1962,73 @@ class CurateExamplesRequest(BaseModel):
     ids: list[str] = Field(default_factory=list, max_length=200, description="候选行 id 清单")
     base_url: str = Field(default="", description="当前 AI 端点地址（算端点指纹用）")
     model: str = Field(default="", description="当前模型名（算端点指纹用）")
+    provider: str = Field(default="", max_length=64,
+                          description="当前 provider 预设（算端点指纹用；缺省空=服务端配置）")
+    project_id: str = Field(default="", max_length=80)
 
 
-def _examples_partition(request: Request, base_url: str, model: str) -> tuple[str, str]:
-    """成功经验库分区键（同口径）：会话账户 principal + 端点指纹 endpoint_fp。"""
+def _effective_form_endpoint(provider: str, base_url: str, model: str) -> tuple[str, str]:
+    """表单坐标 → **有效端点身份**（管理/收录与 Agent 注入同一套指纹口径）。
+
+    - base_url 非空 = 请求级自定义端点（BYOK）：原样使用；
+    - base_url 空（试用预设清空地址 / 护栏模式 / 用服务端默认）＝表单坐标**不是** Agent
+      实际使用的端点（Agent 按服务端物化配置算指纹）——按配置物化通道解析出非空地址与
+      模型；不解析的话规则/样例存进另一个分区，界面显示「生效中」而 decide 永不注入。
+    - `provider`（additive，缺省空 = 服务端配置）：请求显式给了 provider 时经同一物化
+      通道解析（试用/自定义 provider 的地址与模型以物化为准）。"""
+    url = str(base_url or "").strip()
+    mdl = str(model or "").strip()
+    if url:
+        return url, mdl
+    try:
+        if str(provider or "").strip():
+            cfg = _materialize_request_llm_config(
+                _normalize_provider(provider), use_llm=True, mock_llm=False,
+                api_key=None, base_url="", model=mdl, project_root=CONFIG_ROOT)
+            return str(cfg.base_url or ""), str(cfg.model or "")
+        with ENV_LOCK:
+            cfg = load_llm_config(project_root=CONFIG_ROOT)
+        # 地址留空、模型填了：与请求路径同口径（请求级模型名生效，地址取服务端）。
+        return str(cfg.base_url or ""), (mdl or str(cfg.model or ""))
+    except Exception:
+        return url, mdl
+
+
+def _userdata_partition(request: Request, base_url: str, model: str,
+                        provider: str = "") -> tuple[str, str]:
+    """`.userdata/` 账本分区键（成功经验库与协作规则卡**共用**同一套口径）：
+    会话账户 principal + 端点指纹 endpoint_fp（有效端点身份，见 `_effective_form_endpoint`）。"""
     from types import SimpleNamespace
 
     from ..agent import agent_exec as _ax
 
+    eff_url, eff_model = _effective_form_endpoint(provider, base_url, model)
     return _utterance_principal(request), _ax._endpoint_fp_from_config(
-        SimpleNamespace(base_url=base_url, model=model))
+        SimpleNamespace(base_url=eff_url, model=eff_model))
+
+
+def _checked_learning_project(request: Request, project_id: str | None) -> str:
+    from .workspace_store import WorkspaceError, WorkspaceStore
+    if not project_id:
+        return ""
+    from ..agent.learning_scope import principal_variants
+    for principal in principal_variants(_utterance_principal(request)):
+        try:
+            return WorkspaceStore(PROJECT_ROOT).get_project(principal, project_id)["id"]
+        except WorkspaceError as exc:
+            failure = exc
+    raise HTTPException(status_code=404, detail=failure.message, headers={"X-Error-Code": failure.code}) from failure
 
 
 @app.get("/api/curate-examples/pending")
-def api_curate_examples_pending(request: Request, base_url: str = "", model: str = "") -> JSONResponse:
+def api_curate_examples_pending(request: Request, base_url: str = "", model: str = "",
+                                provider: str = "", project_id: str = "") -> JSONResponse:
     """成功操作样例的候选池待选清单：只有本分区（同账户 + 同端点指纹）的行可见。"""
     from ..agent import agent_exec as _ax
 
-    principal, fp = _examples_partition(request, base_url, model)
-    rows = _ax.list_example_candidates(PROJECT_ROOT, principal=principal, endpoint_fp=fp)
+    principal, fp = _userdata_partition(request, base_url, model, provider)
+    rows = _ax.list_example_candidates(PROJECT_ROOT, principal=principal, endpoint_fp=fp,
+                                       project_id=_checked_learning_project(request, project_id))
     return _json_utf8({"ok": True, "candidates": rows})
 
 
@@ -1854,9 +2038,11 @@ def api_curate_examples_approve(payload: CurateExamplesRequest, request: Request
     _require_same_origin(request)
     from ..agent import agent_exec as _ax
 
-    principal, fp = _examples_partition(request, payload.base_url, payload.model)
+    principal, fp = _userdata_partition(request, payload.base_url, payload.model,
+                                        payload.provider)
     result = _ax.approve_example_candidates(PROJECT_ROOT, payload.ids,
-                                            principal=principal, endpoint_fp=fp)
+                                            principal=principal, endpoint_fp=fp,
+                                            project_id=_checked_learning_project(request, payload.project_id))
     return _json_utf8({"ok": True, **result})
 
 
@@ -1866,9 +2052,73 @@ def api_curate_examples_dismiss(payload: CurateExamplesRequest, request: Request
     _require_same_origin(request)
     from ..agent import agent_exec as _ax
 
-    principal, fp = _examples_partition(request, payload.base_url, payload.model)
+    principal, fp = _userdata_partition(request, payload.base_url, payload.model,
+                                        payload.provider)
     result = _ax.dismiss_example_candidates(PROJECT_ROOT, payload.ids,
-                                            principal=principal, endpoint_fp=fp)
+                                            principal=principal, endpoint_fp=fp,
+                                            project_id=_checked_learning_project(request, payload.project_id))
+    return _json_utf8({"ok": True, **result})
+
+
+class CollabRulesRequest(BaseModel):
+    """协作规则卡的逐条确认 / 撤回（2026-09-29 记忆层 RSI 落地）。
+
+    候选来自 `/api/dream` 的 `rules` 字段（**预览期 ephemeral、不落地**，与记忆候选同一
+    范式）；用户点「确认」才把条目写进 `.userdata/collab_rules.jsonl`。
+    base_url/model 只用于算端点指纹（分区键，同口径）；api_key 永不进这个端点。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rules: list[dict] = Field(default_factory=list, max_length=20,
+                              description="规则候选 [{text,trigger,tier,evidence}]（approve 用）")
+    ids: list[str] = Field(default_factory=list, max_length=200,
+                           description="规则 id 清单（revoke 用）")
+    base_url: str = Field(default="", description="当前 AI 端点地址（算端点指纹用）")
+    model: str = Field(default="", description="当前模型名（算端点指纹用）")
+    provider: str = Field(default="", max_length=64,
+                          description="当前 provider 预设（算端点指纹用；缺省空=服务端配置）")
+    project_id: str = Field(default="", max_length=80)
+
+
+@app.get("/api/rules/list")
+def api_rules_list(request: Request, base_url: str = "", model: str = "",
+                   provider: str = "", project_id: str = "") -> JSONResponse:
+    """本分区（同账户 + 同端点指纹）的全部协作规则：active + retracted
+    （撤回是 tombstone，行留在账本里、只是不再注入）。"""
+    from ..agent import collab_rules as _cr
+
+    principal, fp = _userdata_partition(request, base_url, model, provider)
+    rows = _cr.list_collab_rules(PROJECT_ROOT, principal=principal, endpoint_fp=fp,
+                                project_id=_checked_learning_project(request, project_id))
+    return _json_utf8({"ok": True, "rules": rows})
+
+
+@app.post("/api/rules/approve")
+def api_rules_approve(payload: CollabRulesRequest, request: Request) -> JSONResponse:
+    """逐条确认：写 active；返回 approved/duplicated/rejected 三计数
+    （rejected = 收口不过的条数——诚实报数，界面据此说明有几条没入账）。"""
+    _require_same_origin(request)
+    from ..agent import collab_rules as _cr
+
+    principal, fp = _userdata_partition(request, payload.base_url, payload.model,
+                                        payload.provider)
+    result = _cr.approve_collab_rules(PROJECT_ROOT, payload.rules,
+                                      principal=principal, endpoint_fp=fp,
+                                      project_id=_checked_learning_project(request, payload.project_id))
+    return _json_utf8({"ok": True, **result})
+
+
+@app.post("/api/rules/revoke")
+def api_rules_revoke(payload: CollabRulesRequest, request: Request) -> JSONResponse:
+    """撤回：打 tombstone（不物理删），此后不再注入；返回 revoked 计数。"""
+    _require_same_origin(request)
+    from ..agent import collab_rules as _cr
+
+    principal, fp = _userdata_partition(request, payload.base_url, payload.model,
+                                        payload.provider)
+    result = _cr.revoke_collab_rules(PROJECT_ROOT, payload.ids,
+                                     principal=principal, endpoint_fp=fp,
+                                     project_id=_checked_learning_project(request, payload.project_id))
     return _json_utf8({"ok": True, **result})
 
 
@@ -1896,9 +2146,7 @@ def api_interpret(payload: InterpretRequest, request: Request) -> JSONResponse:
 # policy_id ——本次检索所用「语料快照 + 来源 + 排序策略 + 模型 + 应用/路由版本」的
 # 结构化指纹，随 recommend/utterance(search) 响应 additive 返回；前端把它塞进遥测包，
 # 分析端据此把行为数据锚定到确切检索配置（语料变了 snapshot_id 就变，无需猜时间窗）。
-POLICY_ID_SCHEMA = "biodata-policy-id/1"
-# turn.py 属另一写入者包，这里只登记路由层版本串（路由逻辑变更时手动升）。
-ROUTE_POLICY_VERSION = "turn-route/v1"
+from .conversation_results import POLICY_ID_SCHEMA, ROUTE_POLICY_VERSION
 
 
 def _build_policy_id(*, sources, strategy: str, rerank: str, recall: str, model) -> dict:
@@ -1906,15 +2154,9 @@ def _build_policy_id(*, sources, strategy: str, rerank: str, recall: str, model)
     复用 corpus.corpus_snapshot 单一真源（snapshot_id 由内容决定，语料变了它才变）。"""
     records = load_normalized_corpus(DATA_DIR, PROJECT_ROOT, list(sources) if sources else None)
     snap = corpus_snapshot(records)
-    return {
-        "schema": POLICY_ID_SCHEMA,
-        "corpus": {"snapshot_id": snap.get("snapshot_id", ""), "n_records": snap.get("n_records", 0)},
-        "sources": [str(s) for s in sources] if sources else [BASE_SOURCE],
-        "ranking": {"strategy": str(strategy or ""), "rerank": str(rerank or ""), "recall": str(recall or "")},
-        "model": str(model or ""),
-        "app_version": WEB_API_VERSION,
-        "router_version": ROUTE_POLICY_VERSION,
-    }
+    from .conversation_results import policy_from_snapshot
+    return policy_from_snapshot(snap, sources=sources, strategy=strategy, rerank=rerank,
+        recall=recall, model=model, app_version=WEB_API_VERSION, base_source=_corpus_base_source())
 
 
 def _policy_id_or_none(**kwargs) -> dict | None:
@@ -1925,30 +2167,7 @@ def _policy_id_or_none(**kwargs) -> dict | None:
         return None
 
 
-def _policy_token(value: Any, limit: int = 32) -> str:
-    """policy_id_str 的可读段；完整差异仍由末尾摘要兜底。"""
-    token = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("_")
-    return (token or "unknown")[:limit]
-
-
-def _policy_id_string(policy_id: dict | None) -> str | None:
-    """结构化 policy_id 的稳定紧凑引用；两者随响应同时返回。"""
-    if not isinstance(policy_id, dict):
-        return None
-    canonical = json.dumps(policy_id, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-    corpus = policy_id.get("corpus") if isinstance(policy_id.get("corpus"), dict) else {}
-    ranking = policy_id.get("ranking") if isinstance(policy_id.get("ranking"), dict) else {}
-    parts = (
-        ("snap", _policy_token(corpus.get("snapshot_id"), 16)),
-        ("strategy", _policy_token(ranking.get("strategy"))),
-        ("rerank", _policy_token(ranking.get("rerank"))),
-        ("recall", _policy_token(ranking.get("recall"))),
-        ("model", _policy_token(policy_id.get("model"))),
-        ("app", _policy_token(policy_id.get("app_version"))),
-        ("router", _policy_token(policy_id.get("router_version"))),
-    )
-    return "bpol1:" + ";".join(f"{key}={value}" for key, value in parts) + f";h={digest}"
+from .conversation_results import policy_token as _policy_token, policy_id_string as _policy_id_string
 
 
 def _policy_response_fields(policy_id: dict | None) -> dict[str, Any]:
@@ -2028,12 +2247,18 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
         project_root=get_settings().project_root, within=_attach_workflow)
     workflow = _workflow_box["workflow"]
     auto_llm_available = _workflow_box["auto_llm_available"]
-    # 配额闸：润色或 AI 重排将走服务端 key 时计数（BYOK 不计）。
-    # cfg 已物化（request_llm_config），流式无涉——本端点非流式。
-    _gate_llm_quota(
-        request, cfg=request_llm_config, provider=provider,
-        use_llm=bool(use_llm or rerank_backend == "llm"),
-        mock_llm=mock_llm, api_key=payload.api_key)
+
+    # 准入绑定真实调用；同请求的重排、润色与后台复盘共享一轮额度。
+    llm_admitted = False
+
+    def _before_llm(config: LLMConfig) -> None:
+        nonlocal llm_admitted
+        if llm_admitted:
+            return
+        _gate_llm_quota(request, cfg=config, provider=provider, use_llm=True,
+                        mock_llm=config.mock_llm, api_key=payload.api_key)
+        llm_admitted = True
+
     meta = workflow.run_with_meta(
         RecommendParams(
             query=query,
@@ -2058,7 +2283,8 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
             llm_available=auto_llm_available,
             preferred_recall=preferred_recall,
             base_llm_config=request_llm_config,
-        )
+        ),
+        before_llm=_before_llm,
     )
 
     # 结果直接取检索器的结构化候选（确定性、含真实 reason/score），
@@ -2073,19 +2299,32 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
             and "provider" not in payload.model_fields_set):
         warnings.append("未指定 provider，本次按 mock 处理（如需真实 LLM，请显式指定 provider）")
 
-    # OOV 词表闭环第一段（2026-08-09 五机制批）：未收录词弃权落结构化日志
+    # OOV 词表闭环第一段（2026-08-09 五机制批）：未收录词落结构化日志
     # （.userdata/oov_terms.jsonl）——词表生长的真数据源；`scripts/measure_entity_gap.py
     # --oov-report` 把它聚合成 vocabulary 候选别名报告。只在本端点（真实用户查询）记，
     # 官方评测直调 retriever 结构性不经过。日志自身失败绝不掀翻检索（与联网账本同纪律）。
+    # 2026-09-10 起双触发：弃权（自动降级失败、原 intent 带 unresolved_terms）与
+    # 自动降级成功（degraded_search.ignored_terms）——被忽略的词同样是词表生长数据。
     try:
         _iproj = (getattr(meta, "interpretation", {}) or {}).get("intent") or {}
+        _oov: list[str] = []
         if (getattr(meta, "resolution_status", "") == "abstained"
                 and _iproj.get("abstain_reason") == "unresolved_term"):
             _oov = [str(t).strip() for t in (_iproj.get("unresolved_terms") or []) if str(t).strip()]
-            if _oov:
-                from ..corpus.corpus_curation import _append_jsonl, _net_ledger_path, _now_iso
-                _append_jsonl(_net_ledger_path(PROJECT_ROOT).parent / "oov_terms.jsonl", {
-                    "ts": _now_iso(), "query": str(query or "")[:120], "terms": _oov[:8],
+        elif getattr(meta, "resolution_status", "") == "degraded":
+            _oov = [str(t).strip()
+                    for t in ((getattr(meta, "degraded_search", None) or {}).get("ignored_terms") or [])
+                    if str(t).strip()]
+        elif (getattr(meta, "resolution_status", "") == "vector_fallback"
+                and (getattr(meta, "vector_fallback", None) or {}).get("reason") == "unresolved_term"):
+            # 2026-09-12：向量兜底只是兜住了「无结果」的沉默，词表缺口本身照样是生长数据。
+            _oov = [str(t).strip()
+                    for t in ((getattr(meta, "vector_fallback", None) or {}).get("ignored_terms") or [])
+                    if str(t).strip()]
+        if _oov:
+                from ..corpus.net_ledger import append_jsonl, net_ledger_path, now_iso
+                append_jsonl(net_ledger_path(PROJECT_ROOT).parent / "oov_terms.jsonl", {
+                    "ts": now_iso(), "query": str(query or "")[:120], "terms": _oov[:8],
                 })
     except Exception as exc:
         # 纪律不变：日志自身失败绝不掀翻检索。但全静默 = 词表生长机制悄悄停工无从发现
@@ -2098,18 +2337,22 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
     identifier_lookup = identifiers.lookup(query, lambda: load_full_corpus(DATA_DIR, PROJECT_ROOT))
 
     # 引导式放宽：把后端预算好的每个放宽项的预览候选也转成前端卡片行，供 0 结果时一键切入。
+    # suppress＝整组替换语义（2026-09-14 收编：与环内 ask.relax 卡同口径）——请求级已忽略
+    # 与本项放松量在此合并去重，前端点选后原样下发即可，零合并逻辑。
     relaxation_options = [
         {
             "key": opt.get("key", ""),
             "label": opt.get("label", ""),
             "kind": opt.get("kind", "drop"),   # drop=去掉一个条件 / only=只按一个条件搜（前端分组展示）
             "count": opt.get("count", 0),
+            "suppress": list(dict.fromkeys(
+                suppressed_constraints + [str(s) for s in (opt.get("suppress") or [])])),
             "results": _rows_from_retrieved(opt.get("retrieved_data", [])),
         }
         for opt in getattr(meta, "relaxation_options", [])
     ]
-    # 未收录词降级：同样把预览候选转成前端卡片行。**只是选项**——后端不会自动应用（见
-    # workflow.build_degraded_search 里那张「自动降级会返回 3473 条无关数据」的实测表）。
+    # 未收录词自动降级标注（2026-09-10 起）：后端已忽略未收录词继续检索（resolution_status=
+    # "degraded"），此处把降级来路（忽略了哪些词、实际生效条件）透传给前端警示条。
     _deg = getattr(meta, "degraded_search", None)
     degraded_search = None
     if _deg:
@@ -2121,67 +2364,25 @@ def api_recommend(payload: RecommendRequest, request: Request) -> JSONResponse:
             "active_filters": _deg.get("active_filters", []),
         }
 
-    return _json_utf8(
-        {
-        "ok": True,
-        "markdown": meta.answer,
-        "pipeline": meta.pipeline,
-        "llm_attempted": meta.llm_attempted,
-        "llm_succeeded": meta.llm_succeeded,
-        "llm_response_used": meta.llm_response_used,
-        "provider": meta.llm_provider or provider,
-        "llm_mode": meta.llm_mode,
-        "prompt_name": meta.prompt_name,
-        "fallback": meta.fallback,
-        "fallback_reason": meta.fallback_reason,
-        "results": results,
-        "relaxation_options": relaxation_options,
-        # 未收录词降级选项（仅 unresolved_term 弃权且忽略后仍剩得下条件时非 null）：
-        # {ignored_terms, query, count, results, active_filters}。前端渲染成一个可点的芯片，
-        # 点了才切进去；条数 + 生效条件一并展示，让用户自己判断这次忽略值不值。
-        "degraded_search": degraded_search,
-        # 解析结果状态 + 澄清载荷：clarification_required（如"不需要fastq"）须前端单独空态、两个改写选项，
-        # 不与"没有匹配"混同。results/no_match/abstained/clarification_required。
-        "resolution_status": getattr(meta, "resolution_status", "results"),
-        "clarification": getattr(meta, "clarification", None),
-        # 分面细化：命中总数（未截断）+ 可细化维度分组，供前端渲染结果上方的分面面板。
-        "result_total": getattr(meta, "result_total", len(results)),
-        "facets": getattr(meta, "facets", []),
-        "applied_facets": facet_filters,
-        # 诚实降级：缺元数据无法核验的覆盖缺口 [{dim,label,count,by_source}]（本可能相关却被静默判负），
-        # 供前端提示「另有 N 条因缺 <维度> 未能核验」+ 一键「也纳入」；applied_lenient=已宽容维度（回显）。
-        "coverage_caveats": getattr(meta, "coverage_caveats", []),
-        # 执行类说法（打包/下载脚本/导出引文…）：只指路、不代劳。产包仍走原来的预览→确认流程。
-        "action_markers": getattr(meta, "action_markers", []),
-        # N1 静默丢词诚实层：无对应筛选维度、被静默丢弃的实义描述词（性别/年龄/受试者/功能类）——回显给用户。
-        "unused_query_terms": getattr(meta, "unused_query_terms", []),
-        # 「A 或 B」的实际处理方式（exact / superset / narrower + note_zh）。空 dict = 这句话里没有「或」。
-        # 2026-07-25 起「或」不再整句弃权；引擎只能表达同维度的「或」，落到哪一档必须如实说。
-        "or_handling": getattr(meta, "or_handling", {}) or {},
-        # N8 标识符精确反查：query 是标识符时 {is_identifier,kind,value,indexed,match,external_url,message}；否则 None。
-        "identifier_lookup": identifier_lookup,
-        "applied_lenient": lenient_dims,
-        # 「已命中」里被用户删掉的原始命中维度（回显；前端据此持续抑制、后端已按此放宽）。
-        "applied_suppressed": suppressed_constraints,
-        # 本次查询语句已命中的硬约束（放宽后的真源，供「已命中」区渲染带标记的可删 chip；已抑制的维度自然不在其中）。
-        "query_constraints": getattr(meta, "active_filters", []),
-        # 检索策略决策（additive；仅 strategy=auto 非 None）：{mode,tier,recall_backend,rerank_backend,reason,signals}。
-        # 前端当前未读（回显/调试用）；供观测「这条查询自动选了什么后端、为什么」。
-        "strategy": getattr(meta, "strategy", None),
-        # Web / MCP 共用的请求解释与实际执行步骤。前端据此展示“本次检索用了什么”，不再猜后端行为。
-        "interpretation": getattr(meta, "interpretation", {}),
-        "search_trace": getattr(meta, "search_trace", {}),
-        # （additive）：本次检索配置指纹（语料快照/来源/排序/模型/版本），前端随遥测回传。
-        # 组装失败（如语料装载异常）降级为 None，绝不掀翻检索。
-        **_policy_response_fields(_policy_id_or_none(
-            sources=payload.sources, strategy=strategy,
-            rerank=rerank_backend, recall=recall_backend,
-            model=request_llm_config.model,
-        )),
-        "experiment": _experiment_response(payload),
-        "warnings": warnings,
-        }
-    )
+    # 复盘落痕（2026-09-28 复盘批）：本次检索记入 session log（fail-soft；不带 conv_id 整链不启动）。
+    _replay_record_safe(_utterance_principal(request), payload.conv_id, payload.replay_key, "search", {
+        "query": query[:500],
+        "total": int(getattr(meta, "result_total", len(results)) or 0),
+        "status": str(getattr(meta, "resolution_status", "results") or ""),
+        "top": [str(r.get("dataset_name") or "")[:80] for r in results[:5] if r.get("dataset_name")],
+    }, request_llm_config, before_llm=_before_llm)
+
+    from .conversation_results import complete_payload
+    body = complete_payload(meta, query=query, provider=provider, sources=payload.sources,
+        params={"top_k": payload.top_k, "strategy": strategy, "rerank": rerank_backend,
+                "recall": recall_backend, "facet_filters": facet_filters,
+                "suppressed_constraints": suppressed_constraints, "lenient_dims": lenient_dims,
+                "date_from": date_from, "date_to": date_to, "polish": payload.polish},
+        policy=_policy_response_fields(_policy_id_or_none(sources=payload.sources, strategy=strategy,
+            rerank=rerank_backend, recall=recall_backend, model=request_llm_config.model)),
+        experiment=_experiment_response(payload))
+    body["warnings"] = warnings
+    return _json_utf8(body)
 
 
 @app.post("/api/feasibility")
@@ -2242,6 +2443,9 @@ def _task_pack_retrieval(params: dict) -> dict:
     from ..content import item_view, task_pack
     from ..corpus.corpus import load_normalized_corpus
 
+    _validate_or_400(validate_query, params.get("query"))
+    if params.get("query_effective"):
+        _validate_or_400(validate_query, params["query_effective"])
     sources = params.get("sources") or None
     # 补漏（漂移修复）：倒挂窗口在检索层单点拦截（预览与产包共用本函数）——MCP
     # build_task_pack 有 `_validate_date_window`，Web 侧此前只查格式不查倒挂，
@@ -2627,13 +2831,47 @@ def api_action_plan(payload: ActionPlanRequest, request: Request) -> JSONRespons
 
 
 def _utterance_principal(request: Request) -> str:
-    """成功经验库分区主体：会话账户 id；无会话/解析失败 → "anonymous"
-    （宁可匿名不认错人——把别人的分区挂给本请求才是泄漏）。"""
-    try:
-        user = accounts.resolve_session(request.cookies.get(SESSION_COOKIE), sessions_path=_sessions_store())
-    except Exception:
-        user = None
+    """请求身份快照决定分区；只有准入时没有有效会话才使用匿名分区。"""
+    user = _request_user(request)
     return str(getattr(user, "id", "") or "") or "anonymous"
+
+
+# ---------------------------------------------------------------- 复盘落痕挂钩（2026-09-28 复盘批）
+# 对话级 session log（app/session_log.py 通用机制）← 复盘（replay_*）的数据面。
+# 纪律：fail-soft 总闸——挂钩的任何异常只进日志，绝不掀翻检索/对话主路径；
+# 请求不带 conv_id 时整链不启动（行为与现状逐位一致）。
+
+def _replay_record_safe(principal: str, conv_id: str | None, replay_key: str | None,
+                        kind: str, record: dict, cfg: "LLMConfig | None", *,
+                        before_llm: Callable[[LLMConfig], None] | None = None) -> None:
+    """复盘落痕挂钩：fail-soft 总闸——任何异常只进日志，绝不掀翻主路径。
+    收 principal 而不是 request，供流式 worker 共用；before_llm 原样透传请求级准入。"""
+    if not conv_id:
+        return
+    try:
+        from . import replay_service
+        replay_service.record_turn(
+            PROJECT_ROOT, principal, str(conv_id)[:80],
+            str(replay_key or "")[:64], kind, record, cfg, before_llm=before_llm)
+    except Exception:
+        logger.exception("复盘落痕失败（不影响主路径）：kind=%s", kind)
+
+
+def _replay_record_utterance(principal: str, payload: UtteranceRequest,
+                             text: str, result: dict, cfg: "LLMConfig | None") -> None:
+    """一轮 /api/utterance → chat 记录（用户原话 + 路由 + 步骤 + 回复；浓缩截断在 replay_digest）。"""
+    if not isinstance(result, dict):
+        return
+    plan = result.get("plan") or {}
+    steps = [
+        {"verb_zh": str(s.get("verb_zh") or s.get("verb") or "")[:60], "ok": bool(s.get("ok", True))}
+        for s in (plan.get("steps") or [])[:20] if isinstance(s, dict)
+    ]
+    reply = str(plan.get("report_zh") or "") or str(result.get("echo_zh") or "")
+    _replay_record_safe(principal, payload.conv_id, payload.replay_key, "chat", {
+        "user": text[:500], "route": str(result.get("route") or ""),
+        "reply": reply[:1500], "steps": steps,
+    }, cfg)
 
 
 # ---------------------------------------------------------------- /api/utterance 幂等占用
@@ -2649,7 +2887,7 @@ _UTT_IDEM_RUNNING_TTL_SECONDS = 24 * 3600.0   # running 泄漏兜底寿命（own
 _UTT_IDEM_MAX_ENTRIES = 256       # 上限 FIFO 淘汰：防无限增长
 _UTT_IDEM_WAIT_TIMEOUT = 180.0    # 非 owner 等待上限（秒）：超时回 503 让客户端稍后重试
 _UTT_IDEM_LOCK = threading.Lock()
-_UTT_IDEM: "OrderedDict[str, dict]" = OrderedDict()   # req_id → {state, body, event, ts, fp}；插入序即淘汰序
+_UTT_IDEM: "OrderedDict[tuple[str, str], dict]" = OrderedDict()
 
 
 def _utterance_request_fp(text: str, payload: Any, provider: str,
@@ -2694,21 +2932,19 @@ def _utterance_request_fp(text: str, payload: Any, provider: str,
         "date_from": str(getattr(payload, "date_from", "") or ""),
         "date_to": str(getattr(payload, "date_to", "") or ""),
         "polish": bool(getattr(payload, "polish", True)),
+        "ask_answer": getattr(payload, "ask_answer", None),
+        "conv_id": str(getattr(payload, "conv_id", "") or ""),
+        "replay_key_fp": hashlib.sha256(str(getattr(payload, "replay_key", "") or "").encode("utf-8")).hexdigest(),
         "api_key_fp": hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16],
+        "project_id": str(getattr(payload, "project_id", "") or ""),
     }, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
 def _sanitize_req_id(raw: str | None) -> str | None:
-    """清洗 req_id：空白/缺省 → None（=无幂等）；≤64 字符原样；**超长按完整值取定长哈希**——
-    旧实现直接截 64 字符，前 64 字符相同的两条请求会错共一个幂等槽（缓存串台/重复写，
-    评审裁决）。"""
-    text = (raw or "").strip()
-    if not text:
-        return None
-    if len(text) <= 64:
-        return text
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:48]
+    """兼容既有入口名；提交与恢复的规范化真源在 conversation_runs。"""
+    from .conversation_runs import normalize_request_id
+    return normalize_request_id(raw)
 
 
 def _prune_utterance_idem(now: float) -> None:
@@ -2729,15 +2965,16 @@ def _prune_utterance_idem(now: float) -> None:
         del _UTT_IDEM[done_oldest]
 
 
-def _utterance_idem_claim(req_id: str, fp: str = "") -> tuple[dict, bool]:
-    """占用 req_id：没见过 → 注册 running 条目并返回 (entry, True=owner)；
+def _utterance_idem_claim(req_id: str, fp: str = "", *, principal: str = "anonymous") -> tuple[dict, bool]:
+    """按账户占用 req_id：没见过 → 注册 running 条目并返回 (entry, True=owner)；
     已见过 → 返回 (entry, False=非 owner，调用方等/取缓存体)。
     满员且全 running → 503 拒绝新占用（宁可拒新、绝不淘汰在途 owner）。
     同号但请求指纹不同（fp 非空且不匹配）→ 409（评审：那不是重发，是撞号）。"""
     now = time.monotonic()
+    key = (str(principal or "anonymous"), req_id)
     with _UTT_IDEM_LOCK:
         _prune_utterance_idem(now)   # 先清旧：过期条目不得被当成在途 owner 复用
-        entry = _UTT_IDEM.get(req_id)
+        entry = _UTT_IDEM.get(key)
         if entry is not None:
             if fp and entry.get("fp") and entry["fp"] != fp:
                 raise HTTPException(
@@ -2753,13 +2990,14 @@ def _utterance_idem_claim(req_id: str, fp: str = "") -> tuple[dict, bool]:
                 raise HTTPException(status_code=503, detail="在途请求过多，请稍后重试。")
         entry = {"state": "running", "body": None, "event": threading.Event(),
                  "ts": now, "fp": fp}
-        _UTT_IDEM[req_id] = entry
+        _UTT_IDEM[key] = entry
         return entry, True
 
 
 #: route_turn 契约是永不抛——各兜底分支（流式 worker / 非流式 / 幂等收尾 / 等待方回放）
 #: 给客户端的统一通用文案只有这一句；完整堆栈只进服务端日志（webobs）。
-_UTTERANCE_INTERNAL_ERROR_DETAIL = "处理这句话时出了内部错误，请重试。"
+from .conversation_runs import RUN_INTERNAL_ERROR_DETAIL
+_UTTERANCE_INTERNAL_ERROR_DETAIL = RUN_INTERNAL_ERROR_DETAIL
 
 
 def _utterance_idem_store(entry: dict, body: dict) -> None:
@@ -2767,6 +3005,20 @@ def _utterance_idem_store(entry: dict, body: dict) -> None:
     with _UTT_IDEM_LOCK:
         entry["body"] = body
         entry["state"] = "done"
+    entry["event"].set()
+
+
+def _utterance_idem_abort(entry: dict | None, exc: BaseException) -> None:
+    """执行前失败：释放本人占用，并让已附着的等待方收到同一个公开错误。"""
+    if entry is None:
+        return
+    error = exc if isinstance(exc, HTTPException) else HTTPException(500, _UTTERANCE_INTERNAL_ERROR_DETAIL)
+    with _UTT_IDEM_LOCK:
+        for key, current in list(_UTT_IDEM.items()):
+            if current is entry:
+                del _UTT_IDEM[key]
+                break
+        entry.update(state="done", error=error)
     entry["event"].set()
 
 
@@ -2778,6 +3030,8 @@ def _utterance_idem_wait_response(entry: dict, *, stream: bool) -> Response:
     if entry["state"] != "done" or body is None:
         entry["event"].wait(timeout=_UTT_IDEM_WAIT_TIMEOUT)
         body = entry["body"]
+    if entry.get("error") is not None:
+        raise entry["error"]
     if body is None:
         raise HTTPException(status_code=503, detail="同一句话还在处理中，请稍等。")
     if stream:
@@ -2844,6 +3098,10 @@ def _utterance_response_body(result: dict[str, Any]) -> dict[str, Any]:
     # 合法但被机械收窄 → 收窄说明）；无建议动作或处理正常时该键不出现，响应与现状逐位一致。
     if result.get("recipe_note"):
         body["recipe_note"] = result["recipe_note"]
+    # （2026-09-14 YOLO ask.relax，additive）：环内放宽询问的选择卡载荷——仅当轮内
+    # 真发起过询问时才带键（拒绝档/未发起时不出现，响应与现状逐位一致）。
+    if result.get("ask_relax") is not None:
+        body["ask_relax"] = result["ask_relax"]
     return body
 
 
@@ -2869,110 +3127,205 @@ def _sse_line(event: str, data: Any) -> str:
     return "data: " + json.dumps({"event": event, "data": data}, ensure_ascii=False) + "\n\n"
 
 
-def _utterance_event_stream(
-    text: str,
-    payload: UtteranceRequest,
-    *,
-    provider: str,
-    requested_base_url: str,
-    mock_llm: bool,
-    use_llm: bool,
-    idem_entry: dict | None = None,
-    principal: str = "",
-    search_params: dict | None = None,
-) -> Iterator[str]:
-    """`/api/utterance` 流式分支的 SSE 生成器。
-
-    事件序（并发分流 v3.1 重定，r3 裁定后的真实确定性序）：
-    **tool_start(共识) → step(共识) → tool_start(understand) → preliminary? → … → final**
-    ——preliminary 不再保证首帧：verdict-gated 后它在 understand 节点入口（join/补跑
-    完成后、构造 prompt 前）发射，恒在 tool_start(understand) 之后、final 之前；action
-    路线永不发射（路由内部出错则只发 error）。2026-08-16 起 on_event 的 kind
-    透传不再一律打 step。step 是 agent 规划节点的 trace 条目
-    （`turn.route_turn(on_event=...)` 透传给 `plan_with_agent_events`，每节点落定时
-    回调）；保底路径（无 agent）没有节点可播，**只发 final**——前端维持非流式的
-    百分比画像。final 的体与非流式响应逐位同形（共用 `_utterance_response_body` 真源）。
-
-    两处刻意的结构决策：
-
-    1. **ENV_LOCK 只保护「读配置/物化」几行，SSE 泵送全程在锁外**（锁内最小化）：流式的路由
-       发生在生成器被迭代时（端点函数早已返回）。锁内先把请求级 env 覆盖物化成不可变的
-       `cfg`（LLMConfig），worker 的 `route_turn` **显式接收 `config=cfg`**（turn 内部所有
-       配置读取都是 `config or load_llm_config()`，config 恒非空 → 永不读 env）——于是生成
-       阶段不再需要 env override 存活，也不再把整个 SSE 循环与 `worker.join()` 关在锁里。
-       此前一个慢 LLM 流会持锁到 SSE 完成，阻塞 /api/health、/api/recommend 等一切需要
-       读配置的端点（队头阻塞）。
-    2. **route_turn 放进 worker 线程**：on_event 回调在路由**进行中**触发，生成器
-       若是同步调用就只能把步骤攒到最后一次性吐——那不叫流式。规划节点是秒级 LLM
-       调用，步骤经无界队列实时泵给客户端（claudecode 式节点输出）。worker 只碰队列、
-       不碰锁，无死锁面。队列无界 + daemon 线程：客户端中途断开时生成器被关闭，worker
-       亦能自行收尾，不会挂住。
-
-    `idem_entry`：本流是某个 req_id 的 owner 时由端点传入占用条目，
-    **worker 的 finally 里**把最终响应体存进条目并唤醒等待者——客户端断开时生成器会被
-    关闭，但 worker 照常收尾，这正是断流重发能拿到结果的幂等数据源。
-    """
+def _route_turn_with_project(project_id: str, text: str, **kwargs):
     from ..agent import turn
+    from ..agent.learning_scope import bind_project_scope
+    with bind_project_scope(project_id):
+        return turn.route_turn(text, **kwargs)
 
-    events: "queue.Queue" = queue.Queue()
-    done: Any = object()
 
-    def on_event(kind: str, entry: dict) -> None:
-        # kind 透传不再一律打 "step"——preliminary / tool_start
-        # 与 step 同路进队列，_sse_line 对事件名无约束；旧前端对未知事件名天然忽略。
-        events.put((kind, entry))
+_CONVERSATION_RUNTIME_LOCK = threading.Lock()
+_CONVERSATION_RUNTIME = None
+_CONVERSATION_LIFESPANS = set()
+_CONVERSATION_LIFESPAN_RUNTIME = None
 
-    def run() -> None:
-        body: dict | None = None
+
+def _make_conversation_runtime(store):
+    from .conversation_runs import ConversationRuntime
+    return ConversationRuntime(store, workers=max(1, min(_env_int("BIODATA_RUN_WORKERS", 2), 8)),
+        max_inflight=max(1, _env_int("BIODATA_RUN_MAX_INFLIGHT", 16)),
+        max_per_owner=max(1, _env_int("BIODATA_RUN_MAX_PER_USER", 1)),
+        max_seconds=max(30, _env_int("BIODATA_RUN_TIMEOUT_SECONDS", 900)))
+
+
+def _enter_conversation_lifespan(token):
+    from .conversation_store import ConversationStore
+    global _CONVERSATION_RUNTIME, _CONVERSATION_LIFESPAN_RUNTIME
+    with _CONVERSATION_RUNTIME_LOCK:
+        _CONVERSATION_LIFESPANS.add(token)
+        if _CONVERSATION_RUNTIME is None:
+            store = ConversationStore(PROJECT_ROOT)
+            if store.has_pending_cleanup():
+                _CONVERSATION_RUNTIME = _make_conversation_runtime(store)
+                _CONVERSATION_LIFESPAN_RUNTIME = _CONVERSATION_RUNTIME
+
+
+def _leave_conversation_lifespan(token):
+    global _CONVERSATION_RUNTIME, _CONVERSATION_LIFESPAN_RUNTIME
+    runtime = None
+    with _CONVERSATION_RUNTIME_LOCK:
+        if token not in _CONVERSATION_LIFESPANS:
+            return
+        _CONVERSATION_LIFESPANS.remove(token)
+        if not _CONVERSATION_LIFESPANS:
+            runtime, _CONVERSATION_LIFESPAN_RUNTIME = _CONVERSATION_LIFESPAN_RUNTIME, None
+            if _CONVERSATION_RUNTIME is runtime:
+                _CONVERSATION_RUNTIME = None
+    if runtime is not None:
+        runtime.close()
+
+
+def _get_conversation_runtime():
+    from .conversation_store import ConversationStore
+    global _CONVERSATION_RUNTIME, _CONVERSATION_LIFESPAN_RUNTIME
+    with _CONVERSATION_RUNTIME_LOCK:
+        if _CONVERSATION_RUNTIME is None:
+            _CONVERSATION_RUNTIME = _make_conversation_runtime(ConversationStore(PROJECT_ROOT))
+            if _CONVERSATION_LIFESPANS:
+                _CONVERSATION_LIFESPAN_RUNTIME = _CONVERSATION_RUNTIME
+        return _CONVERSATION_RUNTIME
+
+
+def _execute_utterance(text, payload, cfg, principal, project_id, search_params, ask_answer, on_event=None):
+    from .conversation_service import execute_turn
+    body = execute_turn(text, cfg=cfg, principal=principal, project_id=project_id,
+        state={"has_results": bool(payload.has_results), "result_total": int(payload.result_total or 0),
+               "query": payload.query or "", "current_filters": payload.current_filters,
+               "sources": payload.sources, "search_params": search_params},
+        use_agent=bool(payload.agent), artifact_context=str(payload.artifact_context or ""),
+        suggested_recipe=str(payload.suggested_recipe or ""), ask_answer=ask_answer,
+        on_event=on_event, route=_route_turn_with_project)
+    _inject_utterance_policy_id(body, payload, search_params, cfg.model)
+    try:
+        _replay_record_utterance(principal, payload, text, body, cfg)
+    except Exception:
+        logger.exception("复盘落痕挂钩失败（不影响主路径）")
+    return _utterance_response_body(body)
+
+
+def _utterance_event_stream(
+    text, payload, *, provider, requested_base_url, mock_llm, use_llm,
+    idem_entry=None, principal="", project_id="", search_params=None, ask_answer=None,
+    runtime=None, run=None,
+):
+    """Legacy SSE rendering over the same bounded durable execution channel."""
+    from .conversation_runs import RunError, TERMINAL
+    import uuid as _stream_uuid
+    runtime = runtime or _get_conversation_runtime()
+    if run is None:
+        def prepare():
+            cfg = _materialize_request_llm_config(provider, use_llm=use_llm, mock_llm=mock_llm,
+                api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
+            return lambda emit: _execute_utterance(text, payload, cfg, principal, project_id,
+                                                   search_params, ask_answer, emit)
         try:
-            result = turn.route_turn(
-                text,
-                has_results=bool(payload.has_results),
-                result_total=int(payload.result_total or 0),
-                current_query=payload.query or "",
-                current_filters=payload.current_filters,
-                sources=payload.sources,
-                config=cfg,
-                keyword_mapping=get_settings().keyword_mapping,
-                use_agent=bool(payload.agent),
-                on_event=on_event,
-                principal=principal,
-                search_params=search_params,
-                # 课题上下文独立透传，只进 agent prompt。
-                artifact_context=str(payload.artifact_context or ""),
-                # 建议动作 hint（allowlist 校验在 action_plan 单一真源）。
-                suggested_recipe=str(payload.suggested_recipe or ""),
-            )
-            _inject_utterance_policy_id(result, payload, search_params, cfg.model)
-            body = _utterance_response_body(result)
-            events.put(("final", body))
-        except Exception:  # route_turn 契约是永不抛——这里是结构性防御，错误也要成一帧
-            # webobs：此前 exc 接住即弃、零日志零堆栈，触发即无法定位。
-            # 完整堆栈进日志（exception 不含请求体/参数值），客户端仍只见通用文案。
-            logger.exception("/api/utterance 流式 worker 兜底触发：route_turn 抛出异常")
-            body = {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}
-            events.put(("error", {"detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}))
-        finally:
-            if idem_entry is not None:
-                # body=None 只在 BaseException 穿透 except 时发生——同样要存错误体唤醒等待者。
-                _utterance_idem_store(idem_entry, body or {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL})
-            events.put(done)
+            run = runtime.submit(principal or "anonymous", _sanitize_req_id(payload.req_id) or _stream_uuid.uuid4().hex,
+                                 _utterance_request_fp(text, payload, provider, mock_llm, use_llm), prepare=prepare)
+        except BaseException as exc:
+            _utterance_idem_abort(idem_entry, exc)
+            raise
+    after = 0
+    try:
+        with runtime.waiting_transport(principal or "anonymous"):
+            while True:
+                state = runtime.store.load(principal or "anonymous", run["id"])
+                batch = runtime.store.events(principal or "anonymous", run["id"], after)
+                for event in batch:
+                    after = event["seq"]
+                    yield _sse_line(event["event"], event["data"])
+                if state["status"] in TERMINAL and len(batch) < 100:
+                    body = state["result"] or {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}
+                    if idem_entry is not None:
+                        _utterance_idem_store(idem_entry, body)
+                    yield _sse_line("final" if body.get("ok") else "error",
+                                   body if body.get("ok") else {"detail": body.get("detail", _UTTERANCE_INTERNAL_ERROR_DETAIL)})
+                    break
+                time.sleep(.05)
+    except RunError as exc:
+        yield _sse_line("error", {"detail": exc.message})
 
-    # 锁内最小化：锁内只做「读配置/物化」——把请求级 env 覆盖冻结成不可变 `cfg`；
-    # worker 与 SSE 泵送全程在锁外（`cfg` 显式传给 route_turn，worker 不再读 env）。
-    cfg = _materialize_request_llm_config(
-        provider, use_llm=use_llm, mock_llm=mock_llm,
-        api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
 
-    worker = threading.Thread(target=run, daemon=True)
-    worker.start()
-    while True:
-        item = events.get()
-        if item is done:
-            break
-        event, data = item
-        yield _sse_line(event, data)
-    worker.join()
+def _shared_principal(request):
+    principal = _utterance_principal(request)
+    return "local" if principal == "anonymous" else principal
+
+
+def _get_conversation_service():
+    from .conversation_service import ConversationService
+    return ConversationService(PROJECT_ROOT, runtime=_get_conversation_runtime())
+
+
+def _shared_utterance(payload, request):
+    from .conversation_api import invoke
+    from .llm_admission import materialize
+    owner = _shared_principal(request)
+    explicit = bool(payload.model_fields_set & {"provider", "use_llm", "mock_llm", "api_key", "base_url", "model"})
+    def configure():
+        if not explicit:
+            return materialize(config_root=CONFIG_ROOT, loader=load_llm_config, lock=ENV_LOCK)
+        provider, base, mock, enabled = _resolve_llm_request(payload.provider,
+            use_llm=payload.use_llm, mock_llm=payload.mock_llm, base_url=payload.base_url)
+        return _materialize_request_llm_config(provider, use_llm=enabled, mock_llm=mock,
+            api_key=payload.api_key, base_url=base, model=payload.model)
+    def quota(cfg):
+        _gate_llm_quota(request, cfg=cfg, provider=cfg.provider, use_llm=True,
+            mock_llm=cfg.mock_llm, api_key=payload.api_key)
+    def operation():
+        service = _get_conversation_service()
+        patch = dict(payload.state_patch or {})
+        controls = {key: getattr(payload, key) for key in (
+            'top_k', 'rerank', 'rerank_top_n', 'recall', 'strategy', 'facet_filters',
+            'suppressed_constraints', 'lenient_dims', 'date_from', 'date_to', 'polish',
+            'auto_parse_sources', 'auto_allow_llm') if key in payload.model_fields_set}
+        if controls:
+            existing = dict(patch.get('search_params') or {})
+            if any(key in existing and existing[key] != value for key, value in controls.items()):
+                from .conversation_runs import RunError
+                raise RunError('conflicting_search_parameter', '顶层参数与 state_patch 的同名检索参数不一致。')
+            patch['search_params'] = {**existing, **controls}
+        if 'sources' in payload.model_fields_set:
+            patch['sources'] = payload.sources
+        run = service.chat(owner, payload.utterance, request_id=payload.req_id,
+            conv_id=payload.conv_id, expected_revision=payload.expected_revision,
+            project_id=payload.project_id, state_patch=patch or None, ask_choice=payload.ask_choice,
+            use_agent=payload.agent, configure=configure, quota=quota,
+            config_fingerprint=hashlib.sha256(json.dumps({key: getattr(payload, key)
+                for key in ("provider", "use_llm", "mock_llm", "api_key", "base_url", "model")
+                if key in payload.model_fields_set}, sort_keys=True).encode()).hexdigest() if explicit else "")
+        if payload.background:
+            return {"ok": True, "async": True, "shared": True, "run": run}
+        return service.runtime.wait_result(owner, run["id"])
+    if payload.stream:
+        from .conversation_runs import TERMINAL
+        captured = {}
+        def submit_only():
+            saved = payload.background
+            payload.background = True
+            try:
+                captured.update(operation())
+                return captured
+            finally:
+                payload.background = saved
+        response = invoke(submit_only)
+        runtime, run = _get_conversation_runtime(), captured["run"]
+        def events():
+            after = 0
+            with runtime.waiting_transport(owner):
+                while True:
+                    state = runtime.store.load(owner, run["id"])
+                    batch = runtime.store.events(owner, run["id"], after)
+                    for event in batch:
+                        after = event["seq"]
+                        yield _sse_line(event["event"], event["data"])
+                    if state["status"] in TERMINAL and len(batch) < 100:
+                        yield _sse_line("final", state["result"])
+                        break
+                    time.sleep(.05)
+        return StreamingResponse(events(), media_type="text/event-stream")
+    response = invoke(operation)
+    if payload.background:
+        response.status_code = 202
+    return response
 
 
 @app.post("/api/utterance")
@@ -2991,21 +3344,28 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
     LLM 配置链与 `/api/recommend` 同径：ENV_LOCK + `_temporary_env` 请求级覆盖
     （请求级 key 隔离、endpoint 校验、server 配置对照），锁内只载配置，
     锁外才跑规则匹配与 LLM 分流（不把网络 I/O 关在 ENV_LOCK 里）。
-    本端点不产交付物、不落盘；route 的落地由调用方决定
-    （search → `/api/recommend`，tool → 前端 act 结构派发）。
+    执行回执与进度落入账户隔离的任务库；请求级密钥只保留在执行闭包内。
+    浏览器侧动作仍由调用方消费回执后派发。
 
     `stream:true`改发 `text/event-stream`：preliminary? →
     tool_start* → step* → final（2026-08-16）
     final 体与本响应逐位同形；细节见 `_utterance_event_stream`。
 
-    `req_id`（2026-08-08 修复）：同号在途 → 等 owner 收尾回缓存体（不再二次
-    执行路由/写工具）；同号已完成 → 直接回缓存体。占用/等待细节见 `_utterance_idem_*`。
+    `req_id` 按账户持久去重：同号同请求共享一次执行与费用检查，同号异请求返回
+    冲突。JSON、SSE 与 `background:true` 共享 ConversationRuntime 的有界队列；
+    后台模式立即返回任务编号，后续通过 `/api/runs` 查询、恢复进度或申请取消。
+    进程重启后未完成任务标为 interrupted，不自动重复可能已经生效的操作。
     """
     _require_same_origin(request)
+    if payload.shared:
+        return _shared_utterance(payload, request)
+    if payload.query:
+        _validate_or_400(validate_query, payload.query)
     from ..agent import action_plan as _ap
     from ..agent import turn
 
     principal = _utterance_principal(request)   # 成功经验库分区主体（无会话 → anonymous）
+    project_id = ""
 
     try:
         text = _ap.normalize_utterance(payload.utterance)
@@ -3038,77 +3398,219 @@ def api_utterance(payload: UtteranceRequest, request: Request) -> Response:
         "date_to": sp_date_to,
         "polish": bool(payload.polish),
     }
+    search_params.update({key: getattr(payload, key) for key in (
+        "auto_parse_sources", "auto_allow_llm", "rerank_top_n") if key in payload.model_fields_set})
+    # 放松卡作答（2026-09-14 ask 暂停/重启批）：校验在幂等占用之前——400 不占槽。
+    ask_answer = _sanitize_ask_answer(payload.ask_answer)
+    if payload.project_id is not None:
+        from .workspace_store import WorkspaceError, WorkspaceStore
+        from ..secret_patterns import redact
+        try:
+            project_id = WorkspaceStore(PROJECT_ROOT).resolve_conversation(
+                principal, str(getattr(payload, "conv_id", "") or ""), payload.project_id,
+                title=redact(text)[:180])
+        except WorkspaceError as exc:
+            status = 409 if exc.code == "conversation_project_changed" else 404
+            raise HTTPException(status_code=status, detail=exc.message,
+                                headers={"X-Error-Code": exc.code}) from exc
 
     # 幂等占用：非 owner 在这里直接等/取缓存体返回——**不碰 ENV_LOCK、不载 env
     # override、不进路由**（等的时候持 ENV_LOCK 会把 owner 的流式路由也卡住）。
-    req_id = _sanitize_req_id(payload.req_id)
-    idem_entry: dict | None = None
-    if req_id is not None:
-        idem_entry, is_owner = _utterance_idem_claim(
-            req_id, _utterance_request_fp(text, payload, provider, mock_llm, use_llm))
-        if not is_owner:
-            return _utterance_idem_wait_response(idem_entry, stream=bool(payload.stream))
+    from .conversation_runs import RunError
+    import uuid as _run_uuid
+    request_id = _sanitize_req_id(payload.req_id) or _run_uuid.uuid4().hex
+    def prepare():
+        cfg = _materialize_request_llm_config(
+            provider, use_llm=use_llm, mock_llm=mock_llm,
+            api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
+        _gate_llm_quota(request, cfg=cfg, provider=provider, use_llm=use_llm, mock_llm=mock_llm,
+                        api_key=payload.api_key, requested_base_url=requested_base_url)
+        return lambda emit: _execute_utterance(
+            text, payload, cfg, principal, project_id, search_params, ask_answer, emit)
+    runtime = _get_conversation_runtime()
+    try:
+        run = runtime.submit(
+            principal, request_id, _utterance_request_fp(text, payload, provider, mock_llm, use_llm),
+            prepare=prepare, conversation_id=str(getattr(payload, "conv_id", "") or ""),
+            project_id=project_id, request={"text": text, "query": payload.query or "",
+                "search_params": search_params, "sources": payload.sources})
+        if payload.background:
+            return _json_utf8({"ok": True, "async": True, "run": run}, status_code=202)
+        if payload.stream:
+            return StreamingResponse(_utterance_event_stream(
+                text, payload, provider=provider, requested_base_url=requested_base_url,
+                mock_llm=mock_llm, use_llm=use_llm, principal=principal, project_id=project_id,
+                search_params=search_params, ask_answer=ask_answer, runtime=runtime, run=run),
+                media_type="text/event-stream")
+        return _json_utf8(runtime.wait_result(principal, run["id"]))
+    except RunError as exc:
+        status = 409 if exc.code == "run_request_conflict" else 503 if exc.code in {
+            "run_capacity", "run_wait_timeout", "run_transport_capacity"} else 400
+        raise HTTPException(status_code=status, detail=exc.message,
+                            headers={"X-Error-Code": exc.code}) from exc
 
-    # T3 配额闸：幂等**非 owner** 的重发在上面的等待分支直接返回缓存体，不重复计数；
-    # owner（真跑路由的这个）在分流前计一次。cfg=None → 闸内按请求覆盖链复算
-    # （流式分支的 cfg 物化在生成器内，这里拿不到也不该提前载——见下方决策 1）。
-    _gate_llm_quota(
-        request, cfg=None, provider=provider, use_llm=use_llm, mock_llm=mock_llm,
-        api_key=payload.api_key, requested_base_url=requested_base_url)
 
-    if payload.stream:
-        # 流式分支：路由（含 config 加载）挪进生成器——env override 必须罩住整个生成过程，
-        # 在这里提前载好反而会在迭代开始前就还原（见 `_utterance_event_stream` 决策 1）。
-        return StreamingResponse(
-            _utterance_event_stream(
-                text, payload,
-                provider=provider, requested_base_url=requested_base_url,
-                mock_llm=mock_llm, use_llm=use_llm,
-                idem_entry=idem_entry, principal=principal,
-                search_params=search_params,
-            ),
-            media_type="text/event-stream",
-        )
+# ---------------------------------------------------------------- 复盘（replay，2026-09-28 复盘批）
+# 对话级 session log（app/session_log.py 通用机制）→ 后台静默整理成决策因果图
+# （app/replay_service.py 编排）→ 角标提醒 / 窗口查看 / 图上标注 / 标注打包进 sidechat。
+# 访问控制 = 登录 principal 分区 + replay_key（匿名分区防串号）：key 不符一律 404，
+# 不区分「不存在」与「key 错」（不泄漏存在性）。LLM 发送权只属于 chat/digest/backfill——
+# annotate 只记录；全部 fail-soft，绝不掀翻主路径。
 
-    cfg = _materialize_request_llm_config(
+def _replay_cfg_or_none(payload) -> "LLMConfig | None":
+    """复盘端点的请求级 LLM 物化（与 /api/utterance 同径）。"""
+    provider, requested_base_url, mock_llm, use_llm = _resolve_llm_request(
+        payload.provider, use_llm=payload.use_llm, mock_llm=payload.mock_llm,
+        base_url=payload.base_url)
+    return _materialize_request_llm_config(
         provider, use_llm=use_llm, mock_llm=mock_llm,
         api_key=payload.api_key, base_url=requested_base_url, model=payload.model)
 
-    # owner 收尾（含异常路径）必须把最终响应体存进占用条目——等待中的同号重发靠它拿结果；
-    # 异常体（ok=False）也存，等待方拿到的口径与 owner 一致。route_turn 契约是永不抛，
-    # except 与流式分支的 error 帧同为结构性防御。
-    body: dict | None = None
-    try:
-        result = turn.route_turn(
-            text,
-            has_results=bool(payload.has_results),
-            result_total=int(payload.result_total or 0),
-            current_query=payload.query or "",
-            current_filters=payload.current_filters,
-            sources=payload.sources,
-            config=cfg,
-            keyword_mapping=get_settings().keyword_mapping,
-            use_agent=bool(payload.agent),
-            principal=principal,
-            search_params=search_params,
-            # 课题上下文独立透传，只进 agent prompt。
-            artifact_context=str(payload.artifact_context or ""),
-            # 建议动作 hint 独立透传——allowlist 校验在 action_plan
-            # 单一真源；只缩小到既有能力，不绕过参数校验/执行开关/安全闸。
-            suggested_recipe=str(payload.suggested_recipe or ""),
-        )
-        _inject_utterance_policy_id(result, payload, search_params, cfg.model)
-        body = _utterance_response_body(result)
-    except Exception:
-        # webobs：与流式 worker 同口径——完整堆栈进日志，客户端只见通用文案。
-        logger.exception("/api/utterance 非流式兜底触发：route_turn 抛出异常")
-        body = {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL}
-    finally:
-        if idem_entry is not None:
-            # body=None 只可能发生在 BaseException（如 KeyboardInterrupt）穿透 except 时——
-            # 也要存错误体唤醒等待者，否则同号请求会干等到 180s 超时。
-            _utterance_idem_store(idem_entry, body or {"ok": False, "detail": _UTTERANCE_INTERNAL_ERROR_DETAIL})
-    return _json_utf8(body)
+
+def _replay_principal(request, conv_id):
+    principal = _utterance_principal(request)
+    if principal == 'anonymous':
+        from .conversation_store import ConversationStore
+        if ConversationStore(PROJECT_ROOT).exists('local', conv_id, include_deleted=True):
+            return 'local'
+    return principal
+
+
+@app.get("/api/replay/status")
+def api_replay_status(request: Request, conv_id: str = "", key: str = "") -> JSONResponse:
+    """角标轮询（轻量）：{ok, n_turns, has_digest, parse_failed, unseen, unseen_knowledge,
+    drawing, skip_reason, lint_count}。conv 从未落痕 → 空态（has_digest=false），不是 404。"""
+    _require_same_origin(request)
+    from . import replay_service
+    out = replay_service.status(PROJECT_ROOT, _replay_principal(request, conv_id), conv_id[:80], key[:64])
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8(out)
+
+
+@app.get("/api/replay/points")
+def api_replay_points(request: Request, conv_id: str = "", key: str = "") -> JSONResponse:
+    """复盘窗口全量载荷：{ok, digest, threads, snapshots, unseen, unseen_knowledge,
+    n_turns, drawing, skip_reason}。"""
+    _require_same_origin(request)
+    from . import replay_service
+    out = replay_service.points(PROJECT_ROOT, _replay_principal(request, conv_id), conv_id[:80], key[:64])
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8(out)
+
+
+@app.get("/api/replay/snapshots")
+def api_replay_snapshots(request: Request, conv_id: str = "", key: str = "") -> JSONResponse:
+    """标注快照清单（pill 找回用）：{ok, snapshots}。"""
+    _require_same_origin(request)
+    from . import replay_service
+    out = replay_service.points(PROJECT_ROOT, _replay_principal(request, conv_id), conv_id[:80], key[:64])
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8({"ok": True, "snapshots": out["snapshots"]})
+
+
+@app.post("/api/replay/digest")
+def api_replay_digest(payload: ReplayDigestRequest, request: Request) -> JSONResponse:
+    """手动「重新整理」（用户显式触发，同步执行；试用通道也放行但计日配额）。"""
+    _require_same_origin(request)
+    from . import replay_service
+    _gate_llm_quota(
+        request, cfg=None, provider=payload.provider, use_llm=payload.use_llm,
+        mock_llm=payload.mock_llm, api_key=payload.api_key)
+    out = replay_service.manual_digest(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key,
+        _replay_cfg_or_none(payload))
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8(out)
+
+
+@app.post("/api/replay/annotate")
+def api_replay_annotate(payload: ReplayAnnotateRequest, request: Request) -> JSONResponse:
+    """图上标注一条（只记录，不发 LLM——发送权只属于 composer）。"""
+    _require_same_origin(request)
+    from . import replay_service
+    ok = replay_service.annotate(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key,
+        payload.pid, payload.text)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8({"ok": True})
+
+
+@app.post("/api/replay/snapshot")
+def api_replay_snapshot(payload: _ReplayBase, request: Request) -> JSONResponse:
+    """「添加到对话」：打包全部用户标注为快照并清空图上标注 → {ok, snap_id?, count, items, text}。"""
+    _require_same_origin(request)
+    from . import replay_service
+    snap = replay_service.take_snapshot(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8({"ok": True, **snap})
+
+
+@app.post("/api/replay/snapshot/{snap_id}/annotate")
+def api_replay_snapshot_annotate(snap_id: str, payload: ReplayAnnotateRequest,
+                                 request: Request) -> JSONResponse:
+    """往已打包的快照里追加标注（pill 找回后的继续编辑）。"""
+    _require_same_origin(request)
+    from . import replay_service
+    snap = replay_service.annotate_snapshot(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key,
+        snap_id[:80], payload.pid, payload.text)
+    if not snap:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8({"ok": True, "snapshot": snap})
+
+
+@app.post("/api/replay/seen")
+def api_replay_seen(payload: ReplaySeenRequest, request: Request) -> JSONResponse:
+    """开窗即已读：核销用户**实际看到的版本**（observed_version/observed_pids，additive）。
+    返回 {ok, marked, digest_version, stale}——stale=true 表示窗口版本已过期，前端应刷新后重发。"""
+    _require_same_origin(request)
+    from . import replay_service
+    out = replay_service.mark_seen(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key,
+        observed_version=payload.observed_version, observed_pids=payload.observed_pids)
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8(out)
+
+
+@app.post("/api/replay/chat")
+def api_replay_chat(payload: ReplayChatRequest, request: Request) -> JSONResponse:
+    """sidechat 一轮：全上下文（digest + 浓缩痕迹 + 标注 + 复盘史）→ {ok, reply}。"""
+    _require_same_origin(request)
+    from . import replay_service
+    _gate_llm_quota(
+        request, cfg=None, provider=payload.provider, use_llm=payload.use_llm,
+        mock_llm=payload.mock_llm, api_key=payload.api_key)
+    out = replay_service.chat(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key,
+        payload.text, _replay_cfg_or_none(payload))
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8(out)
+
+
+@app.post("/api/replay/backfill")
+def api_replay_backfill(payload: ReplayBackfillRequest, request: Request) -> JSONResponse:
+    """本机历史补建（用户显式点按钮才上传，对齐 /api/dream 先例；仅服务端无记录时生效）。
+    确认本次会真整理后、落痕前过 LLM 配额闸（复用 /api/replay/digest 同款闸；被拒 → 429 零写入）。"""
+    _require_same_origin(request)
+    from . import replay_service
+    out = replay_service.backfill(
+        PROJECT_ROOT, _replay_principal(request, payload.conv_id), payload.conv_id, payload.key,
+        payload.turns, _replay_cfg_or_none(payload),
+        quota_gate=lambda: _gate_llm_quota(
+            request, cfg=None, provider=payload.provider, use_llm=payload.use_llm,
+            mock_llm=payload.mock_llm, api_key=payload.api_key))
+    if out is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return _json_utf8(out)
 
 
 @app.post("/api/agent/search-rescue")
@@ -3580,7 +4082,7 @@ def api_curate_check_updates(payload: CurateCheckUpdatesRequest, request: Reques
 # 跨进程执行；worker 跑完后 web 进程经 needs_web_invalidate 旗标在本进程补做缓存失效）。
 # 两条路径互斥不双写；未设 env 时下列代码行为与历史逐字节一致。
 
-_CORPUS_SYNC_JOB_LOCK = threading.Lock()
+_CORPUS_SYNC_JOB_LOCK = threading.RLock()
 _CORPUS_SYNC_JOB: dict = {
     "status": "idle",            # idle / running / done / failed
     "started_at": None,
@@ -3589,7 +4091,7 @@ _CORPUS_SYNC_JOB: dict = {
     "error": None,
 }
 #: 向量重建子进程超时（秒）：全语料嵌入是十分钟级任务，20 分钟上限兜底防挂死。
-_CORPUS_SYNC_VECTOR_TIMEOUT_S = 20 * 60
+_CORPUS_SYNC_VECTOR_TIMEOUT_S = CORPUS_SYNC_VECTOR_TIMEOUT_SECONDS
 #: durable_jobs 表按 kind 一行；本模块只有这一类 job。
 _CORPUS_SYNC_JOB_KIND = "corpus_sync"
 #: 每进程只对持久镜像 reconcile 一次（进程启动后首次触碰 job 状态时）。
@@ -3616,15 +4118,33 @@ def _corpus_sync_reconcile_once() -> None:
     """进程启动后首次触碰 job 状态时镜像对账：镜像停在 running = 上一进程被打断，如实翻
     failed（单 worker 前提下成立——本进程没发起它，running 镜像即孤儿）。"""
     global _CORPUS_SYNC_RECONCILED
-    if _CORPUS_SYNC_RECONCILED:
-        return
-    _CORPUS_SYNC_RECONCILED = True
-    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
-    try:
-        durable_jobs.reconcile_interrupted(
-            _CORPUS_SYNC_JOB_KIND, "进程重启，上一次同步任务被中断。", db_path=_corpus_sync_jobs_db())
-    except Exception as exc:
-        _corpus_sync_mirror_warn("reconcile", exc)
+    with _CORPUS_SYNC_JOB_LOCK:
+        if _CORPUS_SYNC_RECONCILED:
+            return
+        if _CORPUS_SYNC_JOB["status"] != "idle":
+            _CORPUS_SYNC_RECONCILED = True
+            return
+        from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+        try:
+            durable_jobs.reconcile_interrupted(
+                _CORPUS_SYNC_JOB_KIND, "进程重启，上一次同步任务被中断。", db_path=_corpus_sync_jobs_db())
+        except Exception as exc:
+            _corpus_sync_mirror_warn("reconcile", exc)
+        else:
+            _CORPUS_SYNC_RECONCILED = True
+
+
+def _invalidate_shared_corpus_caches() -> None:
+    invalidate_external_cache()
+    publish_corpus_write(PROJECT_ROOT)   # 跨进程写入代际标记
+    from ..retrieval import recall_api
+    recall_api.invalidate_vectors()
+
+
+def _refresh_shared_corpus_cache() -> None:
+    from . import rq_jobs
+    if rq_jobs.backend_active():
+        rq_jobs.consume_web_invalidate_flag(_invalidate_shared_corpus_caches)
 
 
 def _corpus_sync_job_snapshot() -> dict:
@@ -3637,25 +4157,21 @@ def _corpus_sync_job_snapshot() -> dict:
         except rq_jobs.JobBackendError as exc:
             raise HTTPException(status_code=503, detail=exc.message,
                                 headers={"X-Error-Code": exc.code}) from exc
-        if snap["status"] in ("done", "failed") and rq_jobs.consume_web_invalidate_flag():
-            # worker 在独立进程跑完：它清不了 web 进程的内存缓存，真正有效的失效在这里补做。
-            invalidate_external_cache()
-            from ..retrieval import recall_api  # 惰性：webapp 顶层零新 import 边
-            recall_api.invalidate_vectors()
+        _refresh_shared_corpus_cache()
         return snap
-    _corpus_sync_reconcile_once()
     with _CORPUS_SYNC_JOB_LOCK:
+        _corpus_sync_reconcile_once()
         snap = dict(_CORPUS_SYNC_JOB)
-    if snap["status"] == "idle" and snap["finished_at"] is None:
-        from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
-        try:
-            mirrored = durable_jobs.load(_CORPUS_SYNC_JOB_KIND, db_path=_corpus_sync_jobs_db())
-        except Exception as exc:
-            _corpus_sync_mirror_warn("load", exc)
-            mirrored = None
-        if mirrored is not None:
-            return mirrored
-    return snap
+        if snap["status"] == "idle" and snap["finished_at"] is None:
+            from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+            try:
+                mirrored = durable_jobs.load(_CORPUS_SYNC_JOB_KIND, db_path=_corpus_sync_jobs_db())
+            except Exception as exc:
+                _corpus_sync_mirror_warn("load", exc)
+                mirrored = None
+            if mirrored is not None:
+                return mirrored
+        return snap
 
 
 def _corpus_sync_rebuild_vectors() -> "str | None":
@@ -3714,13 +4230,13 @@ def _corpus_sync_job_finalize(status: str, result: "dict | None", error: "str | 
     with _CORPUS_SYNC_JOB_LOCK:
         _CORPUS_SYNC_JOB.update(
             status=status, finished_at=finished_at, result=result, error=error)
-    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
-    try:
-        durable_jobs.record_terminal(
-            _CORPUS_SYNC_JOB_KIND, status, finished_at, result, error,
-            db_path=_corpus_sync_jobs_db())
-    except Exception as exc:
-        _corpus_sync_mirror_warn("record_terminal", exc)
+        from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+        try:
+            durable_jobs.record_terminal(
+                _CORPUS_SYNC_JOB_KIND, status, finished_at, result, error,
+                db_path=_corpus_sync_jobs_db())
+        except Exception as exc:
+            _corpus_sync_mirror_warn("record_terminal", exc)
 
 
 def _corpus_sync_job_run(sources: "list[str] | None") -> None:
@@ -3731,6 +4247,7 @@ def _corpus_sync_job_run(sources: "list[str] | None") -> None:
     try:
         result = _corpus_sync_execute(sources)
         invalidate_external_cache()
+        publish_corpus_write(PROJECT_ROOT)   # 跨进程写入代际标记
         vec_err = None
         if int(result.get("imported_total") or 0) > 0:
             vec_err = _corpus_sync_rebuild_vectors()
@@ -3753,23 +4270,28 @@ def _corpus_sync_job_start(sources: "list[str] | None") -> dict:
         except rq_jobs.JobBackendError as exc:
             raise HTTPException(status_code=503, detail=exc.message,
                                 headers={"X-Error-Code": exc.code}) from exc
-    _corpus_sync_reconcile_once()
     with _CORPUS_SYNC_JOB_LOCK:
+        _corpus_sync_reconcile_once()
         if _CORPUS_SYNC_JOB["status"] == "running":
             return dict(_CORPUS_SYNC_JOB)
         started_at = _corpus_sync_now()
         _CORPUS_SYNC_JOB.update(
             status="running", started_at=started_at,
             finished_at=None, result=None, error=None)
-    from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+        from . import durable_jobs  # 惰性：webapp 顶层零新 import 边
+        try:
+            durable_jobs.record_running(
+                _CORPUS_SYNC_JOB_KIND, started_at, db_path=_corpus_sync_jobs_db())
+        except Exception as exc:
+            _corpus_sync_mirror_warn("record_running", exc)
     try:
-        durable_jobs.record_running(
-            _CORPUS_SYNC_JOB_KIND, started_at, db_path=_corpus_sync_jobs_db())
+        worker = threading.Thread(
+            target=_corpus_sync_job_run, args=(sources,), name="corpus-sync-job", daemon=True)
+        worker.start()
     except Exception as exc:
-        _corpus_sync_mirror_warn("record_running", exc)
-    worker = threading.Thread(
-        target=_corpus_sync_job_run, args=(sources,), name="corpus-sync-job", daemon=True)
-    worker.start()
+        _corpus_sync_job_finalize("failed", None, "同步任务线程启动失败，请稍后重试。")
+        raise HTTPException(status_code=503, detail="同步任务线程启动失败，请稍后重试。",
+                            headers={"X-Error-Code": "job_start_failed"}) from exc
     return _corpus_sync_job_snapshot()
 
 
@@ -4039,7 +4561,7 @@ def api_watch_check(payload: WatchCheckRequest, request: Request) -> JSONRespons
         uids.append(uid)
         fingerprints[uid] = record_fingerprint_v1(uid, item)
     result_total = int(meta.result_total or len(uids))
-    from ..corpus.corpus_curation import _now_iso
+    from ..corpus.net_ledger import now_iso
     return _json_utf8({"ok": True, "result": {
         "result_total": result_total,
         "uids": uids,
@@ -4059,7 +4581,7 @@ def api_watch_check(payload: WatchCheckRequest, request: Request) -> JSONRespons
             "rerank": "off",
             "polish": False,
         },
-        "checked_at": _now_iso(),
+        "checked_at": now_iso(),
     }})
 
 
@@ -4153,6 +4675,9 @@ def api_diagnose(payload: DiagnoseRequest, request: Request) -> JSONResponse:
     #（2026-08-15 触发点一次死端点诊断曾占锁数个超时长，全进程 LLM 端点静默排队）。
     # healthcheck 里少量展示用 env 直读（各名 key 的 detected/missing）反映的是服务端环境；
     # 请求级 key 的回显走 cfg（"Effective API key"），不受挪出锁影响。
+    _gate_llm_quota(
+        request, cfg=cfg, provider=normalized_provider, use_llm=True,
+        mock_llm=mock_llm, api_key=payload.api_key, require_enabled=False)
     health = healthcheck(cfg)
     network = diagnose_network(cfg)
     return _json_utf8(
@@ -4212,7 +4737,7 @@ def _dataset_facet_bits(record: Any) -> tuple[str, str, str, int | None]:
     PERF-M01：分面计数不再依赖构造完整展示 item（此前 limit=1 也为全库每条构造 item，
     O(N) CPU/内存/JSON 分配被公网重复请求放大）。四项派生与 `item_view.build_item`
     逐字同源——platform/source/published_year 与 build_item 同式，species 与旧浏览循环
-    同式；改 build_item 派生时这里必须同步（tests/test_webapp_sec_s3.py 有 parity 钉）。"""
+    同式；改 build_item 派生时这里必须同步（tests/test_webapp_security.py 有 parity 钉）。"""
     raw = record.raw if isinstance(record.raw, dict) else {}
     species = (record.species or "").strip()
     platform = (record.platform_family or "").strip()
@@ -4473,7 +4998,10 @@ def api_citations_download(f: str = Query(default="", max_length=200)) -> Respon
     name = str(f or "").strip()
     if not name or "/" in name or "\\" in name or name in (".", "..") or Path(name).name != name:
         raise HTTPException(status_code=400, detail="f 必须是 .userdata/citations/ 下的裸文件名。")
-    citations_dir = instance_data_dir_for(PROJECT_ROOT, ".userdata") / "citations"
+    from .runtime_paths import account_data_dir_for
+    from ..corpus.patch_package import current_patch_scope
+
+    citations_dir = account_data_dir_for(PROJECT_ROOT, ".userdata/citations", current_patch_scope())
     base = citations_dir.resolve()
     candidate = (citations_dir / name).resolve()
     if candidate == base or base not in candidate.parents:
@@ -4987,3 +5515,62 @@ def api_download_update(payload: DownloadUpdateRequest, request: Request) -> Res
     except DM.DownloadManagerError as exc:
         return _download_error_response(exc)
     return _json_utf8({"ok": True, **result})
+
+
+from .workspace_api import build_workspace_router
+
+app.include_router(build_workspace_router(
+    project_root=lambda: PROJECT_ROOT,
+    principal=_utterance_principal,
+    require_origin=_require_same_origin,
+    service=_get_conversation_service,
+))
+
+
+from .conversation_runs_api import build_runs_router
+app.include_router(build_runs_router(
+    runtime=_get_conversation_runtime,
+    principal=_utterance_principal,
+    require_origin=_require_same_origin,
+))
+
+from .conversation_api import build_conversation_router
+
+
+def _owned_replay_config(request, payload):
+    from .llm_admission import materialize
+    if not payload.model_fields_set & {'provider', 'use_llm', 'mock_llm', 'api_key', 'base_url', 'model'}:
+        return materialize(config_root=CONFIG_ROOT, loader=load_llm_config, lock=ENV_LOCK)
+    provider, base, mock, enabled = _resolve_llm_request(payload.provider,
+        use_llm=True if payload.use_llm is None else payload.use_llm,
+        mock_llm=bool(payload.mock_llm), base_url=payload.base_url)
+    return _materialize_request_llm_config(provider, use_llm=enabled, mock_llm=mock,
+        api_key=payload.api_key, base_url=base, model=payload.model)
+
+
+def _owned_replay_quota(request, payload, cfg):
+    _gate_llm_quota(request, cfg=cfg, provider=cfg.provider, use_llm=cfg.enable_llm,
+        mock_llm=cfg.mock_llm, api_key=payload.api_key)
+
+
+app.include_router(build_conversation_router(
+    service=_get_conversation_service, principal=_shared_principal,
+    require_origin=_require_same_origin,
+    configure=_owned_replay_config, quota=_owned_replay_quota,
+))
+
+from .learning_api import build_learning_router
+app.include_router(build_learning_router(
+    service=_get_conversation_service, principal=_shared_principal,
+    endpoint=lambda request, base, model, provider: _userdata_partition(request, base, model, provider)[1],
+    require_origin=_require_same_origin,
+    configure=_owned_replay_config, quota=_owned_replay_quota,
+))
+
+from .knowledge_api import build_knowledge_router
+app.include_router(build_knowledge_router(
+    service=_get_conversation_service, principal=_shared_principal,
+    endpoint=lambda request, base, model, provider: _userdata_partition(request, base, model, provider)[1],
+    require_origin=_require_same_origin,
+    configure=_owned_replay_config, quota=_owned_replay_quota,
+))

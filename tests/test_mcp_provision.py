@@ -100,7 +100,7 @@ def test_provision_tool_registered_with_expected_schema():
     """新工具已注册（与 _EXPECTED_TOOLS 单一真源一致）且入参 schema 符合契约：
     dataset_uid + dest_dir 必填，安全闸参数（scope/include_flagged/max_files/dry_run）可选。"""
     assert "provision_dataset" in M._EXPECTED_TOOLS
-    assert len(M._EXPECTED_TOOLS) == 19   # v1.30.0 加 curate_datasets（写工具 ③）：18→19
+    assert len(M._EXPECTED_TOOLS) == 25   # v1.38.0 增加独立学习入口；原schema边界保持。
     tool = next(t for t in asyncio.run(M.mcp.list_tools()) if t.name == "provision_dataset")
     schema = tool.inputSchema
     assert set(schema.get("required", [])) == {"dataset_uid", "dest_dir"}

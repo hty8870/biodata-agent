@@ -18,7 +18,7 @@
 <!-- 可选单包多臂：arm|weight|strategy|rerank|recall;...；权重须合计 1，空值=禁用。 -->
 <meta name="biodata-experiment-arms" content="">
 <title>BioData Agent · 生物数据集检索</title>
-<link rel="stylesheet" href="/static/css/app.css?v=20260909-pp1">
+<link rel="stylesheet" href="/static/css/app.css?v=20261021-knowledge-review">
 <link rel="icon" href="/favicon.ico" type="image/svg+xml">
 <!-- C4（2026-08-03 Phase）：C1 九文件（core/usage_core/usage_log/board_core/memory_rank/dream_core/
      act_core/memory/accounts）+ C2 五文件（cards/shell/results/facets/progress）+ C3 七文件
@@ -26,69 +26,89 @@
      + 本批四文件（board/task_pack/act/boot）+ examples（2026-08-13 操作样例库）——全部 28 个一方 JS
      均为 ES Module（本页 script 标签加载 27 个，dataset_page.js 只由 /dataset 详情页加载），boot 是唯一入口。
      importmap 必须在任何 module script 之前；令牌与 script 标签同代。
-     （意见反馈对话框）：#feedback_dialog_core/#feedback 两键**只在本页与 package.json**
-     登记、不经任何 `#` import 使用（feedback.js 相对 import 纯逻辑核、动态 import usage_upload——与
-     usage_upload/feedback_core「不进静态图」同哲学，见 usage_log.js 头部）；dataset.html 归 F2 并行包
-     不碰，parity 门只查**被使用**的 specifier，故本包不红；后续收口时如需补齐 dataset.html 键即可。 -->
+     两页 importmap 与 package.json imports 同键；页面仅加载所需模块。
+-->
 <script type="importmap">
-{"imports": {
-    "#core": "/static/js/core/core.js?v=20260909-pp1",
-    "#usage_core": "/static/js/core/usage_core.js?v=20260909-pp1",
-    "#usage_log": "/static/js/core/usage_log.js?v=20260909-pp1",
-    "#benchfb_core": "/static/js/core/benchfb_core.js?v=20260909-pp1",
-    "#benchfb": "/static/js/core/benchfb.js?v=20260909-pp1",
-    "#board_core": "/static/js/panel/board_core.js?v=20260909-pp1",
-    "#memory_rank": "/static/js/panel/memory_rank.js?v=20260909-pp1",
-    "#dream_core": "/static/js/panel/dream_core.js?v=20260909-pp1",
-    "#act_core": "/static/js/act/act_core.js?v=20260909-pp1",
-    "#downloads": "/static/js/core/downloads.js?v=20260909-pp1",
-    "#memory": "/static/js/panel/memory.js?v=20260909-pp1",
-    "#examples": "/static/js/panel/examples.js?v=20260909-pp1",
-    "#accounts": "/static/js/panel/accounts.js?v=20260909-pp1",
-    "#cards": "/static/js/search/cards.js?v=20260909-pp1",
-    "#shell": "/static/js/core/shell.js?v=20260909-pp1",
-    "#results": "/static/js/search/results.js?v=20260909-pp1",
-    "#facets": "/static/js/search/facets.js?v=20260909-pp1",
-    "#progress": "/static/js/core/progress.js?v=20260909-pp1",
-    "#search": "/static/js/search/search.js?v=20260909-pp1",
-    "#browse": "/static/js/search/browse.js?v=20260909-pp1",
-    "#reuse_pack": "/static/js/act/reuse_pack.js?v=20260909-pp1",
-    "#fav_folders": "/static/js/panel/fav_folders.js?v=20260909-pp1",
-    "#interactions": "/static/js/core/interactions.js?v=20260909-pp1",
-    "#onboarding": "/static/js/core/onboarding.js?v=20260909-pp1",
-    "#dataset_page": "/static/js/search/dataset_page.js?v=20260909-pp1",
-    "#sync_button_core": "/static/js/search/sync_button_core.js?v=20260909-pp1",
-    "#sync_button": "/static/js/search/sync_button.js?v=20260909-pp1",
-    "#board": "/static/js/panel/board.js?v=20260909-pp1",
-    "#task_pack": "/static/js/act/task_pack.js?v=20260909-pp1",
-    "#act": "/static/js/act/act.js?v=20260909-pp1",
-    "#act_run": "/static/js/act/act_run.js?v=20260909-pp1",
-    "#dream": "/static/js/panel/dream.js?v=20260909-pp1",
-    "#artifacts": "/static/js/core/artifacts.js?v=20260909-pp1",
-    "#projects_core": "/static/js/core/projects_core.js?v=20260909-pp1",
-    "#projects": "/static/js/core/projects.js?v=20260909-pp1",
-    "#feedback_dialog_core": "/static/js/core/feedback_dialog_core.js?v=20260909-pp1",
-    "#feedback": "/static/js/core/feedback.js?v=20260909-pp1",
-    "#ladder_core": "/static/js/search/ladder_core.js?v=20260909-pp1",
-    "#ladder": "/static/js/search/ladder.js?v=20260909-pp1",
-    "#task_card": "/static/js/search/task_card.js?v=20260909-pp1",
-    "#project_updates_core": "/static/js/core/project_updates_core.js?v=20260909-pp1",
-    "#project_updates": "/static/js/core/project_updates.js?v=20260909-pp1",
-    "#project_exports_core": "/static/js/core/project_exports_core.js?v=20260909-pp1",
-    "#project_exports": "/static/js/panel/project_exports.js?v=20260909-pp1",
-    "#batch_select": "/static/js/core/batch_select.js?v=20260909-pp1",
-    "#flow_trace": "/static/js/core/flow_trace.js?v=20260909-pp1",
-    "#boot": "/static/js/core/boot.js?v=20260909-pp1"
-}}
+{
+  "imports": {
+    "#core": "/static/js/core/core.js?v=20261021-knowledge-review",
+    "#usage_core": "/static/js/core/usage_core.js?v=20261021-knowledge-review",
+    "#usage_log": "/static/js/core/usage_log.js?v=20261021-knowledge-review",
+    "#benchfb_core": "/static/js/core/benchfb_core.js?v=20261021-knowledge-review",
+    "#benchfb": "/static/js/core/benchfb.js?v=20261021-knowledge-review",
+    "#board_core": "/static/js/panel/board_core.js?v=20261021-knowledge-review",
+    "#memory_rank": "/static/js/panel/memory_rank.js?v=20261021-knowledge-review",
+    "#dream_core": "/static/js/panel/dream_core.js?v=20261021-knowledge-review",
+    "#act_core": "/static/js/act/act_core.js?v=20261021-knowledge-review",
+    "#downloads": "/static/js/core/downloads.js?v=20261021-knowledge-review",
+    "#memory": "/static/js/panel/memory.js?v=20261021-knowledge-review",
+    "#examples": "/static/js/panel/examples.js?v=20261021-knowledge-review",
+    "#rules": "/static/js/panel/rules.js?v=20261021-knowledge-review",
+    "#accounts": "/static/js/panel/accounts.js?v=20261021-knowledge-review",
+    "#cards": "/static/js/search/cards.js?v=20261021-knowledge-review",
+    "#shell": "/static/js/core/shell.js?v=20261021-knowledge-review",
+    "#results": "/static/js/search/results.js?v=20261021-knowledge-review",
+    "#facets": "/static/js/search/facets.js?v=20261021-knowledge-review",
+    "#progress": "/static/js/core/progress.js?v=20261021-knowledge-review",
+    "#search": "/static/js/search/search.js?v=20261021-knowledge-review",
+    "#browse": "/static/js/search/browse.js?v=20261021-knowledge-review",
+    "#reuse_pack": "/static/js/act/reuse_pack.js?v=20261021-knowledge-review",
+    "#fav_folders": "/static/js/panel/fav_folders.js?v=20261021-knowledge-review",
+    "#interactions": "/static/js/core/interactions.js?v=20261021-knowledge-review",
+    "#onboarding": "/static/js/core/onboarding.js?v=20261021-knowledge-review",
+    "#dataset_page": "/static/js/search/dataset_page.js?v=20261021-knowledge-review",
+    "#sync_button_core": "/static/js/search/sync_button_core.js?v=20261021-knowledge-review",
+    "#sync_button": "/static/js/search/sync_button.js?v=20261021-knowledge-review",
+    "#board": "/static/js/panel/board.js?v=20261021-knowledge-review",
+    "#task_pack": "/static/js/act/task_pack.js?v=20261021-knowledge-review",
+    "#act": "/static/js/act/act.js?v=20261021-knowledge-review",
+    "#act_run": "/static/js/act/act_run.js?v=20261021-knowledge-review",
+    "#dream": "/static/js/panel/dream.js?v=20261021-knowledge-review",
+    "#artifacts": "/static/js/core/artifacts.js?v=20261021-knowledge-review",
+    "#projects_core": "/static/js/core/projects_core.js?v=20261021-knowledge-review",
+    "#projects": "/static/js/core/projects.js?v=20261021-knowledge-review",
+    "#feedback_dialog_core": "/static/js/core/feedback_dialog_core.js?v=20261021-knowledge-review",
+    "#feedback": "/static/js/core/feedback.js?v=20261021-knowledge-review",
+    "#project_updates_core": "/static/js/core/project_updates_core.js?v=20261021-knowledge-review",
+    "#project_updates": "/static/js/core/project_updates.js?v=20261021-knowledge-review",
+    "#project_exports_core": "/static/js/core/project_exports_core.js?v=20261021-knowledge-review",
+    "#project_exports": "/static/js/panel/project_exports.js?v=20261021-knowledge-review",
+    "#batch_select": "/static/js/core/batch_select.js?v=20261021-knowledge-review",
+    "#flow_trace": "/static/js/core/flow_trace.js?v=20261021-knowledge-review",
+    "#replay_core": "/static/js/core/replay_core.js?v=20261021-knowledge-review",
+    "#replay_layout": "/static/js/core/replay_layout.js?v=20261021-knowledge-review",
+    "#replay_graph": "/static/js/panel/replay_graph.js?v=20261021-knowledge-review",
+    "#replay": "/static/js/panel/replay.js?v=20261021-knowledge-review",
+    "#boot": "/static/js/core/boot.js?v=20261021-knowledge-review",
+    "#workspaces_core": "/static/js/core/workspaces_core.js?v=20261021-knowledge-review",
+    "#workspaces": "/static/js/panel/workspaces.js?v=20261021-knowledge-review",
+    "#copy": "/static/js/core/copy.js?v=20261021-knowledge-review",
+    "#conversation_client": "/static/js/act/conversation_client.js?v=20261021-knowledge-review",
+    "#storage_queue": "/static/js/core/storage_queue.js?v=20261021-knowledge-review",
+    "#knowledge_core": "/static/js/panel/knowledge_core.js?v=20261021-knowledge-review",
+    "#knowledge": "/static/js/panel/knowledge.js?v=20261021-knowledge-review",
+    "#live_dot": "/static/js/core/live_dot.js?v=20261021-knowledge-review"
+  }
+}
 </script>
 
+  <!-- 部署注入页脚（备案合规）：样式仅此一处，内容占位符由服务端运行时经
+       BIODATA_SITE_FOOTER_HTML 原样替换；未配置时页脚为空、零占位不可见。
+       真实备案号属部署侧信息，永不进 git（与遥测 meta 同一注入机制）。 -->
+  <style>
+    .deploy-footer{margin:32px auto 16px;padding:0 16px;text-align:center;font-size:12px;line-height:1.8;color:#9aa0a8}
+    .deploy-footer a{color:inherit;text-decoration:none}
+    .deploy-footer a:hover{text-decoration:underline}
+    .deploy-footer img{vertical-align:-3px;width:14px;height:14px;margin-right:4px}
+    .deploy-footer:empty{display:none}
+  </style>
 </head>
 <body>
 <!-- ============ 左侧悬浮 tab 栏 ============ -->
 <aside class="sidebar" id="sidebar">
     <div class="side-card side-nav-card" id="sideNavCard"><!-- 导航卡（常驻）；有分面时向上收缩到内容高 -->
     <div class="side-head">
-        <span class="wordmark" aria-label="BioData Agent"><span class="wm-bio" aria-hidden="true">Bi<svg class="wm-o" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="7.2" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M11 4.2 C5.6 8.2 16.4 13.8 11 17.8" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".62"/></svg></span><span aria-hidden="true">Data&nbsp;Agent</span></span>
+        <button class="wordmark-btn" id="railToggle" type="button" aria-label="收起导航"><span class="wordmark"><span class="wm-bio" aria-hidden="true"><span class="wm-t">Bi</span><svg class="wm-o" viewBox="2.8 2.8 16.4 16.4" aria-hidden="true"><circle cx="11" cy="11" r="7.2" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M11 4.2 C5.6 8.2 16.4 13.8 11 17.8" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".62"/></svg></span><span class="wm-t" aria-hidden="true">Data&nbsp;Agent</span></span></button>
         <button class="side-toggle" id="sideCollapse" title="收起侧栏" aria-label="收起侧栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/></svg></button>
     </div>
     <nav class="side-nav" id="nav">
@@ -100,22 +120,36 @@
         <button class="nav-item" id="libNav" data-view="lib" title="我的库：追踪的检索与收藏的数据集"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h4l2 3h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/></svg><span class="lbl">我的库</span></button>
         <button class="nav-item" id="histNav" data-view="history" title="历史记录：最近 50 次检索，只存在本地"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.2 2"/></svg><span class="lbl">历史记录</span></button>
         <button class="nav-item" data-view="help"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.3 2.4c-.7.3-1.4.9-1.4 1.9v.3"/><path d="M12 17h.01"/></svg><span class="lbl">帮助</span></button>
-        <button class="nav-item" id="settingsBtn" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1A1.6 1.6 0 0 0 8 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 1.1-2.7H2a2 2 0 0 1 0-4h.1A1.6 1.6 0 0 0 3.4 8a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 8 3.4h.1A1.6 1.6 0 0 0 9 2.1V2a2 2 0 0 1 4 0v.1A1.6 1.6 0 0 0 16 3.4a1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8v.1a1.6 1.6 0 0 0 1.5 1H22a2 2 0 0 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg><span class="lbl">设置</span></button>
+<div class="workspace-nav" id="workspaceNav" aria-label="对话项目"></div>
+
+        <button class="nav-item" id="settingsBtn" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.343 3.94c.09-.542.56-.94 1.11-.94h1.093c.55 0 1.02.398 1.11.94l.149.894c.07.424.384.764.78.93.398.164.855.142 1.205-.108l.737-.527a1.125 1.125 0 011.45.12l.773.774c.39.389.44 1.002.12 1.45l-.527.737c-.25.35-.272.806-.107 1.204.165.397.505.71.93.78l.893.15c.543.09.94.56.94 1.109v1.094c0 .55-.397 1.02-.94 1.11l-.893.149c-.425.07-.765.383-.93.78-.165.398-.143.854.107 1.204l.527.738c.32.447.269 1.06-.12 1.45l-.774.773a1.125 1.125 0 01-1.449.12l-.738-.527c-.35-.25-.806-.272-1.203-.107-.397.165-.71.505-.781.929l-.149.894c-.09.542-.56.94-1.11.94h-1.094c-.55 0-1.019-.398-1.11-.94l-.148-.894c-.071-.424-.384-.764-.781-.93-.398-.164-.854-.142-1.204.108l-.738.527c-.447.32-1.06.269-1.45-.12l-.773-.774a1.125 1.125 0 01-.12-1.45l.527-.737c.25-.35.273-.806.108-1.204-.165-.397-.506-.71-.93-.78l-.894-.15c-.542-.09-.94-.56-.94-1.109v-1.094c0-.55.398-1.02.94-1.11l.894-.149c.424-.07.765-.383.93-.78.165-.398.143-.854-.108-1.204l-.526-.738a1.125 1.125 0 01.12-1.45l.773-.773a1.125 1.125 0 011.45-.12l.737.527c.35.25.807.272 1.204.107.397-.165.71-.505.78-.929l.15-.894z"/><path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg><span class="lbl">设置</span></button>
     </nav>
+    <!-- 左栏账号区：钉在导航卡底部（上边框分隔），内容与设置抽屉的账号 chip 同一口径
+         （accounts.js renderAccountChip 同步两处）；点击打开设置抽屉（账户块在抽屉顶部）。 -->
+    <div class="side-acct">
+        <button class="acct-chip" id="railAcctChip" type="button" title="账号">
+            <span class="acct-avatar" id="railAcctAvatar" aria-hidden="true">?</span>
+            <span class="acct-name" id="railAcctName">未登录</span>
+        </button>
+    </div>
     </div><!-- /.side-nav-card -->
-    <!-- 工作卡：同一张卡承载「细化筛选」与「继续对话」，顶部开关切换（2026-07-23；2026-08-02 页签更名）。
-         两块都是「拿到结果之后接着往下做」的动作，此前一个在左侧栏、一个在结果区上方，
-         用户要在两个地方找。合成一张卡后位置固定，只用一个开关决定看哪一块。
-         注意：#sideFacets / #condBoard 及其内部所有 id 一律保持不变——facets.js 的
-         syncFacetsCard/placeFacetBar 与 board.js 全按 id 取节点，改 id 会静默失联。 -->
+    <!-- 工作卡：同一张卡承载「对话」「复盘」两页签，顶部开关切换（2026-07-23 建；
+         2026-08-02 页签更名；2026-10-10 rp1 复盘自浮窗迁入；2026-10-11 rp2「筛选」摘出侧栏——
+         入口挪到结果头行 #facetOpenBtn，面板收进右侧抽屉 #facetDrawer，不再占页签）。
+         两块都是「拿到结果之后接着往下做」的动作，合成一张卡后位置固定，只用一个开关决定看哪一块。
+         注意：#condBoard / #sideReplayPane 及其内部所有 id 一律保持不变——board.js 与 replay.js
+         全按 id 取节点，改 id 会静默失联。 -->
     <div class="side-card side-work" id="sideWork" role="group" hidden aria-label="结果操作">
         <div class="sw-switch" role="tablist" aria-label="侧栏工作模式">
             <span class="sw-glide" id="swGlide" aria-hidden="true"></span>
-            <button type="button" class="sw-tab is-on" id="swTabFacets" role="tab" aria-selected="true" aria-controls="sideFacets" data-sw-mode="facets">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5h17l-6.6 7.6V19l-3.8-2.1v-4.3z"/></svg><span>细化筛选</span>
+            <button type="button" class="sw-tab is-on" id="swTabBoard" role="tab" aria-selected="true" aria-controls="sideBoardPane" data-sw-mode="board">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-3.2-6.4"/><path d="M4 20l1.2-3.4"/><path d="M9 11h6M9 14.5h4"/></svg><span>对话</span>
             </button>
-            <button type="button" class="sw-tab" id="swTabBoard" role="tab" aria-selected="false" aria-controls="sideBoardPane" data-sw-mode="board">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-3.2-6.4"/><path d="M4 20l1.2-3.4"/><path d="M9 11h6M9 14.5h4"/></svg><span>继续对话</span>
+            <!-- 复盘页签（2026-10-10 rp1）：复盘对象就是当前这段对话，可用性与「对话」页签同源
+                 （board.js swAvailable 同值）。#replayNavBadge = 后台整理出的新进展条数（原浮窗入口的角标挪进页签）。 -->
+            <button type="button" class="sw-tab" id="swTabReplay" role="tab" aria-selected="false" aria-controls="sideReplayPane" data-sw-mode="replay"
+                    title="复盘本会话：整理决策图谱，并针对会话追问或质疑">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.2" cy="6" r="2.4"/><circle cx="18.8" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M7.6 6h9"/><path d="M6.8 7.8l3.6 8"/><path d="m17.2 7.8-3.6 8"/></svg><span>复盘</span><span id="replayNavBadge" class="rp-badge" hidden></span>
             </button>
             <!-- 视图交换钮（2026-08-16 vs1）：交换主区结果网格与侧栏对话窗的显示位置——
                  对话放大到主区 #chatStage，结果以紧凑卡收进本卡。board.js placeChatSuite 统一搬家；
@@ -125,27 +159,57 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4 3.5 7.5 7 11"/><path d="M3.5 7.5H17"/><path d="m17 13 3.5 3.5L17 20"/><path d="M20.5 16.5H7"/></svg>
             </button>
         </div>
-        <!-- 常驻「查询条件」栏：**就是** facets 的 #facetActive（用户圈的那一栏），board.js placeHitsBar 把它从
-             #facetBar 整块搬到这里——两模式都在、不随切换消失，**不另造栏**。侧栏收起/移动端搬回 #facetBar（结果区）。 -->
-        <div class="sw-hits" id="swHits" role="group" hidden aria-label="当前查询条件"></div>
-        <!-- `side-facets` 这个类**必须保留**：app.css 里整套侧栏分面样式（全宽行 / 计数右对齐 /
-             长值省略号，约 20 条规则）都以 `.side-facets` 作用域选择，去掉就整块回退成基础 chip 云。 -->
-        <div class="sw-pane side-facets" id="sideFacets" role="tabpanel" aria-labelledby="swTabFacets" aria-label="分面细化筛选">
-            <div class="side-facet-body" id="sideFacetBody"></div>
-        </div>
-        <!-- 对话记录面板（telegram / 微信式）：上＝常驻查询条件栏（#swHits，与细化筛选共享）；
-             中＝对话记录 + 条件板（#sideBoardScroll，主区、可滚）＋撤销/重做步进条；
+        <!-- 对话记录面板（telegram / 微信式）：对话记录 + 条件板（#sideBoardScroll，主区、可滚）＋撤销/重做步进条；
              面板外下方＝统一输入条（#chatComposer：范围 chip + 合并弹层 + 输入框 + 发送键）。
              2026-08-02：唯一的「继续说」输入行挪到本卡最下方（微信式、发送即清空、默认为空），
              主区结果态不再有输入框。#cbHistory 的归宿（p10 起，board.js cbChatInMain/placeChatLog
              单一真源）：**有检索结果**时就是这里（#sideBoardScroll）；**无结果但有对话**时
-             住主区 hero 内的 #chatMain（Codex 式中央列，此时本卡整卡收起）。 -->
+             住主区 hero 内的 #chatMain（Codex 式中央列，此时本卡整卡收起）。
+             rp2（2026-10-11）：常驻查询条件栏 #swHits 随「筛选」页签一并退役——查询条件 chips
+             （#facetActive）恒住筛选抽屉内的 #facetBar 顶部，不再双处摆放。 -->
         <div class="sw-pane" id="sideBoardPane" role="tabpanel" aria-labelledby="swTabBoard" hidden>
             <div class="sw-board-scroll" id="sideBoardScroll" tabindex="0" role="group" aria-label="对话与细化记录（可上下滚动）"><!-- 对话记录（统一对话窗口的对话流，board.js cbRenderHistory）：本轮说过的话 + 系统回音 +
                  做过的细化 + 执行行动流/总结（p10），按发生顺序；每条可「查看历史回复 / 分支 / 回退」。
                  **有检索结果时静态家就是这里**；无结果有对话时由 placeChatLog 搬去 #chatMain（主区）。
                  纯内存 _cbLog，随新检索清空、绝不落盘。 -->
                 <div class="cb-history" id="cbHistory" role="log" aria-live="polite" hidden aria-label="对话与细化记录"></div>
+            </div>
+        </div>
+        <!-- 复盘 pane（2026-10-10 rp1：复盘自浮窗迁入侧栏第三页签，与「对话」并列）；
+             竖排——头按钮行（重新整理/添加到对话/折叠图谱，按钮样式复用浮窗头 .hw-btn）＋状态行
+             #replayNote；上半图谱（#replayGraphCol，panel/replay_graph.js 自建骨架的宿主）；
+             分割线 #replaySplit（视觉 = 全宽 1px 细线定界 + 中央 44px 圆角握把，hover/拖拽染 accent，
+             命中区 9px、上下各吃掉 4px 间隙）＋下半追问对话窗（#replayChat + 自带 composer）。
+             skip 原因（未配置 API Key 等）单处显示：默认落图谱内 .g-skip（replay_graph.js 渲染，
+             映射函数经 ctx 注入自 #replay_core），仅图谱折叠（.rp-graph-collapsed）时由 #replayNote
+             兜底——两处同一决策（replay.js _applyNote(data, collapsed)）。#replayChat 的空态提示
+             （.rp-side-hint）由 replay.js _renderChat 渲染（唯一真源，不再静态摆在这里——首次
+             _renderChat([]) 会把静态节点清掉，空态会读成「输入框上方一片空白」）。
+             **全部 DOM id 与浮窗时代逐位一致**——取数、渲染、补建、折叠逻辑一律按 id 取节点；
+             显隐由 board.js 页签机制统一裁决（hidden），激活经 replaySetActive 通知
+             （取数/轮询随激活启停）。折叠类 .rp-graph-collapsed 挂在本 pane 上。 -->
+        <div class="sw-pane rp-pane" id="sideReplayPane" role="tabpanel" aria-labelledby="swTabReplay" aria-label="复盘" hidden>
+            <div class="rp-pane-head">
+                <button class="hw-btn" id="replayRedrawBtn" type="button" title="按当前痕迹重新整理一遍图谱">重新整理</button>
+                <button class="hw-btn" id="replayAddBtn" type="button" title="把图谱上的标注打包进追问输入框">添加到对话</button>
+                <button class="hw-btn" id="replayGraphToggle" type="button" aria-expanded="true" aria-controls="replayGraphCol" title="折叠图谱，只看追问">收起图谱 ›</button>
+            </div>
+            <p class="rp-side-note" id="replayNote" hidden></p>
+            <div class="rp-graph-col" id="replayGraphCol">
+                <div id="replayGraph"></div>
+            </div>
+            <!-- 上下分区的可拖分割线（replay.js _initSplit 接线；折叠图谱时随图谱栏一起藏）。
+                 点节点展开详情时分割线由 replay.js 动画下移（给 .rp-graph-col 换 flex-basis，
+                 CSS transition 负责补间），标注提交/关闭后回到拖拽记住的比例。 -->
+            <div class="rp-split" id="replaySplit" role="separator" aria-orientation="horizontal" tabindex="0"
+                 aria-label="拖动调整图谱与追问对话的高度比例" aria-valuenow="50" title="拖动调整上下比例；双击复位"></div>
+            <div class="rp-side">
+                <div id="replayEmpty" class="rp-empty" hidden></div>
+                <div id="replayChat" role="log" aria-live="polite" aria-label="针对本会话图谱的追问"></div>
+                <div class="rp-composer">
+                    <div id="replayComposer" contenteditable="true" role="textbox" aria-multiline="true" aria-label="追问、质疑或学习" data-ph="追问 / 质疑 / 学习…"></div>
+                    <button class="cb-send" id="replaySendBtn" type="button" aria-label="发送" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></svg></button>
+                </div>
             </div>
         </div>
         <!-- 统一输入条（图7 重做 2026-08-03 点5 改版；点6/7 分支条）：一条圆角容器 = 输入框 + 范围圆钮 + 发送键。
@@ -201,6 +265,9 @@
         <span aria-hidden="true"></span>
     </div>
 </aside>
+<!-- 键盘恢复入口（桌面胶囊折叠态）：平时视觉隐藏、不占 tab 序；rail-collapsed 时进入 tab 序，
+     :focus-visible 显形。指针用户的唤出走左上角边缘（shell.js initRailToggle）。 -->
+<button class="rail-restore" id="railRestore" type="button" title="展开导航" aria-label="展开导航"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/><path d="m13 10 2.5 2-2.5 2"/></svg></button>
 <!-- 收起后：左上角悬浮 logo（点击展开侧栏） -->
 <button class="side-fab" id="sideFab" title="展开侧栏" aria-label="展开侧栏">
     <span class="wordmark" aria-hidden="true"><span class="wm-bio">Bi<svg class="wm-o" viewBox="0 0 22 22"><circle cx="11" cy="11" r="7.2" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M11 4.2 C5.6 8.2 16.4 13.8 11 17.8" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".62"/></svg></span><span>Data&nbsp;Agent</span></span>
@@ -315,21 +382,20 @@
                 <button class="chip" data-q="检查一下 10x Genomics 有没有新发布的数据集，有的话帮我更新入库" title="联网检查来源更新，新数据集自动入库——检索之外的对话式执行">检查 10x 有没有新数据</button>
             </div>
             <section class="memory-suggestions" id="memorySuggestions" hidden aria-labelledby="memorySuggestionsTitle">
-                <div class="memory-suggestions-head"><span id="memorySuggestionsTitle">从你的记忆继续</span><button type="button" id="memorySuggestionsManage">管理</button></div>
+                <!-- 建议区只列未修改的旧本机资料（草稿不进建议）；管理收敛为唯一入口：设置「用户记忆」。 -->
+                <div class="memory-suggestions-head"><span id="memorySuggestionsTitle" title="未修改的旧本机资料才会出现在这里；草稿不可引用。管理在设置「用户记忆」">本机旧资料建议</span></div>
                 <div class="memory-suggestion-list" id="memorySuggestionList"></div>
             </section>
         </div>
 
         <div id="resultsWrap" style="display:none">
-            <!-- 结果区头部件整体（vs2 起包进 #resultsHead；2026-08-22 重排为四段）：
+            <!-- 结果区头部件整体（vs2 起包进 #resultsHead；2026-08-22 重排，2026-10-10 删「下一步」组）：
                  ① .res-overview 概览卡（结果区唯一卡片）——标题行（含可行性/任务包/存追踪三钮）+
                     批次切换（起 segmented 控件造型）+ 审核横幅（去盒化 teal 左线）+
                     摘要卡（#searchTrace，内嵌 #coverageCaveats；去盒化，覆盖缺口改虚线分隔+琥珀点）；
-                 ② #facetBar 原位不动（有自己的搬家逻辑 facets.js placeFacetBar，严禁包进任何新容器）；
+                 ② rp2（2026-10-11）起 #facetBar 不在本容器内——它恒住右侧筛选抽屉 #facetDrawerBody；
                  ③ .res-notes 诚实回显行组（unusedQueryTerms/orHandling/actionHint 去盒化小字行，
-                    三条全隐时整组经 :has 归隐）；#identifierLookup 保留原 info-bar 盒子、不进组；
-                 ④ .res-next「下一步」——#ladderNarrow 过宽收窄建议（从概览卡上方下移至此）+
-                    #ladderBar 行动阶梯 chips；两者全隐时整组（连标签）经 :has 归隐。
+                    三条全隐时整组经 :has 归隐）；#identifierLookup 保留原 info-bar 盒子、不进组。
                  正常态 #resultsHead{display:contents} 对布局完全透明（内部 id 一律不动）；视图交换态由
                  board.js placeChatSuite 把它整节点搬进侧栏 #sideBoardScroll 顶部（紧凑卡列表之前，
                  随列表滚动），主区只剩对话舞台。
@@ -340,6 +406,10 @@
             <div class="results-head">
                 <div class="results-title">推荐结果<span class="prelim-badge" id="prelimBadge" hidden title="Agent 还在深入思考，屏上是第一阶段先行的结果">初步结果</span></div>
                 <div class="results-head-acts">
+                    <!-- 筛选（2026-10-11 rp2）：细化筛选自侧栏页签摘出——入口跟结果走（本行，
+                         视图交换时随 #resultsHead 一并搬回侧栏），面板从屏幕右侧推入（#facetDrawer，
+                         复用设置抽屉 .drawer 范式）。显隐由 facets.js placeFacetBar 按有无分面内容驱动。 -->
+                    <button class="btn feasibility-btn" id="facetOpenBtn" type="button" hidden title="按物种、组织、平台等维度细化这批结果"><span class="bt-full">筛选</span><span class="bt-short">筛选</span></button>
                     <!-- 可行性概览：入口在结果头行，展开面板在结果区内（#feasibilityPanel）。
                          vs4：按钮内双 span 文案——.bt-full 完整文案（正常态/主区）、.bt-short 短文案
                          （交换态 300px 窄栏，纯 CSS display 切换；id/点击行为不动）。title 兜完整文案。
@@ -368,17 +438,6 @@
                 <div class="coverage-caveats rs-coverage" id="coverageCaveats" hidden></div>
             </section>
             </section><!-- /.res-overview -->
-            <div class="facetbar" id="facetBar" hidden>
-                <div class="facet-active" id="facetActive" hidden></div>
-                <div class="facet-groups" id="facetGroups"></div>
-                <!-- 数据细化「提交」条（用户 2026-07-24·点4）：侧栏数据细化模式下勾选分面攒进草稿，
-                     改动数 + 取消/提交在此；提交才应用并拼一条「加入/去掉」消息进对话。默认隐藏，_facetStage 脏时露出。 -->
-                <div class="facet-stage-bar" id="facetStageBar" hidden role="group" aria-label="待提交的细化筛选">
-                    <span class="fsb-count" id="facetStageCount"></span>
-                    <button type="button" class="btn fsb-cancel" id="facetStageCancel">取消</button>
-                    <button type="button" class="btn btn-primary fsb-submit" id="facetStageSubmit">提交</button>
-                </div>
-            </div>
             <!-- 三条诚实回显条包进 .res-notes（去盒化 2px 左色条小字行）；三条全隐时
                  整组经 CSS :has 归隐，不占纵向空间。JS/显隐逻辑零改动。 -->
             <div class="res-notes">
@@ -392,20 +451,6 @@
             <!-- 一句话直接执行的回执：p10 起长在对话流里（行动流 + 总结 sys，board.js/act.js），结果区不再设挂点。
                  保留原 info-bar 盒子，不进 .res-notes 行组（内容体量自成一卡）。 -->
             <div class="info-bar identifier-lookup" id="identifierLookup" hidden></div>
-            <!-- 「下一步」分组——收窄建议 + 行动阶梯 chips 收进同一容器；两者全隐时整组
-                 （连 .res-next-label 标签）经 CSS :has 归隐。 -->
-            <div class="res-next">
-                <span class="res-next-label">下一步</span>
-                <!-- 过宽收窄建议：result_total 超阈值且
-                     有未固定维度时显示 1–2 条（「找到 N 条。按物种/组织收窄更容易比较」），
-                     点击=直接套对应 facet 筛选（确定性，零 LLM）。渲染在 ladder.js。
-                     从概览卡上方下移到「下一步」组（紧邻行动 chips）。 -->
-                <div class="ladder-narrow" id="ladderNarrow" hidden></div>
-                <!-- 下一步行动阶梯 chips：结果区规则式选取
-                     2–4 颗（零 LLM）——① 直接执行（套分面）/ ② 确定性导出（探测）/ ③ 任务卡
-                     （绑定既有能力 recipe 或普通路由）。渲染在 ladder.js（results 渲染钩子驱动）。 -->
-                <div class="ladder-bar" id="ladderBar" hidden></div>
-            </div><!-- /.res-next -->
             </div><!-- /#resultsHead -->
             <div class="feasibility-panel" id="feasibilityPanel" hidden></div>
             <div class="task-pack-panel" id="taskPackPanel" hidden></div>
@@ -435,7 +480,7 @@
                 <select class="select" id="fSource"><option value="">全部来源</option></select>
                 <select class="select" id="fSpecies"><option value="">全部物种</option></select>
                 <select class="select" id="fPlatform"><option value="">全部平台</option></select>
-                <label class="switch"><input type="checkbox" id="fFastq"><span class="slider"></span>仅含 FASTQ</label>
+                <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="fFastq"><span class="slider"></span>仅含 FASTQ
                 <button class="btn" id="browseFilterClear" type="button" title="复位关键词、来源、物种、平台、FASTQ 与年份范围">清空筛选</button>
             </div>
             <div class="tb-group tb-display" role="group" aria-label="显示控制">
@@ -550,11 +595,31 @@
             <p>点「复制接入提示词」→ 粘给助手发送，它会代你定位服务器、自检、注册、安装技能包并验收，全程无需你动手。</p>
             <div class="help-agent-acts">
                 <button class="btn btn-primary" id="agentPromptCopyBtn" type="button">复制接入提示词</button>
-                <a class="btn btn-ghost" href="/api/guide/skill.zip" download title="技能包 = 给助手看的使用约束说明。提示词已内置自动安装步骤，一般不需要手动下载；想手动安装时才用">下载技能包（一般不需要）</a>
+                <a class="btn btn-ghost" href="/api/guide/skill.zip" download data-dlq="other" data-dlq-name="biodata-skill.zip" title="技能包 = 给助手看的使用约束说明。提示词已内置自动安装步骤，一般不需要手动下载；想手动安装时才用">下载技能包（一般不需要）</a>
             </div>
         </div>
     </section>
 </main>
+
+<!-- 筛选抽屉（2026-10-11 rp2）：「筛选」自侧栏页签摘出——唯一入口是结果头行 #facetOpenBtn，
+     面板从屏幕右侧推入（桌面/移动/交换态同一抽屉，复用设置抽屉 .drawer 范式；**非模态**：不加遮罩、
+     不进 trapDialogFocus，边看结果边挑条件）。#facetBar 恒住其中不再搬家（placeFacetBar 只同步
+     入口钮显隐 + swSync）；class side-facets 必须保留——app.css 整套全宽行分面样式以它作用域。 -->
+<aside class="drawer side-facets" id="facetDrawer" role="dialog" aria-modal="false" aria-labelledby="facetDrawerTitle" aria-hidden="true" inert>
+    <div class="drawer-head"><h3 id="facetDrawerTitle">筛选</h3><button class="icon-btn" id="facetDrawerClose" type="button" aria-label="关闭筛选">✕</button></div>
+    <div class="side-facet-body" id="facetDrawerBody">
+        <div class="facetbar" id="facetBar" hidden>
+            <div class="facet-active" id="facetActive" hidden></div>
+            <div class="facet-groups" id="facetGroups"></div>
+            <!-- 数据细化「提交」条：勾选分面攒进草稿，改动数 + 取消/提交在此；提交才应用并拼一条「加入/去掉」消息进对话。默认隐藏，_facetStage 脏时露出。 -->
+            <div class="facet-stage-bar" id="facetStageBar" hidden role="group" aria-label="待提交的细化筛选">
+                <span class="fsb-count" id="facetStageCount"></span>
+                <button type="button" class="btn fsb-cancel" id="facetStageCancel">取消</button>
+                <button type="button" class="btn btn-primary fsb-submit" id="facetStageSubmit">提交</button>
+            </div>
+        </div>
+    </div>
+</aside>
 
 <!-- 设置抽屉 -->
 <aside class="drawer" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" aria-hidden="true" inert>
@@ -648,7 +713,7 @@
                     </div>
                     <label class="strategy-auto strategy-tip" id="strategyAutoRow" tabindex="-1" aria-describedby="strategyAutoDesc" data-tooltip="开启后，系统按每次查询自动决定是否使用本地精准重排或 AI 重排，下方手动开关会隐藏；AI 重排候选数保留可调。某项不可用时会改用规则排序，并在结果摘要中说明。">
                         <span>自动选择</span>
-                        <span class="switch"><input type="checkbox" id="cfgStrategy" checked><span class="slider"></span></span>
+                        <span class="switch" role="switch" tabindex="0" aria-checked="true"><input type="checkbox" id="cfgStrategy" checked><span class="slider">
                     </label>
                 </div>
 
@@ -707,7 +772,7 @@
                         <strong>允许自动使用 AI <span class="gate-tag" id="gateTagAutoLlm" hidden></span></strong>
                         <small>自动模式下遇到复杂查询时，可以用 AI 重排</small>
                     </span>
-                    <label class="switch"><input type="checkbox" id="cfgAutoLlm"><span class="slider"></span></label>
+                    <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="cfgAutoLlm"><span class="slider"></span>
                 </div>
             </section>
 
@@ -718,7 +783,7 @@
                         <div class="node-name">AI 润色推荐说明 <span class="gate-tag" id="gateTagPolish" hidden></span></div>
                         <div class="node-desc">只优化推荐理由的文字，不改变结果与排序</div>
                     </div>
-                    <label class="switch"><input type="checkbox" id="cfgPolish"><span class="slider"></span></label>
+                    <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="cfgPolish"><span class="slider"></span>
                 </div>
             </div>
 
@@ -729,7 +794,7 @@
                         <div class="node-name">AI 执行 <span class="gate-tag" id="gateTagAgentExec" hidden></span><button type="button" class="help-dot strategy-tip" aria-label="AI 执行的技术细节" data-tooltip="开启后，您说的每句话先由 AI 判断是「检索」还是「操作」；操作类（打包下载、导入、删除、联网搜索等）会直接执行。删除进回收站可恢复，每步操作都有记录；最近一次入库/删除/恢复可用回执里的「撤回这次执行」一键撤回。">?</button></div>
                         <div class="node-desc" id="agentExecDesc">允许 AI 按您的话直接执行操作；每步都有记录，最近一次可一键撤回</div>
                     </div>
-                    <label class="switch"><input type="checkbox" id="cfgAgentExec" checked><span class="slider"></span></label>
+                    <label class="switch" role="switch" tabindex="0" aria-checked="true"><input type="checkbox" id="cfgAgentExec" checked><span class="slider"></span>
                 </div>
             </div>
 
@@ -749,33 +814,35 @@
         <div class="set-block" style="margin-top:16px;">
             <div class="set-row">
                 <span class="label">记住设置</span>
-                <label class="switch"><input type="checkbox" id="cfgSaveSession"><span class="slider"></span></label>
+                <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="cfgSaveSession"><span class="slider"></span>
             </div>
             <div class="set-row" style="margin-top:10px;">
                 <span class="label">记住api key</span>
-                <label class="switch"><input type="checkbox" id="cfgRememberApiKey"><span class="slider"></span></label>
+                <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="cfgRememberApiKey"><span class="slider"></span>
             </div>
         </div>
 
         <div class="set-block memory-setting">
             <div class="set-row">
-                <span class="label"><strong>用户记忆<button type="button" class="help-dot strategy-tip" aria-label="用户记忆说明" data-tooltip="只保存在当前浏览器，不上传；记忆只作为可点击的建议，不会自动改变筛选条件。此开关为本机共用：同一浏览器里所有账户一起生效。">?</button></strong><small>记住您主动保存的研究需求与偏好；默认开启；此开关为本机所有账户共用</small></span>
-                <label class="switch"><input type="checkbox" id="memoryEnabled" checked><span class="slider"></span></label>
+                <span class="label"><strong>用户记忆<button type="button" class="help-dot strategy-tip" aria-label="用户记忆说明" data-tooltip="只保存在当前浏览器，不上传；记忆只作为可点击的建议，不会自动改变筛选条件。协作规则是另一档：作为知识提案写进服务端、「知识空间」里确认后 AI 执行时才参考、可逐条撤回，不受这个开关控制。此开关为本机共用：同一浏览器里所有账户一起生效。">?</button></strong><small>记住您主动保存的研究需求与偏好；默认开启；此开关为本机所有账户共用</small></span>
+                <label class="switch" role="switch" tabindex="0" aria-checked="true"><input type="checkbox" id="memoryEnabled" checked><span class="slider"></span>
             </div>
             <button class="btn" id="memoryManageBtn" type="button">管理用户记忆</button>
+            <button class="btn" id="knowledgeWinBtnSettings" type="button" title="统一知识空间：系统/用户/项目 × 记忆/技能/样例，提案确认后生效">知识空间</button>
         </div>
 
-        <!-- 使用反馈：默认开启本地采集；per-profile consent；尽力过滤后经明文 HTTP 上传
-             （已知风险裁决，consent 弹窗同口径）；手动「导出反馈包」保留作兜底回传
-             （细节收进「?」帮助钮）。设置卡含「本机编号」行与 MCP 调用记录一句，协议 v2 口径。 -->
+        <!-- 使用反馈：默认开启本地采集；per-profile consent；只有部署方配置了上传通道才脱敏上传
+             （公网默认只放 HTTPS，明文端点须部署方在 meta 显式登记主机白名单；端点/令牌未配置则零上传），
+             通道与保留期以当前服务说明为准（consent 弹窗 / 教程同口径）；手动「导出反馈包」保留作
+             兜底回传（细节收进「?」帮助钮）。设置卡含「本机编号」行与 MCP 调用记录一句，协议 v2 口径。 -->
         <div class="set-block usage-setting">
             <div class="set-row">
                 <span class="label"><strong>使用反馈<button type="button" class="help-dot strategy-tip" aria-label="使用反馈说明" data-tooltip="本版本默认开启本地数据采集，每个本机账户首次发送前独立确认。记录包含 MCP 调用的工具名、参数摘要、耗时与成败，并先保存在本机。上传前会尽力过滤手机号、证件号、邮箱和直接标识符，但这并不等同于匿名化。数据按运营方配置的传输和保留政策上传，用于改进推荐排序、产品体验和评测基准；请勿输入敏感内容。此授权不包含训练或微调模型；模型/Agent 训练使用下方独立开关。">?</button></strong><small>采集数据用于能力改进</small></span>
-                <label class="switch"><input type="checkbox" id="nodeUsage"><span class="slider"></span></label>
+                <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="nodeUsage"><span class="slider"></span>
             </div>
             <div class="set-row" style="margin-top:10px;">
                 <span class="label">允许用于模型 / Agent 训练<small>以更细颗粒度采集数据</small></span>
-                <label class="switch"><input type="checkbox" id="usageTrainingToggle"><span class="slider"></span></label>
+                <label class="switch" role="switch" tabindex="0" aria-checked="false"><input type="checkbox" id="usageTrainingToggle"><span class="slider"></span>
             </div>
             <button class="btn" id="benchfbExportBtn" type="button" disabled>导出反馈包</button>
             <!-- 「向开发者发送意见」——意见经开发者公钥加密后走既有遥测通道
@@ -867,7 +934,7 @@
                 </div>
                 <!-- 详情页步骤用真界面实拍（随包 /static/assets/，同源、离线可用），不再是手绘示意图。 -->
                 <div class="tour-visual tour-detail" data-onboarding-visual="detail" hidden>
-                    <img src="/static/assets/onboarding-dataset-detail.png?v=20260909-pp1" alt="数据集详情页实拍：页头有数据集标题、徽章与「打开数据集页 / 下载数据」按钮；下方依次是介绍、全部文件、元数据兼容的数据集、投稿可用性与 FAIR 自检、导出引文、数据集对比六个子标签，当前打开的是介绍。" loading="lazy">
+                    <img src="/static/assets/onboarding-dataset-detail.png?v=20261021-knowledge-review" alt="数据集详情页实拍：页头有数据集标题、徽章与「打开数据集页 / 下载数据」按钮；下方依次是介绍、全部文件、元数据兼容的数据集、投稿可用性与 FAIR 自检、导出引文、数据集对比六个子标签，当前打开的是介绍。" loading="lazy">
                     <div class="tour-detail-fallback" hidden>这是「数据集详情」页的实拍截图：页头为数据集标题、徽章与「打开数据集页 / 下载数据」按钮，下方依次是六个子标签——介绍 · 全部文件 · 元数据兼容 · FAIR 自检 · 导出引文 · 数据集对比。</div>
                 </div>
                 <div class="tour-visual tour-board" data-onboarding-visual="board" hidden>
@@ -884,11 +951,11 @@
                 </div>
                 <!-- 教程结尾步「接进你自己的 AI 助手」：复用帮助页 .help-agent-acts/.help-agent-note
                      样式（零新增 CSS）；复制按钮接线走 interactions.js copyAgentPrompt 单一真源，
-                     「下载技能包」纯 <a download> 无需 JS。 -->
+                     「下载技能包」经 data-dlq 接入统一下载队列。 -->
                 <div class="tour-visual tour-agent" data-onboarding-visual="agent" hidden>
                     <div class="help-agent-acts">
                         <button class="btn btn-primary" id="tourAgentPromptCopyBtn" type="button">复制接入提示词</button>
-                        <a class="btn" href="/api/guide/skill.zip" download>下载技能包</a>
+                        <a class="btn" href="/api/guide/skill.zip" download data-dlq="other" data-dlq-name="biodata-skill.zip">下载技能包</a>
                     </div>
                     <p class="help-agent-note">支持 Claude Code / Kimi Code / Codex，详情见提示词内说明。</p>
                 </div>
@@ -921,44 +988,24 @@
      内含介绍 / 全部文件 / 元数据兼容 / FAIR / 引文 / 对比六个子标签。
      介绍内容的渲染函数在 cards.js，被详情页复用。 -->
 
-<!-- 用户记忆管理：显式保存、可检查、可复用、可删除；内容仅留在当前浏览器。 -->
+<!-- 用户记忆管理（咨询档）：显式保存、可检查、可复用、可删除；内容仅留在当前浏览器。
+     「知识空间」是统一知识窗（文件夹悬浮窗口）：系统/用户/项目 × 记忆/技能/样例，
+     提案经同一道闸确认后才生效。 -->
 <div class="modal-backdrop" id="memoryModal" hidden>
     <div class="modal memory-modal" role="dialog" aria-modal="true" aria-labelledby="memoryModalTitle" aria-describedby="memoryModalSub">
         <div class="modal-head">
             <div>
                 <div class="modal-title" id="memoryModalTitle">用户记忆</div>
-                <div class="modal-sub" id="memoryModalSub">仅保存在当前浏览器，不会自动发送给检索服务</div>
+<label class="learning-scope-control">学习范围 <select id="memoryScopeSelect" aria-label="记忆和技能的学习范围"><option value="">全局</option></select></label>
+
+                <div class="modal-sub" id="memoryModalSub">本机资料只保存在当前浏览器，不上传，不会自动发送给检索服务。新建或修改后的版本都是草稿，不能填入查询或成为建议；未修改的旧资料仍标为旧资料。只有你明确选定、提交的材料才会作为知识提案写进服务端，经独立评估并在知识空间确认提交后才可引用。</div>
             </div>
-            <button class="icon-btn" id="memoryModalClose" title="关闭" aria-label="关闭用户记忆">✕</button>
+            <div class="modal-head-acts">
+                <button class="btn" id="knowledgeWinBtn" type="button">知识空间</button>
+                <button class="icon-btn" id="memoryModalClose" title="关闭" aria-label="关闭用户记忆">✕</button>
+            </div>
         </div>
         <div class="modal-body memory-modal-body">
-            <!-- dream 记忆（2026-08-02 手动「整理记忆」，设计决定可发 LLM）：
-                 历史对话发给用户自己配置的 AI → 封闭 JSON 候选 → 预览勾选后才写入。
-                 产出徽标「AI 整理」（kind:"dream"，工作层可淘汰），可「存为偏好」转正。 -->
-            <div class="dream-block" id="dreamBlock">
-                <div class="dream-head">
-                    <span class="dream-title"><strong>整理记忆</strong><small>让 AI 从历史对话中提炼值得长期记住的偏好；先预览，勾选后才写入</small></span>
-                    <button class="btn" id="dreamRunBtn" type="button">用历史对话整理记忆</button>
-                </div>
-                <div class="dream-consent" id="dreamConsent" hidden>
-                    <p>会把你的历史对话（检索需求 + 对话过程）发送到<b>你自己配置的 AI 服务</b>用于提炼记忆；提炼结果仍只存本机。只在你点这个按钮时发送，不会自动发。</p>
-                    <div class="dream-consent-acts">
-                        <button class="btn btn-primary" id="dreamConsentOk" type="button">知道了，开始整理</button>
-                        <button class="btn" id="dreamConsentCancel" type="button">取消</button>
-                    </div>
-                </div>
-                <div class="dream-status" id="dreamStatus" hidden></div>
-                <div class="dream-preview" id="dreamPreview" hidden></div>
-            </div>
-            <!-- 操作样例库（2026-08-13 用户挑选入库）：「一遍过」的成功操作只进候选池、不注入；
-                 你勾选入库的才作为 AI 理解类似说法的参考。只存本机，按账户 + AI 端点分区。 -->
-            <div class="dream-block" id="examplesBlock">
-                <div class="dream-head">
-                    <span class="dream-title"><strong>操作样例库</strong><small>干净完成的数据库维护操作会先存成候选；勾选入库的，才会作为 AI 理解类似说法的参考</small></span>
-                </div>
-                <div class="dream-status" id="examplesStatus" hidden></div>
-                <div class="dream-preview" id="examplesList" hidden></div>
-            </div>
             <form class="memory-add" id="memoryAddForm">
                 <label for="memoryNoteInput">添加研究偏好</label>
                 <div><input id="memoryNoteInput" maxlength="300" placeholder="例如：优先看人类空间转录组数据"><button class="btn btn-primary" type="submit">添加</button></div>
@@ -970,8 +1017,9 @@
 </div>
 
 <!-- benchmark 采集反馈（b1 支线版）：全量交互记录 + 评分 → 单个 JSON 文件下载回传。
-     与使用反馈同一开关、同一批红线：默认本地采集、尽力过滤后经明文 HTTP 上传（出网只经 usage_upload.js，
-     本文件零网络原语）；api_key 落盘前整键删除。导出反馈包是自动上传之外的手动兜底。 -->
+     与使用反馈同一开关、同一批红线：默认本地采集、尽力过滤后在部署方配置了通道时脱敏上传
+     （出网只经 usage_upload.js，本文件零网络原语；公网默认只放 HTTPS，明文端点须显式登记主机白名单）；
+     api_key 落盘前整键删除。导出反馈包是自动上传之外的手动兜底。 -->
 <div class="modal-backdrop" id="benchfbModal" hidden>
     <div class="modal usage-modal" role="dialog" aria-modal="true" aria-labelledby="benchfbModalTitle" aria-describedby="benchfbModalSub">
         <div class="modal-head">
@@ -1042,39 +1090,11 @@
     </div>
 </div>
 
-<!-- 下一步行动·任务卡：结果页阶梯 chip 点开——
-     说明范围/预计输出/联网行为 + 可编辑任务文本 + 「开始」按钮才发送（不做静默执行，
-     不做填输入框迂回）。文本未经编辑直接发送 → 该轮 benchfb 轮次带 template_originated=true，
-     编辑过 → false；带 recipe 的卡在未编辑时携带 suggested_recipe（编辑后清空回普通路由）。
-     接线在 task_card.js（自接线不进 boot，同 feedback.js 哲学）。 -->
-<div class="modal-backdrop" id="taskCardModal" hidden>
-    <div class="modal usage-modal" role="dialog" aria-modal="true" aria-labelledby="taskCardTitle">
-        <div class="modal-head">
-            <div>
-                <div class="modal-title" id="taskCardTitle">下一步行动</div>
-                <div class="modal-sub">这是系统建议的一步；任务内容可直接修改，「开始」后才执行。</div>
-            </div>
-            <button class="icon-btn" id="taskCardCloseBtn" title="关闭" aria-label="关闭任务卡">✕</button>
-        </div>
-        <div class="modal-body usage-modal-body">
-            <div class="tc-meta" id="taskCardMeta"></div>
-            <label class="fb-label" for="taskCardText">任务内容（可直接修改）</label>
-            <textarea class="fb-text" id="taskCardText" rows="3"></textarea>
-            <div class="tc-fail" id="taskCardFail" hidden role="status"></div>
-            <div class="usage-actions">
-                <button class="btn" id="taskCardCancelBtn" type="button">取消</button>
-                <button class="btn btn-primary" id="taskCardStartBtn" type="button">开始</button>
-            </div>
-            <p class="fb-status" id="taskCardStatus" role="status" hidden></p>
-        </div>
-    </div>
-</div>
-
 <!-- consent 首次告知（S5，2026-08-22 如实化改写；fix1d 协议口径）：
      首次发送/检索时若开关开且未同意，由 usage_upload.js 打开并等待——无 ✕、点遮罩不关闭、Esc 无效，不点确认不执行发送。
     两个按钮：同意并继续（落 consent）／关闭采集并发送（调用方关开关，本次照常发）。
     fix1d 文案纪律（2026-08-24 浓缩版）：弹窗只留用户必须知道的三件事——传什么/不传什么、怎么关闭；
-    完整口径（本地记录↔远端上传两分、明文 HTTP、保留期、删除途径）仍在「设置 → 使用反馈」采集卡片逐字属实。 -->
+    完整口径（本地记录↔远端上传两分、上传通道与保留期以当前服务说明为准、删除途径）仍在「设置 → 使用反馈」采集卡片逐字属实。 -->
 <div class="modal-backdrop" id="consentModal" hidden>
     <div class="modal consent-dialog" role="alertdialog" aria-modal="true" aria-labelledby="consentModalTitle" aria-describedby="consentModalBody">
         <div class="modal-head">
@@ -1129,7 +1149,7 @@
                     <button class="btn btn-primary" type="submit" id="accountLoginBtn">登录</button>
                     <button class="btn" type="button" id="accountRegisterBtn">注册新账户</button>
                 </div>
-                <p class="account-note">密码只在本机加密校验，绝不上传、绝不明文保存。忘记密码只能清空本机账户数据后重新注册。</p>
+                <p class="account-note" id="accountPasswordNote"></p>
             </form>
         </div>
     </div>
@@ -1177,15 +1197,10 @@
     <div class="hw-resize" id="libWinResize" aria-hidden="true" title="拖动调整大小"></div>
 </div>
 
-<!-- 历史记录浮窗（2026-08-23 独立单页签，恢复前结构）：
-     与主界面同层（非模态、不挡操作），标题栏可拖动、右下角可缩放；骨架唯一属主在 shell.js（initHistWin）。
-     历史行交互（2026-08-03 用户）：点行本体＝在本标签页找回这条对话（对话记录+细化+最后一轮结果
-     整体找回）；行尾动作＝新标签页打开（?conv= 链接，同一 localStorage，新标签页加载时自动回看）/
-     重新检索 / 删除（二段确认）。 -->
 <div class="hist-win" id="histWin" hidden role="dialog" aria-label="历史记录">
     <div class="hw-head" id="histWinHead">
         <span class="hw-title">历史记录</span>
-        <span class="hw-sub" id="histWinSub">只存在本地浏览器，最多 50 次检索</span>
+        <span class="hw-sub" id="histWinSub" title="共享对话保存在当前连接的服务中；旧浏览器记录默认不上传，清空只作用于旧记录。">共享对话与本机旧记录</span>
         <div class="hw-acts">
             <button class="hw-btn" id="histClear" type="button">清空</button>
             <button class="hw-btn hw-close" id="histWinClose" type="button" aria-label="关闭历史记录" title="关闭">✕</button>
@@ -1210,81 +1225,125 @@
      标签全是 ES Module（type=module，全 deferred、先于 DOMContentLoaded 就绪）；C1-C3 文件里
      尚未改写的裸引用经各自目标的 window 绞杀桥读取（统一删桥）。
      加载序契约不变：core 最先、boot 最后。 -->
-<script type="module" src="/static/js/core/core.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/core.js?v=20261021-knowledge-review"></script>
 <!-- usage_core 紧跟 core：使用反馈的纯聚合核（无 DOM/存储/墙钟/网络，node 可单测，C1 已转 ESM）。
      usage_log 紧随其后（已转 ESM）：usageLog 经绞杀桥挂 window，后面每个经典模块照原样裸调
      core.js 则经 import 取它。两者都不发任何网络请求，见 usage_log.js 文件头。 -->
-<script type="module" src="/static/js/core/usage_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/usage_log.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/benchfb_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/benchfb.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/panel/board_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/panel/memory_rank.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/usage_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/usage_log.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/benchfb_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/benchfb.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/board_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/memory_rank.js?v=20261021-knowledge-review"></script>
 <!-- dream_core 紧跟 memory_rank：dream 记忆的纯核（素材组织/裁剪/去重，node 可单测，C1 已转 ESM），dream.js 经 import 调它。 -->
-<script type="module" src="/static/js/panel/dream_core.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/panel/dream_core.js?v=20261021-knowledge-review"></script>
 <!-- act_core 执行层纯核（回执/注记构造 + tpBytes，node 可单测，C1 已转 ESM）：act.js 与 task_pack.js
      （同为 ESM）经 import 共用；module 天然 deferred，仍先于 DOMContentLoaded（act.js 的 initAct 在 boot 里）就绪。 -->
-<script type="module" src="/static/js/act/act_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/panel/memory.js?v=20260909-pp1"></script>
-<!-- examples 操作样例库（2026-08-13 用户挑选入库）：候选池→勾选→正式库；memory.js 开弹窗时调它的 renderExampleCandidates。 -->
-<script type="module" src="/static/js/panel/examples.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/cards.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/shell.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/results.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/facets.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/progress.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/search.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/browse.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/act/act_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/memory.js?v=20261021-knowledge-review"></script>
+<!-- examples 操作样例库（统一记忆空间批起为兼容壳）：endpointCfg 是全站端点分区坐标唯一读法；
+     候选/入库界面并入知识窗（kind=example 经 knowledge 道闸），renderExampleCandidates 只作注册反转刷新。 -->
+<script type="module" src="/static/js/panel/examples.js?v=20261021-knowledge-review"></script>
+<!-- rules 学习引擎 + 协作规则兼容壳（统一记忆空间批）：status/control/trigger 的 CAS 与
+     配置释放机制在此；批准改走 knowledge propose 道闸（无第二条直接 approve 通道）。 -->
+<script type="module" src="/static/js/panel/rules.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/search/cards.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/shell.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/search/results.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/search/facets.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/progress.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/search/search.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/search/browse.js?v=20261021-knowledge-review"></script>
 <!-- reuse_pack 紧跟 browse：同属收藏视图；只消费 core.js 的 getFavs/$/toast/escapeHtml。 -->
-<script type="module" src="/static/js/act/reuse_pack.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/act/reuse_pack.js?v=20261021-knowledge-review"></script>
 <!-- fav_folders 在 reuse_pack 之后、interactions 之前：心形 popover / 收藏夹 tab / 管理面板；
      只调 core.js 的存储 CRUD 与 buildCard，顶层不引用未声明绑定。 -->
-<script type="module" src="/static/js/panel/fav_folders.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/interactions.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/onboarding.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/panel/board.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/act/task_pack.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/panel/fav_folders.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/interactions.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/onboarding.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/board.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/act/task_pack.js?v=20261021-knowledge-review"></script>
 <!-- act 紧跟 task_pack：一句话执行层派发的就是 task_pack / reuse_pack / results / cards 里那几件既有能力
      （三者同为 ESM，同批互转走 import；board↔act 成环但绑定都只在函数体内使用）。 -->
-<script type="module" src="/static/js/act/act.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/act/act.js?v=20261021-knowledge-review"></script>
 <!-- 执行行动流（act_run）；被 act.js/board.js 经 importmap 引用。 -->
-<script type="module" src="/static/js/act/act_run.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/panel/accounts.js?v=20260909-pp1"></script>
-<!-- dream.js 是**第一个 ES Module**（Phase C 模块化重写的试点）：type=module 天然 deferred、
-     先于 DOMContentLoaded 执行完；C4 起 window 绞杀桥已退役，boot 经 import { initDream } from "#dream" 直接取。 -->
-<script type="module" src="/static/js/panel/dream.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/act/act_run.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/accounts.js?v=20261021-knowledge-review"></script>
+<!-- dream.js（统一记忆空间批起）：整理视图属主——来源选择（多项目/多对话 + 本机资料显式勾选
+     target + 模型告知）走学习 loop；旧 /api/dream 独立学习 UI 链已删除。boot 经 import { initDream } 取。 -->
+<script type="module" src="/static/js/panel/dream.js?v=20261021-knowledge-review"></script>
 <!-- 课题：artifacts（数据层）+ projects_core（纯逻辑核）+ projects（UI 壳）。
      projects.js 由 boot 经 #projects import 取 initProjects；三文件都在 importmap 登记。 -->
-<script type="module" src="/static/js/core/artifacts.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/projects_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/projects.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/artifacts.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/projects_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/projects.js?v=20261021-knowledge-review"></script>
 <!-- 意见反馈对话框：feedback_dialog_core（纯逻辑核，node 可单测）
      + feedback（UI 壳，自接线不进 boot——boot 的 # import 会牵动两页 importmap，而 dataset.html
      归 F2 并行包；与 usage_upload/feedback_core「不进静态图」同哲学，两键仅在本页 importmap 登记）。 -->
-<script type="module" src="/static/js/core/feedback_dialog_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/feedback.js?v=20260909-pp1"></script>
-<!-- 下一步行动：ladder_core（纯逻辑核，node 可单测）+
-     ladder（结果区壳，经 results.js 渲染钩子驱动）+ task_card（任务卡弹窗，自接线不进 boot——
-     与 feedback.js 同哲学：模块内互引走相对 import、不进静态 # 图，避免牵动 dataset.html；
-     三键仅在本页 importmap 登记，后续收口时决定 dataset.html 是否补键）。 -->
-<script type="module" src="/static/js/search/ladder_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/ladder.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/search/task_card.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/feedback_dialog_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/feedback.js?v=20261021-knowledge-review"></script>
 <!-- 课题更新检查（2026-08-22；2026-08-26 改版）：
      project_updates_core（纯逻辑核，node 可单测）+ project_updates（UI 壳，自接线不进 boot，
      仅本页加载——F2 数据集页联动已随全体批量按钮退役）。projects.js 经 #project_updates
      import 取详情区挂载/行检查/自动刷新完成钩子；壳层 import #core/#shell/#accounts 等，
      浏览器自动补取。 -->
-<script type="module" src="/static/js/core/project_updates_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/core/project_updates.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/project_updates_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/project_updates.js?v=20261021-knowledge-review"></script>
 <!-- 导出中心：project_exports_core（纯逻辑核，node 可单测）
      + project_exports（UI 壳，自接线不进 boot——经 MutationObserver 发现 projects.js 的
      ENG-P5-MOUNT 挂点渲染导出区；project_exports.js 只相对 import 纯逻辑核、不引入新的
      # specifier，两键仅在本页 importmap 登记，dataset.html 不碰）。 -->
-<script type="module" src="/static/js/core/project_exports_core.js?v=20260909-pp1"></script>
-<script type="module" src="/static/js/panel/project_exports.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/project_exports_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/project_exports.js?v=20261021-knowledge-review"></script>
+<!-- 复盘（2026-09-28 复盘批）：replay_core（纯逻辑核）+ replay_layout（布局纯函数）+ replay_graph（图谱）+ replay（窗口属主，boot 注入浮窗工厂起 initReplay）。 -->
+<script type="module" src="/static/js/core/replay_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/replay_layout.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/replay_graph.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/replay.js?v=20261021-knowledge-review"></script>
+<!-- 统一知识空间（memory-space 批）：文件夹式浮窗——顶部 系统/用户/项目 层级；项目层显示
+     左一级圆点竖栏（每项目一点）+ 第二竖栏 记忆/技能/样例（变更审查/整理为次级入口），
+     右侧文件列表 + 编辑。骨架属主 shell.js initFloatingWin（boot 注入 panel/knowledge.js，
+     与复盘同构）；内容由 knowledge.js / rules.js / dream.js 渲染。 -->
+<div id="knowledgeWin" class="hist-win knowledge-win" hidden role="dialog" aria-label="知识空间">
+    <div class="hw-head" id="knowledgeWinHead">
+        <span class="hw-title">知识空间</span>
+        <span class="hw-sub" id="kwWinSub">系统知识是内置说明，只读；你的提案确认后才会生效并被引用</span>
+        <div class="hw-acts">
+            <button class="hw-btn hw-close" id="knowledgeWinClose" type="button" aria-label="关闭知识空间" title="关闭">✕</button>
+        </div>
+    </div>
+    <div class="kw-body">
+        <div class="kw-scope-tabs" id="kwScopeTabs" role="tablist" aria-label="知识层级">
+            <button class="kw-scope-tab" type="button" role="tab" aria-selected="false" data-kw-scope="system">系统</button>
+            <button class="kw-scope-tab" type="button" role="tab" aria-selected="true" data-kw-scope="user">用户</button>
+            <button class="kw-scope-tab" type="button" role="tab" aria-selected="false" data-kw-scope="project">项目</button>
+        </div>
+        <div class="kw-main">
+            <nav class="kw-project-rail" id="kwProjectRail" aria-label="项目列表" hidden></nav>
+            <nav class="kw-kind-rail" id="kwKindRail" aria-label="知识类型">
+                <button class="kw-kind-btn" type="button" data-kw-kind="memory">记忆</button>
+                <button class="kw-kind-btn" type="button" data-kw-kind="skill">技能</button>
+                <button class="kw-kind-btn" type="button" data-kw-kind="example">样例</button>
+                <span class="kw-rail-sep" aria-hidden="true"></span>
+                <button class="kw-kind-btn kw-rail-secondary" type="button" data-kw-view="review">变更审查</button>
+                <button class="kw-kind-btn kw-rail-secondary" type="button" data-kw-view="learn">整理</button>
+            </nav>
+            <section class="kw-content" id="kwContent" aria-live="polite"></section>
+        </div>
+    </div>
+    <div class="hw-resize" id="knowledgeWinResize" aria-hidden="true" title="拖动调整大小"></div>
+</div>
+
 <!-- boot 是全应用唯一入口（起 ESM）：init 里每个名字都从属主模块 import，DOMContentLoaded 平铺串调。 -->
-<script type="module" src="/static/js/core/boot.js?v=20260909-pp1"></script>
+<script type="module" src="/static/js/core/workspaces_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/workspaces.js?v=20261021-knowledge-review"></script>
+<!-- 统一知识空间（memory-space 批）：knowledge_core（纯核，node 可单测）+ knowledge（知识窗壳，
+     boot 注入浮窗工厂起 initKnowledge；不 import #shell，防新环）。 -->
+<script type="module" src="/static/js/panel/knowledge_core.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/panel/knowledge.js?v=20261021-knowledge-review"></script>
+<script type="module" src="/static/js/core/boot.js?v=20261021-knowledge-review"></script>
+
+<footer class="deploy-footer"><!--deploy-footer--></footer>
 
 </body>
 </html>

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Web `/api/datasets` 与 MCP `browse_datasets` 分页上限的**单一真源**。
+"""接口分页上限与后台任务执行预算的单一真源。
 
 值取 **100**：以 Web 既有上限（2026-08-06 起）为准，MCP 从硬上限 200 收窄到 100——
 browse 全库 5000+ 条，100 条/页已远大于任何真实对话的一屏需求；两入口同一常量源后，
@@ -12,3 +12,7 @@ browse 全库 5000+ 条，100 条/页已远大于任何真实对话的一屏需�
 自己的请求被收窄了，静默截断会让「少传的几条」变成不可见的错误数据。
 """
 MAX_DATASETS_LIMIT = 100
+
+# 向量重建上限沿用默认线程路径；队列整任务另给同步与收尾预留 40 分钟。
+CORPUS_SYNC_VECTOR_TIMEOUT_SECONDS = 20 * 60
+CORPUS_SYNC_JOB_TIMEOUT_SECONDS = CORPUS_SYNC_VECTOR_TIMEOUT_SECONDS + 40 * 60

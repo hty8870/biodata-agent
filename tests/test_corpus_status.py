@@ -167,7 +167,7 @@ def test_execute_passes_through_for_verbs_without_tools():
 
 def test_source_failure_carries_error_field(tmp_path: Path, monkeypatch):
     """单源统计失败不得呈现成「0 条」裸数字——带 error 字段与真空快照区分。"""
-    def boom(path):
+    def boom(path, _err=None):
         raise OSError("simulated io error")
 
     monkeypatch.setattr(corpus_status, "_snapshot_local_info", boom)
@@ -175,6 +175,76 @@ def test_source_failure_carries_error_field(tmp_path: Path, monkeypatch):
     assert all(x["local_count"] == 0 for x in s["sources"])
     assert all(x.get("error") == "OSError" for x in s["sources"]), \
         "失败必须可见：error 字段如实区分「库坏了」与「库里没东西」"
+
+
+def test_ledger_summary_partitioned_by_account(tmp_path: Path):
+    """账本摘要只汇总当前主体——账户 B 看不到 A 的查询与错误文本；
+    未绑定（本机匿名/CLI）只看到无主体行，历史行为逐位兼容。"""
+    from dataset_recommender.corpus.patch_package import bind_patch_scope
+
+    ud = tmp_path / ".userdata"
+    ud.mkdir()
+    rows = [
+        {"ts": "2026-08-03T10:00:00", "endpoint": "ep-anon", "query": "匿名历史"},
+        {"ts": "2026-08-03T10:01:00", "endpoint": "ep-a", "query": "甲的秘密查询",
+         "error": "甲的错误文本", "account_id": "acct-a"},
+        {"ts": "2026-08-03T10:02:00", "endpoint": "ep-b", "query": "乙的查询",
+         "account_id": "acct-b"},
+    ]
+    (ud / "curate_net_ledger.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+
+    with bind_patch_scope("acct-a"):
+        sa = corpus_status.db_status(project_root=tmp_path)
+    assert sa["ledger"]["entries"] == 1
+    assert [r["query"] for r in sa["ledger"]["recent"]] == ["甲的秘密查询"]
+    with bind_patch_scope("acct-b"):
+        sb = corpus_status.db_status(project_root=tmp_path)
+    assert sb["ledger"]["entries"] == 1
+    assert "秘密" not in json.dumps(sb["ledger"], ensure_ascii=False)
+    assert "甲的错误文本" not in json.dumps(sb["ledger"], ensure_ascii=False)
+    anon = corpus_status.db_status(project_root=tmp_path)   # 未绑定 = 匿名（历史行同归）
+    assert anon["ledger"]["entries"] == 1
+    assert [r["query"] for r in anon["ledger"]["recent"]] == ["匿名历史"]
+
+
+def test_append_net_ledger_stamps_current_account(tmp_path: Path):
+    """写侧：打主体单锚点——绑定账户写行进 account_id，未绑定记匿名空串。"""
+    from dataset_recommender.corpus import net_ledger
+    from dataset_recommender.corpus.patch_package import bind_patch_scope
+
+    path = tmp_path / ".userdata" / "curate_net_ledger.jsonl"
+    with bind_patch_scope("acct-a"):
+        net_ledger.append_net_ledger(path, {"ts": "t", "endpoint": "ep", "query": "甲"})
+    net_ledger.append_net_ledger(path, {"ts": "t", "endpoint": "ep", "query": "匿名"})
+    rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
+    assert rows[0]["account_id"] == "acct-a" and rows[1]["account_id"] == ""
+    # 显式点名优先（后台任务可为无请求上下文的行指定主体）
+    net_ledger.append_net_ledger(path, {"ts": "t", "endpoint": "ep", "account_id": "svc"})
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[-1])["account_id"] == "svc"
+
+
+def test_corrupt_snapshot_is_visible_not_empty_library(tmp_path: Path, monkeypatch):
+    """真实坏 JSON 快照必须带 error 且总量标注不完整——损坏 ≠ 真空库。"""
+    ext = tmp_path / "database" / "external"
+    ext.mkdir(parents=True)
+    bad = ext / "geo.json"
+    bad.write_text("{bad json", encoding="utf-8")
+
+    def _fake_root_path(*_a, **_k):
+        return bad
+
+    monkeypatch.setattr(corpus_status, "resource_file_for", _fake_root_path)
+    s = corpus_status.db_status(project_root=tmp_path)
+    assert all(x["local_count"] == 0 for x in s["sources"])
+    assert all(x.get("error") for x in s["sources"]), "坏 JSON 必须如实带 error，不伪装 0 条"
+    assert s.get("total_records_incomplete") is True
+    # 合法空目录 / 缺文件：没有 error，也没有「不完整」标注（与损坏不同形）
+    monkeypatch.setattr(corpus_status, "resource_file_for",
+                        lambda *a, **k: tmp_path / "database" / "external" / "none.json")
+    s2 = corpus_status.db_status(project_root=tmp_path)
+    assert all("error" not in x for x in s2["sources"])
+    assert "total_records_incomplete" not in s2
 
 
 def test_curations_failure_carries_error_field(tmp_path: Path, monkeypatch):

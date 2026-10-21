@@ -19,8 +19,10 @@
   turns.jsonl                 benchfb 轮次（隐私遮蔽后全量；benchfb 只作 turn/label 来源，
                               不再制造 impression）
   explicit_labels.jsonl       显式标注双源合并：usage kind:"label" 事件
-                              （{tid,recId,completion,reasons,useful_uids,useful_idx,comment,rev}，
-                              同 (tid,recId) 多 rev 取最高 rev）优先；benchfb 记录内嵌 rating（兼容旧
+                              （{tid,recId,completion,reasons,useful_uids,useful_idx,comment,rev,
+                              rating_fields}，同 (tid,recId) 多 rev 取最高 rev；rating_fields 记录
+                              评分键是否真的出现过——回填候选时 provided 空值覆盖、缺键继承）优先；
+                              benchfb 记录内嵌 rating（兼容旧
                               {stars,useful_idx,comment} 与新 {completion,reasons,useful_idx,comment}
                               两种形状）兜底——同键 (install_id,tid,recId) 两源都有时只留 label 事件行
                               （label_source 区分来源；recId 为 新增，老数据缺失时空串兜底、
@@ -63,6 +65,8 @@ import json
 import os
 import re
 import sys
+import tempfile
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,7 +248,14 @@ VIEW_KIND = "view"    # 曝光追踪事件：{tid,iid,seen,dwell_ms}（补到 im
 LABEL_KIND = "label"  # v3 显式标注事件：{tid,completion,reasons,useful_uids,useful_idx,comment,rev}
 _RATING_OLD_KEYS = ("stars", "useful_idx", "comment")
 _RATING_NEW_KEYS = ("completion", "reasons")
+#: 评分字段全集：label 行合并按「字段是否提供」判定（provided 空值覆盖、缺键继承）。
+_RATING_FIELD_KEYS = ("stars", "useful_idx", "useful_uids", "completion", "reasons", "comment")
 POLICY_UNKNOWN = "policy_unknown"
+
+
+def _provided_rating_fields(source: dict[str, Any]) -> list[str]:
+    """标注来源里**真实出现过**的评分键（不是值非空）——presence 决定覆盖，值决定内容。"""
+    return [key for key in _RATING_FIELD_KEYS if key in source]
 
 
 def interaction_type(event: dict[str, Any]) -> str | None:
@@ -352,16 +363,31 @@ def _record_policy(rec: dict[str, Any], route: dict[str, Any], search: dict[str,
 
 
 def _resolve_useful_uids(rec: dict[str, Any]) -> list[str]:
-    """rating.useful_idx（1-based 名次）→ 检索结果 dataset_uid 列表（对齐前端 benchfbResolveUseful）。"""
+    """rating.useful_idx（1-based 名次）→ 检索结果 dataset_uid 列表（对齐前端 benchfbResolveUseful）。
+
+    截断降级记录（前端 `_shrinkBenchfbRecord` 形态）把截断点之外的标注条目浅拷贝加
+    `_preserved_idx:<原名次>` 追加在尾部；这里按原名次优先命中保留条目，再退回压缩后的
+    位置下标。否则第 23 条这类明确正例解析成空，冻结器会把它当负例（grade 0）。
+    """
     rating = _as_dict(rec.get("rating"))
     idxs = [int(x) for x in (rating.get("useful_idx") or []) if str(x).isdigit()]
     search = _as_dict(rec.get("search"))
     results = _as_dict(search.get("res")).get("results") or []
-    uids = [str(it.get("dataset_uid") or "") for it in results if isinstance(it, dict)]
+    positional: dict[int, str] = {}
+    preserved: dict[int, str] = {}
+    for position, item in enumerate(results, 1):
+        if not isinstance(item, dict):
+            continue
+        uid = str(item.get("dataset_uid") or "")
+        positional.setdefault(position, uid)
+        raw = item.get("_preserved_idx")
+        if isinstance(raw, int) and not isinstance(raw, bool):
+            preserved.setdefault(raw, uid)
     out: list[str] = []
     for i in idxs:
-        if 1 <= i <= len(uids) and uids[i - 1]:
-            out.append(uids[i - 1])
+        uid = preserved.get(i) or positional.get(i) or ""
+        if uid:
+            out.append(uid)
     return out
 
 
@@ -512,6 +538,226 @@ def _agent_trajectory(rec: dict[str, Any], *, install_id: str, packet_id: str,
     }
 
 
+def _merged_label_rating(label: dict[str, Any]) -> dict[str, Any]:
+    """label 行（事件或 benchfb 兜底）→ 候选 rating 字段（键与 _candidate 产出保持一致）。"""
+    return {
+        "stars": label.get("stars"),
+        "completion": label.get("completion"),
+        "reasons": _norm_str_list(label.get("reasons")),
+        "useful_uids": [str(u) for u in (label.get("useful_uids") or []) if u],
+        "useful_idx": _norm_int_list(label.get("useful_idx")),
+        "comment": label.get("comment") or "",
+    }
+
+
+def _merge_label_into_rating(base: dict[str, Any], label: dict[str, Any]) -> dict[str, Any]:
+    """label 行并入候选 rating：**按字段是否提供**合并——provided 空值覆盖、缺键才继承。
+
+    改口常只带变化的那部分（真 missing 键继承，兼容只发 stars/useful_idx/comment 的旧形状），
+    但完整快照会用显式空值清空（rev2 的 useful_uids=[]/comment=''）：若按值过滤空值，显式
+    清空会被丢弃、旧 grade2 正例残留，冻结器把已撤销的标注继续当正例。
+    label 行没有 rating_fields（旧版产物 / 老数据）时退回旧语义：非空覆盖、缺省保留；
+    此时整条字段全空仍视为高 rev 明确清空 → 候选 rating 归空（冻结器按"无人类标注"排除）。
+    """
+    normalized = _merged_label_rating(label)
+    provided = label.get("rating_fields")
+    if not isinstance(provided, list):
+        overlay = {k: v for k, v in normalized.items() if v not in (None, "", [])}
+        if not overlay:
+            return normalized
+        merged = dict(base) if isinstance(base, dict) else {}
+        merged.update(overlay)
+        return merged
+    if not provided:
+        return normalized                       # 显式空快照 / 无评分字段：归空
+    merged = dict(base) if isinstance(base, dict) else {}
+    for key, value in normalized.items():
+        merged.setdefault(key, value)
+    for key in provided:
+        if key in normalized:
+            merged[key] = normalized[key]
+    return merged
+
+
+#: 字段 rev 下限哨兵：从未提供（低于 benchfb 兜底的 -1 与事件的 ≥0）。
+_FIELD_REV_ABSENT = -2
+
+
+def _label_field_rev(row: dict[str, Any], field: str) -> int:
+    """单字段的修订号：rating_field_revs 记录为准；legacy 行（无该键）保守用
+    rating_fields + 行 rev——只认已知提供的字段，不猜未提供的，也不丢历史。"""
+    frevs = row.get("rating_field_revs")
+    if isinstance(frevs, dict):
+        rev = frevs.get(field)
+        if isinstance(rev, int) and not isinstance(rev, bool):
+            return rev
+        return _FIELD_REV_ABSENT
+    provided = row.get("rating_fields")
+    if isinstance(provided, list):
+        return _row_rev(row, "rev") if field in provided else _FIELD_REV_ABSENT
+    return _FIELD_REV_ABSENT
+
+
+def _valid_src_pos(pos: Any) -> list[int] | None:
+    """接收序来源的合法形状 [packet 行 id, 包内数组位置]；不符一律 None（未知）。"""
+    if (isinstance(pos, list) and len(pos) == 2
+            and all(isinstance(x, int) and not isinstance(x, bool) for x in pos)
+            and pos[0] > 0 and pos[1] >= 0):
+        return pos
+    return None
+
+
+def _label_field_src(row: dict[str, Any], field: str) -> list[int] | None:
+    """单字段的接收序来源：逐字段记录（rating_field_srcs）为准；无逐字段记录时退回行级
+    rev_src（扫描来源行的全部字段同源）；旧产物没有此信息 → None（未知，不参与并列反转）。
+    绝不从行 packet_id/ts/最高 rev 元信息猜字段来源。"""
+    srcs = row.get("rating_field_srcs")
+    if isinstance(srcs, dict):
+        return _valid_src_pos(srcs.get(field))
+    return _valid_src_pos(row.get("rev_src"))
+
+
+def _accumulate_label_fields(acc: dict[str, Any] | None, incoming: dict[str, Any]) -> dict[str, Any]:
+    """把一条标注来源（label 事件 / benchfb 内嵌兜底 / 旧产物种子行）按字段并入累积行——
+    唯一的字段级修订累积机制（扫描合包、双源合并、窗口增量种子三处共用，不平行第二路）。
+
+    每字段独立取最高 rev：更高 rev 覆盖（显式 None/[]/'' 同样覆盖——那是真撤销），低 rev
+    迟到不复活。**同 rev 的「先到先留」以 DB 原始接收顺序决胜**：逐字段来源
+    (ingest_packets 行 id, 事件在包内数组的位置) 更小者胜——判据与并入顺序无关，正常
+    分窗/重叠旧窗/反向窗口与全库扫描（接收序上的折叠）终态一致；同一事件经重叠窗口
+    重扫时来源相等，自然幂等。**来源未知的并列没有反转权**：旧产物行（legacy，无
+    rating_field_srcs/rev_src）与现值任一侧来源缺失时一律保留现值——只有严格更高 rev
+    或双方可信的更早来源才能改旧值，绝不从行 packet_id/ts/最高 rev 元信息猜字段来源；
+    legacy 无法推出全局接收序，只能保守保存已知，确定性重建靠全库重扫。行级 rev 只记
+    见过的最高 rev（元信息与 upsert 排序键），绝不因此抹掉低 rev 提供的有效字段。
+    rating_fields=[] 是显式空快照：清空全部字段并以本 rev 钉住全部字段 rev（低 rev
+    迟到不得复活）。benchfb 兜底（rev None→-1）只补缺、不冒充事件 provided：累积行的
+    rating_fields 只含事件来源字段（rev≥0）；一个事件都没有时才退回 benchfb 的提供集
+    （legacy 兼容）。更老的行连 rating_fields 都没有：只按非空值保守判 provided（与
+    _merge_label_into_rating 的 legacy 口径一致），显式空值信息已不可考。
+    持久化只带每字段 (rev, 来源) 与行级 (rev, 来源) 有限元信息，不保留事件历史。"""
+    inc_rev = _row_rev(incoming, "rev")
+    raw_provided = incoming.get("rating_fields")
+    values = _merged_label_rating(incoming)
+    if isinstance(raw_provided, list):
+        provided = [f for f in raw_provided if f in _RATING_FIELD_KEYS]
+        whole_clear = not provided and inc_rev >= 0
+    else:
+        provided = [f for f in _RATING_FIELD_KEYS if values[f] not in (None, "", [])]
+        whole_clear = False
+    if acc is None:
+        acc = dict(incoming)
+        acc["rating_field_revs"] = {}
+        acc["rating_field_srcs"] = {}
+    else:
+        acc = dict(acc)
+        acc["rating_field_revs"] = dict(acc.get("rating_field_revs") or {})
+        acc["rating_field_srcs"] = dict(acc.get("rating_field_srcs") or {})
+    acc_rev = _row_rev(acc, "rev")
+    frevs = acc["rating_field_revs"]
+    srcs = acc["rating_field_srcs"]
+    # 并入范围 = incoming 有 rev 信息的全部字段：扫描事件 = 其 rating_fields；旧产物种子 =
+    # 其 rating_field_revs（含 benchfb 兜底的 -1 字段——它们不在 rating_fields 里，但种子
+    # 合并必须带上，否则窗口链会丢掉 benchfb 兜底值，与全库扫描分叉）。
+    if whole_clear:
+        targets = list(_RATING_FIELD_KEYS)
+    elif isinstance(incoming.get("rating_field_revs"), dict):
+        targets = [f for f in _RATING_FIELD_KEYS if f in incoming["rating_field_revs"]]
+    else:
+        targets = provided
+    for field in targets:
+        cur = frevs.get(field, _label_field_rev(acc, field))
+        cur_src = srcs.get(field)
+        new = inc_rev if whole_clear else _label_field_rev(incoming, field)
+        if new == _FIELD_REV_ABSENT:
+            new = inc_rev                     # legacy-overlay 行：字段在提供集内，行 rev 即字段 rev
+        new_src = _label_field_src(incoming, field)
+        if (new > cur
+                or (new == cur and cur != _FIELD_REV_ABSENT
+                    and cur_src is not None and new_src is not None and new_src < cur_src)):
+            acc[field] = values[field]
+            frevs[field] = new
+            if new_src is None:
+                srcs.pop(field, None)         # 更高 rev 但来源未知：只记 rev，后续并列不再反转
+            else:
+                srcs[field] = new_src
+    # 行级 rev/meta 同判据：更高 rev 胜；同 rev 且双方来源已知取更早接收序；来源未知不反转。
+    inc_rsrc = _valid_src_pos(incoming.get("rev_src"))
+    acc_rsrc = _valid_src_pos(acc.get("rev_src"))
+    if (inc_rev > acc_rev
+            or (inc_rev == acc_rev and acc_rsrc is not None and inc_rsrc is not None
+                and inc_rsrc < acc_rsrc)):
+        acc["rev"] = incoming.get("rev")
+        if inc_rsrc is None:
+            acc.pop("rev_src", None)
+        else:
+            acc["rev_src"] = inc_rsrc
+        for meta in ("tid", "recId", "iid", "install_id", "packet_id", "event_id",
+                     "kind", "q", "ts", "label_source"):
+            if meta in incoming:
+                acc[meta] = incoming.get(meta)
+    # frevs/srcs 也按评分字段全集定序：字段插入路径（事件先到/种子先到）不影响产物字节。
+    acc["rating_field_revs"] = frevs = {f: frevs[f] for f in _RATING_FIELD_KEYS if f in frevs}
+    acc["rating_field_srcs"] = {f: srcs[f] for f in _RATING_FIELD_KEYS if f in srcs}
+    event_fields = [f for f in _RATING_FIELD_KEYS if frevs.get(f, _FIELD_REV_ABSENT) >= 0]
+    if event_fields:
+        acc["rating_fields"] = event_fields
+    else:
+        acc["rating_fields"] = [f for f in _RATING_FIELD_KEYS if frevs.get(f, _FIELD_REV_ABSENT) == -1]
+    acc["label_shape"] = _rating_shape(
+        {k: v for k, v in ((key, acc.get(key)) for key in
+                           ("completion", "reasons", "stars", "useful_idx", "comment"))
+         if v is not None})
+    # 规范化键序：benchfb 先行 / 事件先行 / 旧产物种子三条路径累积出的行必须逐字节一致
+    # （窗口增量与全库扫描同结果、重跑幂等都依赖字节级稳定）。
+    ordered = {k: acc[k] for k in _LABEL_ROW_KEY_ORDER if k in acc}
+    for k in acc:
+        if k not in ordered:
+            ordered[k] = acc[k]
+    return ordered
+
+
+def _label_merge_key(install_id: str, tid: str, packet_id: str, event_id: str,
+                     ts: Any, rec_id: str) -> tuple[str, str, str]:
+    """显式标签合并键 (install_id, tid, recId) 唯一真源：扫描合包、旧产物种子、
+    写出去重三处同键（tid 缺失的老数据退 packet:event|ts 兜底，两侧一致才不串键）。"""
+    return (install_id, tid or f"{packet_id}:{event_id or ts}", rec_id)
+
+
+#: 显式标签行的规范键序（累积输出的唯一排列，保证路径无关的字节稳定）。
+_LABEL_ROW_KEY_ORDER = ("tid", "recId", "iid", "install_id", "packet_id", "event_id", "kind",
+                        "q", "ts", "stars", "useful_idx", "useful_uids", "completion", "reasons",
+                        "comment", "rating_fields", "rev", "rev_src", "label_shape", "label_source",
+                        "rating_field_revs", "rating_field_srcs")
+
+
+def _backfill_candidate_labels(candidates: list[dict[str, Any]],
+                               labels: dict[tuple[str, str, str], dict[str, Any]]) -> int:
+    """把合并后的显式标注回填进候选 rating（键 = (install_id, tid, recId)，与标签合并同源）。
+
+    自动上传常先于评分：候选落盘时 rating 还是空的，用户随后给出的 label 事件只进
+    explicit_labels；不回填则冻结器按 no_human_label 把这条样本整个丢掉（改口同理，
+    还会一直用旧分）。这里消费的是**字段级累积完成**的标签行（事件按各自 rev 覆盖、
+    benchfb 仅补缺），再按 label 的 rating_fields 合并——provided 空值覆盖、缺键继承
+    （旧版行无 rating_fields 时退回非空覆盖语义）；候选携带 rating_rev/rating_source，
+    跨轮 upsert 才能按 rev 判新旧。
+    """
+    filled = 0
+    for cand in candidates:
+        if not isinstance(cand, dict):
+            continue
+        key = (str(cand.get("install_id") or ""), str(cand.get("tid") or ""),
+               str(cand.get("record_id") or ""))
+        label = labels.get(key)
+        if not label:
+            continue
+        cand["rating"] = _merge_label_into_rating(cand.get("rating") or {}, label)
+        cand["rating_source"] = label.get("label_source")
+        cand["rating_rev"] = label.get("rev")
+        filled += 1
+    return filled
+
+
 def _backfill_candidate_context(candidates: list[dict[str, Any]], impressions: list[dict[str, Any]]) -> None:
     """用已有曝光安全补齐 benchmark 候选的 iid/policy。
 
@@ -592,6 +838,8 @@ def _quality_report(report: dict[str, Any]) -> str:
         f"- benchfb 轮次 {e['turns_total']}；显式标注合并后 {e['labels_total']}"
         f"（label 事件 {e['labels_from_events']} · benchfb 内嵌 rating {e['labels_from_benchfb']} · 同 tid 双源去重掉 benchfb {e['labels_benchfb_deduped']}）",
         f"- 评分形状：old {e['labels_shape_old']} · new {e['labels_shape_new']} · hybrid {e['labels_shape_hybrid']} · empty {e['labels_shape_empty']}",
+        f"- 候选 rating 由后到 label 事件回填 {e.get('candidates_label_backfilled', 0)} 条"
+        f"（未回填的候选冻结时按无人类标注排除，不按负例）",
         "",
         "## 重复率",
         "",
@@ -771,6 +1019,25 @@ document.getElementById('clearF').addEventListener('click', () => {{
 # --- 导出主流程 ---
 
 
+def _missing_sqlite_source(dsn: str) -> str | None:
+    """SQLite 文件型 DSN 指向不存在的文件时返回该路径（源缺失，调用方 fail-loud）。
+
+    导出只读消费：SQLAlchemy 打开不存在的 SQLite 文件会静默新建空库，把"路径写错/源缺失"
+    伪装成"合法的 0 包扫描"，进而触发全量退场。内存库、非 SQLite、已存在的文件返回 None。
+    """
+    raw = dsn.strip()
+    url = raw if raw.startswith(("sqlite", "postgresql")) else "sqlite:///" + raw
+    if not url.startswith("sqlite"):
+        return None
+    path = url.split("?", 1)[0].removeprefix("sqlite+pysqlite:///").removeprefix("sqlite:///")
+    path = path.removeprefix("sqlite://")
+    if ":memory:" in path:
+        return None
+    if not path:                    # 没给库路径（sqlite://）也是配置错：不能当合法空库
+        return raw
+    return None if Path(path).is_file() else path
+
+
 def _make_engine(dsn: str):
     dsn = dsn.strip()
     if dsn.startswith(("sqlite", "postgresql")):
@@ -810,7 +1077,16 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
 
      起为**两阶段全量扫描**：先把所有包的事件扫成曝光/标注索引（跨包 join——
     激进上传后 impression 与交互常分属不同包），再统一产出 artifacts。--incremental 不再按
-    watermark 过滤包；幂等改由产物行键 merge 保证（重复跑不重复产出），watermark 仅信息性记录。
+    watermark 过滤包；产物按稳定行键 upsert + 原子替换保证幂等（重复跑不重复产出），
+    watermark 仅信息性记录。
+
+    合并取舍：全库扫描时本次扫描即真源（已从库中清除的行真正退场，含保留期清理过的旧包；
+    合法的 0 包全库扫描——最后一包过期或全库清空——同样原子退场全部产物数据）。只有带
+    --since/--until 的窗口增量才保留窗口外的既有行（未扫描 ≠ 已删除）：显式标签与候选
+    借旧产物作种子，经字段级修订累积（每字段取各自最高 rev，显式空覆盖、缺键继承）与
+    稳定键合并后统一回填重写；窗口模式下"已删除数据"的退场责任在运维的定期全库扫描。
+    源不可访问（SQLite 文件缺失、连接/读取失败）由 CLI 前置检查与异常路径 fail-loud：
+    报错退出且既有产物保持原样，绝不把"读不到"当成"空"。
     """
     prev_watermark: int | None = None
     state_path = out_dir / STATE_FILE
@@ -862,10 +1138,13 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
         "feedback_total": 0, "feedback_with_diag": 0,   #
         "agent_trajectories_total": 0,
         "candidates_excluded_template": 0,   # 默认排除的模板轮次候选计数
+        "candidates_label_backfilled": 0,    # 候选 rating 被后到 label 事件回填的条数
     }
     seen_events: set[tuple[str, str]] = set()
     delays: list[float] = []
-    accepted = accepted_ids or set()
+    # accepted 三态：None=未指定（final 不创建/不改写）；空集=显式撤销全员（final 重写为空）；
+    # 非空=名单过滤。绝不把 None 折叠成空集。
+    accepted = accepted_ids
 
     for p in packets:
         report["packets_processed"] += 1
@@ -932,7 +1211,7 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
             delays.append(d_sec)
 
         # --- benchfb 轮次：只作 turn / label / candidate 来源（不再制造 impression）---
-        for rec in benchfb:
+        for rec_index, rec in enumerate(benchfb):
             if not isinstance(rec, dict):
                 quarantined.append({"reason": "unprocessable", "packet_id": packet_id, "install_id": install_id,
                                     "sample": {"benchfb": rec}})
@@ -977,7 +1256,12 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
                         "completion": rating.get("completion"),
                         "reasons": rating.get("reasons"),
                         "comment": masked_rec.get("rating", {}).get("comment"),
+                        # 兜底源同样记录「哪些评分键真的出现过」：合并时 provided 空值覆盖、
+                        # 缺键继承，不把客户端只发了部分字段的旧形状当完整快照清空。
+                        "rating_fields": _provided_rating_fields(rating),
                         "rev": None,
+                        # 接收序来源（packet 行 id, 包内位置）：同 rev 并列以 DB 接收序决胜
+                        "rev_src": [pid, rec_index],
                         "label_shape": shape,
                         "label_source": "benchfb",
                     }
@@ -995,7 +1279,7 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
                 candidates.append(cand)
 
         # --- usage 事件：imp/search → 曝光索引；view → 曝光补充；label → 显式标注；open/dl/fav → 交互 ---
-        for ev in usage:
+        for ev_index, ev in enumerate(usage):
             if not isinstance(ev, dict):
                 quarantined.append({"reason": "unprocessable", "packet_id": packet_id, "install_id": install_id,
                                     "sample": {"usage": ev}})
@@ -1053,30 +1337,37 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
                 rev_i = int(rev) if isinstance(rev, (int, float)) else 0
                 # 键 = (install_id, tid, recId)——同一轮次下多条记录的评分互不吞并（1c），
                 # 且与 benchfb 记录键空间统一（1a 双源去重真正生效）；老数据无 recId → 空串兜底，
-                # 与 benchfb 侧键不匹配属预期降级。无 tid 的孤儿事件沿用 packet 内唯一化兜底。
+                # 与 benchfb 侧键不匹配属预期降级。无 tid 的孤儿事件沿用 packet 内唯一化兜底
+                # （与旧产物种子/写出去重同一 _label_merge_key 推导，重跑不串键）。
                 ev_recid = str(ev.get("recId") or "")
-                lkey = (install_id, ev_tid, ev_recid) if ev_tid else (
-                    install_id, f"{packet_id}:{ev.get('event_id') or len(label_events)}", ev_recid)
-                prev = label_events.get(lkey)
-                if prev is None or rev_i > int(prev.get("rev") or 0):  # 同键多 rev 取最高；同 rev 先到先留
-                    rating_like = {"completion": masked_ev.get("completion"), "reasons": masked_ev.get("reasons"),
-                                   "stars": masked_ev.get("stars"), "useful_idx": masked_ev.get("useful_idx"),
-                                   "comment": masked_ev.get("comment")}
-                    label_events[lkey] = {
-                        "tid": ev_tid or None, "recId": ev_recid or None, "iid": ev_iid or None,
-                        "install_id": install_id, "packet_id": packet_id,
-                        "event_id": str(ev.get("event_id") or ""),
-                        "kind": LABEL_KIND, "q": masked_ev.get("q"), "ts": _ts_ms(ev.get("t")),
-                        "stars": masked_ev.get("stars"),
-                        "useful_idx": _norm_int_list(ev.get("useful_idx")),
-                        "useful_uids": [str(u) for u in (ev.get("useful_uids") or []) if u] if isinstance(ev.get("useful_uids"), list) else [],
-                        "completion": masked_ev.get("completion"),
-                        "reasons": masked_ev.get("reasons"),
-                        "comment": masked_ev.get("comment"),
-                        "rev": rev_i,
-                        "label_shape": _rating_shape({k: v for k, v in rating_like.items() if v is not None}),
-                        "label_source": "event",
-                    }
+                lkey = _label_merge_key(install_id, ev_tid, packet_id,
+                                        str(ev.get("event_id") or ""), _ts_ms(ev.get("t")), ev_recid)
+                rating_like = {"completion": masked_ev.get("completion"), "reasons": masked_ev.get("reasons"),
+                               "stars": masked_ev.get("stars"), "useful_idx": masked_ev.get("useful_idx"),
+                               "comment": masked_ev.get("comment")}
+                # 字段级修订累积（唯一机制 _accumulate_label_fields）：每字段各自取最高 rev，
+                # 不再整行只留最高 rev——否则 rev2 的显式清空会被 rev3 的部分修订整条丢掉，
+                # 候选 rating 从 benchfb 记录复活已撤销的旧正例。
+                label_events[lkey] = _accumulate_label_fields(label_events.get(lkey), {
+                    "tid": ev_tid or None, "recId": ev_recid or None, "iid": ev_iid or None,
+                    "install_id": install_id, "packet_id": packet_id,
+                    "event_id": str(ev.get("event_id") or ""),
+                    "kind": LABEL_KIND, "q": masked_ev.get("q"), "ts": _ts_ms(ev.get("t")),
+                    "stars": masked_ev.get("stars"),
+                    "useful_idx": _norm_int_list(ev.get("useful_idx")),
+                    "useful_uids": [str(u) for u in (ev.get("useful_uids") or []) if u] if isinstance(ev.get("useful_uids"), list) else [],
+                    "completion": masked_ev.get("completion"),
+                    "reasons": masked_ev.get("reasons"),
+                    "comment": masked_ev.get("comment"),
+                    # 事件真实带过的评分键（含显式空值）：合并时 provided 空值覆盖、
+                    # 缺键继承——完整快照的清空必须落盘，部分更新的缺键不能误清。
+                    "rating_fields": _provided_rating_fields(masked_ev),
+                    "rev": rev_i,
+                    # 接收序来源（packet 行 id, 包内位置）：同 rev 并列以 DB 接收序决胜
+                    "rev_src": [pid, ev_index],
+                    "label_shape": _rating_shape({k: v for k, v in rating_like.items() if v is not None}),
+                    "label_source": "event",
+                })
             itype = interaction_type(ev)
             if itype is not None:
                 report["interaction_types"][itype] += 1
@@ -1227,17 +1518,75 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
         if uid:
             report["interactions_uid_ok"] += 1
 
-    # 显式标注双源合并：benchfb 内嵌 rating 兜底，label 事件优先（同 (install_id,tid,recId) 键只留
-    # 事件行；键含 recId，双源去重真正生效，同一轮次多条记录/多 rev 不再互相吞并）
+    # 显式标注双源合并：benchfb 内嵌 rating 兜底，label 事件按字段并入（键 = (install_id,tid,recId)，
+    # 双源去重真正生效，同一轮次多条记录/多 rev 不再互相吞并；事件未提供的字段保留 benchfb
+    # 兜底值，事件提供的字段（含显式空）按各自 rev 覆盖——整行替换会复活已撤销的旧正例）。
     report["labels_from_benchfb"] = len(benchfb_labels)
     report["labels_from_events"] = len(label_events)
     report["labels_benchfb_deduped"] = len(set(benchfb_labels) & set(label_events))
-    merged_labels: dict[tuple[str, str, str], dict[str, Any]] = dict(benchfb_labels)
-    merged_labels.update(label_events)
+    merged_labels: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for lkey, brow in benchfb_labels.items():
+        merged_labels[lkey] = _accumulate_label_fields(None, brow)
+    for lkey, erow in label_events.items():
+        merged_labels[lkey] = _accumulate_label_fields(merged_labels.get(lkey), erow)
+    report["labels_from_benchfb"] -= report["labels_benchfb_deduped"]
+
+    # --- 写产物：按稳定行键 upsert + 整份原子替换 ---
+    # 只有带 --since/--until 的窗口增量才保留旧文件行：窗口外的数据不在本次扫描范围内，
+    # 存量导出无法判定它是"仍在库"还是"已删除"，所以不把未扫描当已删除（保留，退场责任在
+    # 运维的定期全库扫描，见 --incremental 帮助）。全库扫描时本次扫描即真源：被保留期清理
+    # 或显式删除的数据随之**原子退场**——包括合法的最后一包过期/全库清空到 0 包，绝不把
+    # 旧查询/评语永久拼在产物里（否则接收端的 mtime 清理永远删不掉它）。
+    # 源不可访问（DSN 路径缺失/权限/连接失败）由 main 的 fail-loud 前置检查与异常路径兜住：
+    # 报错退出、产物保持原样，绝不把"读不到"当成"空"。
+    if report["packets_processed"] == 0 and since is None and until is None:
+        print("[telemetry-export] 本次全库扫描 0 包：按扫描结果原子退场既有产物中的全部数据",
+              file=sys.stderr)
+    elif report["packets_processed"] == 0:
+        print("[telemetry-export] 本次窗口扫描 0 包：窗口外既有数据保留；"
+              "要退场已删除数据请跑一次全库扫描", file=sys.stderr)
+    merge_old = incremental and (since is not None or until is not None)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if merge_old:
+        # 窗口增量唯一借旧产物的两粒种子（全库扫描不借，本次扫描即真源）：
+        # ① 旧 explicit_labels 作标签字段累积的种子——同一 _accumulate_label_fields 机制。
+        #    种子先规范化为初始 acc，再把本轮扫描结果并入：双方来源已知的同 rev 并列取
+        #    更早接收位置（判据与并入顺序无关，反向窗口同库一致）；任一侧来源未知的并列
+        #    一律保留旧值——旧产物是已存历史，未知来源没有反转权（只有严格更高 rev 或
+        #    双方可信的更早来源才能改旧值；legacy 无法推出全局接收序，只能保守保存已知，
+        #    确定性重建靠全库重扫）。每字段 rev 各自比较，缺字段继承旧行，不会再因
+        #    「同 highest rev 整行 prefer_rev」把新窗口累积出的字段吞掉。
+        # ② 旧 benchmark_candidates 作候选稳定键合并的种子——窗口外候选行不会重新生成。
+        if (out_dir / "explicit_labels.jsonl").is_file():
+            seed_labels: dict[tuple[str, str, str], dict[str, Any]] = {}
+            for ln in (out_dir / "explicit_labels.jsonl").read_text(encoding="utf-8").splitlines():
+                if not ln.strip():
+                    continue
+                old = json.loads(ln)
+                if not isinstance(old, dict):
+                    continue
+                skey = _label_merge_key(str(old.get("install_id") or ""), str(old.get("tid") or ""),
+                                        str(old.get("packet_id") or ""), str(old.get("event_id") or ""),
+                                        old.get("ts"), str(old.get("recId") or ""))
+                seed_labels[skey] = _accumulate_label_fields(None, old)
+            for skey, srow in seed_labels.items():
+                cur = merged_labels.get(skey)
+                merged_labels[skey] = _accumulate_label_fields(srow, cur) if cur is not None else srow
+        if (out_dir / "benchmark_candidates.jsonl").is_file():
+            prior_candidates = [json.loads(ln) for ln in
+                                (out_dir / "benchmark_candidates.jsonl").read_text(encoding="utf-8").splitlines()
+                                if ln.strip()]
+            by_key = {("cand", str(r.get("packet_id")), str(r.get("record_id"))): r
+                      for r in prior_candidates if isinstance(r, dict)}
+            for r in candidates:      # 窗口内重扫到的记录以本次扫描行为准（同键原位替换）
+                by_key[("cand", str(r.get("packet_id")), str(r.get("record_id")))] = r
+            candidates = list(by_key.values())
     explicit_labels = sorted(merged_labels.values(),
                              key=lambda r: (r.get("ts") or 0, r["install_id"], str(r.get("tid") or "")))
-    report["labels_from_benchfb"] -= report["labels_benchfb_deduped"]
     report["labels_total"] = len(explicit_labels)
+    # 统一回填：标签字段累积与候选稳定键合并都完成后，把终态标签一次性回填进终态候选——
+    # 晚到的评分/改口/窗口外历史修订都进候选，冻结器才不丢样本、不复活已撤销正例。
+    report["candidates_label_backfilled"] = _backfill_candidate_labels(candidates, merged_labels)
 
     # --- 统计收尾 ---
     if delays:
@@ -1250,34 +1599,45 @@ def _export(engine, out_dir: Path, *, since: datetime | None, until: datetime | 
     report["quarantine_reasons"] = [{"reason": q.get("reason")} for q in quarantined]
     report["unknown_keys"] = {k: sorted(v) for k, v in report["unknown_keys"].items()}
 
-    # --- 写产物（增量模式按行键 merge：重复跑不重复产出，断跑续跑不丢历史）---
-    out_dir.mkdir(parents=True, exist_ok=True)
     products = [
+        # (文件名, 行, 稳定键, 同键取舍, rev 字段)
         # impressions 用 prefer_enriched：view 事件的 seen/dwell 可能晚于曝光本身落库，
         # 后跑的全量扫描行信息更全时允许覆盖旧行（其余产物行同键同形，先到先得即可）
-        ("impressions.jsonl", impressions, lambda r: ("imp", r["install_id"], r["iid"]), "prefer_enriched"),
+        ("impressions.jsonl", impressions, lambda r: ("imp", r["install_id"], r["iid"]), "prefer_enriched", None),
         ("interactions.jsonl", interactions,
-         lambda r: ("int", r["install_id"], r.get("event_id") or f"{r['packet_id']}:{r['type']}:{r.get('ts')}"), "keep_old"),
+         lambda r: ("int", r["install_id"], r.get("event_id") or f"{r['packet_id']}:{r['type']}:{r.get('ts')}"),
+         "keep_old", None),
         ("turns.jsonl", turns,
-         lambda r: ("turn", r["packet_id"], r.get("id") or r.get("tid")), "keep_old"),
+         lambda r: ("turn", r["packet_id"], r.get("id") or r.get("tid")), "keep_old", None),
+        # 显式标签：字段级累积在写出前已完成（含窗口种子），本次合并结果即真源——
+        # 改口（rev2）/高 rev 清空评分已真正落盘，不被旧行钉死
         ("explicit_labels.jsonl", explicit_labels,
          lambda r: ("lab", r["install_id"], r.get("tid") or f"{r['packet_id']}:{r.get('event_id') or r.get('ts')}",
-                    r.get("recId") or ""), "keep_old"),
+                    r.get("recId") or ""), "prefer_rev", "rev"),
         # mcp 幂等键跨包稳定（中继 CAS 重传会同 call_id 进新包）：按 install+call_id 去重
-        ("mcp_calls.jsonl", mcp_calls, lambda r: ("mcp", r["install_id"], r.get("call_id")), "keep_old"),
+        ("mcp_calls.jsonl", mcp_calls, lambda r: ("mcp", r["install_id"], r.get("call_id")), "keep_old", None),
         # 意见反馈按 feedback_id 去重（同一 feedback_id 重传只留首次，与接收端幂等同键）
         ("feedback.jsonl", feedback_rows,
-         lambda r: ("fb", r["install_id"], r.get("feedback_id")), "keep_old"),
-        ("benchmark_candidates.jsonl", candidates, lambda r: ("cand", r["packet_id"], r.get("record_id")), "keep_old"),
+         lambda r: ("fb", r["install_id"], r.get("feedback_id")), "keep_old", None),
+        # 候选：稳定键合并 + 统一回填在写出前已完成（含窗口种子），本次合并结果即真源
+        ("benchmark_candidates.jsonl", candidates, lambda r: ("cand", r["packet_id"], r.get("record_id")),
+         "prefer_rev", "rating_rev"),
         ("agent_trajectories.jsonl", agent_trajectories,
-         lambda r: ("traj", r["packet_id"], r.get("record_id")), "keep_old"),
-        ("quarantine.jsonl", quarantined, lambda r: ("q", r["packet_id"], r.get("record_id"), r["reason"]), "keep_old"),
+         lambda r: ("traj", r["packet_id"], r.get("record_id")), "keep_old", None),
+        ("quarantine.jsonl", quarantined,
+         lambda r: ("q", r["packet_id"], r.get("record_id"), r["reason"]), "keep_old", None),
     ]
     merged_views: dict[str, list[dict[str, Any]]] = {}
-    for fname, rows, key_fn, on_conflict in products:
+    for fname, rows, key_fn, on_conflict, rev_key in products:
+        # 标签/候选的旧行已在上面作种子并入终态，不再二次 merge（二次 merge 的同 rev
+        # 整行取舍会吞掉新累积字段）；其余产物维持窗口增量的旧行保留语义。
+        product_merge = merge_old and fname not in ("explicit_labels.jsonl", "benchmark_candidates.jsonl")
         merged_views[fname] = _write_product(out_dir / fname, rows, key_fn,
-                                             merge=incremental, on_conflict=on_conflict)
-    if accepted:
+                                             merge=product_merge, on_conflict=on_conflict,
+                                             rev_key=rev_key)
+    if accepted is not None:
+        # final 从终态候选过滤后整份重写（不 merge 旧 final）：显式空名单 = 撤销全员 → 空 final；
+        # 未指定（None）= 不创建/不改写既有 final。
         final = [c for c in merged_views["benchmark_candidates.jsonl"]
                  if str(c.get("record_id")) in accepted or c.get("tid") in accepted]
         _write_jsonl(out_dir / FINAL_CANDIDATES, final)
@@ -1305,38 +1665,76 @@ def _masked_flatten(rec: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in rec.items() if k not in ("_install", "_src")}
 
 
+def _row_rev(row: dict[str, Any], rev_key: str | None) -> int:
+    """行上的修订号；缺省/非整数视为 -1（benchfb 内嵌兜底没有 rev）。"""
+    if not rev_key:
+        return -1
+    value = row.get(rev_key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+
 def _write_product(path: Path, rows: list[dict[str, Any]], key_fn, *, merge: bool,
-                   on_conflict: str = "keep_old") -> list[dict[str, Any]]:
-    """写单个 JSONL 产物；merge=True 时先读旧文件按 key_fn 去重合并（增量幂等续跑语义）。
+                   on_conflict: str = "keep_old",
+                   rev_key: str | None = None) -> list[dict[str, Any]]:
+    """写单个 JSONL 产物：按稳定行键 upsert，整份原子替换。
+
+    merge=True 时先读旧文件参与合并（仅窗口增量需要保留窗口外的既有行）；merge=False
+    时本次扫描即真源——已从库里清除的行随之真正退场，而不是永远拼在旧文件后面。
 
     on_conflict：同键新旧行取舍——"keep_old" 先到先得（同键行同形，无信息差）；
-    "prefer_enriched" 时新行带旧行没有的 seen 键才覆盖（impressions 的 view 补充晚到场景）。
+    "prefer_enriched" 时新行带旧行没有的 seen 键才覆盖（impressions 的 view 补充晚到场景）；
+    "prefer_rev" 时按 rev_key（rev / rating_rev）取最高 rev，改口/纠正的新分必须真正落盘。
     返回最终写出的行列表（供 review.html / final candidates 复用）。
     """
+    merged: dict[tuple[Any, ...], dict[str, Any]] = {}
     if merge and path.exists():
-        merged: dict[tuple[Any, ...], dict[str, Any]] = {}
         for ln in path.read_text(encoding="utf-8").splitlines():
             if not ln.strip():
                 continue
             r = json.loads(ln)
             merged[key_fn(r)] = r
-        for r in rows:
-            k = key_fn(r)
-            if k not in merged:
-                merged[k] = r
-            elif on_conflict == "prefer_enriched" and "seen" in r and "seen" not in merged[k]:
-                merged[k] = r
-        out_rows = list(merged.values())
-    else:
-        out_rows = list(rows)
+    for r in rows:
+        k = key_fn(r)
+        if k not in merged:
+            merged[k] = r
+        elif on_conflict == "prefer_enriched" and "seen" in r and "seen" not in merged[k]:
+            merged[k] = r
+        elif on_conflict == "prefer_rev" and _row_rev(r, rev_key) > _row_rev(merged[k], rev_key):
+            merged[k] = r
+    out_rows = list(merged.values())
     _write_jsonl(path, out_rows)
     return out_rows
 
 
+def _replace_with_retry(temp_name: str, path: Path, *, attempts: int = 5) -> None:
+    """os.replace 的有界重试：Windows 上扫描器/索引器可能瞬时持有目标句柄（拒绝访问）。
+
+    重试同一替换不改变原子性（读者看到的仍是旧文件或新文件）；用尽后原样抛出。
+    """
+    for attempt in range(attempts):
+        try:
+            os.replace(temp_name, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+    """临时文件 + os.replace 原子替换；显式 LF（产物跨平台字节可比，读者不见半截文件）。"""
+    fd, temp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False, default=str) + "\n")
+        _replace_with_retry(temp_name, path)
+    except BaseException:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
 
 
 def _parse_iso(raw: str | None) -> datetime | None:
@@ -1353,8 +1751,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--since", default=None, help="received_at 下限（ISO 时间串）")
     ap.add_argument("--until", default=None, help="received_at 上限（ISO 时间串）")
     ap.add_argument("--incremental", action="store_true",
-                    help="增量续跑：产物按行键与已有文件 merge（重复跑不重复产出）；"
-                         "watermark 仅信息性记录（跨包 join 要求全量扫描，不再按它过滤包）")
+                    help="增量续跑：产物按稳定行键 upsert + 原子替换（重复跑不重复产出）；"
+                         "全库扫描以本次扫描为真源——库中已清除的行（含合法的空库/最后一包过期）"
+                         "原子退场；带 --since/--until 时保留窗口外既有行（未扫描≠已删除，"
+                         "退场责任在定期全库扫描）；watermark 仅信息性记录（跨包 join 要求全量扫描）")
     ap.add_argument("--accepted", default=None, help="人工接受名单文件（每行一个记录 id；# 开头为注释）→ 只写 benchmark_candidates.final.jsonl")
     args = ap.parse_args(argv)
 
@@ -1362,7 +1762,13 @@ def main(argv: list[str] | None = None) -> int:
     if not dsn:
         print("error: 需要 --dsn 或 env BIODATA_TELEMETRY_DSN", file=sys.stderr)
         return 2
-    accepted: set[str] = set()
+    missing = _missing_sqlite_source(dsn)
+    if missing is not None:
+        # 源缺失 fail-loud：不打开、不建库、不动既有产物——"读不到"绝不等价于"空库"。
+        print(f"error: SQLite 源文件不存在或 DSN 未给出库路径：{missing}（拒绝导出，既有产物保持原样）",
+              file=sys.stderr)
+        return 2
+    accepted: set[str] | None = None
     if args.accepted:
         try:
             accepted = {ln.strip() for ln in Path(args.accepted).read_text(encoding="utf-8").splitlines()
@@ -1386,7 +1792,7 @@ def main(argv: list[str] | None = None) -> int:
           f"mcp {r['mcp_total']}、意见 {r['feedback_total']}、"
           f"quarantine {r['quarantine_total']}。")
     print(f"[telemetry-export] 产物：{Path(args.out) / 'impressions.jsonl'} 等（见 quality_report.md）。")
-    if accepted:
+    if accepted is not None:
         print(f"[telemetry-export] --accepted：名单 {len(accepted)} 个 id → {FINAL_CANDIDATES}。")
     return 0
 

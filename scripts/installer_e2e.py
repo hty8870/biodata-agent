@@ -51,6 +51,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from process_tree import run as run_process_tree
+
 # sys.path 锚定：复用启动器的 MUTEX_NAME / HEALTH_PATH 与 win32 mutex 探测
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
@@ -495,7 +497,7 @@ def _innocmd(installer: Path, args: list[str], env: dict | None = None,
 
     timeout 超时（如 matrix7 运行中升级被拦时 Inno 弹对话框等待用户）→ 抛
     subprocess.TimeoutExpired，由调用方按「被拦/未完成」语义处理。"""
-    result = subprocess.run([str(installer)] + args, env=env,
+    result = run_process_tree([str(installer)] + args, env=env,
                             capture_output=True, text=True, timeout=timeout)
     return result.returncode, (result.stdout or "") + (result.stderr or "")
 
@@ -655,8 +657,6 @@ def _matrix_handlers(installer: Path, workdir: Path) -> list[dict]:
     timed_out = "timeout=" in res["detail"]
     if not app_ready:
         # 运行实例未就绪 = 用例无效，直接 fail（不得用「安装没被拦」反向判 pass）
-        if timed_out:
-            _kill_stray_installers()   # 超时被拦后清理残留 setup 对话框进程
         res.update({"id": "matrix7", "name": "运行中升级被拦", "status": "fail",
                     "detail": f"运行实例未能就绪（{STARTUP_TIMEOUT_S:.0f}s 内无 runtime.json/"
                               f"instance.json，进程退出码 {proc.poll() if proc else 'N/A'}）；"
@@ -666,8 +666,6 @@ def _matrix_handlers(installer: Path, workdir: Path) -> list[dict]:
         # 语义：AppMutex 拦截 = 运行实例存在时安装器不得静默完成（rc≠0 即被拦；
         # 超时=安装器被「正在运行」对话框卡住，同样是未静默完成 → 合规被拦；
         # rc=0 但实例已被优雅关闭且安装完成 → 按 CloseApplications=yes 语义也算合规）
-        if timed_out:
-            _kill_stray_installers()   # 超时被拦后清理残留 setup 对话框进程
         blocked = res["status"] != "pass" or not running_at_install
         res.update({"id": "matrix7", "name": "运行中升级被拦",
                     "status": "pass" if blocked else "fail",
@@ -695,7 +693,6 @@ def _matrix_handlers(installer: Path, workdir: Path) -> list[dict]:
             # 版本守卫 InitializeSetup 的 MsgBox 在静默模式被抑制前可能弹框等待
             # （「旧版覆盖新版被拦」实测：提示后确定退出）——超时同样视为被拦。
             rc, timed_out = -1, True
-            _kill_stray_installers()   # 清理残留对话框进程
         still_installed = installed_exe.is_file()
         blocked = (rc != 0 or timed_out) and still_installed
         items.append({"id": "matrix8", "name": "降级被拦",
@@ -958,20 +955,6 @@ def _installer_in_use(installer: Path) -> bool:
         return "No tasks" not in out and bool(out.strip())
     except Exception:  # noqa: BLE001（探测失败按未占用处理，由授权门兜底）
         return False
-
-
-def _kill_stray_installers() -> None:
-    """清理矩阵运行残留的安装器/卸载器进程（超时被拦后可能仍挂对话框等待）。
-    仅杀本矩阵安装器映像名（含 2.3.0 旧版编译产物与 unins000），不影响其他进程。"""
-    for pattern in ("BioData-Agent-Setup-*", "unins000.exe"):
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/IM", pattern],
-                capture_output=True, text=True, timeout=20,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except Exception:  # noqa: BLE001（清理尽力而为）
-            pass
 
 
 def installer_matrix(installer: Path | None, workdir: Path,

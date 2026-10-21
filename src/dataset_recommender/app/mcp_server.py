@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """BioData Agent · 本地 stdio MCP 服务器（零改动封装现有确定性管线）。
 
-把「中文自然语言 → 单细胞数据集」的**确定性、离线、永不崩**管线，暴露成 19 个 MCP 工具
-（16 个只读 + 3 个写盘工具：upload_dataset 写外部库、provision_dataset 写调用方指定目录、
-curate_datasets 管护外部库 upload_* 与回收站），
+把「中文自然语言 → 单细胞数据集」管线暴露成 25 个 MCP 工具（在线23个）：
+19 个基础工具（16 个只读 + 3 个写盘工具：upload_dataset 写外部库、provision_dataset 写调用方指定目录、
+curate_datasets 管护外部库 upload_* 与回收站）+ 6 个高层 Agent 工具（agent_chat / agent_conversations /
+agent_projects / agent_task / agent_replay / agent_learning，持久会话、项目、复盘与经授权的独立学习；
+调用会消耗模型额度，学习批准/替代须网页真人逐条确认），
 供 Claude Code / Codex 这类支持 MCP 的 agent 直接调用（与网页端能力对齐）：
 
   1. recommend_datasets(query, sources=None, top_k=None, recall/use_llm/rerank=opt-in,
@@ -66,20 +68,58 @@ curate_datasets 管护外部库 upload_* 与回收站），
      **check_updates / sync_updates**（2026-08-22 补齐）：只读检查来源更新 / 检查+自动
      入库复合流（sync 有整任务文件锁，冲突 → `sync_busy`；返回 operation receipt，可经 Web
      `/api/curate/recall` 整次撤回），修复 plan_action 已宣称而工具不接的 plan→execute 断链。
+ 20. agent_chat(message, conversation_id/request_id/expected_revision/project_id/state_patch/ask_choice/
+     wait_seconds)  —— 【高层】直接对知识库 Agent 说一句话，不必由宿主拼装底层工具：一次调用即
+     走完整轮（解析→检索→可选 LLM），并自己保存消息、结果帧与检索现场。同 `request_id` 重试即幂等
+     （不重复执行写工具）；后台未跑完时返回 `run_id` + `pending=true`，用 agent_task 续读，**不要另起请求重跑**。
+     `state_patch` 只接受 query/sources/search_params，`ask_choice` 只取当前选择卡的真实 key。
+     对齐 Web `/?conv=` 同一现场：同实例 + 同身份即同 scope（普通 MCP 不复制图谱 GUI）。
+ 21. agent_conversations(action, conversation_id/expected_revision/offset/limit/after_message/after_frame/
+     include_archived/frame_id/title/import_id/data)  —— 【高层】会话 list/get/create/archive/restore/
+     rename/delete/select_frame/branch/import。list/get 有分页游标；写动作携 `expected_revision`
+     防旧客户端覆盖新轮；`branch` 必须给真实 frame_id；`import` 只提交用户**逐条预览确认**的一条旧史
+     并给稳定 import_id——**绝不自动扫描本机历史**（导入是幂等的，原件不动；保存会话 ≠ 训练 consent）。
+ 22. agent_projects(action, project_id/name/color/conversation_id/expected_revision/project_ids)  ——
+     【高层】共享项目 list/create/update/archive/restore/reorder/assign，与 Web 项目机制、学习作用域同源；
+     归档项目保留会话；不上传记忆。
+ 23. agent_task(action=status/events/cancel/resolve, run_id/request_id/after)  —— 【高层】读写
+     已有后台任务的运行现场：`status` 读快照、`events` 按 `seq` 游标增量、`resolve` 按 `request_id`
+     找回、`cancel` 只在安全边界停止（已完成操作不会撤销；`interrupted` 不自动重演）。
+ 24. agent_replay(conversation_id, action=status/points/annotate/snapshot/annotate_snapshot/seen/chat/
+     digest, data)  —— 【高层】复盘（own replay）：`points` 返回结构化图 + 出处 + 标注，`snapshot`
+     打包标注供继续讨论，`chat`/`digest` 会使用可用模型与同一额度。`data` 仅允许
+     pid/text/snap_id/observed_version/observed_pids（strict `{data: …}` 信封，旧 anonymous key 保留）。
+     不需要客户端互传 key；仅本人共享会话可复盘。
+ 25. agent_learning(action=status/control/trigger/candidates/review) —— 经scope授权的独立ReAct学习，
+     默认关闭，每调用独立额度；候选/审核反馈与真实trace持久可回查。AI关/trial/无配置不后台调用；
+     重启等待同身份端点授权配置。批准/替代须网页真人逐条确认，MCP不能代批；暂停/删除阻止迟回候选。
 
 设计原则（与主线「永不崩→降级」合同一致）：
-  * 传输 = stdio：由客户端本地 spawn 一个进程；默认检索/解析不联网。只有调用方显式开启 LLM
-    参数或 biodata_llm_status(check_connection=True) 时，才向已配置的 API 发请求。
+  * 传输 = stdio：由客户端本地 spawn 一个进程；**默认检索/解析不联网**。旧的 19 个基础工具仍只在
+    调用方显式开启 LLM 参数或 biodata_llm_status(check_connection=True) 时，才向已配置的 API 发请求。
+    高层 Agent 五工具是**如实声明的例外**：agent_chat 与 agent_replay 的 chat·digest 会主动使用
+    可用模型（服务端配置的，或调用方本轮的请求级配置）并计入与 Web 同一身份额度；经它们规划的轮次
+    也可执行调用方**本轮已授权**的联网工具（如 curate_datasets 的 search_online / check_updates /
+    sync_updates），执行与否在结果里如实回显。**这不是预先授权**：保存会话/项目/复盘只是给你自己
+    看的持久现场，不等于训练 consent，也不构成对未来联网或写盘的授权。
   * 非法请求与内部异常转换为 ToolError（客户端 isError=true），合法业务结果保持 ok=true；
     FastMCP 兜住单次工具错误，不让它掀翻 MCP 进程。
   * 数据路径锚定在**源码位置**（config.py: project_root = 源文件父级），与启动 cwd 无关 →
     Claude Code / Codex 从任意目录 spawn 都能找到 database/ 与下载索引。
   * 重资源（语料、下载索引）一律**懒加载**，import 期不做 I/O → 启动秒开，不触发 Codex 启动超时。
-  * 只有三个写盘工具：upload_dataset（按用户授权补入，**只写** database/external/、绝不碰 database/base/）
+  * 只有三个**语料写盘**工具：upload_dataset（按用户授权补入，**只写** database/external/、绝不碰 database/base/）
     与 provision_dataset（**只写**调用方显式给定的 dest_dir，executor 对 database/base 与在仓数据目录
     fail-closed 拒绝）、curate_datasets（管护写工具，apply 才写 database/external/ 的 upload_* 命名空间
     与 .userdata/recycle/ 回收站；search_online apply 时联网）；其余工具调用不写语料/冻结基准。默认路径不启用 LLM，774 冻结评测的确定性与
     硬违规 0% 不受影响（官方评测走 base-only、永不读外部库，故上传即便入库也不影响基准）。
+    高层 Agent 五工具（agent_chat / agent_conversations / agent_projects / agent_task / agent_replay）
+    另有一层**持久现场**副作用（会话/项目/任务/复盘落实例数据库，**不写语料、不碰冻结基准**），
+    且 agent_chat / agent_replay 的 chat·digest 会使用已配置模型、消耗与 Web 同一身份额度
+    （缺模型如实降级，绝不静默假装成功）。
+  * 身份与 scope（高层工具专用）：stdio 无 `BIODATA_MCP_ACCESS_TOKEN` 时身份为本机 `local`，
+    与同一实例的 Web「本机 shared」同 scope；显式设了该环境变量则**必须**是同一实例令牌库里已有、
+    未被撤销的令牌（否则 fail-closed，绝不降级冒用本机身份），**不接受裸 account_id**，
+    也不得把线上服务器令牌用于另一套本地库。在线形态（Bearer）高层工具走服务端配置、同一账户额度。
   * 工具调用留痕：每次调用 append 一行脱敏 JSON 到 .userdata/mcp_calls.jsonl（gitignored、零网络、
     写失败静默降级绝不影响调用；env BIODATA_MCP_CALL_LOG=off 关闭，默认开）。
 """
@@ -329,7 +369,13 @@ _LEDGER_SNAPSHOT = "2026-07-10"
 #        stdio 本地形态逐字节不变；工具数/入参/错误码对本地不变。
 # 1.36.0：退役 recommend_datasets 的 rerank_audit/degrade_with_llm/action_audit 环外
 #        LLM 参数；检索救回统一进 Agent search.rerun 套件。工具数不变。
-_SERVER_VERSION = "1.36.0"
+# 1.37.0：**高层 Agent 五工具**——新增 agent_chat / agent_conversations / agent_projects /
+#        agent_task / agent_replay（对齐 Web `/api/conversations*` 与持久会话/项目/复盘现场；
+#        身份由传输层注入，不接受裸 account_id）。stdio 无令牌 = 本机 local、与同一实例 Web
+#        「本机 shared」同 scope；显式 `BIODATA_MCP_ACCESS_TOKEN` 必须是同实例令牌库里已有的令牌，
+#        否则 fail-closed。在线形态（Bearer）走服务端配置 + 同一账户额度；旧 19 工具的
+#        在线 `force_llm_off` 安全档不放松。工具数 19→24（在线 22：两个本机能力工具不下发）。
+_SERVER_VERSION = "1.38.0"
 
 
 # ============================ 在线形态（网页版挂载 /mcp，2026-08-28）============================
@@ -337,14 +383,17 @@ _SERVER_VERSION = "1.36.0"
 # （webapp 挂载，本块末尾 `build_online_mcp_app()`）。在线差异全部收口在 `_ScopedFastMCP.call_tool`
 # 一处：Bearer 令牌 → 账户补丁作用域（bind_patch_scope，语料读写落在该账户补丁包，与网页端
 # 同机制）+ 在线工具策略（下两表，显式拒绝、绝不静默偏离）+ LLM 成本闸（scope_gate.force_llm_off：
-# 隐式 LLM 路径降级规则版，结果 source 字段如实反映）。contextvar 随 anyio worker 线程传播
-# （run_sync_in_worker_thread 的 copy_context 实读确认），与网页试用通道互不串扰。
+# 隐式 LLM 路径降级规则版，结果 source 字段如实反映）。高层工具由 mcp_agent_tools 显式
+# 经有界 anyio 转交并传播 contextvars；FastMCP 的同步工具默认在事件循环直接执行。
 #
 # 在线禁用的工具：本机文件系统语义，挂到服务器上既无意义也不安全。
 _ONLINE_DISABLED_TOOLS: dict[str, str] = {
     "provision_dataset": "它把文件下载到 dest_dir——这是调用方**本机**路径语义；在线形态下写到的是服务器磁盘，无意义且绝不开放",
     "verify_local_assets": "它扫描调用方**本机**目录树与本地资产比对；在线形态下扫到的是服务器文件系统，无意义且绝不开放",
 }
+
+# 本机路径参数在线不可用；同一工具的结构化内容输入仍可用。
+_ONLINE_LOCAL_PATH_PARAMS: dict[str, tuple[str, ...]] = {"upload_dataset": ("path",)}
 
 #: 在线强制安全档的显式 LLM 参数（成本闸：在线调用消耗的是服务端 key）。仅当调用方把参数
 #: 推离安全档才显式 ToolError（客户端可见、去掉后重试即可；纯确定性管线本身就是完整能力）。
@@ -363,6 +412,10 @@ def _enforce_online_policy(name: str, arguments: dict) -> None:
     reason = _ONLINE_DISABLED_TOOLS.get(name)
     if reason is not None:
         raise ToolError(f"online_tool_disabled: {name} 在线形态不可用——{reason}。")
+    for param in _ONLINE_LOCAL_PATH_PARAMS.get(name, ()):
+        if arguments.get(param):
+            raise ToolError(
+                f"online_path_disabled: 在线形态不接受 {param} 本机路径；请直接提交结构化内容。")
     for param, safe_value in (_ONLINE_LLM_SAFE.get(name) or {}).items():
         value = arguments.get(param, safe_value)
         if value is None or value == safe_value:
@@ -382,12 +435,26 @@ class _ScopedFastMCP(FastMCP):
             request = ctx.request_context.request if ctx.request_context else None
         except ValueError:
             request = None
-        if request is None:                      # stdio 本地形态：逐字节历史行为
-            return await super().call_tool(name, arguments)
+        if request is None:
+            from dataset_recommender.app.mcp_agent_tools import bind_identity, stdio_identity
+            from dataset_recommender.app.conversation_runs import RunError
+            from dataset_recommender.corpus.patch_package import bind_patch_scope
+            try:
+                owner, username = stdio_identity(get_app_paths().data_root)
+            except RunError as exc:
+                raise ToolError(f'{exc.code}: {exc.message}') from None
+            with bind_identity(owner, username), bind_patch_scope(None if owner == 'local' else owner):
+                return await super().call_tool(name, arguments)
         _enforce_online_policy(name, arguments)
         account_id = request.scope.get("biodata.mcp_account_id", "")  # build_online_mcp_app 注入
         from dataset_recommender.corpus.patch_package import bind_patch_scope  # 惰性：零新顶层边
         from dataset_recommender.llm.scope_gate import force_llm_off
+        from dataset_recommender.app.mcp_agent_tools import AGENT_TOOLS, bind_identity
+        if name in AGENT_TOOLS:
+            if not account_id:
+                raise ToolError("auth_required: 高层 Agent 需要有效传输身份。")
+            with bind_patch_scope(account_id), bind_identity(account_id, request.scope.get("biodata.mcp_username", "")):
+                return await super().call_tool(name, arguments)
         with bind_patch_scope(account_id or None), force_llm_off():
             return await super().call_tool(name, arguments)
 
@@ -406,7 +473,9 @@ class _ScopedFastMCP(FastMCP):
         return [t for t in tools if t.name not in _ONLINE_DISABLED_TOOLS]
 
 
-mcp = _ScopedFastMCP("biodata", stateless_http=True, json_response=True,
+from dataset_recommender.domain.registry import get_domain as _get_domain
+
+mcp = _ScopedFastMCP(_get_domain().branding.mcp_server_name, stateless_http=True, json_response=True,
                      transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
 # stateless + json_response：在线形态是「挂在 webapp 里的无状态工具端点」——无长会话、
 # 无服务器推送，单次 POST 单次 JSON 应答；两个开关只影响 HTTP 应用构建，stdio 路径不读。
@@ -468,9 +537,8 @@ def _clip(value: object, limit: int = 120) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-# 单细胞检索查询通常几十字；超长上限的真源自批起在 app/request_validation.MAX_QUERY_CHARS
-# 此处保留别名供本文件历史引用。
-_MAX_QUERY_CHARS = 2000
+# 单细胞检索查询通常几十字；超长上限的唯一真源在 app/request_validation.MAX_QUERY_CHARS
+# （本文件历史上的 `_MAX_QUERY_CHARS` 别名 2026-10-01 整理批随零引用一并删除）。
 # top_k / rerank_top_n 硬上限：防响应放大（反馈：top_k=999999999 → 155 万字符响应，吃爆上下文/token）。
 # 默认 5；100 对 agent 消费已足够大，需要更多请缩小查询范围而非拉爆单次返回。
 _MAX_TOP_K = 100
@@ -548,7 +616,7 @@ def _validate_date_window(date_from: str, date_to: str) -> None:
 
 def _enrich_candidates(candidates: list[dict]) -> None:
     """Attach shared introductions and data-quality caveats to candidates in place."""
-    from dataset_recommender.retrieval import vocabulary
+    from dataset_recommender.domain.registry import domain_catalog
     from dataset_recommender.corpus.data_quality import record_caveats
     from types import SimpleNamespace
     for c in candidates:
@@ -559,7 +627,7 @@ def _enrich_candidates(candidates: list[dict]) -> None:
             tissue=c.get("tissue", ""),
             description=c.get("description", ""),
         )
-        c["caveats"] = record_caveats(rec, vocabulary.CATALOG)
+        c["caveats"] = record_caveats(rec, domain_catalog())
         c["introduction"] = build_dataset_introduction(c)
 
 
@@ -797,6 +865,8 @@ def recommend_datasets(
                            `kind="only"` = **只按「label」搜**，其余条件（含 FASTQ / 时间范围 /
                            排除项）这次全都没参与筛选。`count` 是该档能救回多少条。
                            第二档只在条件够多时才出现，它是「去掉任何单独一个仍是 0 条」时唯一还救得回来的一档。
+                           `suppress` 是该档对应的 suppressed_constraints filter_id 清单
+                           （2026-09-14 收编新增；要执行该档就把它整组作为 suppressed_constraints 重调）。
       degraded_search   —— 规则因**未收录词**弃权时的降级建议 {ignored_terms, query, count, results,
                            active_filters}：「先忽略这几个不认识的词，能搜到 N 条，实际按这几个条件筛」。
                            **服务器不会自动应用**：实测「翼龙的单细胞数据」忽略「翼龙」后是 3473 条无关
@@ -1725,8 +1795,8 @@ def build_task_pack(
         eff_date_to = _require_iso_date(date_to, name="date_to")
         _validate_date_window(eff_date_from, eff_date_to)
         # 审计 C-2（2026-08-21）：facet/suppressed/lenient 此前**原样透传** run_with_meta，而
-        # recommend_datasets 先过共用 sanitize——sanitize 会 casefold（workflow._FACET_CASEFOLD）
-        # 而 retriever.record_passes_facets 不做小写归一 → 同一 facet 值在 recommend 生效、在
+        # recommend_datasets 先过共用 sanitize——sanitize 会 casefold（白名单随活动领域包，
+        # workflow.sanitize_facet_filters）而 retriever.record_passes_facets 不做小写归一 → 同一 facet 值在 recommend 生效、在
         # task-pack 静默 0 命中；12 项上限也未应用。收敛为同一套 sanitize（单一真源），
         # 非法/未知项静默丢弃（安全默认），params 回显与实际生效口径一致。
         from dataset_recommender.app.workflow import sanitize_facet_filters, sanitize_suppressed, sanitize_lenient_dims
@@ -2241,6 +2311,7 @@ def curate_datasets(
                         uploads 管线 + 回收站可撤回，**整次可撤回**——返回 `operation_id` +
                         `created_files[]`，用 Web `/api/curate/recall` 可整次撤回）。
                         **整任务文件锁**：另一个 sync 正在跑 → `sync_busy`（fail-closed，不排队）。
+                        必须显式 dry_run=False；dry_run=True 拒绝执行，预览请用 check_updates。
                         无 confirm_token——原子调用没有信任边界要跨。
       import         —— 本地 JSON 导入 + 内容 hash 去重（撞已有 external 记录默认拒绝，`force=true` 可覆盖）。
                         `payload_json` = 数据集 JSON 文本（记录数组或 {"records":[…]} 对象）；`filename` 落盘名
@@ -2276,6 +2347,10 @@ def curate_datasets(
         # 直接薄封装到 corpus_curation 能力真源（与 Web /api/curate/check-updates、sync-updates
         # 同一函数），不在本层写任何业务逻辑。
         if action_name in ("check_updates", "sync_updates"):
+            if action_name == "sync_updates" and dry_run:
+                raise _bad_request(
+                    "bad_param", "sync_updates 不支持 dry_run；预览请用 check_updates，"
+                    "确认执行入库后显式传 dry_run=False。")
             src_list = [source] if str(source or "").strip() else None
             if action_name == "check_updates":
                 result = cc.check_updates(src_list, project_root=_settings().project_root)
@@ -2401,7 +2476,8 @@ def upload_dataset(
                 或包裹对象 `{ "records": [ {…} ], "source": "…" }`。**不要传 JSON 字符串**——直接传数组/对象即可
                 （MCP 会按结构校验；字符串反而会被框架预解析，易踩坑）。每条记录建议含 dataset_name / species /
                 url 等字段（缺 dataset_name 会在 warnings 提示）。
-      path:     本地 JSON 文件**路径**（便捷：直接指一个已有 .json 文件）。仅用于**读取**输入字节（utf-8 / 带 BOM 均可）；
+      path:     仅本地 stdio 可用的 JSON 文件**路径**；在线 MCP 仅接受 records，不读取服务器路径。
+                仅用于**读取**输入字节（utf-8 / 带 BOM 均可）；
                 写入永远落 database/external/，与 path 所在目录无关。
       filename: 落盘用文件名（会自动加 upload_<时间戳>_ 前缀）。**须以 .json 结尾**；
                 省略时取 path 的文件名，若无 path 则默认 "upload.json"。
@@ -2609,6 +2685,9 @@ def biodata_status() -> dict:
     """健康自检 + 库存清单。装完让 agent 调一次即可确认服务器与数据是否就绪。
 
     返回：各来源计数（10x 置顶）、下载直链索引是否就绪、直链快照日期、确定性/离线声明。
+    `tools` 是**服务器全部工具清单**（单一真源 `_EXPECTED_TOOLS`）：在线形态下 `tools/list`
+    会再摘掉两个本机文件系统语义工具（`provision_dataset` / `verify_local_assets`），
+    因此在线时这份清单可能比实际可调用的多两个——以 `tools/list` 为准。
     """
     try:
         from dataset_recommender.corpus import downloads, inspection
@@ -2687,7 +2766,16 @@ def _advisory(intent: dict, result_total: int) -> str | None:
     return None
 
 
+from dataset_recommender.app.mcp_agent_tools import AGENT_TOOLS, register_agent_tools
+register_agent_tools(mcp, root=lambda: get_app_paths().data_root)
+
 _EXPECTED_TOOLS = (
+    "agent_chat",
+    "agent_conversations",
+    "agent_projects",
+    "agent_task",
+    "agent_replay",
+    "agent_learning",
     "recommend_datasets",
     "get_file_manifest",
     "parse_constraints",
@@ -2724,6 +2812,10 @@ _USAGE = """biodata-mcp —— BioData Agent 本地 stdio MCP 服务器
 环境变量：
   BIODATA_LLM_ENV_FILE=<绝对路径>          项目外 LLM 配置文件；客户端配置只需保存此路径，不保存 API Key。
   BIODATA_MCP_RECALL=cross_encoder|dense   启动期预热本地重排模型（默认 off）。详见使用教程 §5.1。
+  BIODATA_MCP_ACCESS_TOKEN=<在线接入令牌>   可选。不设 = 高层工具以本机身份运行，与同一实例的
+                                           网页版「本机」同 scope；设了则必须是**同一实例**「接入
+                                           AI 助手」里生成且未撤销的令牌，否则启动即 fail-closed
+                                           （绝不降级冒用本机身份，也别把线上服务器的令牌用在这里）。
 """
 
 

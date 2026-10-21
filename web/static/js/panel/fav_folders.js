@@ -115,14 +115,24 @@ function _renderFavPopoverPick(pop, anchorBtn, it) {
 /* 播一次收藏动效：先摘旧类再强制回流，否则连点两次第二次不会重放（同名 animation 不会重启）。
    动画结束（或 500ms 兜底，`animationend` 在 reduced-motion 下不会来）自行摘类 → 心形可反复触发。
    纯 CSS 动画，不经 MOTION 门控：它不依赖 GSAP，`prefers-reduced-motion` 由 app.css 的媒体查询关掉。 */
+const _favAnimations = new WeakMap();
 function _favFlash(el, cls) {
     if (!el) return;
+    const previous = _favAnimations.get(el);
+    if (previous) previous();
     el.classList.remove("fav-pop", "fav-unpop", "fav-landed");
     void el.offsetWidth;   // 强制回流：让浏览器认为这是一次全新的动画
     el.classList.add(cls);
-    const done = () => el.classList.remove(cls);
+    let timer = null;
+    const done = () => {
+        el.removeEventListener("animationend", done);
+        if (timer !== null) clearTimeout(timer);
+        if (_favAnimations.get(el) === done) _favAnimations.delete(el);
+        el.classList.remove(cls);
+    };
+    _favAnimations.set(el, done);
     el.addEventListener("animationend", done, { once: true });
-    setTimeout(done, 900);
+    timer = setTimeout(done, 900);
 }
 /* 收藏落地后，「我的库」导航入口也弹一下——心形自己弹只说明「点到了」，
    这一下才说明**它去了哪里**。收藏页签里没有导航动作也无妨（找不到就跳过）。 */

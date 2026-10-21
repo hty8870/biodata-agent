@@ -115,11 +115,29 @@ def test_chat_only_rows_render_and_restore_honestly():
     assert i_chatonly < i_legacy, "chatOnly 分支必须先于「无快照回退重跑」兜底"
     branch = scode[i_chatonly:]
     assert "exitResultsLayout()" in branch, "恢复仅对话前必须退出结果态（屏上旧结果照实收起）"
-    assert "cbRestoreConversation(chron)" in branch, "仅对话也要整条对话搬回"
+    assert "cbRestoreConversation(chron," in branch, "仅对话也要整条对话搬回"
     assert "swSync()" in branch, "恢复后要重排落位（无结果 → 对话住主区 #chatMain）"
     # 恢复分支里绝不许出现 runRecommend（仅对话没有检索句可重跑）
     seg = branch[:branch.index("return;")]
     assert "runRecommend" not in seg, "仅对话恢复不许触发检索"
+
+
+def test_history_restores_saved_content_without_search_or_placeholder():
+    """找回会话只读保存的内容，不把缺失回复替换成链接或重新检索。"""
+    restore = re.search(r"function viewHistorySnapshot\([^)]*\)\s*\{(.*?)\n\}", BROWSE, re.S)
+    assert restore
+    code = _strip_comments(restore.group(1))
+    assert "runRecommend(" not in code
+    assert "cbSaveConversation()" in code and "getHist()" in code
+    board = (STATIC / "js" / "panel" / "board.js").read_text(encoding="utf-8")
+    state_restore = re.search(r"function cbRestoreConversation\([^)]*\)\s*\{(.*?)\n\}", board, re.S)
+    assert state_restore and "cbHistoryRestore(" in state_restore.group(1)
+    assert "这是从历史里回看" not in state_restore.group(1)
+    assert ">查看历史回复</button>" not in board
+    assert "cbSafeHistoryHtml(entry.html)" in state_restore.group(1)
+    search = (STATIC / "js" / "search" / "search.js").read_text(encoding="utf-8")
+    landed = re.search(r"function landRecommendResult\([^)]*\)\s*\{(.*?)\n\}", search, re.S)
+    assert landed and landed.group(1).index("cbPushCurrent(") < landed.group(1).index("pushHist(")
 
 
 def test_resize_uses_real_drag_geometry():

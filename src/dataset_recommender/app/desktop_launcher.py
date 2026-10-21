@@ -1301,7 +1301,10 @@ MIGRATE_REQUIRED_FILES = ("start-web.bat", "src/dataset_recommender/__init__.py"
 MIGRATE_USERDATA_FILES = (
     "accounts.json",
     "sessions.json",
+    "workspace.sqlite",
+    "conversation-runs.sqlite",
     "agent_fallbacks.jsonl",
+    "collab_rules.jsonl",
     "curate_example_candidates.jsonl",
     "curate_examples.jsonl",
     "curate_net_ledger.jsonl",

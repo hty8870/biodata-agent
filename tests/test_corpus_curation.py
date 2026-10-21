@@ -200,6 +200,69 @@ def test_apply_import_duplicate_rejected_then_force_passes(tmp_path):
     assert len(list((tmp_path / "database" / "external").glob("*.json"))) == 2
 
 
+def test_restore_respects_external_total_cap(tmp_path, monkeypatch):
+    """恢复前在摄取临界区内重检全库累计上限——
+    「导入→删除→补满→恢复」不得突破 100 万（此处缩小上限做真实往返）；超限零落盘变化。"""
+    monkeypatch.setattr(cc, "EXTERNAL_TOTAL_MAX_RECORDS", 3)
+    a = _import_once(tmp_path, [{"dataset_name": "A1"}, {"dataset_name": "A2"}])
+    plan = cc.plan_remove(a["filename"], project_root=tmp_path)
+    cc.apply_remove(a["filename"], confirm_token=plan["confirm_token"], project_root=tmp_path)
+    _import_once(tmp_path, [{"dataset_name": "B1"}, {"dataset_name": "B2"}, {"dataset_name": "B3"}],
+                 filename="y.json")
+    recycle_name = next(p.name for p in (tmp_path / ".userdata" / "recycle").glob("*_upload_*.json"))
+    rplan = cc.plan_restore(recycle_name, project_root=tmp_path)
+    with pytest.raises(CurateError) as ei:
+        cc.apply_restore(recycle_name, confirm_token=rplan["confirm_token"], project_root=tmp_path)
+    assert ei.value.code == "too_large"
+    assert (tmp_path / ".userdata" / "recycle" / recycle_name).is_file(), "拒绝时回收件原样保留"
+    ext = tmp_path / "database" / "external"
+    totals = [len(json.loads(p.read_text(encoding="utf-8"))["records"])
+              for p in ext.glob("*.json")]
+    assert totals == [3], "拒绝时 external 零变化（只有补满的 3 条）"
+
+
+def test_concurrent_apply_import_serializes_dedup(tmp_path, monkeypatch):
+    """并发 apply 的最终查重与落盘同住摄取临界区（与 apply_search_online 同口径）——
+    屏障固定「两次查重窗口重叠」后，仅一次成功、另一次 duplicate_content，只落一个文件。"""
+    import threading
+
+    raw = _payload_bytes([{"dataset_name": "A"}, {"dataset_name": "B"}])
+    plan = cc.plan_import(raw, "x.json", "测试源", project_root=tmp_path)
+    barrier = threading.Barrier(2, timeout=1.0)
+    real_scan = cc._scan_external_files
+
+    def scan_with_barrier(records, project_root):
+        try:
+            barrier.wait()   # 修复后第二路被临界区串行化，到不了这里
+        except threading.BrokenBarrierError:
+            pass
+        return real_scan(records, project_root)
+
+    monkeypatch.setattr(cc, "_scan_external_files", scan_with_barrier)
+    results: list = []
+
+    def worker():
+        try:
+            res = cc.apply_import(raw, "x.json", "测试源",
+                                  confirm_token=plan["confirm_token"], project_root=tmp_path)
+            results.append(("ok", res["filename"]))
+        except CurateError as exc:
+            results.append(("err", exc.code))
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert sorted(kind for kind, _ in results) == ["err", "ok"], results
+    assert [value for kind, value in results if kind == "err"] == ["duplicate_content"]
+    files = list((tmp_path / "database" / "external").glob("*.json"))
+    assert len(files) == 1, "并发查重窗口不得落两份重复文件"
+    journal = tmp_path / ".userdata" / "uploads_journal.jsonl"
+    rows = [x for x in journal.read_text(encoding="utf-8").splitlines() if x.strip()]
+    assert len(rows) == 1, "只有一个成功流水账"
+
+
 def test_import_bad_input_passthrough_codes(tmp_path):
     with pytest.raises(CurateError) as ei:
         cc.plan_import(b"{ not json", "x.json", None, project_root=tmp_path)
@@ -423,6 +486,55 @@ def test_remove_moves_to_recycle_with_manifest_and_cache_invalidation(tmp_path, 
     assert manifest[-1]["original_path"] == f"database/external/{name}"
     assert manifest[-1]["recycle_name"] == dest.name and manifest[-1]["record_count"] == 2
     assert called["n"] == 1  # 缓存失效 → 即时不可见
+
+
+@pytest.mark.parametrize("action", ["remove", "restore", "recall"])
+@pytest.mark.parametrize("rollback_fails", [False, True])
+def test_curation_journal_failure_rolls_back_or_reports_move_and_invalidates_cache(
+        tmp_path, monkeypatch, action, rollback_fails):
+    from dataset_recommender.corpus import corpus
+    _import_once(tmp_path, [{"dataset_name": "A", "species": "Human", "dataset_uid": "test:A"}])
+    ext = tmp_path / "database" / "external"
+    name = next(p.name for p in ext.glob("*.json"))
+    if action == "restore":
+        plan = cc.plan_remove(name, project_root=tmp_path)
+        moved = cc.apply_remove(name, confirm_token=plan["confirm_token"], project_root=tmp_path)
+        name_arg = Path(moved["moved_to"]).name
+        plan = cc.plan_restore(name_arg, project_root=tmp_path)
+    else:
+        name_arg = name
+        plan = cc.plan_remove(name, project_root=tmp_path)
+    before = len(corpus._external_normalized_for(tmp_path))  # 预热真实缓存
+    generation = corpus._EXTERNAL_CACHE_GENERATION
+    real_move = cc.shutil.move
+    calls = []
+
+    def move(src, dst):
+        calls.append((src, dst))
+        if rollback_fails and len(calls) == 2:
+            raise OSError("rollback denied")
+        return real_move(src, dst)
+
+    def denied(*args):
+        raise OSError("journal denied")
+
+    monkeypatch.setattr(cc.shutil, "move", move)
+    monkeypatch.setattr(cc, "_append_jsonl", denied)
+    if action == "recall":
+        monkeypatch.setattr(cc, "_find_sync_operation", lambda *a: {"created_files": [name]})
+        result = cc.recall_sync_operation("example", project_root=tmp_path)
+        assert result["status"] == "failed" and not result["recalled_files"]
+        hint = result["failed_files"][0]["hint"]
+    else:
+        with pytest.raises(cc.CurateError) as exc:
+            getattr(cc, "apply_" + action)(name_arg, confirm_token=plan["confirm_token"], project_root=tmp_path)
+        assert exc.value.code == ("move_partial" if rollback_fails else "journal_failed")
+        hint = exc.value.hint
+    assert ("文件已移动" if rollback_fails else "已回滚") in hint
+    assert corpus._EXTERNAL_CACHE_GENERATION > generation
+    expected = (1 if action == "restore" else 0) if rollback_fails else before
+    assert len(corpus._external_normalized_for(tmp_path)) == expected
+    assert len(list(ext.glob("*.json"))) == expected
 
 
 def test_apply_remove_token_mismatch_and_toctou(tmp_path):

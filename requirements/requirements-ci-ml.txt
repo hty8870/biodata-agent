@@ -1,0 +1,7 @@
+# CPU-only dependencies for the primary full verification job.
+# Product and Web runtime environments do not install this test envelope.
+torch==2.11.0+cpu
+scikit-learn==1.9.0
+# tests/test_semantic_relations.py loads a bundled tokenizer-only fixture offline.
+transformers==4.57.6
+tokenizers==0.22.2

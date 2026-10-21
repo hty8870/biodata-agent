@@ -50,8 +50,9 @@ from dataset_recommender.corpus.corpus import (  # noqa: E402
     locate_record,
 )
 from dataset_recommender.corpus.data_loader import RawRecord, load_raw_records  # noqa: E402
-from dataset_recommender.corpus.uploads import _append_upload_journal  # noqa: E402
+from dataset_recommender.corpus.uploads import _append_upload_journal, ingest_critical_section  # noqa: E402
 from dataset_recommender.retrieval.normalizer import normalize_records  # noqa: E402
+from dataset_recommender.app.runtime_paths import atomic_write_bytes, instance_data_dir_for  # noqa: E402
 
 #: 晋升目标文件（database/base/ 内；与策展产物 10x-Visium.json 并列、独立可回滚）。
 BASE_SYNCED_NAME = "10x-synced.json"
@@ -129,7 +130,7 @@ def _journal_promote(project_root: Path, *, base_filename: str, record_count: in
     })
 
 
-def promote_uploads(
+def _promote_uploads_locked(
     project_root: Path,
     *,
     log: Callable[[str], None] = print,
@@ -138,7 +139,7 @@ def promote_uploads(
 
     批次语义：逐文件闸（整批通过/整批拒绝）；全部可晋升文件合并成**一次** base 写出
     （uid 排序、按 uid 内部去重——保留先到者），随后逐文件归档 + 逐文件流水账。
-    流水账写不进去 → 回滚 base 写出（恢复原内容/删除新文件），归档不动，如实报错。
+    任何归档/记账/输入回收失败 → 恢复全部前像，缓存失效，如实报错。
     """
     project_root = Path(project_root)
     ext_dir = project_root / EXTERNAL_DIR_NAME
@@ -243,71 +244,104 @@ def promote_uploads(
     merged.sort(key=lambda r: str(r.get("dataset_uid") or ""))
 
     new_total = sum(len(v) for v in per_file_new.values())
-    base_dir.mkdir(parents=True, exist_ok=True)
-    new_bytes = json.dumps(merged, ensure_ascii=False, indent=2).encode("utf-8")
-    synced_path.write_bytes(new_bytes)
-    invalidate_base_cache()      # API 复用时生效（指纹键控缓存常规自失效，这里双保险）
-
-    # 归档 + 流水账（逐文件）。账写不进去 → 回滚 base 写出，归档未动，如实报错。
     archive_dir = project_root / PROMOTIONS_REL
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    for path, raw_bytes, records in accepted:
-        uids = per_file_new.get(path.name, [])
-        note = (f"晋升：{path.name} → {BASE_SYNCED_NAME}"
-                f"（{len(uids)}/{len(records)} 条；归档 {PROMOTIONS_REL.as_posix()}/）")
-        try:
-            _journal_promote(
-                project_root, base_filename=BASE_SYNCED_NAME,
-                record_count=len(uids), sha256=_sha256(raw_bytes), note=note)
-        except OSError as exc:
-            # 强制流水账纪律（同 ingest 的 journal_failed）：账在写在，账断回滚。
-            if old_synced_bytes is None:
-                synced_path.unlink(missing_ok=True)
-            else:
-                synced_path.write_bytes(old_synced_bytes)
-            invalidate_base_cache()
-            report["ok"] = False
-            report["rejected"].append({
-                "file": path.name,
-                "reason": f"晋升流水账写不进去（{exc}）——base 写出已回滚，没有任何晋升生效",
-            })
-            log(f"错误：流水账写不进去（{exc}），base 已回滚，本次晋升未生效。")
-            return report
+    journal_path = instance_data_dir_for(project_root, ".userdata") / "uploads_journal.jsonl"
+    # 锁内保存完整前像，失败时同时恢复输入、快照、归档与账本。
+    affected = [synced_path, journal_path]
+    for path, _raw, _records in accepted:
+        affected.extend((path, archive_dir / f"{path.name}.promoted",
+                         archive_dir / f"{path.name}.manifest.json"))
+    before = {p: p.read_bytes() if p.exists() else None for p in affected}
+    new_bytes = json.dumps(merged, ensure_ascii=False, indent=2).encode("utf-8")
+    atomic_write_bytes(synced_path, new_bytes)
+    promoted = []
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        for path, raw_bytes, records in accepted:
+            uids = per_file_new.get(path.name, [])
+            note = f"晋升：{path.name} → {BASE_SYNCED_NAME}（{len(uids)}/{len(records)} 条）"
+            _journal_promote(project_root, base_filename=BASE_SYNCED_NAME,
+                             record_count=len(uids), sha256=_sha256(raw_bytes), note=note)
+            archived_as = archive_dir / f"{path.name}.promoted"
+            atomic_write_bytes(archived_as, raw_bytes)
+            manifest = {
+                "ts": _utc_now_iso(), "action": "promote",
+                "source_file": f"{EXTERNAL_DIR_NAME}/{path.name}",
+                "archived_as": f"{PROMOTIONS_REL.as_posix()}/{archived_as.name}",
+                "base_file": f"database/base/{BASE_SYNCED_NAME}",
+                "promoted_count": len(uids), "skipped_count": len(records) - len(uids),
+                "uids": uids, "sha256_source": _sha256(raw_bytes),
+                "sha256_base_after": _sha256(new_bytes),
+            }
+            atomic_write_bytes(archive_dir / f"{path.name}.manifest.json",
+                               json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"))
+            promoted.append({"file": path.name, "count": len(uids), "uids": uids,
+                             "archived_as": manifest["archived_as"]})
+        # 所有归档与账完成后才回收输入；中途删除失败也恢复已回收文件。
+        for path, _raw, _records in accepted:
+            path.unlink()
+    except BaseException as exc:
+        rollback_errors = []
+        for target, original in reversed(list(before.items())):
+            try:
+                if original is None:
+                    target.unlink(missing_ok=True)
+                elif not target.exists() or target.read_bytes() != original:
+                    atomic_write_bytes(target, original)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"{target.name}: {rollback_exc}")
+        if rollback_errors:
+            raise RuntimeError("晋升失败且回滚未完成：" + "; ".join(rollback_errors)) from exc
+        if not isinstance(exc, OSError):
+            raise
+        report["ok"] = False
+        report["rejected"].append({"file": BASE_SYNCED_NAME,
+                                   "reason": f"晋升失败（{exc}），全部文件已恢复"})
+        log(f"晋升失败（{exc}），全部文件已恢复。")
+        return report
+    finally:
+        invalidate_base_cache()
+        invalidate_external_cache()
+    report["promoted"] = promoted
 
-        archived_as = archive_dir / f"{path.name}.promoted"
-        archived_as.write_bytes(raw_bytes)
-        path.unlink()
-        manifest = {
-            "ts": _utc_now_iso(),
-            "action": "promote",
-            "source_file": f"{EXTERNAL_DIR_NAME}/{path.name}",
-            "archived_as": f"{PROMOTIONS_REL.as_posix()}/{archived_as.name}",
-            "base_file": f"database/base/{BASE_SYNCED_NAME}",
-            "promoted_count": len(uids),
-            "skipped_count": len(records) - len(uids),
-            "uids": uids,
-            "sha256_source": _sha256(raw_bytes),
-            "sha256_base_after": _sha256(synced_path.read_bytes()),
-        }
-        (archive_dir / f"{path.name}.manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        report["promoted"].append({
-            "file": path.name, "count": len(uids), "uids": uids,
-            "archived_as": manifest["archived_as"],
-        })
-        log(f"晋升：{path.name} → {BASE_SYNCED_NAME}（{len(uids)} 条）；"
-            f"归档 {manifest['archived_as']} + manifest")
-
-    invalidate_external_cache()  # upload 文件已搬走，外部库视图同步失效
     report["promoted_total"] = new_total
     log(f"完成：晋升 {new_total} 条 → {BASE_SYNCED_NAME}（写出共 {len(merged)} 条，uid 排序）。")
     return report
 
 
+def promote_uploads(project_root: Path, *, log: Callable[[str], None] = print) -> dict:
+    """与摄取共用写锁，完整晋升事务内不允许上传或另一晋升插入。"""
+    with ingest_critical_section(Path(project_root)):
+        return _promote_uploads_locked(project_root, log=log)
+
+
+def refresh_frozen_queries(project_root: Path, reason: str) -> None:
+    """受控重基线的独立同步步骤；只更新判据，不改查询/标签或基础数据。"""
+    if not reason.strip():
+        raise ValueError("--rebaseline-reason is required to refresh frozen queries")
+    from evaluate_recommendation import frozen_query_identity
+
+    contract = frozen_query_identity(project_root / "eval" / "eval_queries.json")
+    contract["rebaseline_reason"] = reason.strip()
+    target = project_root / "automation" / "frozen-queries.json"
+    atomic_write_bytes(target, (json.dumps(contract, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="把 curate sync 的 upload_*.json 晋升进 database/base/10x-synced.json")
     parser.add_argument("--project-root", default=str(ROOT), help="仓库根（默认脚本所在仓库）")
+    parser.add_argument("--refresh-frozen-queries", action="store_true",
+                        help="受控重基线后只同步查询判据；不执行数据晋升")
+    parser.add_argument("--rebaseline-reason", default="", help="公开可读的重基线依据（同步判据时必填）")
     args = parser.parse_args(argv)
+    if args.refresh_frozen_queries:
+        try:
+            refresh_frozen_queries(Path(args.project_root), args.rebaseline_reason)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        return 0
+    if args.rebaseline_reason:
+        parser.error("--rebaseline-reason requires --refresh-frozen-queries")
     report = promote_uploads(Path(args.project_root))
     return 0 if report["ok"] else 1
 

@@ -18,6 +18,11 @@ tree from that exact private commit and checks:
   delivery-ignored as internal material, or git-ignored as a local artifact —
   so nothing is silently dropped or leaked;
 - `public-mirror.json` equals the manifest the generator itself would emit.
+- the public stage-0 index (the tree that will be committed) has exactly the
+  generated paths, regular-file modes and blob bytes; the working tree must
+  contain the same bytes and no symlink/junction or non-regular file.
+  Blob identities use Git's clean rules, including declared checkout line endings;
+  CRLF worktree text and its canonical LF index blob are not a content mismatch.
 
 ## Sync procedure
 
@@ -26,7 +31,16 @@ tree from that exact private commit and checks:
    `python scripts/build_public_mirror.py apply --public-root <public-worktree>`
    from a clean public branch. Never hand-edit the generated tree — fix the
    private source, the policy, or the classification instead.
-3. Review the generated diff only.
+   Both roots must be separate checkout top-levels. Before writing, apply requires
+   the public origin to match the selected profile's repository; an existing
+   mirror without an origin must have a matching `public-mirror.json` identity.
+   Source and output paths must be canonical portable relative paths. Drive/stream
+   syntax, reserved Windows components and linked parent directories are rejected;
+   all output paths are checked for containment before the first mutation.
+3. Review the generated diff only, then stage the complete projection with
+   `git -C <public-worktree> add --all`. Verification reads both index blobs and
+   working-tree files; an obsolete staged blob fails even if the working file
+   has already been corrected. Do not change or restage files after verification.
 4. `source_private_commit` is set to the exact private commit by the generator;
    `runtime_version` must equal `WEB_API_VERSION` in both repositories.
 5. Run:

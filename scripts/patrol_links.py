@@ -11,7 +11,8 @@
   * `--sample-pct` / `--limit` / `--uids` 做**滚动抽样**，避免一次性对上游 15,119 次全量敲击（既省事又不挑衅上游）。
   * 只写 `data/inspection/`，绝不碰 `database/base/`、绝不改 manifest、绝不入 .env。
 
-诚实分桶（与阶段二同口径）：alive(200/206) / http_dead(4xx/5xx) / network_error(超时·连接错=不结论) / off_host。
+诚实分桶（与阶段二同口径）：alive(200/206) / http_dead(确定性 4xx/5xx) / network_error(超时·连接错=不结论)
+/ throttled(429/503 有限退避后仍受限=不结论，绝不判 dead) / off_host。
 size：服务器报告总大小 vs manifest 记录 bytes → match|mismatch|unknown。integrity(md5)/load 本步不做，仍 unknown。
 
 用法：
@@ -31,6 +32,7 @@ import json
 import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -48,6 +50,36 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 ALLOWED_HOST_RE = re.compile(
     r"^https://(?:cf\.10xgenomics\.com|s3-us-west-2\.amazonaws\.com/10x\.files)/")
+
+# 探测重试预算与限流退避。429/503 是**临时**状态（限流/服务端繁忙），证据不足，不能判死：
+# 有限退避重试后仍受限 → throttled（reach 映射 unknown，保守不结论），交人工/下一帧再看。
+PROBE_ATTEMPTS = 3
+THROTTLE_CODES = (429, 503)
+THROTTLE_BACKOFF_S = (5.0, 15.0)     # 第 1/2 次重试前的固定退避
+THROTTLE_MAX_SLEEP_S = 30.0          # Retry-After 再大也封顶，别把探测拖成挂起
+_sleep = time.sleep                  # 测试注入点：合成替身替换它，避免测试真等退避
+
+
+def _retry_after_seconds(exc) -> "float | None":
+    """解析 429/503 的 Retry-After 秒数；HTTP-date 形式不解析（退回固定退避，别猜时间）。"""
+    headers = getattr(exc, "headers", None)
+    raw = headers.get("Retry-After") if headers else None
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def file_problem(vec: dict) -> bool:
+    """单文件向量是否计入 problem：存活 dead / 大小 mismatch / integrity mismatch / load failed。
+
+    唯一真源：`rebuild_current` 的 tally 与 `diff_snapshots` 的头条必须同口径——
+    diff 曾只算 r/s，漏掉 i/l，与帧自报 problem 对不上。
+    """
+    return (vec.get("r") == "dead" or vec.get("s") == "mismatch"
+            or vec.get("i") == "mismatch" or vec.get("l") == "failed")
 
 
 def norm(u: str) -> str:
@@ -85,13 +117,17 @@ def _parse_total(headers, status: int):
 
 
 def probe(url: str) -> dict:
-    """轻量存活探测：Range-GET 1 字节。返回 {bucket,status,server_total}。只读、越界即跳过。"""
+    """轻量存活探测：Range-GET 1 字节。返回 {bucket,status,server_total}。只读、越界即跳过。
+
+    分桶纪律：429/503 有限退避重试（尊重 Retry-After、封顶），仍受限 → `throttled`＝不结论；
+    其余 HTTP 状态是确定性答案，直接 `http_dead` 且不重试（404 就是 404，不许被「保守」放行）。
+    """
     if not ALLOWED_HOST_RE.match(url):
         return {"bucket": "off_host", "status": None, "server_total": None}
     req = urllib.request.Request(url, method="GET",
                                  headers={"Range": "bytes=0-0", "User-Agent": UA})
     last = None
-    for _ in range(3):
+    for attempt in range(1, PROBE_ATTEMPTS + 1):
         try:
             with urllib.request.urlopen(req, timeout=45) as r:
                 status = getattr(r, "status", None) or r.getcode()
@@ -101,6 +137,14 @@ def probe(url: str) -> dict:
             return {"bucket": "alive" if ok else "http_dead",
                     "status": status, "server_total": total}
         except urllib.error.HTTPError as e:
+            if e.code in THROTTLE_CODES:
+                if attempt < PROBE_ATTEMPTS:
+                    delay = _retry_after_seconds(e)
+                    if delay is None:
+                        delay = THROTTLE_BACKOFF_S[min(attempt - 1, len(THROTTLE_BACKOFF_S) - 1)]
+                    _sleep(min(delay, THROTTLE_MAX_SLEEP_S))
+                    continue
+                return {"bucket": "throttled", "status": e.code, "server_total": None}
             return {"bucket": "http_dead", "status": e.code, "server_total": None}
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last = repr(e)
@@ -185,8 +229,7 @@ def rebuild_current(manifest, prior: dict, results: dict, snapshot_iso: str, sou
                 vec = dict(prior_files[url])            # 未测：保留旧向量（含其旧 last_verified 与 i）
             else:
                 vec = {"r": "unknown", "h": None, "s": "unknown", "srv": None, "v": "unknown"}
-            problem = ((vec["r"] == "dead") or (vec["s"] == "mismatch")
-                       or (vec.get("i") == "mismatch") or (vec.get("l") == "failed"))
+            problem = file_problem(vec)   # 唯一真源：diff 头条与这里的 tally 必须同口径
             u["f"][url] = vec
             u["nf"] += 1
             if problem:
@@ -255,7 +298,7 @@ def run(args) -> int:
             for key, vec in ex.map(work, targets):
                 results[key] = vec
                 n += 1
-                if n % 200 == 0 or vec["bucket"] in ("http_dead", "off_host"):
+                if n % 200 == 0 or vec["bucket"] in ("http_dead", "throttled", "off_host"):
                     print(f"  [{n}/{len(targets)}] {vec['bucket']:12s} {vec['http']} {key.split(chr(9))[0][:34]}", flush=True)
         print(f"[patrol] 实测完成 {n} 条。", flush=True)
     else:

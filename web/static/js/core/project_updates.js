@@ -38,7 +38,7 @@
  * 追踪名/uid 不进遥测（设计 §1.3 隐私红线）。
  */
 
-import { API, $, currentAccountScope, escapeHtml, fmtTime, nsKey, readJSON, toast, writeJSON } from "#core";
+import { API, $, beginRequest, currentAccountScope, escapeHtml, fmtTime, nsKey, readJSON, toast, writeJSON } from "#core";
 import { buildCard } from "#cards";
 import { catalogLookup, ensureDatasetsLoaded } from "#browse";
 import { webGuardOn, healthSnapshot, setHealthArrivedHook } from "#shell";
@@ -51,14 +51,21 @@ import { WATCH_CHECK_COPY, WATCH_KIND_ADDED, WATCH_KIND_FP, WATCH_KIND_REMOVED,
     WATCH_RETRY_BASELINE_COPY, WATCH_SYNC_BUSY_COPY, WATCH_SYNC_POLL_MAX, WATCH_SYNC_POLL_MS,
     WATCH_SYNC_TIMEOUT_COPY, watchAutoRefreshToast, watchChangedCount, watchChangedFlag,
     watchCheckableProjects, watchDeltaEntries, watchDiff, watchDiffCounts, watchGenChanged, watchReceiptText,
-    watchSpecSources, watchSyncJobState, watchUpstreamText } from "./project_updates_core.js";
+    watchSpecSources, watchSyncJobState, watchUpstreamText } from "#project_updates_core";
 
 /* ---------- 模块内状态（本文件唯一有状态区；数据真源在 artifacts.js / _deltas） ---------- */
 
-/* 会话内「待查看更新」：projectId → [{uid, kind}]（kind ∈ added/fp/removed）。
+/* 会话内「待查看更新」：**按（账户 scope × projectId）分区** → [{uid, kind}]（kind ∈ added/fp/removed）。
    不落库（artifacts.js schema 白名单无此字段，「追踪内待查看更新」由本模块持有）；
-   刷新页面清空——已纳入候选的 uid 经 candidates 持久，如实不丢用户决定。 */
+   刷新页面清空——已纳入候选的 uid 经 candidates 持久，如实不丢用户决定。
+   按 scope 分区：换号后 A 的会话态绝不能出现在 B 的详情里（同名 projectId 也不行）。 */
 const _deltas = new Map();
+
+/* 会话键：scope + projectId。同一把键同时服务 _deltas 与 _lastFail——两者都是
+   「本账户本会话」的事实，A 的检查失败标记不该挂到 B 的同名追踪上。 */
+function _sessionKey(scope, projectId) {
+    return String(scope || "") + "\u0000" + String(projectId || "");
+}
 
 /* 单追踪检查在途防重入（projectId 集合；详情检查按钮随动禁用） */
 const _checking = new Set();
@@ -66,17 +73,26 @@ const _checking = new Set();
 function _scope() { return currentAccountScope(); }
 function _esc(v) { return escapeHtml(v); }
 
-/* ---------- 会话「待查看更新」内存态 ---------- */
-function _deltasOf(projectId) { return _deltas.get(String(projectId)) || []; }
-function _deltasSet(projectId, entries) {
-    _deltas.set(String(projectId), Array.isArray(entries) ? entries : []);
+/* 异步回包统一闸：发起时的账户 scope 与当前 scope 必须
+   一致，否则该回包**整段丢弃**——不写会话态、不重渲 DOM、不 toast。换号不是「换个筛选」，
+   而是换身份：旧身份的检查结果既不该进新身份的界面，也不该触发新身份的埋点。 */
+function _scopeStillCurrent(launchScope) {
+    return _scope() === launchScope;
+}
+
+/* ---------- 会话「待查看更新」内存态（读写都带 scope：回包写**发起** scope 的分区） ---------- */
+function _deltasOf(projectId, scope) {
+    return _deltas.get(_sessionKey(scope === undefined ? _scope() : scope, projectId)) || [];
+}
+function _deltasSet(projectId, entries, scope) {
+    _deltas.set(_sessionKey(scope === undefined ? _scope() : scope, projectId),
+        Array.isArray(entries) ? entries : []);
 }
 /* delta_review_completed（设计 §10）：用户把某追踪的「待查看更新」逐条处理到空时计一次
    （计数型无文本）。只在用户处理动作后调用——检查覆盖（_watchCheckOnce 里的 _deltasSet）
    不算「用户处理完」，不埋。 */
 function _deltaReviewMaybeCompleted(projectId) {
-    const id = String(projectId);
-    if ((_deltas.get(id) || []).length > 0) return;
+    if (_deltasOf(projectId).length > 0) return;
     try { usageLog(USAGE_KINDS.delta_review_completed, {}); } catch (_e) {}
 }
 
@@ -84,10 +100,16 @@ function _deltaReviewMaybeCompleted(projectId) {
  * 追踪详情检查条件区（projects.js renderProjectDetail 调 p4DetailMount(p)）
  * ========================================================================== */
 
-/* 挂点定位：详情 body 内预留的骨架 div（projects.js 每次重渲详情都会重建它）。 */
-function _detailMountEl() {
+/* 挂点定位：详情 body 内预留的骨架 div（projects.js 每次重渲详情都会重建它）。
+   返回的挂点带**属主**（projects.js renderProjectDetail 写入 data-p4-project-id）——
+   异步回包只能画进「还是这个追踪」的挂点；挂点已被换掉/换成别的追踪时整段丢弃。 */
+function _detailMountEl(p) {
     const body = $("artifactsWinBody");
-    return body ? body.querySelector(".prj-check-mount[data-p4-mount-check]") : null;
+    const mount = body ? body.querySelector(".prj-check-mount[data-p4-mount-check]") : null;
+    if (!mount || !p) return mount;
+    const owner = mount.dataset ? String(mount.dataset.p4ProjectId || "") : "";
+    if (owner && owner !== String(p.project_id || "")) return null;   // 挂点属于别的追踪 → 不画
+    return mount;
 }
 
 /* 渲染详情检查条件区。p 为追踪对象（projects.js 现读传入）；每次调用整区重建
@@ -96,8 +118,9 @@ function _detailMountEl() {
    promise 接不住——对外函数一律同步返回，内部异步（读 sync-status）自己 catch。 */
 export function p4DetailMount(p) {
     try {
-        const mount = _detailMountEl();
+        const mount = _detailMountEl(p);
         if (!mount || !p || !p.check_condition || !p.check_condition.spec) return;   // 无检查条件不渲染
+        const mountScope = _scope();
         const projectId = p.project_id;
         const cc = p.check_condition;
         const hasBaseline = !!(cc.baseline && Array.isArray(cc.baseline.uids));
@@ -125,6 +148,7 @@ export function p4DetailMount(p) {
         runBtn.textContent = hasBaseline ? WATCH_CHECK_COPY : WATCH_RETRY_BASELINE_COPY;
         runBtn.addEventListener("click", async () => {
             await runProjectCheck(projectId, runBtn);
+            if (!_scopeStillCurrent(mountScope)) return;   // 换号后不重渲（A 的详情已不在屏上）
             try { const fresh = await artifactsGetProject(_scope(), projectId); p4DetailMount(fresh || p); } catch (_e) { p4DetailMount(p); }
         });
         acts.appendChild(runBtn);
@@ -221,7 +245,12 @@ function _renderDeltaList(projectId, p, deltas) {
         box.appendChild(wrap);
     });
     if (deltas.some((d) => { let l = null; try { l = (typeof catalogLookup === "function") ? catalogLookup(d.uid) : null; } catch (_e) { l = null; } return l && l.status === "load_error"; }) && typeof ensureDatasetsLoaded === "function") {
-        ensureDatasetsLoaded().then(() => { try { const fresh = artifactsGetProject(_scope(), projectId).then((np) => p4DetailMount(np || p)); } catch (_e) {} }).catch(() => {});
+        // 目录加载完再刷一次（卡片从「目录未加载」变真卡片）；回包只认**发起时**的账户与挂点属主
+        const launchScope = _scope();
+        ensureDatasetsLoaded().then(() => {
+            if (!_scopeStillCurrent(launchScope)) return;
+            return artifactsGetProject(_scope(), projectId).then((np) => { if (np) p4DetailMount(np); });
+        }).catch(() => {});
     }
     return box;
 }
@@ -243,16 +272,19 @@ async function _adoptDelta(projectId, uid, btn) {
     if (btn) { btn.disabled = true; }
     try {
         const p = await artifactsGetProject(scope, projectId);
+        if (!_scopeStillCurrent(scope)) return;          // 换号：本次纳入动作不属于新身份，整段丢弃
         if (!p) { toast("追踪不存在"); return; }
         const existed = (p.candidates || []).some((c) => c.uid === uid);
         await artifactsUpdateProject(scope, projectId, (np) => artifactsAddCandidate(np, uid));
-        _deltasSet(projectId, _deltasOf(projectId).filter((d) => d.uid !== uid));
+        if (!_scopeStillCurrent(scope)) return;
+        _deltasSet(projectId, _deltasOf(projectId, scope).filter((d) => d.uid !== uid), scope);
         _deltaReviewMaybeCompleted(projectId);
         toast(existed ? "该数据集已在候选表中（状态不变）" : "已加入候选（待核验）——请到候选区核验/排除");
         const p2 = await artifactsGetProject(scope, projectId);
+        if (!_scopeStillCurrent(scope)) return;
         p4DetailMount(p2 || p);
     } catch (e) {
-        toast("纳入候选失败：" + ((e && e.message) || "未知错误"));
+        if (_scopeStillCurrent(scope)) toast("纳入候选失败：" + ((e && e.message) || "未知错误"));
         if (btn) { btn.disabled = false; }
     }
 }
@@ -260,9 +292,11 @@ async function _adoptDelta(projectId, uid, btn) {
 /* 「忽略」：仅把本条从会话待查看列表移除（不写库）；处理完触发 delta_review_completed 埋点。 */
 async function _ignoreDelta(projectId, uid, btn) {
     if (btn) { btn.disabled = true; }
-    _deltasSet(projectId, _deltasOf(projectId).filter((d) => d.uid !== uid));
+    const scope = _scope();
+    _deltasSet(projectId, _deltasOf(projectId, scope).filter((d) => d.uid !== uid), scope);
     _deltaReviewMaybeCompleted(projectId);
-    const p = await artifactsGetProject(_scope(), projectId);
+    const p = await artifactsGetProject(scope, projectId);
+    if (!_scopeStillCurrent(scope)) return;
     if (p) p4DetailMount(p);
     else p4DetailMount({ project_id: projectId });
 }
@@ -272,8 +306,8 @@ async function _ignoreDelta(projectId, uid, btn) {
    导出 `runProjectCheck(projectId, btnEl)`：**进入立刻占 _checking + 禁按钮**（修竞态——
    旧实现首个 await 后才占位，双击可重入），返回结构化 outcome `{changed, added, fp, removed, error,
    baselineCreated}`，调用方据此 toast + 行级重渲。细节/列表按钮都走它。 */
-let _lastFail = new Map();   // 会话内上次检查失败的追踪（行内「检查失败，可重试」标记）
-export function checkFailed(projectId) { return _lastFail.has(String(projectId)); }
+let _lastFail = new Map();   // 会话内上次检查失败的追踪（key = scope+id；行内「检查失败，可重试」标记）
+export function checkFailed(projectId) { return _lastFail.has(_sessionKey(_scope(), projectId)); }
 export function pendingDeltaCount(projectId) { return _deltasOf(projectId).length; }
 
 export async function runProjectCheck(projectId, btnEl) {
@@ -284,15 +318,17 @@ export async function runProjectCheck(projectId, btnEl) {
     const svg = btnEl && btnEl.querySelector("svg");
     if (btnEl) { btnEl.disabled = true; if (svg) { svg.classList.add("ra-spin"); btnEl.title = "检查中…"; } else { btnEl.textContent = "检查中…"; } }
     let outcome = { changed: 0, added: 0, fp: 0, removed: 0, error: null, baselineCreated: false };
+    const scope = _scope();
     try {
-        const scope = _scope();
         const p = await artifactsGetProject(scope, projectId);
+        if (!_scopeStillCurrent(scope)) { outcome.error = "account_switched"; return outcome; }
         if (!p || !p.check_condition || !p.check_condition.spec) { toast("这个追踪没有检查条件"); outcome.error = "no_spec"; return outcome; }
         /* 2026-08-26 起：网页形态（guard on）先向上追溯——按追踪 spec 的
            来源触发语料同步 job 并等终态，再确定性重跑；本机形态保持直接 watch/check。 */
         let upstreamText = null;
         if (typeof webGuardOn === "function" && webGuardOn()) {
             const up = await _upstreamSyncAndWait(watchSpecSources(p.check_condition.spec));
+            if (!_scopeStillCurrent(scope)) { outcome.error = "account_switched"; return outcome; }
             if (up && up.timeout) {
                 outcome.error = "sync_timeout";
                 toast(WATCH_SYNC_TIMEOUT_COPY);   // 后台仍在同步：本次不重跑，如实提示稍后再看
@@ -304,18 +340,22 @@ export async function runProjectCheck(projectId, btnEl) {
             } else if (up && up.ok) {
                 upstreamText = watchUpstreamText(up.result);
                 const gen = await _fetchCorpusGen();   // 手动同步完成写回新语料代，防自动刷新紧接重跑
+                if (!_scopeStillCurrent(scope)) { outcome.error = "account_switched"; return outcome; }
                 if (gen) _writeGen(gen);
             }
         }
         const out = await _watchCheckOnce(p);
+        /* 回包闸：整个检查可能跑了数秒（上游同步更久）——回来时账户可能已被切换。
+           旧回包一律不进新账户的界面：不 toast、不写失败标记、不埋点、不重渲。 */
+        if (!_scopeStillCurrent(scope)) { outcome.error = "account_switched"; return outcome; }
         if (out && out.error) {
-            _lastFail.set(id, true);
+            _lastFail.set(_sessionKey(scope, id), true);
             outcome.error = out.error;
             toast((out.error === "rule_updated")
                 ? "检索规则已更新，无法按旧规则检查——请重新保存追踪或等待规则适配"
                 : "检查失败：" + out.error);
         } else if (out && out.diff) {
-            _lastFail.delete(id);
+            _lastFail.delete(_sessionKey(scope, id));
             const diffCounts = watchDiffCounts(out.diff);   // {added, fp, removed}
             outcome = Object.assign({}, outcome, diffCounts, {
                 changed: watchChangedCount(out.diff),
@@ -333,9 +373,14 @@ export async function runProjectCheck(projectId, btnEl) {
             }
         }
     } catch (e) {
-        _lastFail.set(id, true);
-        outcome.error = ((e && e.message) || "网络请求失败，请重试");
-        toast("检查失败：" + (((e && e.message) || "网络请求失败")));
+        // 换号后的失败也不进新账户：既不标「检查失败」，也不 toast（属于旧身份的那次检查）
+        if (_scopeStillCurrent(scope)) {
+            _lastFail.set(_sessionKey(scope, id), true);
+            outcome.error = ((e && e.message) || "网络请求失败，请重试");
+            toast("检查失败：" + (((e && e.message) || "网络请求失败")));
+        } else {
+            outcome.error = "account_switched";
+        }
     } finally {
         _checking.delete(id);
         if (btnEl) {
@@ -350,8 +395,8 @@ export async function runProjectCheck(projectId, btnEl) {
 
 /* 单追踪检查核心（详情与批量共用）：请求 + diff + 回填 baseline/last_checked_at + 会话态。
    返回 {diff} | {error: "rule_updated"|详情}。**绝不自动改纳入表**——只回填基线时间戳。 */
-async function _watchCheckOnce(p) {
-    const scope = _scope();
+async function _watchCheckOnce(p, scope = _scope(), token = beginRequest({}, _scope)) {
+    if (!token.isCurrent() || !_scopeStillCurrent(scope)) return { error: "account_switched" };
     const projectId = p.project_id;
     const cc = p.check_condition;
     const spec = cc.spec;
@@ -362,6 +407,7 @@ async function _watchCheckOnce(p) {
             body: JSON.stringify(spec),
         });
         const j = await res.json().catch(() => null);
+        if (!token.isCurrent()) return { error: "account_switched" };
         if (!res.ok || !j || !j.ok || !j.result) {
             const detail = (j && typeof j.detail === "string") ? j.detail : "";
             /* spec_version 与当前端点支持版本不一致 → 「检索规则已更新」单列（§4.3），
@@ -373,10 +419,10 @@ async function _watchCheckOnce(p) {
         }
         const r = j.result;
         const diff = watchDiff(r, cc.baseline, String(spec.spec_version || ""));
-        /* 检查完回填 baseline + last_checked_at（设计 §4.4 明文；baseline=null 时即
-           「重试生成基线」的回填路径）。 */
+        let writeError = null;
         try {
             await artifactsUpdateProject(scope, projectId, (np) => {
+                if (!token.isCurrent()) throw new Error("account_switched");
                 let next = np;
                 if (np.check_condition) {
                     next = artifactsSetBaseline(np, {
@@ -388,15 +434,16 @@ async function _watchCheckOnce(p) {
                 }
                 return next;
             });
-        } catch (_e) {
-            /* 基线回填失败：diff 仍可展示（如实），下轮检查会重试——不掀翻检查本身 */
+        } catch (e) {
+            writeError = (e && e.message) || "基线回填失败";
         }
-        /* 会话「待查看更新」：diff 结果进内存态（刷新即清；纳入候选的已持久）。 */
-        _deltasSet(projectId, diff.kind === "diff" ? watchDeltaEntries(diff) : []);
-        /* 埋点（计数型无文本，设计 §10）：watch_checked{changed} */
+        if (!token.isCurrent()) return { error: "account_switched" };
+        /* 回填失败仍保留可展示的 diff，但批次不得记为完成。 */
+        _deltasSet(projectId, diff.kind === "diff" ? watchDeltaEntries(diff) : [], scope);
         try { usageLog(USAGE_KINDS.watch_checked, { changed: watchChangedFlag(diff) }); } catch (_e) {}
-        return { diff: diff };
+        return { diff: diff, error: writeError };
     } catch (e) {
+        if (!token.isCurrent()) return { error: "account_switched" };
         return { error: ((e && e.name === "AbortError") ? "已取消" : ((e && e.message) || "网络请求失败，请重试")) };
     }
 }
@@ -408,8 +455,8 @@ async function _watchCheckOnce(p) {
 
 function _sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function _readProjects() {
-    try { return await artifactsListProjects(_scope()); } catch (_e) { return []; }
+async function _readProjects(scope) {
+    return artifactsListProjects(scope);
 }
 
 /* 返回 {ok:true, result} / {error, busy} / {timeout:true} / null（非异步响应 = 协议漂移防御，
@@ -457,17 +504,20 @@ async function _upstreamSyncAndWait(sources) {
 
 const WATCH_GEN_LS = "biodata_watch_gen";
 const WATCH_AUTO_INTERVAL_MS = 300;
-let _autoRefreshRunning = false;
+let _autoRefreshRunning = null;
+const _autoRefreshRequests = {};
 const _autoRefreshDone = {};   // scope::gen → true（health 钩子与账户钩子都会来，本会话内防双跑）
 
-function _readGen() {
+function _readGen(scope = _scope()) {
+    if (!_scopeStillCurrent(scope)) return null;
     try {
         const v = readJSON(nsKey(WATCH_GEN_LS), null);
         return (typeof v === "string" && v) ? v : null;
     } catch (_e) { return null; }
 }
-function _writeGen(gen) {
-    try { writeJSON(nsKey(WATCH_GEN_LS), String(gen)); } catch (_e) {}
+function _writeGen(gen, scope = _scope()) {
+    if (!_scopeStillCurrent(scope)) return false;
+    try { writeJSON(nsKey(WATCH_GEN_LS), String(gen)); return true; } catch (_e) { return false; }
 }
 
 /* 当前语料代哨兵：health 快照取（钩子触发时快照刚写入）。不可得 → null（降级跳过）。 */
@@ -494,37 +544,46 @@ const _watchesRefreshedHooks = [];
 export function setWatchesRefreshedHook(fn) {
     if (typeof fn === "function" && !_watchesRefreshedHooks.includes(fn)) _watchesRefreshedHooks.push(fn);
 }
-function _fireWatchesRefreshed() {
-    _watchesRefreshedHooks.forEach((h) => { try { h(); } catch (_e) {} });
+function _fireWatchesRefreshed(token) {
+    for (const h of _watchesRefreshedHooks) {
+        if (!token.isCurrent()) return;
+        try { h(); } catch (_e) {}
+    }
 }
 
 async function _maybeAutoRefreshWatches() {
-    if (_autoRefreshRunning) return;
+    if (_autoRefreshRunning && _autoRefreshRunning.isCurrent()) return;
+    let token = null;
     try {
         if (typeof webGuardOn !== "function" || !webGuardOn()) return;   // 本机形态不自动刷
         const gen = _currentCorpusGen();
-        if (!gen) return;                                 // 哨兵不可得 → 跳过，不报错
+        if (!gen) return;
         const scope = _scope();
-        if (!scope) return;                               // 未登录；登录后账户钩子会再触发
-        if (!watchGenChanged(_readGen(), gen)) return;    // 零成本跳过
+        if (!scope || !watchGenChanged(_readGen(scope), gen)) return;
         const doneKey = scope + "::" + gen;
         if (_autoRefreshDone[doneKey]) return;
-        const checkable = watchCheckableProjects(await _readProjects());
-        _autoRefreshRunning = true;
-        let changed = 0;
+        token = beginRequest(_autoRefreshRequests, _scope);
+        _autoRefreshRunning = token;
+        const projects = await _readProjects(scope);
+        if (!token.isCurrent()) return;
+        const checkable = watchCheckableProjects(projects);
+        let changed = 0, completed = true;
         for (let i = 0; i < checkable.length; i++) {
+            if (!token.isCurrent()) return;
             try {
-                const out = await _watchCheckOnce(checkable[i]);
+                const out = await _watchCheckOnce(checkable[i], scope, token);
+                if (!token.isCurrent()) return;
+                if (!out || out.error || !out.diff) completed = false;
                 if (out && out.diff && watchChangedCount(out.diff) > 0) changed++;
-            } catch (_e) { /* 单条失败不连累其余 */ }
+            } catch (_e) { completed = false; }
             if (i < checkable.length - 1) await _sleep(WATCH_AUTO_INTERVAL_MS);
         }
-        _writeGen(gen);            // 全部完成才写回（失败静默、下次启动再试）
-        _autoRefreshDone[doneKey] = true;
+        if (!token.isCurrent()) return;
+        if (completed && _writeGen(gen, scope)) _autoRefreshDone[doneKey] = true;
         const note = watchAutoRefreshToast(changed);
-        if (note) { toast(note); _fireWatchesRefreshed(); }
+        if (note && token.isCurrent()) { toast(note); _fireWatchesRefreshed(token); }
     } catch (_e) { /* 失败静默：不写回 gen，下次启动再试 */ }
-    finally { _autoRefreshRunning = false; }
+    finally { if (_autoRefreshRunning === token) _autoRefreshRunning = null; }
 }
 
 /* ---------- 初始化（index.html 自挂 DOMContentLoaded；挂点不存在即静默） ---------- */

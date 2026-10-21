@@ -475,14 +475,16 @@ export function cancelTelemetryUpload(scope) {
 
 /* 网页版护栏判定（公网护栏硬化，2026-08-26）：唯一真源 = /api/health 的 account.required，
    与 accounts.js 的 _gate / shell.js 的 _healthSnapshot 同一份 health 快照。本模块不进静态
-   import 图（文件头红线），故 shell.js 的 webGuardOn 只能**动态 import** 取（index 页 shell
-   早已被 boot 加载，命中模块缓存零成本）。快照未到/加载失败 → false（按本机形态处理，
-   绝不误停中继）；只缓存肯定结果，health 晚到时下一次调用还会重判。 */
+   import 图（文件头红线），故 shell.js 的 webGuardOn 只能**动态 import** 取。通道是目标模块
+   的属性：`#shell` 有键，故动态 import 也必须走 `#shell`——它与 boot 加载的是**同一个**带令牌
+   实例，读到的是活的模块级 _healthSnapshot；写成相对路径会拉出无令牌第二实例，那份 _healthSnapshot
+   恒 null → webGuardOn() 恒 false → 公网护栏静默失效（2026-10-01 修）。快照未到/加载失败 →
+   false（按本机形态处理，绝不误停中继）；只缓存肯定结果，health 晚到时下一次调用还会重判。 */
 let _webGuardCache = false;
 async function _webGuardOn() {
     if (_webGuardCache) return true;
     try {
-        const m = await import("./shell.js");
+        const m = await import("#shell");
         if (typeof m.webGuardOn === "function" && m.webGuardOn()) {
             _webGuardCache = true;
             return true;

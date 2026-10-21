@@ -173,6 +173,140 @@ def test_userdata_is_hard_skipped_without_needing_git():
     assert ".userdata" in MD._HARD_SKIP_DIRS
 
 
+def test_collect_delivery_files_refuses_tracked_symlink(tmp_path):
+    """tracked 符号链接 fail-closed：链接目标（仓库外/被排除文件）的字节绝不入包。
+
+    `is_file()` 与 `zipfile.write` 都会跟随链接；扫描按链接路径走，真身内容无人看。
+    合成 repo 夹具：链接指向仓库外的文件，collect 必须拒绝而不是把外部字节收进来。
+    """
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (root / "real.txt").write_text("ok\n", encoding="utf-8")
+    outside = tmp_path / "outside-secret.txt"
+    outside.write_text("OUTSIDE_BYTES_MUST_NOT_SHIP\n", encoding="utf-8")
+    try:
+        (root / "link.txt").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("本机/该文件系统不支持创建符号链接")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.collect_delivery_files(root)
+    # 打包侧同样防御（files 可能由调用方传入）：链接一律拒绝
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.build_zip(tmp_path / "out.zip", [root / "link.txt"], root)
+    assert not (tmp_path / "out.zip").exists()
+
+
+# ------------------------------------------------------- 父级 junction 下的交付源 containment
+
+def _make_dir_junction(link: Path, target: Path) -> None:
+    """创建**真实**目录 junction（Windows `mklink /J`，无需 admin）或 POSIX 目录符号链接。
+
+    创建后必须用判据再验证——「平台不能创建」只允许走 pytest.skip，
+    绝不许把打桩判据/未验证的创建当成真验证。
+    （与 tests/test_submission_package.py 同名 helper 同源复制，改动须双同步——
+    tests 目录非包，跨测试文件 import 不值得为它引入包结构。）"""
+    if sys.platform.startswith("win"):
+        proc = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                              capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            pytest.skip(f"本机无法创建目录 junction：{proc.stdout} {proc.stderr}")
+    else:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f"本机/该文件系统不支持创建目录符号链接：{exc}")
+    assert MD._is_link_like(link), "目录链接未真实创建（判据不可见）——不得当作已验证"
+
+
+def _junction_repo(tmp_path):
+    """合成 repo：tracked 普通后代 `sub/inner.txt` + 根级 `top.txt`（直接 outroot 控制）；
+    仓库外 `external/` 仅一件 sentinel（与 tracked 后代同相对名）。
+    返回 (root, external, sentinel_bytes)；调用方随后把 `sub` 换成 junction。"""
+    root = tmp_path / "repo"
+    root.mkdir()
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (root / "top.txt").write_text("top\n", encoding="utf-8")
+    (root / "sub").mkdir()
+    (root / "sub" / "inner.txt").write_text("ok\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = b"OUTSIDE_BYTES_MUST_NOT_SHIP\n"
+    (external / "inner.txt").write_bytes(sentinel)   # 外面仅 sentinel
+    return root, external, sentinel
+
+
+def _swap_sub_for_junction(root: Path, target: Path) -> None:
+    """把 tracked 目录 sub 换成指向 target 的目录链接（tracked 后代路径不变）。"""
+    (root / "sub" / "inner.txt").unlink()
+    (root / "sub").rmdir()
+    _make_dir_junction(root / "sub", target)
+
+
+def test_collect_refuses_tracked_descendant_under_parent_junction(tmp_path):
+    """tracked 后代位于父级 junction——叶子自身不是链接、叶级判定为假，
+    修前 rglob 跟随 junction 把仓外字节收进交付集（read/zip sentinel 前必须拒）。"""
+    root, external, sentinel = _junction_repo(tmp_path)
+    # 控制：未换链接前普通成功（含根级文件直接落位）
+    assert [p.name for p in MD.collect_delivery_files(root)] == ["inner.txt", "top.txt"]
+    _swap_sub_for_junction(root, external)
+    # 夹具前提：真的能经 junction 读到仓外 sentinel 字节（证明攻击面与 junction 都真实）
+    assert (root / "sub" / "inner.txt").read_bytes() == sentinel
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.collect_delivery_files(root)
+
+
+def test_build_zip_refuses_file_under_parent_junction_before_creating_output(tmp_path):
+    """直接 zip 路径（files 由调用方传入）：复核在创建输出**之前**——
+    输出不创建；既有输出字节原样保持。"""
+    root, external, _sentinel = _junction_repo(tmp_path)
+    _swap_sub_for_junction(root, external)
+    out = tmp_path / "dist" / "out.zip"
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.build_zip(out, [root / "sub" / "inner.txt"], root)
+    assert not out.exists(), "输出不得在复核前创建"
+    pre = tmp_path / "pre.zip"
+    pre.write_bytes(b"KEEP")
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.build_zip(pre, [root / "sub" / "inner.txt"], root)
+    assert pre.read_bytes() == b"KEEP", "既有输出字节不得被触碰"
+
+
+def test_run_delivery_gate_asserts_sources_before_scanning(tmp_path):
+    """run_delivery_gate（唯一门禁实现）在任何 read 扫描前先过同一条 containment 闸。"""
+    root, external, _sentinel = _junction_repo(tmp_path)
+    _swap_sub_for_junction(root, external)
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.run_delivery_gate([root / "sub" / "inner.txt"], root)
+
+
+def test_junction_to_target_inside_root_still_refused(tmp_path):
+    """链接不是可交付物——即使 junction 目标在仓库**内**，同样拒绝（不只拦越界解析）。"""
+    root, _external, _sentinel = _junction_repo(tmp_path)
+    (root / "real_sub").mkdir()
+    (root / "real_sub" / "inner.txt").write_text("real\n", encoding="utf-8")
+    _swap_sub_for_junction(root, root / "real_sub")
+    assert (root / "sub" / "inner.txt").read_text(encoding="utf-8") == "real\n"
+    with pytest.raises(MD.DeliveryLinkError, match="符号链接"):
+        MD.collect_delivery_files(root)
+
+
 @requires_git
 def test_delivery_set_contains_no_gitignored_file():
     """**核心结构不变量**：git 拒绝跟踪的文件，一律不在交付集里。

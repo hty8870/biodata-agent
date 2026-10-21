@@ -24,7 +24,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .runtime_paths import atomic_write_json, instance_data_dir_for
+from .runtime_paths import assert_runtime_path, atomic_write_json, instance_data_dir_for
+from ..corpus.fs_utils import file_critical_section
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,19 @@ class QuotaExceeded(Exception):
     """超限：message 为中文人读文案（接口层翻 429，不泄漏内部细节）。"""
 
 
+class QuotaPathError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def default_quota_path(project_root: Path) -> Path:
     """配额账本默认路径 = 实例 userdata 层（`.userdata/llm_quota.json`）；
-    `BIODATA_LLM_QUOTA_FILE` 显式覆盖优先（测试与特殊部署用）。"""
+    覆盖路径与默认路径均须通过运行时状态路径守卫。"""
     override = os.environ.get("BIODATA_LLM_QUOTA_FILE", "").strip()
-    if override:
-        return Path(override)
-    return instance_data_dir_for(Path(project_root), ".userdata") / "llm_quota.json"
+    path = Path(override) if override else instance_data_dir_for(Path(project_root), ".userdata") / "llm_quota.json"
+    return assert_runtime_path(path, QuotaPathError)
 
 
 def _utc_day(now: float | None = None) -> str:
@@ -87,17 +94,17 @@ def check_and_increment(
     - `trial=True` 走独立的试用桶（`u:<name>:trial` / `global:trial`），与正式服务端
       key 的桶互不挤占——试用限轮与正式配额是两笔独立的账。
     - `per_user_limit` / `global_limit` ≤ 0 表示该维度不限（两道闸各自独立生效）。
-    - 存储任何故障：放行 + error 日志（可用性优先，见模块 docstring）。
+    - 运行时路径误配：读写前抛 QuotaPathError（Web 翻译为 503），绝不触碰元数据库。
+    - 其它存储故障：放行 + error 日志（可用性优先，见模块 docstring）。
     """
-    path = quota_path or default_quota_path(project_root)
+    path = assert_runtime_path(quota_path or default_quota_path(project_root), QuotaPathError)
     day = _utc_day()
     user_key = f"u:{username}:trial" if trial else f"u:{username}"
     global_key = "global:trial" if trial else "global"
-    with _LOCK:
-        try:
+    try:
+        with _LOCK, file_critical_section(Path(str(path) + '.lock'), timeout=15):
             data = _load(path)
             days = data["days"]
-            # 只留当日：账本只为日配额服务，跨日旧账整段丢弃（防无界增长）。
             for old in [d for d in days if d != day]:
                 days.pop(old, None)
             bucket = days.setdefault(day, {})
@@ -119,17 +126,16 @@ def check_and_increment(
             bucket[user_key] = used_user + 1
             bucket[global_key] = used_global + 1
             _save(path, data)
-        except QuotaExceeded:
-            raise
-        except Exception:
-            # 可用性优先：账本写不进绝不掀翻用户请求；provider 侧消费上限兜底。
-            logger.error("llm_quota: 计数存储故障，本次放行", exc_info=True)
+    except QuotaExceeded:
+        raise
+    except Exception:
+        logger.error("llm_quota: 计数存储故障，本次放行", exc_info=True)
 
 
 def usage_snapshot(project_root: Path, username: str, *, trial: bool,
                    quota_path: Path | None = None) -> int:
     """只读：该账号当日已用次数（前端展示「今日剩余」用；故障 → 0，绝不阻断）。"""
-    path = quota_path or default_quota_path(project_root)
+    path = assert_runtime_path(quota_path or default_quota_path(project_root), QuotaPathError)
     user_key = f"u:{username}:trial" if trial else f"u:{username}"
     with _LOCK:
         try:

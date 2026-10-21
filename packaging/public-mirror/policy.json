@@ -27,7 +27,8 @@
     "docs/归档/",
     "docs/汇报/",
     "协同/认领/",
-    "协同/交接/"
+    "协同/交接/",
+    "docs/agent/"
   ],
   "allowed_email_paths": [
     "packaging/inno/languages/ChineseSimplified.isl",
@@ -44,10 +45,13 @@
     "tests/test_webapp_endpoint_security.py"
   ],
   "allowed_private_reference_paths": [
+    "packaging/public-mirror/policy.biodata-pack.json",
     "packaging/public-mirror/policy.json",
+    "packaging/public-mirror/policy.skeleton.json",
     "scripts/build_public_mirror.py",
     "scripts/verify_public_mirror.py",
     "tests/test_public_mirror_builder.py",
-    "tests/test_public_mirror_contract.py"
+    "tests/test_public_mirror_contract.py",
+    "tests/test_public_mirror_profiles.py"
   ]
 }

@@ -357,6 +357,34 @@ def test_safe_open_without_whitelist_still_enforces_ip_gate():
     assert e.value.code == "ip_blocked"
 
 
+def test_url_policy_without_whitelist_still_blocks_scheme_port_userinfo():
+    """策略层回归：`allowed_hosts=None` 只跳过「主机集合匹配」一闸。
+
+    修复前 `_open_stream_safe` 用 `if allowed_hosts is not None:` 包住整个策略调用，
+    于是无白名单形态（`_open_stream` / load_smoke 等既有调用方）下 http、非 443 端口、
+    userinfo 三闸一起失效，只剩 IP 解析闸。None 必须在策略函数内部按「只跳过匹配」处理。
+    """
+    for bad in ("http://cf.10xgenomics.com/x", "ws://cf.10xgenomics.com/x",
+                "https://cf.10xgenomics.com:8443/x", "https://cf.10xgenomics.com:80/x",
+                "https://user@cf.10xgenomics.com/x", "https://user:pass@cf.10xgenomics.com/x"):
+        assert DE.url_policy_error(bad, None), \
+            f"{bad} 在白名单缺省时也必须被拒绝（scheme/端口/userinfo 闸无条件生效）"
+    assert DE.url_policy_error("https://cf.10xgenomics.com/x", None) is None
+
+
+@pytest.mark.parametrize("bad", ["http://cf.10xgenomics.com/x",
+                                 "https://cf.10xgenomics.com:8443/x",
+                                 "https://user@cf.10xgenomics.com/x"])
+def test_safe_open_without_whitelist_rejects_before_any_connection(bad):
+    """传输层回归：无白名单形态下违规 URL 在**解析/建连之前**被拒。"""
+    resolver = _resolver_fake(["8.8.8.8"])
+    connect = _connect_fake()
+    with pytest.raises(DE.DownloadPolicyError) as e:
+        DE._open_stream_safe(bad, 5, allowed_hosts=None, resolver=resolver, connect=connect)
+    assert e.value.code == "url_blocked"
+    assert resolver.calls == [] and connect.calls == [], "策略拒绝必须发生在解析/建连之前"
+
+
 # ================================================================ D. download_one 集成（硬上限 / 策略拒绝）
 
 def test_too_large_aborts_cleans_part_no_retry(tmp_path):

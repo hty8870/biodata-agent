@@ -75,10 +75,14 @@ def test_projects_core_layer_has_no_dom_or_localstorage() -> None:
     assert not hits, f"projects_core.js 出现 DOM/localStorage 访问：{hits}"
 
 
-def test_projects_core_has_no_hash_imports() -> None:
-    """纯逻辑核只相对 import artifacts.js（同为零 DOM 纯模块）——不进 import 图、不进环。"""
+def test_projects_core_import_channel_follows_importmap() -> None:
+    """import 通道 = 目标模块的属性：`#artifacts` 在 importmap 有键 ⇒ 必须走 `#artifacts`
+    （相对路径会拉出无令牌第二实例，数据层被读成两份）；除它之外不得再有别的 # import。
+    纯逻辑核仍只依赖 artifacts.js（同为零 DOM 纯模块），不进环。"""
     text = CORE.read_text(encoding="utf-8")
-    assert re.search(r'from\s*"#', text) is None, "projects_core.js 出现了 # import（应相对 import artifacts.js）"
+    assert 'from "#artifacts"' in text, "projects_core.js 未经 #artifacts 取数据层（有键模块必须走 importmap 通道）"
+    others = set(re.findall(r'from\s*"(#[A-Za-z_0-9]+)"', text)) - {"#artifacts"}
+    assert not others, f"projects_core.js 出现 #artifacts 之外的 # import：{sorted(others)}"
 
 
 # ---------------------------------------------------------------- 上下文卡常量

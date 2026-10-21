@@ -25,7 +25,7 @@
      文件 + base 建索引，已在库的跳过并计数；再叠 `_record_identity_keys` 实体级去重兜底。
 
 设计约束（与 ingest_zenodo.py 一致）：
-- **不动 `database/base/`**：官方评测冻结在 774 条 base 语料；外部库默认关
+- **不动 `database/base/`**：官方评测冻结在 784 条 base 语料；外部库默认关
   （sources=None 只装基础语料）→ 确定性二元门不受影响。
 - **运行时不联网**：一次性抓快照落地，查询期只读本地 JSON。
 - **不绕过管护管线**：抓取走 `corpus_curation` 的 refine.bio 适配器原语
@@ -37,7 +37,7 @@
 
 用法：
     python scripts/ingest_refinebio.py            # 抓候选 → 三道闸 → database/external/refinebio.json
-    python scripts/ingest_refinebio.py --dry-run  # 只抓取并打印复核漏斗，不写任何文件
+    python scripts/ingest_refinebio.py --dry-run  # 只抓取并打印复核漏斗：读 staging/raw 缓存，但不写任何文件
 """
 from __future__ import annotations
 
@@ -106,28 +106,35 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
 
 
-def _fetch_json(url: str, *, endpoint: str, query: str, cache: Path | None, use_cache: bool):
-    """带缓存的 _fetch_logged 包装：raw 摘要缓存在 staging/raw/，复跑/干跑不重复联网。"""
+def _fetch_json(url: str, *, endpoint: str, query: str, cache: Path | None,
+                use_cache: bool, write_cache: bool = True):
+    """带缓存的 _fetch_logged 包装：raw 摘要缓存在 staging/raw/，复跑/干跑不重复联网。
+
+    `use_cache` 管**读**、`write_cache` 管**写**，两个开关分开：`--dry-run` 的语义是
+    「不写任何文件」，但保留读缓存（命中即零联网），所以 dry-run 传 use_cache=True +
+    write_cache=False——修前只有一个开关，dry-run 会往 staging/raw 写缓存、与文案相反。
+    """
     if use_cache and cache is not None and cache.is_file():
         return json.loads(cache.read_text(encoding="utf-8"))
     payload = cc._fetch_logged(
         url, project_root=REPO_ROOT, endpoint=endpoint, query=query,
         min_interval=cc._REFINEBIO_MIN_INTERVAL,
     )
-    if use_cache and cache is not None:
+    if use_cache and write_cache and cache is not None:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
     return payload
 
 
-def _discover(query: str, *, use_cache: bool) -> list[dict]:
+def _discover(query: str, *, use_cache: bool, write_cache: bool = True) -> list[dict]:
     """一组发现查询：服务端过滤 + relevance top N → 已过形状闸的候选条目列表。"""
     q = urllib.parse.quote(query)
     url = (f"{cc.REFINEBIO_SEARCH_API}?search={q}&technology=rna-seq"
            f"&num_downloadable_samples__gt=0&organism=HOMO_SAPIENS&organism=MUS_MUSCULUS"
            f"&limit={DISCOVERY_TOP_N}")
     payload = _fetch_json(url, endpoint=cc.REFINEBIO_SEARCH_API, query=query,
-                          cache=RAW_DIR / f"search_{_slug(query)}.json", use_cache=use_cache)
+                          cache=RAW_DIR / f"search_{_slug(query)}.json",
+                          use_cache=use_cache, write_cache=write_cache)
     return cc._refinebio_validated_results(payload)  # 形状闸 fail-closed
 
 
@@ -175,7 +182,7 @@ def _candidate_accessions(hit: dict) -> set[str]:
     return accs
 
 
-def _enrich_from_samples(rec: dict, *, use_cache: bool) -> str:
+def _enrich_from_samples(rec: dict, *, use_cache: bool, write_cache: bool = True) -> str:
     """闸后对入选候选拉 samples 端点一页（≤25 条）做 specimen_part/disease/has_raw 富化。
     返回富化状态串（留档用）；失败如实返回原因，记录保持诚实缺省。"""
     acc = rec["public_accession"]
@@ -183,7 +190,8 @@ def _enrich_from_samples(rec: dict, *, use_cache: bool) -> str:
     try:
         payload = _fetch_json(url, endpoint=f"{cc.REFINEBIO_API}/samples/",
                               query=f"experiment:{acc}",
-                              cache=RAW_DIR / f"samples_{acc}.json", use_cache=use_cache)
+                              cache=RAW_DIR / f"samples_{acc}.json",
+                              use_cache=use_cache, write_cache=write_cache)
     except cc.CurateError as exc:
         return f"samples 拉取失败（{exc.hint[:60]}）→ tissue/disease 留空"
     results = payload.get("results") if isinstance(payload, dict) else None
@@ -194,7 +202,7 @@ def _enrich_from_samples(rec: dict, *, use_cache: bool) -> str:
     return f"samples 一页 {len(results)} 条 → 回填 {','.join(got) if got else '无有效值（留空）'}"
 
 
-def _enrich_from_detail_annotations(rec: dict, *, use_cache: bool) -> str:
+def _enrich_from_detail_annotations(rec: dict, *, use_cache: bool, write_cache: bool = True) -> str:
     """samples 端点不可用时的回退证据：experiment 详情的 annotations（SRA 样本键值对，
     实测每实验通常 1 条）聚合成 tissue/disease（证据等级低于 samples 聚合，provenance 如实写）。"""
     acc = rec["public_accession"]
@@ -202,7 +210,8 @@ def _enrich_from_detail_annotations(rec: dict, *, use_cache: bool) -> str:
     try:
         payload = _fetch_json(url, endpoint=cc.REFINEBIO_EXPERIMENTS_API,
                               query=f"detail:{acc}",
-                              cache=RAW_DIR / f"detail_{acc}.json", use_cache=use_cache)
+                              cache=RAW_DIR / f"detail_{acc}.json",
+                              use_cache=use_cache, write_cache=write_cache)
     except cc.CurateError as exc:
         return f"detail 拉取也失败（{exc.hint[:50]}）→ tissue/disease 留空"
     if not cc._refinebio_core_ok(payload):
@@ -217,7 +226,7 @@ def _enrich_from_detail_annotations(rec: dict, *, use_cache: bool) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="refine.bio 单细胞/空间切片 → external 快照")
     parser.add_argument("--dry-run", action="store_true",
-                        help="只抓取并打印复核漏斗，不写 refinebio.json / staging")
+                        help="只抓取并打印复核漏斗：读 staging/raw 缓存，但不写任何文件")
     parser.add_argument("--no-cache", action="store_true",
                         help="忽略 staging/raw/ 缓存，强制重新联网")
     parser.add_argument("--skip-enrich", action="store_true",
@@ -226,11 +235,12 @@ def main() -> int:
                         help="富化并发数（默认 2；聚合速率仍受 ≤60 req/min 全局限速锁约束）")
     args = parser.parse_args()
     use_cache = not args.no_cache
+    write_cache = not args.dry_run   # --dry-run 不写任何文件（含 staging/raw 缓存）
 
     # ---- 闸 1：服务端召回（8 组查询 × top 200，过滤已在 URL 里）----
     candidates: dict[str, dict] = {}   # accession → hit（保序去重；ES 索引实测有重复文档）
     for query in DISCOVERY_QUERIES:
-        hits = _discover(query, use_cache=use_cache)
+        hits = _discover(query, use_cache=use_cache, write_cache=write_cache)
         n_new = 0
         for hit in hits:
             acc = str(hit.get("accession_code") or "").strip()
@@ -310,13 +320,15 @@ def main() -> int:
             acc = rec["public_accession"]
             cached = RAW_DIR / f"samples_{acc}.json"
             if use_cache and cached.is_file():
-                return acc, _enrich_from_samples(rec, use_cache=True)
+                return acc, _enrich_from_samples(rec, use_cache=True, write_cache=write_cache)
             if state["samples_down"]:
-                return acc, _enrich_from_detail_annotations(rec, use_cache=use_cache)
-            note = _enrich_from_samples(rec, use_cache=use_cache)
+                return acc, _enrich_from_detail_annotations(rec, use_cache=use_cache,
+                                                            write_cache=write_cache)
+            note = _enrich_from_samples(rec, use_cache=use_cache, write_cache=write_cache)
             if "拉取失败" in note:
                 state["samples_down"] = True
-                note = note + "；" + _enrich_from_detail_annotations(rec, use_cache=use_cache)
+                note = note + "；" + _enrich_from_detail_annotations(
+                    rec, use_cache=use_cache, write_cache=write_cache)
             return acc, note
 
         with ThreadPoolExecutor(max_workers=args.workers) as pool:

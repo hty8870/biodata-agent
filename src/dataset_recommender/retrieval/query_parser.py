@@ -12,16 +12,26 @@
 """
 from __future__ import annotations
 
+import calendar
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
-from . import vocabulary as V
+from . import query_lexicon as V
 from ..content.identifier_patterns import classify as _classify_identifier, strip_doi_prefix as _strip_doi_prefix
+from ..domain.registry import domain_catalog, domain_dimensions, domain_labels_zh
 
-DIMENSIONS = ("species", "tissue", "disease", "platform", "assay", "modality")
+
+def __getattr__(name: str):
+    """兼容 shim（PEP 562）：`DIMENSIONS` 与 `_DIM_LABEL_CN` 改由活动领域包供给，
+    旧的 `from query_parser import DIMENSIONS` 写法惰性解析到当前领域，biodata 默认逐位不变。"""
+    if name == "DIMENSIONS":
+        return domain_dimensions()
+    if name == "_DIM_LABEL_CN":
+        return domain_labels_zh()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # parse_status 取值
 PS_EXECUTABLE = "executable"
@@ -77,7 +87,7 @@ class QueryIntent:
     unused_query_terms: list[str] = field(default_factory=list)
     # `unresolved_term` 弃权时，**卡住这句话的那几个词**（结构化版本；此前只以文字形式
     # 埋在 abstain_detail 里，上层想用只能去正则抠字符串）。
-    # 用途：编排层据此算「先忽略这几个词能搜到什么」的降级选项（见 workflow.build_degraded_search）。
+    # 用途：编排层据此自动降级——忽略这几个词、拿剩余条件继续检索并显著标注（见 workflow.run）。
     # 只在 abstain_reason == "unresolved_term" 时非空；其它状态恒空。
     unresolved_terms: list[str] = field(default_factory=list)
     # 「A 或 B」的**实际处理方式**（只读、additive；查询里没有「或」时恒为空 dict）。
@@ -102,9 +112,9 @@ def _unique(items: list[str]) -> list[str]:
 
 
 def _merged_catalog(keyword_mapping: dict[str, list[dict[str, Any]]] | None) -> dict:
-    catalog = V.CATALOG
+    catalog = domain_catalog()
     if keyword_mapping:
-        catalog = {k: list(v) for k, v in V.CATALOG.items()}
+        catalog = {k: list(v) for k, v in domain_catalog().items()}
         for dim, entries in keyword_mapping.items():
             if isinstance(entries, list):
                 norm = []
@@ -284,7 +294,7 @@ def _match_all_consuming(query_lower: str, catalog: dict[str, list[dict[str, Any
     """跨维度**最长匹配 + 消费**（正向路径，历史行为，勿改语义）：先匹配长 alias 并从工作串抹除，
     避免子串重复命中。返回 (constraints, display_map, matched_aliases, residual_working)。"""
     alias_entries: list[tuple[str, str, dict[str, Any]]] = []
-    for dim in DIMENSIONS:
+    for dim in domain_dimensions():
         for entry in catalog.get(dim, []):
             for a in entry.get("aliases", []):
                 a = str(a).lower().strip()
@@ -359,8 +369,8 @@ def _extract_free_text_terms(query: str) -> list[str]:
     return _unique([t for t in terms if len(t) > 1])
 
 
-#: 兼容别名：维度中文名锚点在 vocabulary.DIM_LABELS_CN；board.py 从本模块取这个名（历史入口），保留不删。
-_DIM_LABEL_CN = V.DIM_LABELS_CN
+#: 兼容别名：维度中文名唯一真源=活动领域包的维度描述符（经 `domain_labels_zh()` 下发）；
+#: board.py 从本模块取 `_DIM_LABEL_CN`（历史入口，经顶部 __getattr__ shim 惰性解析），保留不删。
 
 
 def active_filters(intent: "QueryIntent") -> list[dict]:
@@ -373,23 +383,23 @@ def active_filters(intent: "QueryIntent") -> list[dict]:
     if intent.parse_status != PS_EXECUTABLE:
         return []
     out: list[dict] = []
-    for dim in DIMENSIONS:
+    for dim in domain_dimensions():
         disp = intent.display_map.get(dim)
         if disp:
             out.append({"filter_id": f"include:{dim}", "polarity": "include",
-                        "dim": dim, "label": _DIM_LABEL_CN.get(dim, dim), "values": list(disp)})
-    for dim in DIMENSIONS:
+                        "dim": dim, "label": domain_labels_zh().get(dim, dim), "values": list(disp)})
+    for dim in domain_dimensions():
         disp = intent.excluded_display.get(dim)
         if disp:
             out.append({"filter_id": f"exclude:{dim}", "polarity": "exclude",
-                        "dim": dim, "label": "排除·" + _DIM_LABEL_CN.get(dim, dim), "values": list(disp)})
+                        "dim": dim, "label": "排除·" + domain_labels_zh().get(dim, dim), "values": list(disp)})
     # 软偏好：**不是筛选条件**，只影响排序。极性单列成 prefer，标签写「优先·」，
     # 前端据此把它和硬条件区分开——混在一起会让用户以为结果都满足这一项，那就是骗人。
-    for dim in DIMENSIONS:
+    for dim in domain_dimensions():
         disp = intent.preferred_display.get(dim)
         if disp:
             out.append({"filter_id": f"prefer:{dim}", "polarity": "prefer",
-                        "dim": dim, "label": "优先·" + _DIM_LABEL_CN.get(dim, dim), "values": list(disp)})
+                        "dim": dim, "label": "优先·" + domain_labels_zh().get(dim, dim), "values": list(disp)})
     if intent.preferred_raw:
         out.append({"filter_id": "prefer:raw", "polarity": "prefer",
                     "dim": "has_raw_data", "label": "优先·原始数据", "values": ["有 FASTQ"]})
@@ -411,6 +421,56 @@ def active_filters(intent: "QueryIntent") -> list[dict]:
         rng = f"{lo} ~ {hi}" if lo and hi else (f"≥ {lo}" if lo else f"≤ {hi}")
         out.append({"filter_id": "date:range", "polarity": "include",
                     "dim": "date", "label": "发表时间", "values": [rng]})
+    return out
+
+
+def relax_key_to_suppressed(intent: "QueryIntent", key: object) -> list[str]:
+    """把 `retriever.relaxation_options` 的放宽项 key 翻译成 suppressed_constraints 口径
+    （filter_id 极性形式，与 `active_filters` 同词表——单锚点，agent 环内 ask.relax/rerank
+    relax 槽与网页零命中放松卡共用）：dim:X→include:X / exclude:X→exclude:X /
+    raw→按当前值 raw:required|raw:forbidden / date→date:range /
+    only:X→删其余全部（其它正向维+全部排除维+FASTQ+时间范围）。
+    只产出**本项放松量**，不与调用方既有 suppressed 合并（合并归装配侧）。
+    非法/与 intent 不符的 key 抛 ValueError（如实拒绝，不静默忽略）。"""
+    suppressed: list[str] = []
+    k = str(key or "").strip()
+    if k.startswith("dim:"):
+        dim = k[4:]
+        if dim not in domain_dimensions() or not intent.constraints.get(dim):
+            raise ValueError(k)
+        suppressed.append(f"include:{dim}")
+    elif k.startswith("exclude:"):
+        dim = k[8:]
+        if dim not in domain_dimensions() or not intent.excluded_constraints.get(dim):
+            raise ValueError(k)
+        suppressed.append(f"exclude:{dim}")
+    elif k == "raw":
+        if intent.has_raw_data_required is None:
+            raise ValueError(k)
+        suppressed.append("raw:required" if intent.has_raw_data_required else "raw:forbidden")
+    elif k == "date":
+        if not (intent.date_from or intent.date_to):
+            raise ValueError(k)
+        suppressed.append("date:range")
+    elif k.startswith("only:"):
+        dim = k[5:]
+        if dim not in domain_dimensions() or not intent.constraints.get(dim):
+            raise ValueError(k)
+        suppressed.extend(f"include:{d}" for d in domain_dimensions()
+                          if d != dim and intent.constraints.get(d))
+        suppressed.extend(f"exclude:{d}" for d in domain_dimensions()
+                          if intent.excluded_constraints.get(d))
+        if intent.has_raw_data_required is not None:
+            suppressed.append("raw:required" if intent.has_raw_data_required
+                              else "raw:forbidden")
+        if intent.date_from or intent.date_to:
+            suppressed.append("date:range")
+    else:
+        raise ValueError(k)
+    out: list[str] = []
+    for s in suppressed:
+        if s not in out:
+            out.append(s)
     return out
 
 
@@ -493,7 +553,6 @@ _AMBIGUOUS_REL_RE = re.compile(r"近几年|最近几年|近年来|近些年|这�
 # 近0年 / 近-1年：无意义的相对年数（此前 _parse_dates 因 N≤0 跳过相对分支 → 时间约束静默消失）。
 _ZERO_NEG_REL_RE = re.compile(r"(?:最近|近|过去|过往)\s*(?:0+|-\s*\d+)\s*年")
 # YYYY年MM月[DD日]：抓出月/日以校验是否合法日历日（如 13月、2月30日）；合法则照旧只用年份粒度。
-_YMD_RE = re.compile(_YEAR + r"\s*年\s*(\d{1,2})\s*月(?:\s*(\d{1,2})\s*日)?")
 # 并列年份（X年和/与/、Y年）：区间还是恰好这几年语义歧义（『到/至/-/~』区间不在此列，仍正常解析）。
 _MULTI_YEAR_RE = re.compile(_YEAR + r"\s*年?\s*(?:和|与|、|及|以及|，|,)\s*" + _YEAR + r"\s*年")
 
@@ -527,60 +586,159 @@ def _shift_years(d: date, delta: int) -> date:
         return date(y, d.month, 28)
 
 
-def _parse_dates(text: str, today: date | None = None) -> tuple[str, str, str]:
-    """从中文/英文查询解析发表时间范围 → (date_from, date_to, 去掉日期表达后的文本)。
-    支持：绝对年/区间/以后/以前（历史行为，逐位不变）+ 相对（近N年/今年/去年/前年）+ 年代（十年）。
-    相对表达相对 `today`（默认 date.today()，测试可 pin）换算成绝对区间。"""
-    if today is None:
-        today = date.today()
-    date_from = ""
-    date_to = ""
-    t = text
-    # -- 相对：近/最近/过去 N 年 → [today-N, today]（N 明确才认；不明确交给 parse_query 弃权）--
-    m = _REL_YEARS_RE.search(t)
-    if m and _cn_num(m.group("n")) > 0:
+# 日期字面量、范围计算与 span 共用一条解析路径，避免高亮精度与过滤精度漂移。
+_ABS_DATE_ATOM = (
+    r"(?:19|20)\d{2}(?:\s*年(?:\s*\d{1,2}\s*月(?:\s*\d{1,2}\s*日)?)?"
+    r"|-\d{2}(?:-\d{2})?(?!\d))?"
+)
+_ABS_DATE_RE = re.compile(r"(?<![a-z0-9])" + _ABS_DATE_ATOM + r"(?!\d)")
+_ABS_RANGE_RE = re.compile(
+    r"(?<![a-z0-9])(" + _ABS_DATE_ATOM + r")\s*[-~到至]\s*(" + _ABS_DATE_ATOM + r")(?!\d)"
+)
+_DATE_FROM_SUFFIX = re.compile(r"\s*(?:以后|之后|以来|往后|开始|起)")
+_DATE_TO_SUFFIX = re.compile(r"\s*(?:以前|之前)")
+_DATE_PREFIX = re.compile(r"(?<![a-z])(?P<op>after|since|before)\s+$")
+
+
+def _absolute_date_bounds(text: str) -> tuple[str, str]:
+    parts = re.sub(r"\s+", "", text).replace("年", "-").replace("月", "-").rstrip("日-").split("-")
+    year = int(parts[0])
+    month = int(parts[1]) if len(parts) > 1 else 1
+    day = int(parts[2]) if len(parts) > 2 else 1
+    lo = date(year, month, day)
+    hi = lo if len(parts) == 3 else date(
+        year, month if len(parts) == 2 else 12,
+        calendar.monthrange(year, month)[1] if len(parts) == 2 else 31,
+    )
+    return lo.isoformat(), hi.isoformat()
+
+
+def _date_parts(text: str, today: date | None = None) -> tuple[str, str, list[tuple[int, int]]]:
+    """日期字面量解析：同句**全部**日期表达按合取组合——相对窗口（近N年/今年去年前年/年代）
+    与绝对窗口（完整区间/上下界）各自收全后一次交集（下界 max、上界 min），不再首个命中即返回。
+
+    「近5年、2024年之前」此前命中相对分支就 return，同句的绝对上界被整段丢弃，
+    2025 年记录照样返回。同类多个界（『2025年之前、2024年之前』只留首个上界）与
+    多个区间（只留首区间，第二区间端点退化成裸日期）同样丢更紧条件——收全后取交集，
+    表达顺序置换结果不变。空交集原样返回（df>dt）：不 swap、不清空成无限窗，
+    下游硬过滤据此拒绝任何记录。"""
+    today = today or date.today()
+    los: list[str] = []
+    his: list[str] = []
+    rel_spans: list[tuple[int, int]] = []
+    for m in _REL_YEARS_RE.finditer(text):
         n = _cn_num(m.group("n"))
-        return (_shift_years(today, -n).isoformat(), today.isoformat(),
-                t[: m.start()] + " " + t[m.end():])
-    # -- 命名相对：今年/去年/前年 → 对应整年 --
-    m = _NAMED_REL_RE.search(t)
-    if m:
+        if n > 0:
+            los.append(_shift_years(today, -n).isoformat())
+            his.append(today.isoformat())
+            rel_spans.append(m.span())
+    for m in _NAMED_REL_RE.finditer(text):
+        if _span_overlaps(m.span(), rel_spans):
+            continue
         y = today.year - _NAMED_REL_OFFSET[m.group(0)]
-        return f"{y}-01-01", f"{y}-12-31", t[: m.start()] + " " + t[m.end():]
-    # -- 年代：YYYY年代 → 该十年整段（2010年代 = 2010-2019，此前被误当单年 2010）--
-    m = _DECADE_RE.search(t)
-    if m:
+        los.append(f"{y}-01-01")
+        his.append(f"{y}-12-31")
+        rel_spans.append(m.span())
+    for m in _DECADE_RE.finditer(text):
+        if _span_overlaps(m.span(), rel_spans):
+            continue
         start = (int(m.group(1)) // 10) * 10
-        return f"{start}-01-01", f"{start + 9}-12-31", t[: m.start()] + " " + t[m.end():]
-    m = re.search(_YEAR + r"\s*年?\s*[-~到至]\s*" + _YEAR + r"\s*年?", t)
-    if m:
-        lo, hi = sorted((int(m.group(1)), int(m.group(2))))
-        return f"{lo}-01-01", f"{hi}-12-31", t[: m.start()] + " " + t[m.end():]
-    m = re.search(_YEAR + r"\s*年?\s*(?:以后|之后|以来|往后|开始|起)", t)
-    if m:
-        date_from = f"{int(m.group(1))}-01-01"
-        t = t[: m.start()] + " " + t[m.end():]
-    m = re.search(_YEAR + r"\s*年?\s*(?:以前|之前)", t)
-    if m:
-        date_to = f"{int(m.group(1)) - 1}-12-31"
-        t = t[: m.start()] + " " + t[m.end():]
-    if not date_from:
-        m = re.search(r"(?:after|since)\s+" + _YEAR, t)
-        if m:
-            date_from = f"{int(m.group(1))}-01-01"
-            t = t[: m.start()] + " " + t[m.end():]
-    if not date_to:
-        m = re.search(r"before\s+" + _YEAR, t)
-        if m:
-            date_to = f"{int(m.group(1)) - 1}-12-31"
-            t = t[: m.start()] + " " + t[m.end():]
-    if not date_from and not date_to:
-        m = re.search(_YEAR + r"\s*年", t)
-        if m:
-            y = int(m.group(1))
-            date_from, date_to = f"{y}-01-01", f"{y}-12-31"
-            t = t[: m.start()] + " " + t[m.end():]
-    return date_from, date_to, t
+        los.append(f"{start}-01-01")
+        his.append(f"{start + 9}-12-31")
+        rel_spans.append(m.span())
+    a_lo, a_hi, a_spans = _absolute_date_parts(text, exclude=rel_spans or None)
+    if a_lo:
+        los.append(a_lo)
+    if a_hi:
+        his.append(a_hi)
+    spans = rel_spans + a_spans
+    if not spans:
+        return "", "", []
+    return (max(los) if los else ""), (min(his) if his else ""), sorted(spans, key=lambda s: s[0])
+
+
+def _absolute_date_exprs(text: str) -> "list[tuple[str, str, str, tuple[int, int]]]":
+    """逐条产出绝对日期表达 (kind, lo, hi, span)；kind ∈ {"range","lower","upper","bare"}。
+
+    **唯一扫描路径**：`_absolute_date_parts`（交集消费）与 parse_query 的并列年份歧义门
+    （区分『裸并列年』与『两个明确表达的相邻端点』）共用同一份，防两份正则分支漂移。
+    完整区间先全部消费——区间端点不再落入裸原子扫描（修前只认首个区间，第二个区间的
+    端点退化成裸日期、更紧的界随之被丢）。单个倒置区间照旧在此规范化（sorted endpoints）。
+    """
+    exprs: list[tuple[str, str, str, tuple[int, int]]] = []
+    range_spans: list[tuple[int, int]] = []
+    for m in _ABS_RANGE_RE.finditer(text):
+        bounds = sorted((_absolute_date_bounds(m.group(1)), _absolute_date_bounds(m.group(2))))
+        range_spans.append(m.span())
+        exprs.append(("range", bounds[0][0], bounds[1][1], m.span()))
+    for m in _ABS_DATE_RE.finditer(text):
+        if _span_overlaps(m.span(), range_spans):
+            continue
+        lo, hi = _absolute_date_bounds(m.group(0))
+        prefix = _DATE_PREFIX.search(text[:m.start()])
+        after = _DATE_FROM_SUFFIX.match(text, m.end())
+        before = _DATE_TO_SUFFIX.match(text, m.end())
+        span = ((prefix.start() if prefix else m.start()),
+                ((after or before).end() if (after or before) else m.end()))
+        if after or (prefix and prefix.group("op") in ("after", "since")):
+            exprs.append(("lower", lo, hi, span))
+        elif before or (prefix and prefix.group("op") == "before"):
+            exprs.append(("upper", lo, hi, span))
+        else:
+            exprs.append(("bare", lo, hi, span))
+    return exprs
+
+
+#: 并列年份歧义门只认这三类为「完整表达」——裸日期端点不算（见 parse_query 的 _MULTI_YEAR_RE 闸）。
+_RANGE_BOUND_KINDS = frozenset({"range", "lower", "upper"})
+
+
+def _range_or_bound_spans(text: str) -> list[tuple[int, int]]:
+    """完整区间/上下界表达消费的 span（裸日期不算）——与 `_absolute_date_parts` 同一表达式流。"""
+    return [span for kind, _lo, _hi, span in _absolute_date_exprs(text) if kind in _RANGE_BOUND_KINDS]
+
+
+def _absolute_date_parts(text: str, *, exclude: "list[tuple[int, int]] | None" = None
+                         ) -> tuple[str, str, list[tuple[int, int]]]:
+    """绝对日期窗口：完整区间与逐条上/下界**全部**收集后一次交集（下界 max、上界 min）。
+
+    修前只留首个区间与每侧首个界——同类更紧的界（『2025年之前、2024年之前』里的
+    2024）与第二个区间被整段丢弃，甚至界表达连 span 都没消费、残差门误弃权。
+    没有任何区间/上下界时退回首个裸日期单点窗口（原行为）。空交集原样返回
+    （df>dt）：不 swap、不清空成无限窗。after/since 下界含边界、before 上界取前一日，
+    月/日精度由 `_absolute_date_bounds` 保真。"""
+    los: list[str] = []
+    his: list[str] = []
+    spans: list[tuple[int, int]] = []
+    single: "tuple[str, str, list[tuple[int, int]]] | None" = None
+    for kind, lo, hi, span in _absolute_date_exprs(text):
+        if exclude and _span_overlaps(span, exclude):
+            continue
+        if kind == "range":
+            los.append(lo)
+            his.append(hi)
+            spans.append(span)
+        elif kind == "lower":
+            los.append(lo)
+            spans.append(span)
+        elif kind == "upper":
+            his.append((date.fromisoformat(lo) - timedelta(days=1)).isoformat())
+            spans.append(span)
+        elif single is None and ("年" in text[span[0]:span[1]] or "-" in text[span[0]:span[1]]):
+            single = (lo, hi, [span])
+    if spans:
+        return (max(los) if los else ""), (min(his) if his else ""), sorted(spans, key=lambda s: s[0])
+    return single or ("", "", [])
+
+
+def _span_overlaps(a: "tuple[int, int]", spans: "list[tuple[int, int]]") -> bool:
+    return any(a[0] < b[1] and b[0] < a[1] for b in spans)
+
+
+def _parse_dates(text: str, today: date | None = None) -> tuple[str, str, str]:
+    """按用户给出的年/月/日精度取边界，同时消费对应的完整日期表达。"""
+    df, dt, spans = _date_parts(text, today)
+    return df, dt, _blank_spans(text, spans)
 
 
 # ============================================================================
@@ -601,7 +759,7 @@ class _Span:
 def _entity_spans(q: str, catalog: dict) -> list[_Span]:
     """全查询最长-非重叠实体 span（含 raw 物理资产名）。用于判断否定作用域与保护实体内否定字。"""
     cand: list[_Span] = []
-    for dim in DIMENSIONS:
+    for dim in domain_dimensions():
         for entry in catalog.get(dim, []):
             targets = tuple(str(t).lower() for t in entry.get("targets", []))
             disp = str(entry.get("display") or dim)
@@ -637,38 +795,12 @@ def _entity_spans(q: str, catalog: dict) -> list[_Span]:
 
 
 def _date_spans(q: str) -> list[dict]:
-    """把 `_parse_dates` 那套模式在**整句**上再扫一遍，只为拿到时间表达的位置。
-
-    刻意镜像 `_parse_dates` 的分支顺序与优先级：前四种（相对年数 / 今年去年前年 / 年代 / 区间）任一命中
-    即独占返回；否则收集「以后 / 以前 / after·since / before」，四者都没有时才认裸年份。
-    只报位置、不报解析出的区间——区间的唯一真源仍是 `_parse_dates` 自己。
-    """
-    for regex in (_REL_YEARS_RE, _NAMED_REL_RE, _DECADE_RE):
-        match = regex.search(q)
-        if match:
-            return [{"start": match.start(), "end": match.end()}]
-    match = re.search(_YEAR + r"\s*年?\s*[-~到至]\s*" + _YEAR + r"\s*年?", q)
-    if match:
-        return [{"start": match.start(), "end": match.end()}]
-    found: list[dict] = []
-    has_from = has_to = False
-    for regex, is_from in (
-        (re.compile(_YEAR + r"\s*年?\s*(?:以后|之后|以来|往后|开始|起)"), True),
-        (re.compile(_YEAR + r"\s*年?\s*(?:以前|之前)"), False),
-        (re.compile(r"(?:after|since)\s+" + _YEAR), True),
-        (re.compile(r"before\s+" + _YEAR), False),
-    ):
-        if (is_from and has_from) or (not is_from and has_to):
-            continue
-        match = regex.search(q)
-        if match:
-            found.append({"start": match.start(), "end": match.end()})
-            has_from = has_from or is_from
-            has_to = has_to or not is_from
-    if found:
-        return sorted(found, key=lambda s: s["start"])
-    match = re.search(_YEAR + r"\s*年", q)
-    return [{"start": match.start(), "end": match.end()}] if match else []
+    """与执行解析共用日期表达及精度，不另维护一份日期正则分支。"""
+    try:
+        _df, _dt, spans = _date_parts(q)
+    except ValueError:
+        return []  # 非法日期由 parse_query 的日历校验给出说明。
+    return [{"start": a, "end": b} for a, b in sorted(spans)]
 
 
 def annotate_query_spans(query: str, keyword_mapping: "dict[str, list[dict[str, Any]]] | None" = None) -> list[dict]:
@@ -791,9 +923,9 @@ def _intent_has_search_signal(intent: QueryIntent) -> bool:
     故本函数只用来**配合执行词判定**「纯操作指令」，不单独据它弃权（见调用点）。
     纯数字 free-text（『20』）不算信号：它只会把一切含该数字的记录拉进来。
     """
-    if any(intent.constraints.get(d) for d in DIMENSIONS):
+    if any(intent.constraints.get(d) for d in domain_dimensions()):
         return True
-    if any(intent.excluded_constraints.get(d) for d in DIMENSIONS):
+    if any(intent.excluded_constraints.get(d) for d in domain_dimensions()):
         return True
     if intent.has_raw_data_required is not None:
         return True
@@ -854,7 +986,7 @@ def _unresolved_detail(shown: str) -> str:
 
     2026-07-25 产品哲学修正后重写了措辞。旧文案是「为避免返回违反你意图的结果，已弃权」，
     那是在把「弃权」当成一种美德讲。新措辞只说两件事实：哪个词没收录，以及**已经算好了**
-    忽略它之后能搜到什么（`workflow.build_degraded_search` 一直在算，一键就能看）。
+    忽略它之后能搜到什么（编排层会自动降级检索并把结果与标注一并给出）。
     这一档之所以还保留「先不直接返回」，不是「宁可弃权」，而是因为**它本来就没让用户空手**：
     未收录词多半是真实约束（「霍格沃茨综合征」「胰岛素」），直接按剩下的条件返回几千条
     并宣称是答案才是撒谎；而降级选项把这几千条摆在一次点击之外，用户随时能拿。
@@ -867,7 +999,7 @@ def _unresolved_detail(shown: str) -> str:
     return f"查询里有系统未收录的词：{shown}。把这些词去掉再搜，可能有结果。"
 
 
-#: 维度中文名锚点在 vocabulary.DIM_LABELS_CN（assay→「技术」、modality→「模态」）；本模块不再另抄一份。
+#: 维度中文名唯一真源=活动领域包的维度描述符（经 `domain_labels_zh()` 下发）；本模块不再另抄一份。
 #: 裁决留痕：旧 `_DIM_ZH` 的键误写 "technology"（维度键实为
 #: "assay"），OR 回执把英文维度键直出（「assay＝…」）；锚点化后输出中文标签属**修复**而非
 #: 漂移，明确接受。逐字契约钉：tests/test_negation_contract.py::test_or_note_uses_chinese_dim_labels。
@@ -911,12 +1043,12 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
         src, disp = (excluded, excluded_display) if neg else (constraints, display_map)
         return len(disp.get(dim) or src.get(dim) or [])
 
-    or_dims = [d for d in DIMENSIONS if _n(d, False) > 1]
-    or_neg_dims = [d for d in DIMENSIONS if _n(d, True) > 1]
-    and_dims = [d for d in DIMENSIONS if _n(d, False) == 1 or _n(d, True) == 1]
+    or_dims = [d for d in domain_dimensions() if _n(d, False) > 1]
+    or_neg_dims = [d for d in domain_dimensions() if _n(d, True) > 1]
+    and_dims = [d for d in domain_dimensions() if _n(d, False) == 1 or _n(d, True) == 1]
     # 软偏好段的多值也要数：_extract_preferences 已把偏好段从 constraints 抹掉，
     # 只数 constraints 会看不见「优先 A 或 B」里的「或」。
-    pref_or_dims = [d for d in DIMENSIONS
+    pref_or_dims = [d for d in domain_dimensions()
                     if len(preferred_display.get(d) or preferred.get(d) or []) > 1]
     if not (or_dims or or_neg_dims or and_dims or pref_or_dims):
         return {}
@@ -924,7 +1056,7 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
     def _one(dim: str, neg: bool) -> str:
         src, disp = (excluded, excluded_display) if neg else (constraints, display_map)
         vals = " / ".join(disp.get(dim) or src.get(dim) or [])
-        return f"{'不要' if neg else ''}{V.DIM_LABELS_CN.get(dim, dim)}＝{vals}"
+        return f"{'不要' if neg else ''}{domain_labels_zh().get(dim, dim)}＝{vals}"
 
     def _join(dims: list[str], neg: bool | None = None, sep: str = "、") -> str:
         # neg=None → 自动：这个维度只有排除侧有值就按排除说，避免把「不要小鼠」说成「物种＝Mouse」。
@@ -955,7 +1087,7 @@ def _describe_or_handling(query: str, constraints: dict, display_map: dict,
             # chip 自相矛盾（2026-08-15 触发点。
             fit = "exact"
             pref_text = "；".join(
-                f"优先{V.DIM_LABELS_CN.get(d, d)}：{' / '.join(preferred_display.get(d) or preferred.get(d) or [])}"
+                f"优先{domain_labels_zh().get(d, d)}：{' / '.join(preferred_display.get(d) or preferred.get(d) or [])}"
                 for d in pref_or_dims)
             note = (f"你写了「{mk}」。优先条件收到了多个值（{pref_text}），"
                     "已按\"命中任一都加权\"执行——这就是\"或\"的效果，不需要分两次查。")
@@ -1005,7 +1137,8 @@ _WHY_NOT_RE = re.compile(r"(?<![a-z])why\s+not(?![a-z])")
 
 
 def _leftover_negation(working: str) -> str:
-    """在『已消费正向 alias 的工作串』上找**未被白名单消费的否定形素**。找到 → 必须弃权（防静默反向）。
+    """在『已消费正向 alias 的工作串』上找**未被白名单消费的否定形素**。是否弃权由调用方按
+    从句邻近实体判定（2026-09-11 起：同从句有实体→弃权防反向；无实体碎尾→改道降级通道）。
     先移除 filler + raw 物理名（保护 免疫/是 等含否定字的合法填充词与已处理 raw），再查否定形素。"""
     text = working
     # 否定豁免复合词（非编码RNA/non-coding…）：词首 非/non- 是词素、非排除操作符 → 扫描前先整词屏蔽，
@@ -1232,6 +1365,53 @@ def _positive_core(q: str, catalog: dict, today: date | None = None):
     return date_from, date_to, working, constraints, display_map, raw_req, residual
 
 
+def _match_list_connector(q: str, pos: int, *, left: bool = False) -> tuple[str, int]:
+    """实体列表连接词的**唯一 gap 匹配**（正/反向共用；词表内容唯一真源 = `V.LIST_CONNECTORS`）。
+
+    词表里的英文连接词写作单空格字面形（" or "/" and "）——用户敲出双空格/tab/混合
+    空白时字面匹配落空，后项掉进正向内核被吃成「必须包含」（静默反向，比弃权更糟）。本函数
+    只把词形**泛化成空白类**，不改词表：
+    - 中文连接词：可选前导空白 + 字面词（与原两次 startswith 行为逐位一致）；
+    - 英文连接词（词表中自带单空格的项）：至少一个空白 + 核心词 + **右侧仍须空白**——
+      词边界不许吞 orange/androgen，句末悬空的 "or" 也不消费（悬空连接词被吃掉会把
+      「整句弃权」静默变成「只排除了前一项」）。
+    坐标始终落在原串上（不做全句空白归一，span/高亮坐标不漂移）。
+
+    正向（left=False）：pos = 左侧实体 span 结束坐标；命中返回 (词表 token, 连接词后坐标，
+    尾随空白留给调用方 `_skip_ws`)。
+    反向（left=True）：pos = 右侧实体 start 向左 `_skip_ws_left` 后的坐标（连接词须在此
+    结束）；命中返回 (词表 token, gap 起点坐标，已向左跳过空白)。
+    未命中返回 ("", pos)。
+    """
+    for conn in sorted(V.LIST_CONNECTORS, key=len, reverse=True):
+        core = conn.strip(" \t")
+        if core == conn:
+            # 中文连接词：字面匹配（反向时 pos 已向左跳过空白；正向时再向右跳过可选空白）。
+            if left:
+                if pos - len(conn) >= 0 and q[pos - len(conn):pos] == conn:
+                    return conn, _skip_ws_left(q, pos - len(conn))
+            else:
+                i = _skip_ws(q, pos)
+                if q.startswith(conn, i):
+                    return conn, i + len(conn)
+        else:
+            # 英文连接词：核心词两侧都须贴空白（等价词表单空格形的可变空白泛化）。
+            if left:
+                end = pos - len(core)
+                if end >= 1 and q[end:pos] == core and q[end - 1] in " \t":
+                    return conn, _skip_ws_left(q, end)
+            else:
+                i = pos
+                while i < len(q) and q[i] in " \t":
+                    i += 1
+                if i == pos:
+                    continue  # 左侧至少一个空白（词表 " or " 前缘的泛化）
+                if (q.startswith(core, i) and i + len(core) < len(q)
+                        and q[i + len(core)] in " \t"):
+                    return conn, i + len(core)
+    return "", pos
+
+
 def _consume_entity_list(q: str, start: int, spans: list[_Span]) -> tuple[list[_Span], int]:
     """从 start 起消费『同段紧邻的实体 span 列表』（仅允许连接词/空白分隔）。返回 (items, end)。"""
     items: list[_Span] = []
@@ -1243,10 +1423,10 @@ def _consume_entity_list(q: str, start: int, spans: list[_Span]) -> tuple[list[_
         items.append(sp)
         i = sp.end
         j = _skip_ws(q, i)
-        conn = _startswith_any(q, j, V.LIST_CONNECTORS)
+        # 连接词统一走 `_match_list_connector` 的 gap 匹配（中文/英文/可变空白同机制）。
+        conn, conn_end = _match_list_connector(q, i)
         if conn:
-            i = j + len(conn)
-            i = _skip_ws(q, i)
+            i = _skip_ws(q, conn_end)
             continue
         # 无连接词但紧邻另一实体（如「小鼠脑」）→ 视为复合负向对象继续消费，
         # 交由 _neg_items_kind_dim 判跨维歧义（NOT(mouse AND brain) 无法表达 → 弃权）
@@ -1269,9 +1449,18 @@ def _neg_items_kind_dim(items: list[_Span]) -> tuple[str, str, str]:
     return ("", "", sole)
 
 
-def _apply_exclude(items: list[_Span], excluded: dict, excluded_disp: dict) -> None:
+def _apply_exclude(items: list[_Span], excluded: dict, excluded_disp: dict) -> "bool | None":
+    """把负向实体列表落成排除条件（**统一处理 entity/raw**）：entity → 维度排除；
+    raw → 返回 False＝提交 raw 第三态（has_raw_data_required=False）。
+
+    raw 对象此前被静默跳过：句子被消费干净、排除条件却是空的，用户以为排除了 FASTQ、
+    实际一条都没排。返回 None＝本次不含 raw，调用方原样保留既有 raw 判定。"""
+    raw_excluded: "bool | None" = None
     for it in items:
-        if it.kind != "entity" or not it.dim:
+        if it.kind == "raw":
+            raw_excluded = False
+            continue
+        if not it.dim:
             continue
         excluded.setdefault(it.dim, [])
         for t in it.targets:
@@ -1280,6 +1469,7 @@ def _apply_exclude(items: list[_Span], excluded: dict, excluded_disp: dict) -> N
         excluded_disp.setdefault(it.dim, [])
         if it.display not in excluded_disp[it.dim]:
             excluded_disp[it.dim].append(it.display)
+    return raw_excluded
 
 
 def _mark(excised: list[bool], a: int, b: int) -> None:
@@ -1344,7 +1534,8 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
             reason, detail, _sole = _neg_items_kind_dim(items)
             if reason:
                 return _mk_abstain(query, reason, detail)
-            _apply_exclude(items, staged_exclude, staged_exclude_disp)
+            if _apply_exclude(items, staged_exclude, staged_exclude_disp) is False:
+                staged_raw = False
             _mark(excised, i, j + len(close))
 
     # 4b. 后缀 X 除外
@@ -1365,7 +1556,8 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
             reason, detail, _sole = _neg_items_kind_dim(chain)
             if reason:
                 return _mk_abstain(query, reason, detail)
-            _apply_exclude(chain, staged_exclude, staged_exclude_disp)
+            if _apply_exclude(chain, staged_exclude, staged_exclude_disp) is False:
+                staged_raw = False
             _mark(excised, chain[0].start, k + len(suf))
 
     # 4c. 前缀（中文，长优先）
@@ -1406,7 +1598,8 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
                         return _mk_abstain(query, "conflicting_polarity",
                                            "同一条件同时出现『排除』和『需要』，请只保留一个。")
                 # OK：只 excise 负向部分，『的+后缀』留给正向解析
-            _apply_exclude(items, staged_exclude, staged_exclude_disp)
+            if _apply_exclude(items, staged_exclude, staged_exclude_disp) is False:
+                staged_raw = False
             _mark(excised, i, clause_end)
 
     # 4d. 前缀（英文，词边界 + 紧邻 typed target；操作符表程序生成自 V.EXEC_NEG_PREFIX_EN）
@@ -1420,7 +1613,8 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
         reason, detail, _sole = _neg_items_kind_dim(items)
         if reason:
             return _mk_abstain(query, reason, detail)
-        _apply_exclude(items, staged_exclude, staged_exclude_disp)
+        if _apply_exclude(items, staged_exclude, staged_exclude_disp) is False:
+            staged_raw = False
         _mark(excised, i, end)
 
     # 5. 正向 remainder（excise 掉负向 clause）
@@ -1430,13 +1624,41 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
     df, dt, working, constraints, display_map, raw_pos, residual = _positive_core(remainder, catalog, today)
     stray = _leftover_negation(working)
     if stray:
-        return _mk_abstain(query, "unsupported_negation",
-                           f"检测到排除含义『{stray}』，但当前写法无法安全执行，请改写为明确的『不要 X』或去掉该词。")
+        # 2026-09-11 产品哲学修正（「不替用户弃权」延伸到兜底否定形素，带极性保险丝）：
+        # 形素与受控实体**不同从句**（口语碎尾「别笑/不要漏」——没有可否定对象）→ 改道
+        # unresolved_term 自动降级通道：忽略该形素、剩余条件重搜并显著标注；硬闸不变。
+        # 形素与实体**同从句**（「不是小鼠的」「not want mouse」——极性反转风险为真）→ 维持弃权。
+        pos = working.find(stray)
+        end = len(working)
+        for ch in "，。！？；,.;!?":
+            k = working.find(ch, pos + len(stray))
+            if k >= 0:
+                end = min(end, k)
+        clause_has_entity = pos >= 0 and any(
+            sp.kind == "entity" and pos + len(stray) <= sp.start < end for sp in spans)
+        # 中文否定形素**直接粘连**实义汉字的（『非哺乳类』『别管正常对照』——紧跟 ≥2 个连写汉字）
+        # 视同有真实排除对象（词表未收录不代表用户没在说东西），同样维持弃权；
+        # 只有碎尾语气（『别笑』『不要漏』——形素后至多 1 个连写汉字）才进降级通道。
+        j = pos + len(stray) if pos >= 0 else -1
+        run = 0
+        if j >= 0:
+            while j < len(working) and working[j] in " 	":
+                j += 1
+            while j < len(working) and "一" <= working[j] <= "鿿":
+                run += 1
+                j += 1
+        if clause_has_entity or run >= 2:
+            return _mk_abstain(query, "unsupported_negation",
+                               f"检测到排除含义『{stray}』，但当前写法无法安全执行，请改写为明确的『不要 X』或去掉该词。")
+        stray_terms = [t for t in str(stray).split() if t] or [str(stray)]
+        return _mk_abstain(query, "unresolved_term",
+                           _unresolved_detail("、".join(f"「{t}」" for t in stray_terms)),
+                           unresolved=stray_terms)
 
     # 7. 极性一致性
     if staged_raw is False and raw_pos:
         return _mk_abstain(query, "conflicting_polarity", "原始数据同时被要求『需要』和『排除』，请只保留一个。")
-    for dim in DIMENSIONS:
+    for dim in domain_dimensions():
         if set(constraints.get(dim, [])) & set(staged_exclude.get(dim, [])):
             return _mk_abstain(query, "conflicting_polarity", "同一实体同时出现『需要』和『排除』，请只保留一个。")
 
@@ -1450,9 +1672,9 @@ def _negation_parse(query: str, q: str, catalog: dict, today: date | None = None
     has_raw = False if staged_raw is False else (True if raw_pos else None)
 
     # 9. 否定信号在但什么都没抽到（如裸操作符无实体）→ 弃权
-    if (not any(staged_exclude.get(d) for d in DIMENSIONS)
+    if (not any(staged_exclude.get(d) for d in domain_dimensions())
             and has_raw is None
-            and not any(constraints.get(d) for d in DIMENSIONS)):
+            and not any(constraints.get(d) for d in domain_dimensions())):
         return _mk_abstain(query, "unsupported_negation",
                            "检测到排除含义，但未能确定要排除什么，请改写为明确的『不要 X』。")
 
@@ -1488,13 +1710,9 @@ def _entity_list_ending_at(q: str, end: int, spans: list[_Span]) -> list[_Span]:
             break
         items.append(sp)
         j = _skip_ws_left(q, sp.start)
-        conn = ""
-        for t in sorted(V.LIST_CONNECTORS, key=len, reverse=True):
-            if j - len(t) >= 0 and q[j - len(t):j] == t:
-                conn = t
-                break
+        conn, gap_start = _match_list_connector(q, j, left=True)
         if conn:
-            i = _skip_ws_left(q, j - len(conn))
+            i = gap_start
             continue
         break
     items.reverse()
@@ -1662,21 +1880,33 @@ def parse_query(query: str, keyword_mapping: dict[str, list[dict[str, Any]]] | N
         return _mk_abstain(query, "invalid_relative_date",
                            "相对时间年数必须为正整数（如『近3年』）；『近0年 / 近-1年』无意义，请修正后重试。")
     # 非法日历日期（月>12 / 该月不存在的日，如 2020年13月、2020年2月30日）→ 弃权（而非静默放宽成整年）。
-    _mymd = _YMD_RE.search(q)
-    if _mymd:
-        _yy, _mm = int(_mymd.group(1)), int(_mymd.group(2))
-        _dd = int(_mymd.group(3)) if _mymd.group(3) else 1
+    for match in _ABS_DATE_RE.finditer(q):
         try:
-            date(_yy, _mm, _dd)
+            _absolute_date_bounds(match.group(0))
         except ValueError:
             return _mk_abstain(query, "invalid_date",
-                               f"日期『{_mymd.group(0)}』不是合法日历日期；请检查月(1-12)/日，或只写年份。")
-    # 并列年份（X年和/与/、Y年）：是年份区间还是恰好这几年？语义歧义 → 弃权（此前只取前一个年份、忽略其余）。
-    _mmy = _MULTI_YEAR_RE.search(q)
-    if _mmy and _mmy.group(1) != _mmy.group(2):
-        return _mk_abstain(query, "ambiguous_multi_year",
-                           f"检测到并列年份『{_mmy.group(0)}』，无法确定是年份区间还是恰好这几年；"
-                           "请用『2020到2022年』表示区间，或分开查询。")
+                               f"日期『{match.group(0)}』不是合法日历日期；请检查月(1-12)/日。")
+
+    # 只拦「裸并列年」：先把完整区间/上下界表达**等长 blank**（坐标不动），再对剩下的
+    # 文字统一遍历并列年——『2020到2023年、2021到2024年』这类合法端点对随之隐身，
+    # 不再逐个判豁免，也就没有「首个合法端点对获豁免后、后续裸并列年漏检」的顺序依赖
+    # （『2020年到2025年、2022年以后、2023年和2024年』两顺序都必须弃权）。
+    # 裸并列（『2020年和2022年』）照旧弃权；合法多区间/上下界的交集语义不受影响。
+    # 遍历必须**重叠推进**：同年 pair（2023,2023）不歧义、不弃权，但若从 match 末尾继续，
+    # 从它第二组开始的下一 pair（2023,2024）会被整个跳过——『2023年和2023年和2024年』
+    # 换序两结局。故同年命中后从该 match 第二组的起始位置继续 search（严格右移、
+    # 沿用 `_MULTI_YEAR_RE` 单一正则、不造平行 pattern）；任何一组异年裸并列都弃权。
+    _q_bare = _blank_spans(q, _range_or_bound_spans(q))
+    _pos = 0
+    while True:
+        _mmy = _MULTI_YEAR_RE.search(_q_bare, _pos)
+        if _mmy is None:
+            break
+        if _mmy.group(1) != _mmy.group(2):
+            return _mk_abstain(query, "ambiguous_multi_year",
+                               f"检测到并列年份『{_mmy.group(0)}』，无法确定是年份区间还是恰好这几年；"
+                               "请用『2020到2022年』表示区间，或分开查询。")
+        _pos = _mmy.start(2)  # 同年 pair 不放行共享端点的下一 pair：从第二组起点继续（严格推进）
 
     # 软偏好（优先 X）先抽走：命中的整段从查询里抹成等长空格，后续所有路径（否定检测、正向解析、
     # 残差门）看到的都是同一个「已去偏好」的串。放在这里而不是各分支内部，是为了让正负两条路径
@@ -1753,7 +1983,7 @@ def parse_query(query: str, keyword_mapping: dict[str, list[dict[str, Any]]] | N
         # _is_bare_identifier 的剥壳判等拦不住；词面解析把编号拆成数字残片静默丢弃后，
         # 空约束会拿全库 top-N 冒充结果。宁可如实走标识符
         # 诚实通道（由 identifiers.lookup 反查条应答），也绝不退化成全库检索。
-        if (not any(_c0.get(d) for d in DIMENSIONS)
+        if (not any(_c0.get(d) for d in domain_dimensions())
                 and not _r0 and not _df and not _dt):
             hit = _classify_identifier(query)
             if hit and _identifier_residue(query, hit["value"]):

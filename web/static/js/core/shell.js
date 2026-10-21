@@ -7,7 +7,7 @@
    使用反馈卡片的本机编号行——benchfb 不反向 import 本文件，无环）。
    boot/interactions/onboarding/browse/search/board/task_pack/act/dream 经 import 取本文件导出
    （绞杀桥已全退役）。 */
-import { $, API, LS, MOTION, REDUCE_MOTION, clampInt, readJSON, toast, writeJSON } from "#core";
+import { $, API, LS, MOTION, REDUCE_MOTION, cancelLayoutTransition, clampInt, readJSON, toast, writeJSON, currentAccountScope, registerContextChanged, beginRequest } from "#core";
 import { LS_SIDE } from "#cards";
 import { placeFacetBar } from "#facets";
 import { ensureDatasetsLoaded } from "#browse";
@@ -15,15 +15,91 @@ import { getSelectedSources, getSourceMode } from "#interactions";
 import { benchfbSyncSettings } from "#benchfb";
 
 export function setSidebar(open) {
+    // 桌面（>780px）的「收起」= 导航轨折叠为胶囊（rail-collapsed），不再整栏隐藏——
+    // 内容（对话/复盘）留在中栏。rp2 起分面板恒住右侧筛选抽屉 #facetDrawer，不再随侧栏收展搬家。
+    if (window.innerWidth > 780) { setRailCollapsed(!open); return; }
     document.body.classList.toggle("side-closed", !open);
     // 移动端抽屉与浮窗互斥（2026-08-04：我的库 + 历史两窗都关）：浮窗曾靠抬 z 压回抽屉，
     // 结果抽屉导航/遮罩被浮窗盖死点不到——层级对调治不好，开抽屉即关浮窗。桌面不动：
     // 那边侧栏非遮罩，浮窗与侧栏本就同层共存。
     if (open && window.innerWidth <= 780) { closeLibWin(); closeHistWin(); }
-    if (window.innerWidth > 780) { try { localStorage.setItem(LS_SIDE, open ? "0" : "1"); } catch (_e) {} }
-    if (typeof placeFacetBar === "function") placeFacetBar(false);   // 收起/展开只安置分面条落位，不播导航收缩 FLIP（侧栏本身有滑入/滑出过渡，导航动画会与之抢戏、重复）
+    if (typeof placeFacetBar === "function") placeFacetBar();   // 收起/展开触发 swSync 刷新侧栏工作卡 + 筛选入口钮显隐（不播导航收缩 FLIP：侧栏本身有滑入/滑出过渡，导航动画会与之抢戏、重复）
 }
-function closeSidebarOnMobile() { if (window.innerWidth <= 780) { document.body.classList.add("side-closed"); if (typeof placeFacetBar === "function") placeFacetBar(); } }   // 抽屉关闭 → 分面条搬回结果区，别遗落在离屏抽屉里
+/* 导航轨胶囊折叠（桌面专属）：rail-collapsed = 左栏缩成悬浮胶囊、默认滑出左边界，
+   指针到左上角（rail-peek）唤出；持久化 LS_RAIL。移动端无此态（抽屉语义不变）。 */
+const LS_RAIL = "biodata_rail_collapsed_v1";
+function _readRailPref() { try { return localStorage.getItem(LS_RAIL) === "1"; } catch (_e) { return false; } }
+export function railCollapsed() { return document.body.classList.contains("rail-collapsed"); }
+export function setRailCollapsed(collapsed) {
+    if (window.innerWidth <= 780) collapsed = false;   // 移动端恒无胶囊态
+    const body = document.body;
+    const changed = body.classList.contains("rail-collapsed") !== collapsed;
+    body.classList.toggle("rail-collapsed", collapsed);
+    if (!collapsed) body.classList.remove("rail-peek");
+    if (changed && window.innerWidth > 780) { try { localStorage.setItem(LS_RAIL, collapsed ? "1" : "0"); } catch (_e) {} }
+    _syncRailToggleA11y();
+}
+function _syncRailToggleA11y() {
+    const btn = document.getElementById("railToggle");
+    if (!btn) return;
+    // 悬停提示走 CSS ::after 浮签（app.css），不设 title——原生 tooltip 会与浮签双份弹出
+    btn.setAttribute("aria-label", railCollapsed() ? "展开导航" : "收起导航");
+}
+/* 边缘唤出：仅桌面胶囊态。指针到左上角（≤28px × ≤320px）或悬在胶囊上 → rail-peek 滑入；
+   离开区域且不在胶囊上 → 延迟 250ms 撤掉。rAF 节流 pointermove。
+   坐标判定只认非负真实指针坐标：撤离检查传 (-1,-1) 时退化到只看胶囊 :hover。 */
+let _peekRaf = false, _peekTimer = 0, _railWasMobile = window.innerWidth <= 780;
+function _railPeekWanted(x, y) {
+    const card = document.getElementById("sideNavCard");
+    if (card && card.matches(":hover")) return true;
+    return x >= 0 && y >= 0 && x <= 28 && y <= 320;
+}
+function _dropRailPeek() { document.body.classList.remove("rail-peek"); }
+export function initRailToggle() {
+    const btn = document.getElementById("railToggle");
+    if (btn && !btn.dataset.bound) {
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", () => setRailCollapsed(!railCollapsed()));
+    }
+    const restore = document.getElementById("railRestore");
+    if (restore && !restore.dataset.bound) {
+        restore.dataset.bound = "1";
+        restore.addEventListener("click", () => setRailCollapsed(false));
+    }
+    _syncRailToggleA11y();
+    document.addEventListener("pointermove", (event) => {
+        if (_peekRaf || window.innerWidth <= 780 || !railCollapsed()) return;
+        _peekRaf = true;
+        const x = event.clientX, y = event.clientY;
+        requestAnimationFrame(() => {
+            _peekRaf = false;
+            if (window.innerWidth <= 780 || !railCollapsed()) { _dropRailPeek(); return; }
+            if (_railPeekWanted(x, y)) {
+                if (_peekTimer) { clearTimeout(_peekTimer); _peekTimer = 0; }
+                document.body.classList.add("rail-peek");
+            } else if (document.body.classList.contains("rail-peek") && !_peekTimer) {
+                _peekTimer = setTimeout(() => {
+                    _peekTimer = 0;
+                    if (!_railPeekWanted(-1, -1)) _dropRailPeek();
+                }, 250);
+            }
+        });
+    }, { passive: true });
+    document.addEventListener("pointerleave", () => { if (!_peekTimer) { _peekTimer = setTimeout(() => { _peekTimer = 0; _dropRailPeek(); }, 250); } });
+    // 过断点回到桌面时，移动抽屉的 side-closed 不带回来（桌面已无 fab 可开，会变成无栏可用的死状态）：
+    // 摘掉它，按桌面胶囊偏好恢复。桌面 → 移动端不动（抽屉开着过断点是合法移动抽屉开）。
+    window.addEventListener("resize", () => {
+        const mobile = window.innerWidth <= 780;
+        if (mobile === _railWasMobile) return;
+        _railWasMobile = mobile;
+        if (!mobile && document.body.classList.contains("side-closed")) {
+            document.body.classList.remove("side-closed");
+            setRailCollapsed(_readRailPref());
+            if (typeof placeFacetBar === "function") placeFacetBar();   // 断点跨回桌面：swSync 刷新侧栏工作卡 + 筛选入口钮显隐
+        }
+    });
+}
+function closeSidebarOnMobile() { if (window.innerWidth <= 780) { document.body.classList.add("side-closed"); if (typeof placeFacetBar === "function") placeFacetBar(); } }   // 抽屉关闭 → swSync 刷新工作卡（筛选面板住右侧 #facetDrawer，与左侧导航抽屉无关）
 /* ≤780px 固钉 logo（side-fab）恒显会压住从它下面滚过的正文（放宽横幅/控制台顶边被盖）。
    向下滚动阅读时把它淡出（fab-tucked），向上回滚/回到顶部即还——只切 class，动画走 side-fab 既有
    transition；桌面不动（那边 fab 与内容无冲突）。 */
@@ -40,9 +116,16 @@ export function initFabTuck() {
         if (!_fabTicking) { _fabTicking = true; requestAnimationFrame(_syncFabTuck); }
     }, { passive: true });
 }
-export function initSidebar() {   // 移动端默认收起（抽屉）；桌面读持久化，默认展开
+export function initSidebar() {   // 移动端默认收起（抽屉）；桌面读胶囊偏好，默认展开
     if (window.innerWidth <= 780) { document.body.classList.add("side-closed"); return; }
-    try { if (localStorage.getItem(LS_SIDE) === "1") document.body.classList.add("side-closed"); } catch (_e) {}
+    try {
+        // 旧「整栏隐藏」偏好一次性迁移成胶囊折叠并清键——桌面已无 fab，留着它会进无栏可用的死状态
+        if (localStorage.getItem(LS_SIDE) === "1") {
+            localStorage.removeItem(LS_SIDE);
+            localStorage.setItem(LS_RAIL, "1");
+        }
+        if (_readRailPref()) document.body.classList.add("rail-collapsed");
+    } catch (_e) {}
 }
 const SIDEBAR_WIDTH = { min: 240, max: 420, dflt: 300 };
 function setSidebarWidth(value, persist) {
@@ -141,15 +224,16 @@ export function initStrategyTooltips() {
 
 /* ---------- router ---------- */
 export function showView(name) {
+    cancelLayoutTransition();
     document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.dataset.view === name));
     document.querySelectorAll(".side-nav .nav-item[data-view]").forEach((n) => n.classList.toggle("active", n.dataset.view === name));
-    document.body.classList.toggle("on-query", name === "query");   // 仅智能查询视图允许侧栏二分（承载分面细化）
+    document.body.classList.toggle("on-query", name === "query");   // 仅智能查询视图允许侧栏二分（承载工作卡：对话/复盘）
     closeSidebarOnMobile();   // 移动端选完页面顺手收起抽屉
     window.scrollTo({ top: 0, behavior: "smooth" });
     if (name === "browse") ensureDatasetsLoaded();
     // 我的库（追踪+收藏）与历史记录都收进浮窗（#libWin / #histWin），不占视图位——
     // 本函数永远不该收到 "lib"/"history"/"favorites"/"archive"；收到也不渲染页面。
-    placeFacetBar(false, true);   // 切视图：不播导航 FLIP（导航卡保持原样、跨视图两列不动），但让数据细化卡按新视图淡入(回查询)/淡出(离开)
+    placeFacetBar();   // 切视图：swSync 按新视图刷新侧栏工作卡显隐 + 筛选入口钮（不播导航 FLIP：导航卡保持原样、跨视图两列不动）
 }
 
 /* ---------- 通用浮窗工厂（骨架 开合/拖动/缩放/落位/重钳 每窗一份） ----------
@@ -189,6 +273,7 @@ export function initFloatingWin(winEl, opts) {
        REDUCE_MOTION 直接 hidden。 */
     function close() {
         if (!w || w.hidden) return;
+        if (typeof opts.onClose === "function") opts.onClose();
         if (REDUCE_MOTION) { w.hidden = true; return; }
         w.classList.add("hist-win-out");
         if (closeTimer) clearTimeout(closeTimer);
@@ -521,7 +606,7 @@ export function aiGateChange(box) {
     syncAiGates();
 }
 
-export function syncAiGates() {
+export function syncAiGates(options = {}) {
     const capable = llmCapable();
     _AI_GATED.forEach(function (ids) {
         const box = $(ids[0]), row = $(ids[1]), tag = $(ids[2]);
@@ -536,6 +621,7 @@ export function syncAiGates() {
         }
     });
     syncStrategyNode();   // B 维度显隐与 rerankDetail 可见性随之重算
+    notifyAiConfigurationChanged(options);
 }
 
 /* langchain 扩展可用性 + 服务端 LLM 配置探测（启动一次）：
@@ -547,6 +633,10 @@ export function agentExtMissing() { return _agentExtMissing; }
 // 排序策略卡「已在线」判定用）。只在 /api/health 成功时更新。
 let _healthSnapshot = null;
 export function healthSnapshot() { return _healthSnapshot; }
+/* 护栏政策是否已知：health 快照到达前，webGuardOn() 恒 false——那是「未知」而不是
+   「非护栏」。密钥等政策的**恢复**动作必须等它知道（未知期先不恢复），否则网页版会把
+   历史遗留明文 key 先恢复进输入框，快照到达后只隐藏勾选框，值既留在界面也留在 localStorage。 */
+export function webGuardKnown() { return _healthSnapshot != null; }
 /* health 快照到达钩子（2026-08-26；注册式反转——project_updates 的登录后
    自动刷新经此触发，shell 不反向 import 它）。快照每次成功写入后逐个调用；钩子异常不连累
    主流程。 */
@@ -562,6 +652,43 @@ function _fireHealthArrived() {
    false（按本机形态处理，绝不误锁功能）。task_pack/act 等模块经此函数取判定，不自造第二真源。 */
 export function webGuardOn() {
     return !!(_healthSnapshot && _healthSnapshot.account && _healthSnapshot.account.required);
+}
+/* 政策已知后的密钥落位（唯一落点；由 syncAgentAvailability 在快照写入后调用一次）：
+   loadConfig 跑在 health 之前，那时护栏政策**未知**——未知期不恢复也不删（见 loadConfig 注释）。
+   快照到达后在这里按真实政策落位：
+   - 护栏 on：清空输入框里的残留值 + 从 LS.cfg 剔除明文 key（网页版从不持久化密钥）；
+   - 护栏 off（BYOK）：存档授权过 rememberApiKey 且输入框还空着 → 恢复进输入框、勾上记住；
+     输入框已有值（用户在未知期自己填了）绝不覆盖——**当前输入只活表单/内存，不落 localStorage**；
+     未授权的历史遗留 apiKey 按旧迁移口径剔除。 */
+let _policySecretApplied = false;
+function _applyPolicyDependentSecret() {
+    if (_policySecretApplied || !webGuardKnown()) return;
+    _policySecretApplied = true;
+    const guard = webGuardOn();
+    const keyInput = $("cfgApiKey");
+    const rememberBox = $("cfgRememberApiKey");
+    const c = readJSON(LS.cfg, null) || {};
+    if (guard) {
+        if (keyInput && keyInput.value) keyInput.value = "";
+        if (rememberBox) rememberBox.checked = false;
+        if (Object.prototype.hasOwnProperty.call(c, "apiKey")) {
+            delete c.apiKey;
+            c.rememberApiKey = false;
+            writeJSON(LS.cfg, c);
+        }
+        return;
+    }
+    const storedWantsRemember = c.save === true && c.rememberApiKey === true && typeof c.apiKey === "string";
+    if (!storedWantsRemember) {
+        if (Object.prototype.hasOwnProperty.call(c, "apiKey")) {   // 旧存档：未单独授权 → 剔除
+            delete c.apiKey;
+            c.rememberApiKey = false;
+            writeJSON(LS.cfg, c);
+        }
+        return;
+    }
+    if (rememberBox) rememberBox.checked = true;
+    if (keyInput && !keyInput.value) keyInput.value = c.apiKey;
 }
 /* 护栏模式设置面收口（health 快照到达后由 syncAgentAvailability 调用）：
    - 「记住api key」勾选禁用并强制不勾——网页版 key 只活内存，刷新即失；
@@ -626,6 +753,7 @@ export async function syncAgentAvailability() {
             ? "允许 AI 按您的话直接执行操作；每步都有记录，最近一次可一键撤回（未装 langchain 扩展，用基础规划）"
             : "允许 AI 按您的话直接执行操作；每步都有记录，最近一次可一键撤回";
         _syncWebGuardUI();   // 护栏模式设置面收口（health 快照刚更新，此刻判定最准）
+        _applyPolicyDependentSecret();   // 政策已知，密钥按真实政策一次性落位
     } catch (_e) {
         // fail-open：开关维持原状。但必须留痕（2026-08-15）——health 探测失败时
         // 「AI 执行」的实际可用性与界面显示可能不符，静默吞掉就无从排障。
@@ -849,7 +977,7 @@ export function applyPreset(key, opts) {
     }
     refreshTrialQuota();
     syncApiConfigSummary();
-    syncAiGates();   // 接入方式变了 → API 可用性可能翻转，门控视觉随之重算
+    syncAiGates({ configurationChanged: force });   // 配置编辑与有效性变化共用授权生命周期。
 }
 
 /* 试用额度卡（2026-08-25）：trial 预设 + 服务端通道可用 → 显示并拉取「今日剩余」。
@@ -858,16 +986,19 @@ export function applyPreset(key, opts) {
 let _trialQuotaSeq = 0;
 export async function refreshTrialQuota() {
     const box = $("trialQuotaInfo");
+    /* **每次进入即失效在途响应**（seq 自增放在一切早退之前）。此前「切走 trial」
+       的早退分支不推进 seq，旧的在途响应回来时 seq 仍匹配 → 会把试用卡重新点亮
+       （box.hidden=false），而当前预设早已不是 trial。 */
+    const seq = ++_trialQuotaSeq;
     if (!box) return;
     const t = _healthLlm && _healthLlm.trial;
     if (_llmWire() !== "trial" || !(t && t.available)) { box.hidden = true; return; }
-    const seq = ++_trialQuotaSeq;
     try {
         const r = await fetch(API.accountTrialQuota, { credentials: "same-origin" });
-        if (seq !== _trialQuotaSeq) return;
+        if (seq !== _trialQuotaSeq || _llmWire() !== "trial") return;   // 双闸：代序 + 预设复核
         if (!r.ok) { box.hidden = true; return; }   // 401/404：未登录或本机形态——不显示
         const d = await r.json();
-        if (seq !== _trialQuotaSeq) return;
+        if (seq !== _trialQuotaSeq || _llmWire() !== "trial") return;
         if (!d || d.available !== true) { box.hidden = true; return; }
         box.hidden = false;
         const num = $("trialQuotaNum"), fill = $("trialQuotaFill");
@@ -885,6 +1016,57 @@ export async function refreshTrialQuota() {
         }
     } catch (_e) { if (seq === _trialQuotaSeq) box.hidden = true; }
 }
+let _aiConfigurationHook = null, _aiConfigurationContext = null, _aiConfigurationBound = false;
+const _aiConfigurationPending = new Map();
+function aiConfigurationContext(cfg) {
+    return { owner: currentAccountScope(), provider: cfg.provider || "", base_url: cfg.base_url || "",
+        model: cfg.model || "", available: !!cfg.use_llm && !cfg.mock_llm && cfg.provider !== "trial" };
+}
+export function setAiConfigurationChangedHook(fn) {
+    _aiConfigurationHook = fn;
+    _aiConfigurationContext = aiConfigurationContext(getConfig());
+    if (!_aiConfigurationBound) {
+        _aiConfigurationBound = true;
+        registerContextChanged((kind) => {
+            if (kind === "before-account") _aiConfigurationContext = null;
+            if (kind === "account") {
+                _aiConfigurationContext = aiConfigurationContext(getConfig());
+                notifyAiConfigurationChanged();
+            }
+        });
+    }
+}
+export function notifyAiConfigurationChanged(options = {}) {
+    if (!_aiConfigurationHook) return;
+    const previous = _aiConfigurationContext;
+    const current = aiConfigurationContext(getConfig());
+    _aiConfigurationContext = current;
+    const descriptorOf = (context) => ({ owner: context.owner, provider: context.provider, base_url: context.base_url, model: context.model });
+    if (previous && previous.owner === current.owner
+        && (options.configurationChanged || JSON.stringify(previous) !== JSON.stringify(current))) {
+        const descriptor = descriptorOf(previous), key = JSON.stringify(descriptor);
+        if (!_aiConfigurationPending.has(key)) {
+            _aiConfigurationPending.set(key, { descriptor, inFlight: false });
+        }
+    }
+    for (const [key, pending] of _aiConfigurationPending) {
+        if (pending.descriptor.owner !== current.owner || pending.inFlight) continue;
+        pending.inFlight = true;
+        const token = beginRequest({}, () => currentAccountScope());
+        const stillCurrent = () => token.isCurrent() && _aiConfigurationPending.get(key) === pending;
+        const failed = (error) => {
+            pending.inFlight = false;
+            if (stillCurrent()) toast("旧AI授权释放失败，请重试或手动暂停学习：" + String(error.message || error));
+        };
+        try {
+            Promise.resolve(_aiConfigurationHook(pending.descriptor, current, stillCurrent)).then((data) => {
+                pending.inFlight = false;
+                if (data?.ok && (data.released === true || data.obsolete === true) && _aiConfigurationPending.get(key) === pending) _aiConfigurationPending.delete(key);
+            }).catch(failed);
+        } catch (error) { failed(error); }
+    }
+}
+
 export function getConfig() {
     const key = $("cfgProvider").value || "mock";
     const preset = LLM_PRESETS[key] || LLM_PRESETS.mock;
@@ -919,6 +1101,15 @@ export function getConfig() {
         auto_allow_llm: $("cfgAutoLlm") ? $("cfgAutoLlm").checked : false,
     };
 }
+
+/* 当前接入方式的 **wire 值**（真正发给后端的 provider：mock / trial / zhipuai /
+   openai-compatible）——唯一真源仍是 LLM_PRESETS（经 getConfig 读出，不复制映射表）。
+   rules/examples 的端点指纹要用它，但那两个面板模块不能 import #shell（历史环：
+   shell→browse→…→memory→examples，环只缩不涨），故由 board 的注册反转注入点
+   （与 setReplayLlmFn 同一套）把本函数register 给 `examples.setEndpointProviderWire`。 */
+export function llmProviderWire() {
+    return getConfig().provider;
+}
 export function loadConfig() {
     const c = readJSON(LS.cfg, null);
     if (!c) { applyPreset($("cfgProvider").value || "mock", { force: false }); syncAiGates(); return; }
@@ -942,14 +1133,19 @@ export function loadConfig() {
     if (c.topK) $("cfgTopK").value = String(c.topK);
     if (c.rerankTopN) $("cfgRerankTopN").value = String(c.rerankTopN);
     $("cfgSaveSession").checked = !!c.save;
-    // 护栏模式（网页版）：key 只活内存——绝不从 localStorage 恢复、也清掉历史遗留的已存 key。
-    const rememberApiKey = c.save === true && c.rememberApiKey === true && !webGuardOn();
+    /* 护栏模式（网页版）：key 只活内存——绝不从 localStorage 恢复、也清掉历史遗留的已存 key。
+       health 快照未到之前**政策未知**——未知期既不恢复、也不删（未知≠护栏，删了会毁掉
+       本机用户的存档），secret 一律先按空处理；快照到达后由 _applyPolicyDependentSecret 一次性
+       按真实政策落位（护栏→清输入框+剔存储；非护栏→按存档授权恢复）。 */
+    const policyKnown = webGuardKnown();
+    const rememberApiKey = policyKnown && c.save === true && c.rememberApiKey === true && !webGuardOn();
     $("cfgRememberApiKey").checked = rememberApiKey;
     if (rememberApiKey && typeof c.apiKey === "string") $("cfgApiKey").value = c.apiKey;
     // 旧存档迁移：旧版只有一个「记住设置」开关，不等于用户单独授权
     // 持久化密钥。缺 `rememberApiKey:true` 即从 localStorage 立即剔除旧 apiKey，
     // 其余非敏感配置原样保留。护栏模式同理剔除（网页版不持久化任何 key）。
-    if (Object.prototype.hasOwnProperty.call(c, "apiKey") && (!rememberApiKey || webGuardOn())) {
+    // 政策未知期不改存储——上面的「未知期不删」口径；已知后按政策删/恢复。
+    if (policyKnown && Object.prototype.hasOwnProperty.call(c, "apiKey") && (!rememberApiKey || webGuardOn())) {
         delete c.apiKey;
         c.rememberApiKey = false;
         writeJSON(LS.cfg, c);
@@ -963,7 +1159,9 @@ export function saveConfig() {
         // 护栏模式（网页版）：强制不持久化 key——勾选框已被禁用/隐藏，这里再兜底一道。
         const rememberApiKey = !webGuardOn() && $("cfgRememberApiKey").checked === true;
         const stored = { polish: c.polish, preset: c.preset, baseUrl: c.base_url, model: c.model, rerank: c.rerank === "llm", recall: c.recall !== "off", strategy: c.strategy === "auto", autoAllowLlm: c.auto_allow_llm, agentExec: c.agent, topK: c.top_k, rerankTopN: c.rerank_top_n, save: true, rememberApiKey };
-        if (rememberApiKey) stored.apiKey = c.api_key;
+        // 政策未知期（health 快照未到）不落 secret——BYOK 当前输入只活表单/内存；
+        // 非密钥设置照常持久化。快照到达后 _applyPolicyDependentSecret 按真实政策落位。
+        if (rememberApiKey && webGuardKnown()) stored.apiKey = c.api_key;
         writeJSON(LS.cfg, stored);
     } else {
         localStorage.removeItem(LS.cfg);

@@ -129,6 +129,9 @@ def _row(item: dict[str, Any]) -> dict[str, Any]:
         "identifier_label_en": ident["label_en"],
         "url": url,
         "collection_doi": provenance.collection_doi(item),
+        # **数据记录自己的 DOI**（Zenodo 的 conceptdoi/doi）——与 collection_doi
+        # （关联论文 DOI）粒度不同，读数走 provenance.dataset_doi 唯一入口，展示措辞不得混用。
+        "dataset_doi": provenance.dataset_doi(item),
         "raw_state": raw["state"],
         "raw_basis": raw["basis"],
         "raw_note_en": raw_en,
@@ -413,11 +416,41 @@ def _cite_key(row: dict[str, Any], index: int) -> str:
     return f"{safe or 'dataset'}{index + 1}"
 
 
+def _cite_keys(rows: list[dict[str, Any]]) -> list[str]:
+    """全表 BibTeX 引用键（**必须唯一**）。
+
+    UID 与序号直接拼接会撞键：`SCP11` 的第 2 条与 `SCP1` 的第 12 条都得到 `SCP112`
+    （两条都在官方快照里）——重复键会让 BibTeX 直接报错跳过，甚至把引用指到另一个数据集。
+    这里先按原式生成；只对**重复出现的后续条目**追加 `-2`/`-3`…（按出现顺序，确定性），
+    未撞键的条目键逐字不变（用户已经引过的键不许动）。"""
+    keys: list[str] = []
+    seen: dict[str, int] = {}
+    for index, row in enumerate(rows):
+        base = _cite_key(row, index)
+        taken = seen.get(base, 0) + 1
+        seen[base] = taken
+        keys.append(base if taken == 1 else f"{base}-{taken}")
+    return keys
+
+
+def _doi_notes(row: dict[str, Any]) -> list[str]:
+    """两条 DOI 注记，**粒度不同、措辞不许混用**（语料侧已把两类值分开）。
+
+    - dataset_doi = 数据记录自己的 DOI（Zenodo）→ 如实叫「Dataset DOI」；
+    - collection_doi = 产出该数据的**论文** DOI → 只能叫「Associated publication DOI」。
+    此前 Zenodo 的数据 DOI 被导出当成「关联论文 DOI」，是一句关于对象类型的假话。"""
+    notes: list[str] = []
+    if row.get("dataset_doi"):
+        notes.append(f"Dataset DOI: {row['dataset_doi']} (this DOI identifies the dataset "
+                     "record, not a paper).")
+    if row.get("collection_doi"):
+        notes.append(f"Associated publication DOI: {row['collection_doi']} (this DOI identifies "
+                     "the paper, not the dataset; cite per journal requirements).")
+    return notes
+
+
 def _assoc_doi_note(row: dict[str, Any]) -> str:
-    doi = row.get("collection_doi")
-    if not doi:
-        return ""
-    return f"Associated publication DOI: {doi} (this DOI identifies the paper, not the dataset; cite per journal requirements)."
+    return " ".join(_doi_notes(row))
 
 
 def to_ris(pack: dict[str, Any]) -> str:
@@ -432,22 +465,47 @@ def to_ris(pack: dict[str, Any]) -> str:
             rec.append(f"AN  - {r['identifier']}")
         if r.get("url"):
             rec.append(f"UR  - {r['url']}")
-        note = _assoc_doi_note(r)
-        if note:
+        for note in _doi_notes(r):
             rec.append(f"N1  - {note}")
         rec.append("ER  - ")
         out.append("\n".join(rec))
     return "\n\n".join(out) + ("\n" if out else "")
 
 
+#: 会在普通 LaTeX 排版里出事、但真实题名里合法出现的字符。
+#: `%` 尤其危险：它在 TeX 里开始注释，会把该行后半截（含右花括号）整段吞掉。
+_TEX_SPECIALS = (
+    ("\\", "/"),        # 反斜线先归一成斜杠（与历史行为一致；留着会变成 LaTeX 命令）
+    ("{", "("), ("}", ")"),
+    ("&", r"\&"), ("%", r"\%"), ("#", r"\#"), ("$", r"\$"),
+    ("_", r"\_"), ("~", r"\textasciitilde{}"), ("^", r"\textasciicircum{}"),
+)
+
+
 def _bib_escape(value: Any) -> str:
+    """BibTeX **文字字段**转义：花括号换成圆括号（保护条目结构）、反斜线换斜杠，
+    再转义 LaTeX 特殊字符（`_ & # % $ ~ ^`）——此前只处理花括号/反斜线，真实题名里的
+    `_ & # %` 原样输出：普通 LaTeX 排版报错，`%` 甚至吞掉后半行。
+
+    URL 字段不走本函数（见 `_bib_url`）：文字要能排版，**链接必须保持原样可点**。"""
+    text = str(value if value is not None else "").replace("{", "(").replace("}", ")")
+    for ch, replacement in _TEX_SPECIALS:
+        text = text.replace(ch, replacement)
+    return text
+
+
+def _bib_url(value: Any) -> str:
+    """BibTeX URL 字段：只做结构性归一（花括号/反斜线），**不做 TeX 转义**——
+    `\\_` / `\\%` 会把链接改坏（点开指向错误地址），URL 的真实值优先于排版细节。"""
     return str(value if value is not None else "").replace("{", "(").replace("}", ")").replace("\\", "/")
 
 
 def to_bibtex(pack: dict[str, Any]) -> str:
     """复用清单 → BibTeX。每个数据集一条 `@misc`（数据集，不是 `@article`）。"""
     out: list[str] = []
-    for i, r in enumerate(pack.get("table") or []):
+    rows = pack.get("table") or []
+    keys = _cite_keys(rows)      # 先全表判重：UID+序号拼接可能撞键（SCP11#2 vs SCP1#12）
+    for i, r in enumerate(rows):
         fields = [f"  title = {{{_bib_escape(r.get('dataset_name') or '(untitled)')}}}"]
         src = provenance.english_source_name(r.get("source") or "")
         ident = r.get("identifier")
@@ -455,9 +513,9 @@ def to_bibtex(pack: dict[str, Any]) -> str:
         if howpub:
             fields.append(f"  howpublished = {{{_bib_escape(howpub)}}}")
         if r.get("url"):
-            fields.append(f"  url = {{{_bib_escape(r['url'])}}}")
+            fields.append(f"  url = {{{_bib_url(r['url'])}}}")
         note = _assoc_doi_note(r)
         note_full = ("Reused public dataset. " + note).strip()
         fields.append(f"  note = {{{_bib_escape(note_full)}}}")
-        out.append("@misc{" + _cite_key(r, i) + ",\n" + ",\n".join(fields) + "\n}")
+        out.append("@misc{" + keys[i] + ",\n" + ",\n".join(fields) + "\n}")
     return "\n\n".join(out) + ("\n" if out else "")

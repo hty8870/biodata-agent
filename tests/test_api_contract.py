@@ -12,6 +12,10 @@
 自己稳）。断言 `required ⊆ actual`：**删/改**字段名立刻红；**加**字段不误伤（加字段是有意的，届时
 同步扩这里）。加/改任一端点响应字段 → 必须同步改本文件与 MODULES.md 那张表。
 """
+import json
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +27,7 @@ for _p in (str(_ROOT), str(_ROOT / "src")):
         sys.path.insert(0, _p)
 
 from fastapi.testclient import TestClient
+import pytest
 
 from dataset_recommender.app import webapp as webapp_module
 from dataset_recommender.app.webapp import app
@@ -61,6 +66,8 @@ RECOMMEND_CARD = {
     "assay", "sample_size", "gene_count", "raw_data_status", "published_date", "source",
     "url", "download_url", "dataset_uid", "n_files", "reason",
     "reachability",   # 国内可达性启发（非实测；值可能 None，键必在）
+    "collection_doi",  # collection 级编号（同一论文下 core/extended 等条目共用；无则 ""）。
+                       # 前端 cards.js 按「本响应里同 doi 的条数」给那些卡加「同系列 ×N」小标（3.1.1）。
 }
 
 # introduction dict：cards.js renderIntroduction / MCP get_dataset_introduction 共用（含样本量提醒字段）。
@@ -72,6 +79,12 @@ SOURCES_TOP = {"ok", "sources"}
 FAIR_TOP = {"ok", "fair_report"}
 FILES_TOP = {"ok", "files", "count"}
 HEALTH_TOP = {"ok", "version", "install_root"}
+
+# /api/replay/*（2026-09-28 复盘批，additive）：角标轮询与窗口载荷的必需键。
+REPLAY_STATUS_TOP = {"ok", "n_turns", "has_digest", "parse_failed", "unseen",
+                     "unseen_knowledge", "drawing", "skip_reason", "lint_count"}
+REPLAY_POINTS_TOP = {"ok", "digest", "threads", "snapshots", "unseen",
+                     "unseen_knowledge", "n_turns", "drawing", "skip_reason"}
 
 # /api/board/plan 顶层：board.js 每个状态都读同一批键，缺一个就得靠 try/except 判断状态。
 BOARD_PLAN_TOP = {
@@ -102,7 +115,9 @@ def test_recommend_results_shape():
 def test_recommend_zero_result_keeps_same_top_shape():
     """0 结果/弃权时顶层形状必须一致——前端空态分流靠这些键，缺了就静默空白。"""
     r = _recommend("火星章鱼组织")
-    assert r["resolution_status"] in ("no_match", "abstained", "clarification_required")
+    # 2026-09-12 起：解析弃权不再沉默——vector_fallback（全库语义召回+未经条件核验标注）
+    # 加入合法状态集；嵌入器不可用的环境才回退 abstained。
+    assert r["resolution_status"] in ("no_match", "abstained", "clarification_required", "vector_fallback")
     assert not _missing(RECOMMEND_TOP, r), f"0 结果顶层缺字段：{_missing(RECOMMEND_TOP, r)}"
 
 
@@ -140,11 +155,88 @@ def test_utterance_search_route_carries_policy_id():
     assert body["policy_id_str"].startswith("bpol1:")
 
 
-def test_coverage_caveats_item_shape_when_present():
-    """诚实降级 caveat 若非空，每项必须有 dim/label/count/by_source（results.js 据此渲染）。"""
-    r = _recommend("人类肺癌免疫细胞", sources=["10x Genomics", "cellxgene", "arrayexpress"], lenient_dims=[])
-    for cav in r.get("coverage_caveats") or []:
-        assert not _missing({"dim", "label", "count", "by_source"}, cav), f"coverage_caveat 缺键：{cav}"
+def test_coverage_caveats_survive_http_and_render_nonempty(monkeypatch):
+    """微型语料→真workflow→HTTP→真JS渲染；空数组不能再让契约检查空转。"""
+    from dataset_recommender.app import workflow as wf
+    from dataset_recommender.corpus.data_loader import RawRecord
+    from dataset_recommender.retrieval.normalizer import normalize_records
+
+    records = normalize_records([
+        RawRecord(source_file="fixture.json", record={
+            "dataset_uid": f"fixture-{i}", "dataset_name": f"fixture {i}",
+            "url": f"https://example.org/{i}", "source": "10x Genomics",
+            "species": "Human", "tissue": tissue,
+        }) for i, tissue in enumerate(["Lung", "", "", "Brain"])
+    ])
+    monkeypatch.setattr(wf, "load_normalized_corpus", lambda *a, **k: records)
+    query = "人类肺组织数据"
+    meta = wf.DatasetRecommendationWorkflow().run_with_meta(
+        wf.RecommendParams(query=query, sources=["10x Genomics"], use_llm=False))
+    assert meta.coverage_caveats == [{"dim": "tissue", "label": "组织", "count": 2,
+                                     "by_source": [{"source": "10x Genomics", "count": 2}]}]
+    response = client.post("/api/recommend", json={
+        "query": query, "sources": ["10x Genomics"], "use_llm": False,
+        "recall": "off", "rerank": "off", "strategy": "fixed"})
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["coverage_caveats"] == meta.coverage_caveats
+    node = os.environ.get("BIODATA_NODE") or shutil.which("node") or shutil.which("node.exe")
+    if not node:
+        pytest.skip("Node unavailable; HTTP projection assertions already ran")
+    script = r'''
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+const results = fs.readFileSync('web/static/js/search/results.js', 'utf8');
+const core = fs.readFileSync('web/static/js/core/core.js', 'utf8');
+const render = results.match(/^function renderCoverageCaveats\(data\) \{[\s\S]*?^\}/m)[0];
+const escape = core.match(/^export function escapeHtml\([^\n]*\{[\s\S]*?^\}/m)[0].replace('export ', '');
+let html = '', buttons = [], effects = [];
+const detail = {hidden: true};
+const box = {
+  hidden: true,
+  get innerHTML() { return html; },
+  set innerHTML(value) {
+    html = value;
+    buttons = [...html.matchAll(/<button\b([^>]*)>/g)].map(match => {
+      const attrs = Object.fromEntries([...match[1].matchAll(/([\w-]+)="([^"]*)"/g)].map(x => [x[1], x[2]]));
+      return {attrs, dataset: {sdim: attrs['data-sdim'], covHow: attrs['data-cov-how'], covIdx: attrs['data-cov-idx'], covDim: attrs['data-cov-dim']},
+        listeners: {}, addEventListener(k, fn) { this.listeners[k] = fn; },
+        setAttribute(k, v) { this.attrs[k] = v; }};
+    });
+  },
+  querySelectorAll(selector) {
+    if (selector === '.cov-strat') return buttons.filter(b => b.attrs.class === 'cov-strat');
+    if (selector === '[data-cov-idx]') return buttons.filter(b => b.dataset.covIdx !== undefined);
+    if (selector === '.cov-undo[data-cov-dim]') return buttons.filter(b => b.dataset.covDim !== undefined);
+    assert.fail('unexpected selector: ' + selector);
+  },
+  querySelector(selector) { assert.equal(selector, '[data-cov-detail="0"]'); return detail; }
+};
+const context = {input, $: id => { assert.equal(id, 'coverageCaveats'); return box; },
+  CB_DIM_LABEL: {tissue: '组织'}, prettySource: x => x,
+  toggleLenient: dim => effects.push(['lenient', dim]),
+  relaxDimFully: dim => effects.push(['drop', dim])};
+vm.runInNewContext(escape + '\n' + render + '\nrenderCoverageCaveats(input);', context);
+assert.equal(box.hidden, false);
+assert.ok(html.includes('另有 <b>2</b> 条'));
+assert.ok(html.includes('10x Genomics 2 条'));
+assert.ok(html.includes('未标注「组织」'));
+assert.equal(box.querySelectorAll('.cov-strat').length, 2);
+for (const button of box.querySelectorAll('.cov-strat')) button.listeners.click();
+assert.deepEqual(effects, [['lenient', 'tissue'], ['drop', 'tissue']]);
+box.querySelectorAll('[data-cov-idx]')[0].listeners.click();
+assert.equal(detail.hidden, false);
+context.input = {coverage_caveats: [], applied_lenient: []};
+vm.runInNewContext('renderCoverageCaveats(input)', context);
+assert.equal(box.hidden, true);
+assert.equal(box.innerHTML, '');
+'''
+    result = subprocess.run([node, "-e", script], cwd=_ROOT,
+                            input=json.dumps(data, ensure_ascii=False), capture_output=True,
+                            text=True, encoding="utf-8", timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_query_constraints_item_shape_when_present():
@@ -168,6 +260,15 @@ def test_datasets_sources_fair_files_health_shapes():
     uid = _recommend("人类肺癌数据")["results"][0]["dataset_uid"]
     assert not _missing(FAIR_TOP, client.get("/api/fair", params={"uid": uid}).json())
     assert not _missing(FILES_TOP, client.get("/api/files", params={"uid": uid}).json())
+
+
+def test_replay_status_and_points_empty_state_shape():
+    """复盘端点的空态契约（conv 从未落痕 → 空态而非 404；键集钉死防漂移）。"""
+    q = {"conv_id": "cCONTRACT-empty", "key": "k-contract"}
+    st = client.get("/api/replay/status", params=q).json()
+    assert not _missing(REPLAY_STATUS_TOP, st), f"replay/status 缺字段：{_missing(REPLAY_STATUS_TOP, st)}"
+    pts = client.get("/api/replay/points", params=q).json()
+    assert not _missing(REPLAY_POINTS_TOP, pts), f"replay/points 缺字段：{_missing(REPLAY_POINTS_TOP, pts)}"
 
 
 def test_datasets_limit_offset_page_only():

@@ -19,6 +19,7 @@ from __future__ import annotations
 import sys
 import threading
 import types
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -82,6 +83,48 @@ def _fake_sync_result(imported: int = 0) -> dict:
     return {"checked_at": "2026-08-26T00:00:00Z", "sources": [],
             "imported_total": imported, "skipped_existing": 0,
             "operation_id": "sync_test", "created_files": [], "failed_sources": []}
+
+
+@pytest.mark.parametrize("transition", ["terminal", "reconcile"])
+def test_durable_transition_cannot_overwrite_new_job(client, monkeypatch, transition):
+    from dataset_recommender.app import durable_jobs
+    db = webapp._corpus_sync_jobs_db()
+    durable_jobs.record_running("corpus_sync", "old-start", db_path=db)
+    monkeypatch.setattr(webapp, "_corpus_sync_job_run", lambda sources: None)
+    entered, release, next_started, next_done = (threading.Event() for _ in range(4))
+    method = "record_terminal" if transition == "terminal" else "reconcile_interrupted"
+    real = getattr(durable_jobs, method)
+    def paused(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(durable_jobs, method, paused)
+    if transition == "terminal":
+        webapp._CORPUS_SYNC_RECONCILED = True
+        webapp._CORPUS_SYNC_JOB["status"] = "running"
+    def finish_previous():
+        if transition == "terminal":
+            webapp._corpus_sync_job_finalize("done", {"old": True}, None)
+        else:
+            webapp._corpus_sync_job_snapshot()
+    def start_next():
+        next_started.set()
+        result = webapp._corpus_sync_job_start(None)
+        next_done.set()
+        return result
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        old = pool.submit(finish_previous)
+        assert entered.wait(3)
+        new = pool.submit(start_next)
+        assert next_started.wait(3)
+        try:
+            assert not next_done.wait(0.1)
+        finally:
+            release.set()
+        old.result(3)
+        assert new.result(3)["status"] == "running"
+    mirror = durable_jobs.load("corpus_sync", db_path=db)
+    assert mirror["status"] == "running" and mirror["result"] is None
 
 
 # ---------------------------------------------------------------- 1. unbound_patch_scope

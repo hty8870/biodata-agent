@@ -35,12 +35,16 @@ from __future__ import annotations
 from .labels import PROJECT_CONDITION_LABELS, UNNAMED_DATASET
 
 import json
+import re
 from typing import Any, Sequence
 
 from . import item_view, reuse_pack
 from .task_pack import files_to_zip_bytes  # 复用 task_pack 的内存拼包（服务端零写盘同一范式）
 from ..corpus.corpus import corpus_snapshot
 from ..corpus import provenance as PROV
+
+#: TSV/Markdown 单元格的单行化锚点：控制字符（含 \t \r \n）折成空格。
+_CTRL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 SCHEMA = "biodata-export-pack/v1"
 
@@ -478,10 +482,14 @@ def build_export_pack(snapshot: dict, records: Sequence[Any], today: str | None 
             "reason": cand.get("reason") or "",
             "verified_at": cand.get("verified_at") or "",
         })
+    candidates_by_uid = {c["uid"]: c for c in snapshot["candidates"]}
     for uid in unresolved:
+        # 来源能否解析与用户的研究裁决是两件事；墓碑仍保留保存时的结论。
+        cand = candidates_by_uid[uid]
         manifest_rows.append({
             "uid": uid, "name": "（当前库中找不到）", "identifier": "", "source": "",
-            "url": "", "status": "", "reason": "", "verified_at": "",
+            "url": "", "status": cand.get("status") or "待核验",
+            "reason": cand.get("reason") or "", "verified_at": cand.get("verified_at") or "",
         })
 
     pack = {
@@ -590,17 +598,17 @@ def _render_manifest_md(rows: list[dict]) -> str:
              "| 数据集 | 稳定标识符 | 来源 | URL | 状态 | 最后核验时间 | 理由 |", "|---|---|---|---|---|---|---|"]
     for r in rows:
         lines.append("| {} | {} | {} | {} | {} | {} | {} |".format(
-            _cell(r["name"]), _cell(r["identifier"] or "—"), _cell(r["source"] or "—"),
-            _cell(r["url"] or "—"), _cell(r["status"] or "—"), _cell(r["verified_at"] or "—"),
-            _cell(r["reason"] or "—")))
+            _md_cell(r["name"]), _md_cell(r["identifier"] or "—"), _md_cell(r["source"] or "—"),
+            _md_cell(r["url"] or "—"), _md_cell(r["status"] or "—"), _md_cell(r["verified_at"] or "—"),
+            _md_cell(r["reason"] or "—")))
     return "\n".join(lines) + "\n"
 
 
 def _render_manifest_tsv(rows: list[dict]) -> str:
     out = ["#uid\tdataset_name\tstable_identifier\tsource\turl\tstatus\tverified_at\treason"]
     for r in rows:
-        out.append("\t".join(_cell(r[k]) for k in ("uid", "name", "identifier", "source", "url",
-                                                   "status", "verified_at", "reason")))
+        out.append("\t".join(_one_line(r[k]) for k in ("uid", "name", "identifier", "source", "url",
+                                                       "status", "verified_at", "reason")))
     return "\n".join(out) + "\n"
 
 
@@ -629,7 +637,7 @@ def _render_candidates_md(snapshot: dict, rows: list[dict]) -> str:
         lines.append("|---|---|---|---|")
         for r in group:
             lines.append("| {} | {} | {} | {} |".format(
-                _cell(r["name"]), _cell(r["uid"]), _cell(r["reason"] or "—"), _cell(r["verified_at"] or "—")))
+                _md_cell(r["name"]), _md_cell(r["uid"]), _md_cell(r["reason"] or "—"), _md_cell(r["verified_at"] or "—")))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -638,10 +646,10 @@ def _render_candidates_tsv(snapshot: dict, rows: list[dict]) -> str:
     out = ["#uid\tdataset_name\tstatus\tdecision\treason\tverified_at"]
     decision = {"已核验": "纳入", "已排除": "排除", "待核验": "未裁决", "候选": "未裁决"}
     for r in rows:
-        out.append("\t".join(_cell(r[k]) for k in ("uid", "name", "status"))
-                   + "\t" + _cell(decision.get(r["status"], "未裁决"))
-                   + "\t" + _cell(r["reason"])
-                   + "\t" + _cell(r["verified_at"]))
+        out.append("\t".join(_one_line(r[k]) for k in ("uid", "name", "status"))
+                   + "\t" + _one_line(decision.get(r["status"], "未裁决"))
+                   + "\t" + _one_line(r["reason"])
+                   + "\t" + _one_line(r["verified_at"]))
     return "\n".join(out) + "\n"
 
 
@@ -676,9 +684,16 @@ def _render_recipe_json(pack: dict) -> str:
     return json.dumps(recipe, ensure_ascii=False, indent=1) + "\n"
 
 
-def _cell(value: Any) -> str:
-    """Markdown 表格 / TSV 单元格：竖线与换行会破坏结构，必须清洗。"""
-    return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+def _one_line(value: Any) -> str:
+    """TSV 单元格：任意控制字符（含 `\\t` `\\r` `\\n`）折成空格——一个字段里出现制表符
+    就等于多造一列、出现换行就多造一行，机器可读证据会整片错位。
+    与 download_script.one_line 同一口径（渲染层各自持有一份，跨包不建新依赖边）。"""
+    return _CTRL_CHARS.sub(" ", str(value if value is not None else ""))
+
+
+def _md_cell(value: Any) -> str:
+    """Markdown 表格单元格：单行化 + `|` 转义（竖线会截断整行）。"""
+    return _one_line(value).replace("|", "\\|")
 
 
 #: 每种导出类型的文件集（顺序即 ZIP 内顺序）。前三种是单项轻量导出，内容如实标注在

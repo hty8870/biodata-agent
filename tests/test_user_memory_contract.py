@@ -20,6 +20,8 @@ def test_memory_is_explicit_local_transparent_and_manageable():
         'id="memoryEnabled"', 'id="memoryManageBtn"',
         'id="memoryModal"', 'id="memoryAddForm"', 'id="memoryList"', 'id="memoryClearBtn"',
         "只保存在当前浏览器，不上传", "不会自动发送给检索服务",
+        # 统一记忆空间批：知识窗入口（记忆弹窗头 + 设置卡），浮窗骨架由 knowledge.js 接线
+        'id="knowledgeWinBtn"', 'id="knowledgeWin"',
     ):
         assert token in html
     assert "biodata_user_memory_v1" in core and "biodata_user_memory_enabled_v1" in core
@@ -100,7 +102,29 @@ def test_layered_memory_preserves_two_tiers_and_protects_preferences():
     # 分层判定 + 偏好不衰减（打分用 recency=1）在纯核。
     assert "memRankIsPreference" in rank
     assert 'kind === "note"' in rank
-    # 淘汰在落盘处统一决策（不再在读取处盲截断）。
-    assert "memRankEvict(items, MEMORY_LIMIT)" in memory
+    # 保存不自动淘汰旧原件；修改保留旧版本，新版本只存草稿。
+    assert "memRankEvict(items, MEMORY_LIMIT)" not in memory
+    assert 'original_id: old.id' in memory and 'status: "draft"' in memory
+    assert 'if (item.status !== "legacy") return false' in memory
     # 两个层级的用户可见标签仍在（研究偏好 / 已存需求）。
     assert "研究偏好" in memory and "已存需求" in memory
+
+
+def test_memory_promise_survives_the_rule_bridge():
+    """一个系统、两个行为档（2026-09-29 融合批；2026-10-09 统一记忆空间批更新）：
+    咨询档的承诺**逐字不变**，同时在用户看得见的地方说清行为档的唯一出口——
+    否则「只存本机」会被读成对知识提案账本也成立（那是假的）。"""
+    html = _read("web/static/index.html")
+    memory = _read("web/static/js/panel/memory.js")
+    # 承诺原文仍在（逐字断言在 test_memory_is_explicit_local_and_transparent 里，此处钉归属）
+    assert "只保存在当前浏览器，不上传" in html and "不会自动发送给检索服务" in html
+    # 出口写清楚：只有手动点「转为协作规则」的那几条会作为知识提案写进服务端、知识窗确认后生效
+    assert "作为知识提案写进服务端" in html
+    # 记忆开关不管协作规则（防「关了记忆就以为规则也停了」的错信）
+    assert "不受这个开关控制" in html
+    # 过桥是显式动作：按钮 + 二段确认 + 零网络原语（网络在 rules.js）
+    assert "转为协作规则" in memory and "COPY.common.confirmConvertRule" in memory
+    assert "fetch(" not in memory
+    # 桥的另一端是知识提案：只打「已提交」标、绝不冒充「已生效」
+    assert "approveMemoryAsRule" in memory and "result.pending" in memory
+    assert "ruleProposedAt" in memory and "已提交知识提案" in memory

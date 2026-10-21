@@ -138,17 +138,20 @@ def test_corpus_cache_generation_bound_vs_unbound_and_accounts(tmp_path):
     _write_patch(tmp_path, AID_B, blocks=["Y"])
 
     unbound = C.corpus_cache_generation(data_dir, tmp_path)
-    assert len(unbound) == 5   # 未绑定仍是历史 5 元组
+    # 刻意更新（2026-10-04）：第 6 位是跨进程写入代际令牌（未写过 → 空串），
+    # 第 7 位是用户层 external 的目录指纹（glob+stat，keeps 可观察 healer）。
+    assert len(unbound) == 7 and unbound[5] == ""
+    assert isinstance(unbound[6], tuple)
 
     with bind_patch_scope(AID_A):
         ka = C.corpus_cache_generation(data_dir, tmp_path)
     with bind_patch_scope(AID_B):
         kb = C.corpus_cache_generation(data_dir, tmp_path)
 
-    assert len(ka) == 7 and len(kb) == 7
+    assert len(ka) == 9 and len(kb) == 9
     assert ka != unbound and kb != unbound
     assert ka != kb                # 两账号键不同
-    assert ka[:5] == unbound       # 追加段与历史前 5 元组同形
+    assert ka[:7] == unbound       # 追加段与历史前 7 元组同形
 
 
 def test_double_account_cross_isolation(tmp_path):
@@ -349,7 +352,7 @@ def test_curation_restore_unbound_legacy(tmp_path):
         json.dumps([{"dataset_name": "A", "species": "Human"}]), encoding="utf-8")
     plan = CC.plan_remove(fname, project_root=tmp_path)
     CC.apply_remove(fname, confirm_token=plan["confirm_token"], project_root=tmp_path)
-    entries = list(CC._recycle_dir(tmp_path).glob("*.json"))
+    entries = list(CC.recycle_dir(tmp_path).glob("*.json"))
     assert len(entries) == 1
     rplan = CC.plan_restore(entries[0].name, project_root=tmp_path)
     assert "mode" not in rplan and "dataset_uid" not in rplan
@@ -368,3 +371,28 @@ def test_curation_recall_sync_unbound_legacy(tmp_path):
     with pytest.raises(CC.CurateError) as ei:
         CC.recall_sync_operation("whatever", project_root=tmp_path)
     assert ei.value.code == "unknown_operation"
+
+
+@pytest.mark.parametrize("stored,requested", [
+    ("Atlas-A", "atlas-a"),
+    ("Atlas\u200b-B", "atlas-b"),
+    ("Café-C", "cafe\u0301-c"),
+])
+def test_uid_block_remove_load_restore_uses_one_comparison_key(tmp_path, stored, requested):
+    base = _write_base(tmp_path, [
+        {"dataset_uid": stored, "dataset_name": "Synthetic atlas", "species": "Human"}])
+    original = (base / "base.json").read_bytes()
+    with bind_patch_scope(AID_A):
+        assert _uids(C.load_full_corpus(base, tmp_path)) == [stored]
+        plan = CC.plan_remove(requested, project_root=tmp_path)
+        assert plan["_kind"] == "block"
+        result = CC.apply_remove(requested, confirm_token=plan["confirm_token"], project_root=tmp_path)
+        assert result["moved_to"] == "patch:blocks"
+        assert C.load_full_corpus(base, tmp_path) == []
+        assert C.load_normalized_corpus(base, tmp_path, sources=None) == []
+        assert pp.uid_key(stored) not in pp.effective_visible_uids(tmp_path, AID_A)
+        restore = CC.plan_restore(stored, project_root=tmp_path)
+        CC.apply_restore(stored, confirm_token=restore["confirm_token"], project_root=tmp_path)
+        assert _uids(C.load_full_corpus(base, tmp_path)) == [stored]
+        assert pp.uid_key(stored) in pp.effective_visible_uids(tmp_path, AID_A)
+    assert (base / "base.json").read_bytes() == original

@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import json
 import sys
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +38,35 @@ _RECALL_ENVS = [
 def _clear_recall_env(monkeypatch) -> None:
     for name in _RECALL_ENVS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("indices", [
+    [0, 0], [0], [-1, 1], [1, 2], [None, 1], [0.0, 1], [False, 1],
+])
+def test_recall_embed_response_indices_must_be_a_permutation(monkeypatch, indices):
+    rows = [{"embedding": [1.0, 0.0], **({"index": i} if i is not None else {})} for i in indices]
+    monkeypatch.setattr(recall_api, "_post", lambda *args: {"data": rows})
+    monkeypatch.setattr(recall_api, "_embed_dims", lambda: 2)
+    monkeypatch.setattr(recall_api._EMBED_QPM, "allow", lambda: True)
+    assert recall_api.api_embed_texts(["query", "doc"], record_ledger=False) is None
+
+
+def test_recall_embed_response_reorders_unique_indices(monkeypatch):
+    monkeypatch.setattr(recall_api, "_post", lambda *args: {"data": [
+        {"index": 1, "embedding": [0.0, 1.0]}, {"index": 0, "embedding": [1.0, 0.0]},
+    ]})
+    monkeypatch.setattr(recall_api, "_embed_dims", lambda: 2)
+    monkeypatch.setattr(recall_api._EMBED_QPM, "allow", lambda: True)
+    assert recall_api.api_embed_texts(["query", "doc"], record_ledger=False) == [[1.0, 0.0], [0.0, 1.0]]
+
+
+@pytest.mark.parametrize("row", [None, {"index": 0, "embedding": [float("nan"), 0.0]},
+                                  {"index": 0, "embedding": [float("inf"), 0.0]}])
+def test_recall_embed_response_malformed_values_fail_closed(monkeypatch, row):
+    monkeypatch.setattr(recall_api, "_post", lambda *args: {"data": [row]})
+    monkeypatch.setattr(recall_api, "_embed_dims", lambda: 2)
+    monkeypatch.setattr(recall_api._EMBED_QPM, "allow", lambda: True)
+    assert recall_api.api_embed_texts(["query"], record_ledger=False) is None
 
 
 def _rec(name: str, uid: str = "") -> DatasetRecord:

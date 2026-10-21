@@ -142,10 +142,18 @@ _SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
         "改写后的检索句：把当前查询换成规则更容易正确解析的说法，语义等价、"
         "不新增用户没表达的条件；当前没有可改的查询就不填。"
     ),
-    "display": (
-        "检索结果是否更新到结果区：检索本身就是用户的诉求时填 true——用户等着看结果，"
-        "结果区还没有内容的首次检索更要上屏（收尾前必须至少上屏一次）；"
-        "只是为后续动作探路、中间看一眼时不填（缺省 = 不上屏）。"
+    # 2026-09-13 夜批 rerank 双通道：relax 槽（结构化定向放松，零 LLM）。
+    "relax": (
+        "定向放松清单（数组，元素取上次 rerank 结果 probe_zh 报告里列出的 key："
+        "dim:维度 / exclude:维度 / raw / date / only:维度，可多选）。"
+        "填了就走零-LLM 定向放松重检（不再改写）；报告里没有的 key 不要发明，"
+        "拿不准就不填（走默认改写通道）。"
+    ),
+    # display 槽已退役（2026-09-13 rerank 处置批）：上屏唯一出口是 results.show 动词，
+    # rank/rerank 不再声明该槽——原「检索结果是否更新到结果区」描述随之摘除。
+    "handle": (
+        "要上屏的试跑结果句柄：latest（最近一次检索/重查试跑，缺省值）/ latest_rank / "
+        "latest_rerank / 步号（如 \"3\"）；没有就不填（=latest）。"
     ),
     "target_route": (
         "要换到的处理路线：search=检索向（找数据/改条件/贴编号）、"
@@ -187,6 +195,8 @@ _SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
 _REASON_SLOT_DESCRIPTIONS_ZH: dict[str, str] = {
     "rerank": "为什么需要优化检索词（一句中文，如「原句太口语化」）；没有就不填。",
     "route.request": "为什么要换路线（一句中文，如「用户要找数据、不是管护动作」）；没有就不填。",
+    # 2026-09-14 YOLO ask.relax：发起放宽询问的理由（随选择卡展示给用户，要诚实具体）。
+    "ask.relax": "为什么判定当前查询的条件不合理/互相打架（一句中文，会展示给用户）；没有就不填。",
 }
 
 #: query 槽的**按动词专职描述**：「改写后的检索句…」那句只贴合
@@ -238,15 +248,17 @@ def _args_model_for(spec: "_ap.VerbSpec") -> type[BaseModel]:
                 Field(description=_SOURCE_SLOT_DESCRIPTIONS_ZH.get(
                     spec.verb, _SLOT_DESCRIPTIONS_ZH["source"])),
             )
-        elif slot == "display":
-            # 布尔槽（2026-08-17 rank/rerank）：检索结果是否上屏——schema 层给 bool
-            # 类型引导填写；必填与否的裁决仍归 build_plan_from_raw（required 恒空铁律不变）。
-            fields["display"] = (bool, Field(description=_SLOT_DESCRIPTIONS_ZH["display"]))
+        # display 布尔槽的 schema 分支已随该槽退役摘除（2026-09-13 rerank 处置批，
+        # 见 _SLOT_DESCRIPTIONS_ZH 的退役注记）；handle 等字符串槽走下方通用 else。
         elif slot == "uids":
             # 数组槽（2026-08-20 批）：cite.export 的编号清单——schema 层给
             # list[str] 类型引导（元素可混占位引用）；形状/流向裁决归 build_plan_from_raw
             # 与 execute 解析层，required 恒空铁律不变。
             fields["uids"] = (list[str], Field(description=_SLOT_DESCRIPTIONS_ZH["uids"]))
+        elif slot == "relax":
+            # 数组槽（2026-09-13 夜批 rerank 双通道）：探测报告 key 清单（可多选）——
+            # schema 层给 list[str] 类型引导；key 合法性裁决归 `_relax_to_suppressed`。
+            fields["relax"] = (list[str], Field(description=_SLOT_DESCRIPTIONS_ZH["relax"]))
         else:
             description = _SLOT_DESCRIPTIONS_ZH.get(
                 slot, f"{slot} 槽位：按原话里的说法填，没有就不填。")
@@ -494,10 +506,16 @@ class RankResult(BaseModel):
     query（生效检索句）/ total（命中总数，meta.result_total 口径 = /api/recommend 未截断
     命中总数）/ filters（生效条件，meta.active_filters 原样 = **投影 dict 的列表**，
     workflow._active_filters 投影形状）/ top（前 3 条紧凑 digest）/
-    displayed（是否上屏）/ batch（display=true 时的批次原料 dict——kind/label/
+    displayed（是否上屏）/ batch（批次原料 dict——kind/label/
     query_raw/query_effective/payload，batch_id/seq/created_at 由轮级装配补齐；否则 None）。
+    上屏语义（2026-09-13 rerank 处置批）：display 槽已退役——结果经规则程序判定健康时
+    由后端**不经 LLM 自动上屏**（auto-show，results.show 的机械直调），displayed/batch
+    即由它产生；不健康时两键为 False/None，屏态改经 results.show 动词。
     top 条目 2026-08-20 扩字段：dataset_uid + rank（1 起序号）——同批依赖占位的
-    解析源（`$<N>.top[<i>].dataset_uid`），decide 据它挑对象、execute 据它解析。"""
+    解析源（`$<N>.top[<i>].dataset_uid`），decide 据它挑对象、execute 据它解析。
+    relax_live（2026-09-14 YOLO 批，additive）：degenerate 试跑顺带的 ask.relax
+    适用性情报（零 LLM 预演「放松哪维能救回几条」，key/label/count 紧凑 digest）；
+    None=未探测（healthy/弃权/异常档不探）。"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -507,25 +525,109 @@ class RankResult(BaseModel):
     top: list[dict[str, Any]] = []
     displayed: bool = False
     batch: dict[str, Any] | None = None
+    relax_live: list[dict[str, Any]] | None = None
 
 
 class RerankResult(BaseModel):
     """`rerank`（`agent_exec._loop_rerank`）的出口契约：在 RankResult
     口径上把 query 拆成三键——original_query（原始坏 query）/ rewritten_query（实际生效
     的检索句；改写未通过机械健全性检查时 = 原句）/ rewritten（改写是否被采纳，如实标注）。
-    batch 的 label 取生效的 rewritten_query。top 条目同 RankResult 的批扩字段
-    （dataset_uid + rank，依赖占位解析源）。"""
+    top 条目同 RankResult 的批扩字段（dataset_uid + rank，依赖占位解析源）。
+    试跑化（2026-09-13 rerank 处置批）：rerank 不再直接上屏，只**试跑**并机械对照
+    新旧结果健康度，三态出口——①基线健康+试跑恶化 → rejected=true + comparison_zh
+    对照（无 batch，不上屏）；②基线恶化+试跑健康 → 自动上屏（auto_shown=true，
+    displayed/batch 由它产生）；③其余 → 仅 advisory 对照（baseline + comparison_zh，
+    明显改善由模型经 results.show 上屏）。生死线只拦「健康→恶化」，双方都健康时
+    机械层只报事实不判「更好」。
+    双通道（2026-09-13 夜批）：applied 标记本次走的通道——"relax"（结构化放松，
+    零改写确定性重检原句，relaxed 列出实际生效的 suppressed filter_id）/
+    "rewrite"（改写被采纳）/ "none"（改写未通过机械检查退回原句）；
+    probe_zh 回传本次注入改写调用的松弛试算报告（仅改写通道非空）——decide 侧据此
+    决定下一轮是否走 relax 通道（报告 key 即 relax 槽合法取值）。
+    relax_live（2026-09-14 YOLO 批，additive）：同 RankResult——degenerate 试跑
+    顺带的 ask.relax 适用性情报（按生效检索句 + 原始结构化现场预演，与
+    `_loop_ask_relax` 的弹卡口径同源）。
+    双闸（2026-09-18 触发子集批，additive）：
+    - 触发闸——屏面 healthy/unknown 且结果充足（>3 条）时工具如实拒绝执行
+      （零 LLM、零试跑）：refused=true + refuse_reason="screen_healthy" + note_zh
+      如实句（拒绝是数据不是故障，同 ask.relax 的 screen_not_degenerate 先例）；
+    - 语义闸——改写定稿经 `_constraint_diff` 机械对比原句，未授权语义变化即
+      semantic_blocked=true：屏面健康 → rejected=true + reject_reason=
+      "semantic_change"（生死线扩档，原档记 "trial_degenerate"）；空屏面放行
+      auto-show 但 disclosure_zh 如实标注语义变化明细；其余档 advisory 附警示。
+    repair 术式（2026-09-18 专家化批 WP3，additive）：改写通道前的零 LLM 局部
+    纠错路由——原句因未收录词弃权时，受控词表唯一最近邻打补丁（applied="repair"），
+    纠正明细随 comparison_zh 给出、空屏 auto-show 时 disclosure_zh 如实标注
+    「请核实」；不适用/不采纳时 repair 键为 None 或候选 advisory（adopted=False），
+    改写通道照旧兜底。repair 键形状：{terms: [{term, candidates: [{dim, display,
+    alias, targets, absent, dist}]}], adopted, patched_query, adopted_fixes}。"""
 
     model_config = ConfigDict(extra="allow")
 
     original_query: str
     rewritten_query: str
     rewritten: bool
+    applied: str = ""
+    relaxed: list[str] = []
+    probe_zh: str = ""
+    repair: dict[str, Any] | None = None
     total: int
     filters: list[dict[str, Any]] = []
     top: list[dict[str, Any]] = []
     displayed: bool = False
     batch: dict[str, Any] | None = None
+    baseline: dict[str, Any] | None = None
+    comparison_zh: str = ""
+    rejected: bool = False
+    auto_shown: bool = False
+    relax_live: list[dict[str, Any]] | None = None
+    refused: bool = False
+    refuse_reason: str = ""
+    note_zh: str = ""
+    reject_reason: str = ""
+    semantic_blocked: bool = False
+    disclosure_zh: str = ""
+
+
+class ShowResult(BaseModel):
+    """`results.show`（`agent_exec._loop_show`）的出口契约（2026-09-13 rerank 处置批，
+    屏态唯一出口）：八键恒在——shown（是否真上屏；句柄无对应试跑或指纹复核不符时
+    False，fail-closed 如实回报）/ handle（入参原样）/ origin（试跑来源动词：
+    rank / rerank / search.rerun）/ query_effective（生效检索句）/ total（命中总数）/
+    overridden（是否覆盖了屏面既有结果）/ batch（批次原料 dict，形状与 rank/rerank
+    批次同——kind 取内容来源动词，前端按 kind 渲染无感）/ displayed（=shown，
+    与 RankResult 口径对齐）。拒绝原因如实落在 note_zh（extra allow）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    shown: bool
+    handle: str = ""
+    origin: str = ""
+    query_effective: str = ""
+    total: int = 0
+    overridden: bool = False
+    batch: dict[str, Any] | None = None
+    displayed: bool = False
+
+
+class AskRelaxResult(BaseModel):
+    """`ask.relax`（`agent_exec._loop_ask_relax`）的出口契约（2026-09-14 YOLO 批，
+    「问用户放松哪个条件」选择卡）：六键恒在——asked（是否真发起了询问；闸内情拒绝
+    时 False + refuse_reason 落在 extra，拒绝是数据不是故障）/ query（被判坏的原查询）/
+    reason（模型给的判定理由，随卡展示）/ options（给模型看的选项摘要 list，无 suppress
+    细节）/ ask_relax（真发起时的前端选择卡载荷 dict：query + reason + options〔含
+    suppress；不含 preview——2026-09-14 用户评审：示例名塞按钮信息效率太低〕；拒绝/
+    未发起时 None）/ note_zh（人读如实句，成功与拒绝恒在）。
+    本工具不上屏（屏态唯一出口仍是 results.show），只发问卡。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    asked: bool
+    query: str = ""
+    reason: str = ""
+    options: list[dict[str, Any]] = []
+    ask_relax: dict[str, Any] | None = None
+    note_zh: str = ""
 
 
 class RouteRequestResult(BaseModel):
@@ -682,6 +784,10 @@ LOOP_RESULT_MODELS: dict[str, type[BaseModel]] = {
     # RAG 工具组与逃生口（常驻，原开关登记分支摘除）。
     "rank": RankResult,
     "rerank": RerankResult,
+    # 2026-09-13 rerank 处置批：屏态唯一出口。
+    "results.show": ShowResult,
+    # 2026-09-14 YOLO 批：「问用户放松哪个条件」选择卡（不上屏，只发问）。
+    "ask.relax": AskRelaxResult,
     "route.request": RouteRequestResult,
     # 2026-08-17 rb1 回滚动词化。
     "curate.rollback": RollbackResult,

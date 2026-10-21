@@ -20,10 +20,32 @@ def _read(rel: str) -> str:
 
 
 def test_backend_serves_dataset_route() -> None:
-    """webapp.py 提供 GET/HEAD /dataset → dataset.html（只读静态，不接受写入）。"""
+    """webapp.py 提供 GET/HEAD /dataset → dataset.html（只读静态，不接受写入）。
+
+    注册面静态钉（路由 + 方法集）；行为面用**真实 HTTP 调用**钉：返回 dataset.html 骨架、
+    Cache-Control: no-cache（骨架每次回源再验证）与逐页计算的 CSP 头、POST 不接受写入。
+    旧实现曾把 `FileResponse(...)` 整句字面量写进断言——CSP 改为随页面动态计算后该形状
+    失真，被真实调用取代（同事实、更强证据）。
+    """
     webapp = _read("src/dataset_recommender/app/webapp.py")
-    assert '@app.api_route("/dataset"' in webapp
-    assert 'FileResponse(STATIC_DIR / "dataset.html", headers={"Cache-Control": "no-cache"})' in webapp
+    assert '@app.api_route("/dataset", methods=["GET", "HEAD"]' in webapp, "路由必须同时接受 GET/HEAD"
+
+    import sys
+    sys.path.insert(0, str(ROOT / "src"))
+    from fastapi.testclient import TestClient
+    import dataset_recommender.app.webapp as webapp_module
+
+    client = TestClient(webapp_module.app, base_url="http://127.0.0.1")
+    get = client.get("/dataset")
+    assert get.status_code == 200
+    assert "text/html" in get.headers.get("content-type", "")
+    assert 'id="dsTabs"' in get.text and 'id="dsPanel-cite"' in get.text, "GET /dataset 必须返回 dataset.html 骨架（六子标签挂点）"
+    assert "no-cache" in (get.headers.get("cache-control") or ""), "缺 no-cache 骨架会被浏览器启发式缓存（旧骨架×新 JS 混跑）"
+    assert "Content-Security-Policy" in get.headers, "dataset 页必须带逐页计算的 CSP"
+    head = client.head("/dataset")
+    assert head.status_code == 200 and head.content == b"", "HEAD /dataset 必须空体 200"
+    assert head.headers.get("cache-control") == get.headers.get("cache-control")
+    assert client.post("/dataset", json={}).status_code == 405, "只读静态：/dataset 不接受写入"
 
 
 def test_dataset_html_skeleton_and_script_order() -> None:

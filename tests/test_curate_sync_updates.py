@@ -86,6 +86,32 @@ def _external_files(root):
 
 # ---------------------------------------------------------------- 闭环：检查 → 自动入库
 
+def test_sync_total_budget_caps_cross_source_writes_before_write(tmp_path, monkeypatch, ae_search):
+    """`total_max_import` 在**写前**收窄跨来源累计写入——两源各 3 条新增、
+    总预算 4 → 实际入库恰 4 条；被预算挡下的来源在 note 里如实点名总预算（不静默截断）。"""
+    monkeypatch.setattr(cc, "check_updates", lambda *a, **k: {"checked_at": "t", "sources": [
+        {"source": "arrayexpress", "label": "ArrayExpress", "mode": "online", "new_count": 3,
+         "new_candidates": [{"accession": f"E-MTAB-30{i}"} for i in range(3)]},
+        {"source": "zenodo", "label": "Zenodo", "mode": "online", "new_count": 3,
+         "new_candidates": [{"accession": f"700000{i}"} for i in range(3)]},
+    ]})
+
+    def fake_zenodo(query, species="", limit=20, project_root=None):
+        return ([{"dataset_uid": f"zenodo:{query}", "dataset_name": f"Z{query}",
+                  "url": f"https://x/{query}", "source": "Zenodo"}], [])
+
+    original = dict(cc.SOURCE_ADAPTERS["zenodo"])
+    monkeypatch.setitem(cc.SOURCE_ADAPTERS, "zenodo", {**original, "search": fake_zenodo})
+
+    res = cc.sync_updates(["arrayexpress", "zenodo"], total_max_import=4, project_root=tmp_path)
+    assert res["imported_total"] == 4, "跨来源累计入库必须 ≤ 调用方给的总预算"
+    partial = [e for e in res["sources"]
+               if 0 < int(e["imported_count"] or 0) < int(e["new_count"] or 0)]
+    assert len(partial) == 1 and partial[0]["source"] == "zenodo"
+    assert "预算" in partial[0]["note_zh"] and "4" in partial[0]["note_zh"], \
+        "被预算挡下的新增必须如实点名总预算（不静默截断）"
+
+
 def test_sync_supply_no_longer_throttles_import_cap(tmp_path, monkeypatch, ae_search):
     """new_candidates 供给上限必须 ≥ 每源入库上限。
 
@@ -160,6 +186,28 @@ def test_sync_second_run_does_not_reimport(tmp_path, ae_online, ae_search):
     assert "已经在外部库" in entry["note_zh"] or "已在外部库" in entry["note_zh"]
     # 已在外部库的条目直接跳过，连在线搜回都不发起
     assert ae_search == calls_after_first
+
+
+@pytest.mark.parametrize("source", ["arrayexpress", "10x"])
+def test_sync_repeated_runs_advance_beyond_preview_limit(tmp_path, monkeypatch, source):
+    candidates = [{"accession": f"entry-{i}", "title": f"Entry {i}"} for i in range(25)]
+    monkeypatch.setattr(cc, "_fetch_logged", lambda *a, **k: {"hits": candidates})
+    monkeypatch.setattr(corpus_net, "tenx_dataset_items", lambda **k: {"ok": True, "items": candidates})
+    calls = []
+
+    def search(query, **kwargs):
+        calls.append(query)
+        return ([{"dataset_uid": f"{source}:{query}", "dataset_name": query,
+                  "url": f"https://example.org/{query}"}], [])
+
+    monkeypatch.setitem(cc.SOURCE_ADAPTERS, source, {**cc.SOURCE_ADAPTERS[source], "search": search})
+    preview = cc.check_updates([source], project_root=tmp_path)
+    assert len(preview["sources"][0]["new_candidates"]) == 20
+    totals = [cc.sync_updates([source], max_import=10, project_root=tmp_path)["imported_total"]
+              for _ in range(4)]
+    assert totals == [10, 10, 5, 0]
+    assert len(calls) == len(set(calls)) == 25
+    assert len(cc._external_dataset_uids(tmp_path)[0]) == 25
 
 
 def test_sync_no_new_writes_nothing(tmp_path, monkeypatch, ae_search):

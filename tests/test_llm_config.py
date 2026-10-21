@@ -288,3 +288,44 @@ def test_default_max_tokens_is_8000_in_both_places(monkeypatch, tmp_path):
     assert load_llm_config(project_root=tmp_path).max_tokens == 8000, "load_llm_config 兜底不是 8000"
     monkeypatch.setenv("LLM_MAX_TOKENS", "4096")
     assert load_llm_config(project_root=tmp_path).max_tokens == 4096, "显式 LLM_MAX_TOKENS 没有生效"
+
+
+def test_external_file_stops_stale_project_env_address(tmp_path: Path, monkeypatch):
+    """外部文件已生效时不得再回落项目 `.env`——否则项目残留的通用 `LLM_BASE_URL`
+
+    会把外部 provider 的 Key 发往旧端点（外部来源隔离契约；进程环境仍是最高优先级）。"""
+    external = tmp_path / "outside.env"
+    external.write_text(
+        "ENABLE_LLM=true\n"
+        "LLM_PROVIDER=openai-compatible\n"
+        "LLM_API_KEY=external-secret\n"
+        "OPENAI_BASE_URL=https://external-gateway.example/v1\n",
+        encoding="utf-8",
+    )
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text(
+        "LLM_BASE_URL=https://stale-project.example/v1\nLLM_MODEL=stale-model\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BIODATA_LLM_ENV_FILE", str(external.resolve()))
+
+    config = load_llm_config(project_root=project)
+
+    assert config.api_key == "external-secret"
+    assert config.base_url == "https://external-gateway.example/v1"
+    assert config.model != "stale-model"
+
+
+def test_missing_external_file_falls_back_to_project_env(tmp_path: Path, monkeypatch):
+    """外部文件配置了但不可用 → 保持既有项目 `.env` 回落（来源隔离不误伤默认行为）。"""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text(
+        "LLM_API_KEY=project-secret\nLLM_MODEL=project-model\n", encoding="utf-8")
+    monkeypatch.setenv("BIODATA_LLM_ENV_FILE", str((tmp_path / "nope.env").resolve()))
+
+    config = load_llm_config(project_root=project)
+
+    assert config.api_key == "project-secret"
+    assert config.model == "project-model"

@@ -12,9 +12,9 @@
   3. idle 回落：本进程从未跑过（内存 idle）而镜像有 done 终态 → snapshot 返回镜像。
   4. RQ 委托：env BIODATA_JOB_BACKEND=rq → start/snapshot 委托 rq_jobs，内存 job 与
      持久镜像都不被默认路径触碰；JobBackendError → 端点 503 + X-Error-Code 透传。
-  5. 跨进程失效旗标：RQ 终态 + needs_web_invalidate="1" → snapshot 后 web 进程内
-     invalidate_external_cache 与 recall_api.invalidate_vectors 各执行一次、旗标清零
-     （再次 snapshot 不重复失效）。
+  5. 跨进程失效代际：RQ 终态通知由每个 Web consumer 各自记录游标，
+     invalidate_external_cache 与 recall_api.invalidate_vectors 各执行一次，通知不清零；
+     再次 snapshot 不重复失效。
 """
 from __future__ import annotations
 
@@ -266,16 +266,22 @@ def test_snapshot_consumes_web_invalidate_flag_once(client, rq_env, monkeypatch)
 
 
 def test_snapshot_running_status_does_not_consume_flag(client, rq_env, monkeypatch):
-    rq_jobs._write_hash({
-        "status": "running",
-        "started_at": "2026-09-08T02:00:00+00:00",
-        rq_jobs._FLAG_FIELD: "0",
-    })
+    rq_jobs.start(None)  # 真实在队列中的任务；没有 job ID 的遗留 running 是孤儿。
     calls = []
     monkeypatch.setattr(webapp, "invalidate_external_cache", lambda: calls.append("ext"))
     snap = webapp._corpus_sync_job_snapshot()
     assert snap["status"] == "running"
     assert calls == []                                         # 未到终态不做失效
+
+
+def test_snapshot_orphaned_running_becomes_failed_and_invalidates(client, rq_env, monkeypatch):
+    rq_jobs._write_hash({"status": "running", rq_jobs._FLAG_FIELD: "0"})
+    calls = []
+    monkeypatch.setattr(webapp, "invalidate_external_cache", lambda: calls.append("ext"))
+    monkeypatch.setattr(recall_api, "invalidate_vectors", lambda: calls.append("vec"))
+    snap = webapp._corpus_sync_job_snapshot()
+    assert snap["status"] == "failed"
+    assert calls == ["ext", "vec"]
 
 
 def test_snapshot_direct_call_503_raises_http_exception(client, rq_env, monkeypatch):

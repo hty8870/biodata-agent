@@ -15,13 +15,13 @@
 
 ## 安装前先知道
 
-- **默认运行期离线**：不启用 LLM 参数时，BioData MCP 只读取本机项目数据，不需要 API Key，也不会主动调用外部服务。
+- **基础检索默认离线**：本机接入的基础推荐、解析工具在默认参数下关闭 LLM，不需要 API Key、不主动调用外部服务。高层 Agent 的对话/复盘会使用当前可用模型配置；独立学习默认关闭、需单独授权。在线接入本身会把请求发送到当前服务，不能套用本机离线承诺。
 - **LLM 是可选增强**：`use_llm=true`、`rerank="llm"` 和关键词审核需要 API Key 与网络；一键脚本会把密钥保存到项目外的专用文件，Codex/Claude 配置里只有文件路径。
 - **安装阶段通常联网**：首次下载 Python 或 MCP SDK 需要网络；Codex / Claude Code 仍按各自要求安装、登录和联网。
 - **项目应保持完整**：`mcp_server.py` 必须和同项目的 `src/`、数据与下载索引放在一起，不能只复制单个脚本。
 - **不会污染系统 Python**：下文把依赖装进项目外的专用虚拟环境。
 - **运行要求**：Python 3.10+。项目脚本安装固定版本的 MCP Python SDK；Codex 或 Claude Code 请使用各自当前可用的版本，具体命令以 `codex mcp --help` / `claude mcp --help` 的输出为准。
-- **版本口径（别混）**：本文里的 `mcp==1.28.1` 指 MCP **SDK**（Python `mcp` 包）的钉版；BioData MCP **服务**自身的版本是 **1.36.0**（`--version` 会打印 `biodata-mcp 1.36.0 | MCP SDK …`）。两者是两个不同的数——安装/升级 SDK 用 1.28.1，看服务版本用 1.36.0。
+- **版本口径（别混）**：本文里的 `mcp==1.28.1` 指 MCP **SDK**（Python `mcp` 包）的钉版；BioData MCP **服务**自身的版本是 **1.38.0**（`--version` 会打印 `biodata-mcp 1.38.0 | MCP SDK …`）。两者是两个不同的数——安装/升级 SDK 用 1.28.1，看服务版本用 1.38.0。
 
 安装只需要记住两个绝对路径：
 
@@ -56,7 +56,7 @@
 & "$env:LOCALAPPDATA\Programs\BioData Agent\BioDataAgentMCP.exe" --selfcheck
 ```
 
-末行出现 `SELFCHECK_OK tools=19 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；`--version` 可打印 `biodata-mcp 1.36.0 | MCP SDK …`。
+末行出现 `SELFCHECK_OK tools=25 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；`--version` 可打印 `biodata-mcp 1.38.0 | MCP SDK …`。
 
 ### 3. 注册到客户端（命令直接指向 exe）
 
@@ -166,7 +166,7 @@ LLM API 类型：
 5. 若选择了 LLM API，不要让我把 Key 发到聊天。让我在受信任的本机 PowerShell 中亲自完成脚本的隐藏输入；Agent 只提供已经填好其他参数的一条命令。Key 只能落在项目外 `%LOCALAPPDATA%\BioDataAgent\secrets\llm.env`，客户端配置只保存 `BIODATA_LLM_ENV_FILE` 路径。
 6. API 模式默认会跑 `mcp_server.py --llm-check` 真实最小请求；探测失败时脚本降级为警告、仍注册离线可用的服务器（并明确提示 LLM 未通过、稍后重试）。只有我要求"不通就别注册"时才加 `-RequireLlm`（此时失败会恢复旧密钥文件和客户端配置）；只有我明确同意时才用 `-SkipLlmCheck` 完全跳过探测。密钥文件先建限权 ACL 再写入，旧密钥备份只保留最近数份。
 7. 不得关闭沙箱、安全审批或使用任何 dangerously-skip/bypass 参数。需要联网安装依赖或写入用户配置时，只申请完成该步骤所需的最小权限。
-8. 重启客户端后，确认十九个工具可见：recommend_datasets、get_file_manifest、parse_constraints、browse_datasets、get_dataset_introduction、assess_dataset_fair、lookup_identifier、find_compatible_datasets、assess_feasibility、plan_query_edit、plan_action、build_task_pack、build_reuse_pack、verify_local_assets、provision_dataset、curate_datasets、upload_dataset、biodata_status、biodata_llm_status；确认 biodata_status.ok=true、corpus_total>0、download_index_ready=true。
+8. 重启客户端后，确认二十五个工具可见：agent_chat、agent_conversations、agent_projects、agent_task、agent_replay、agent_learning、recommend_datasets、get_file_manifest、parse_constraints、browse_datasets、get_dataset_introduction、assess_dataset_fair、lookup_identifier、find_compatible_datasets、assess_feasibility、plan_query_edit、plan_action、build_task_pack、build_reuse_pack、verify_local_assets、provision_dataset、curate_datasets、upload_dataset、biodata_status、biodata_llm_status；确认 biodata_status.ok=true、corpus_total>0、download_index_ready=true。
 9. LLM 模式再调用 biodata_llm_status(check_connection=false) 与 biodata_llm_status(check_connection=true)，只汇报 configured/provider/model/connection/error_code，不得回显路径或秘密。
 10. 完成后报告：客户端及版本、Python 与 MCP 版本、虚拟环境路径、服务器路径、配置作用域、备份路径、协议与 API 验收结果、重启要求、卸载命令，以及项目 Git 状态是否保持不变。
 
@@ -273,7 +273,7 @@ winget install --id=astral-sh.uv -e
 通过时最后一行是：
 
 ```text
-SELFCHECK_OK tools=19 corpus_total=8022 download_index_ready=true llm_configured=<true|false>
+SELFCHECK_OK tools=25 corpus_total=8022 download_index_ready=true llm_configured=<true|false>
 ```
 
 - 退出码 `0` = 通过、`1` = 失败：协议握手成功后逐项 `[PASS] / [FAIL]` 指出卡在哪一步；握手前就失败（Python 用错 / mcp 版本不兼容 / 超时）则打印单行 `SELFCHECK_FAIL <原因>`。
@@ -383,7 +383,7 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 安装成功的最低标准：
 
 - `biodata` 在客户端中显示启用或已连接；
-- 十九个工具均可发现；
+- 二十五个工具均可发现；
 - `ok: true`；
 - `corpus_total > 0`；
 - `download_index_ready: true`。
@@ -407,10 +407,16 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 
 ## 5. 安装后怎么用
 
-十九个工具（与网页端能力对齐；其中 16 个只读 + 3 个写盘：`upload_dataset` 写外部库、`provision_dataset` 写调用方指定目录、`curate_datasets` 管护外部库 upload_* 与回收站）：
+二十五个工具（与网页端能力对齐；其中 19 个基础＝16 个只读 + 3 个写盘：`upload_dataset` 写外部库、`provision_dataset` 写调用方指定目录、`curate_datasets` 管护外部库 upload_* 与回收站；另 6 个高层 Agent 工具负责持久会话、项目、复盘与经授权的独立学习）：
 
 | 工具 | 作用 | 关键入参 |
 |---|---|---|
+| `agent_chat` | **直接对知识库 Agent 说一句话**，不必自己拼装底层工具：一次调用走完整轮，并保存消息、结果帧与检索现场。重试须复用同一个 `request_id`；后台没跑完时返回 `run_id` 与 `pending=true`，用 `agent_task` 续读，**不要另起请求重跑**。与网页版共享同一份现场（同一实例 + 同一身份） | `message`，可选 `conversation_id`、`request_id`、`expected_revision`、`project_id`、`state_patch`（只接受 query/sources/search_params）、`ask_choice`（只取当前选择卡真实 key）、`wait_seconds` |
+| `agent_conversations` | 会话 **list/get/create/archive/restore/rename/delete/select_frame/branch/import**：list/get 有分页游标；写动作携 `expected_revision` 防旧客户端覆盖新轮；`branch` 必须给真实 `frame_id`；`import` 只提交你**逐条预览确认**的一条旧史（给稳定 `import_id`），绝不自动扫描本机历史 | `action`，可选 `conversation_id`、`expected_revision`、`offset`、`limit`、`after_message`、`after_frame`、`include_archived`、`frame_id`、`title`、`import_id`、`data` |
+| `agent_projects` | 共享项目 **list/create/update/archive/restore/reorder/assign**，与网页端项目机制、学习作用域同源；归档项目保留会话，不上传记忆 | `action`，可选 `project_id`、`name`、`color`、`conversation_id`、`expected_revision`、`project_ids` |
+| `agent_task` | 已有后台任务的 **status/events/cancel/resolve**：`events` 带 `seq` 游标；取消只在安全边界停止（**已完成操作不会撤销**，`interrupted` 不自动重演） | `action`，可选 `run_id`、`request_id`、`after` |
+| `agent_replay` | **复盘** status/points/annotate/snapshot/annotate_snapshot/seen/chat/digest：`points` 出结构化图与出处，`snapshot` 打包标注供继续讨论，`chat`/`digest` 使用可用模型与同一额度；**仅本人共享会话可复盘** | `conversation_id`，可选 `action`、`data`（仅 pid/text/snap_id/observed_version/observed_pids） |
+| `agent_learning` | 实验性独立学习 **status/control/release/trigger/candidates/review**：默认关闭，当前scope明确授权后整理新共享回合，独立模型调用预算；候选/审核反馈/真实trace持久可回查。release释放旧端点短期配置，不删长期授权/候选；approve/replace只指向网页真人逐条确认，MCP不能代批 | `action`，可选 `project_id`、`enabled`、`threshold`、`request_id`、`feedback`、`conversation_id`、`candidate_id`、`decision`、CAS指纹、分页与trace游标；release可给旧`base_url`/`model`，不接受owner/key/confirmed |
 | `biodata_status` | 健康自检、数据来源计数、下载索引状态与链接快照 | 无 |
 | `parse_constraints` | 只解析查询，展示来源、时间、硬约束和弃权状态 | `query`，可选 `sources`、`auto_parse` |
 | `recommend_datasets` | 自然语言查询 → 硬过滤、排序后的数据集候选 | `query`，可选 `sources`、`auto_parse`、`top_k`、`recall`、`use_llm`、`rerank`、`rerank_top_n`、`strategy`、`auto_allow_llm`，以及**分面细化 / 忽略已识别的查询条件 / 把未标注的也纳入 / 发表时间范围**：`facet_filters`、`suppressed_constraints`、`lenient_dims`、`date_from`、`date_to`（见 5.1、5.2） |
@@ -430,6 +436,12 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 | `upload_dataset` | **上传数据集 JSON 进外部库**（对齐网页上传；**写工具 ①**，写入只落 `database/external/`、绝不碰冻结基准，即时可检索） | `records`（结构化数组/对象）**或** `path`（本地 .json 文件）二选一；可选 `filename`、`source`（见 5.3） |
 | `get_file_manifest` | 根据推荐/浏览结果的 UID 获取文件级下载清单、大小、MD5、FASTQ 等 | `dataset_uid` |
 | `biodata_llm_status` | 脱敏检查 LLM 配置；默认离线，显式要求时做真实 API 最小探测 | `check_connection=false/true` |
+
+高层 Agent 六工具的身份由传输方式决定，**签名里没有账户参数**：本地 stdio 不设 `BIODATA_MCP_ACCESS_TOKEN` 为本机身份；显式设了就必须是本实例有效令牌，失败不降级。在线下发23工具，本地25，两个本机能力工具在线不开放。共享现场本机接入存本机，在线接入发送并保存在当前服务、按账户隔离；授权 AI 对话、复盘或学习时，完成任务所需的上下文会发给所用模型服务。对话/复盘按同身份计模型额度，保存不等于训练或未来写盘授权。
+
+独立学习默认关闭，开启或触发须你在本轮明确授权当前账户、端点与全局/项目范围；助手不得擅自开关、提交反馈、释放配置或扩大范围。每次模型调用另过额度闸，AI关/trial/无配置不执行，重启需授权配置恢复。`agent_learning`不能替你批准或替代长期规则，须在网页记忆面板逐条确认；候选、反馈与真实执行记录可回查，可暂停。状态提供`config_epoch`；网页control/trigger先比较`expected_identity`与`expected_config_epoch`，冲突分别报`learning_identity_conflict`/`learning_config_conflict`，须刷新当前身份与配置后再操作。MCP在内部捕获并校验代际，不接收调用方owner/key/confirmed；`release`只释放当前可信身份旧端点的短期配置，保留长期授权和候选。
+
+高层同步调用不阻塞协议事件循环；准入总8=慢调用6+`agent_task`短控制2，满载快速返回`mcp_transport_busy`、不无限排队。收到`pending`继续用`agent_task`；未启动操作可撤回，取消等待不代表已运行动作撤销，也不提前释放其名额，由worker实际结束回收。删除响应顶层`ok`及`conversation.deleted=true`确认tombstone已提交、会话不可访问；`conversation.cleanup_pending/detail`说明文件清理状态。服务清理会话内容、任务记录、复盘与session log及项目归属，使相关学习来源失效；持久待清理项在启动/heartbeat每周期最多重试16项，0.5秒项间软预算不是I/O硬保证。迟回不得重建现场，列表刷新失败不撤销已确认删除。归档可恢复，删除不同于归档，不表示抹除备份或已批准规则/审核账本。
 
 一次完整使用链路可以这样要求：
 
@@ -580,7 +592,7 @@ Kimi Code（以及任何未在上文列出的 MCP 客户端）按该客户端自
 
 ## 6. 更新、项目移动与重复安装
 
-重复运行环境安装块会复用同一个虚拟环境。升级 MCP **SDK**（Python `mcp` 包）前应先查看项目的已验证版本；本教程当前固定 SDK 为 `mcp==1.28.1`（BioData MCP **服务**版本是 1.36.0，见「安装前先知道」的版本口径）。
+重复运行环境安装块会复用同一个虚拟环境。升级 MCP **SDK**（Python `mcp` 包）前应先查看项目的已验证版本；本教程当前固定 SDK 为 `mcp==1.28.1`（BioData MCP **服务**版本是 1.38.0，见「安装前先知道」的版本口径）。
 
 如果项目移动了位置，客户端中保存的绝对路径会失效。先重新运行第 1 节的变量与环境安装块，使 `$Python` 和 `$Server` 指向当前真实路径；再查看旧配置，确认后移除并重新添加：
 
@@ -775,7 +787,7 @@ fi
 "$PYTHON" "$SERVER" --selfcheck
 ```
 
-末行出现 `SELFCHECK_OK tools=19 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；该自检只读配置、不联网。
+末行出现 `SELFCHECK_OK tools=25 corpus_total=… download_index_ready=true llm_configured=…` 且退出码为 0 即通过；该自检只读配置、不联网。
 
 可选配置 LLM（以 OpenAI 为例；`read -s` 不回显 Key，文件权限设为仅当前用户）：
 

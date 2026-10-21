@@ -68,9 +68,9 @@ def test_invalid_calendar_date_abstains():
         i = _p(q)
         assert i.parse_status == "abstained" and i.abstain, q
         assert i.abstain_reason == "invalid_date", q
-    # 合法月/日不受影响：仍按年份粒度解析（回归护栏）
+    # 合法月份按月精度解析。
     ok = _p("2020年5月的人类数据")
-    assert ok.parse_status == "executable" and (ok.date_from, ok.date_to) == ("2020-01-01", "2020-12-31")
+    assert ok.parse_status == "executable" and (ok.date_from, ok.date_to) == ("2020-05-01", "2020-05-31")
 
 
 def test_ambiguous_multi_year_abstains():

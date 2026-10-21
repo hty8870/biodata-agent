@@ -5,6 +5,9 @@
 - 素材是**前端从本机历史快照组织**的对话记录（query + chat），服务端零存储、无后台任务。
 - LLM 配置随请求带来（与 /api/utterance 同契约：请求级 key 优先、绝不持久化）；
   无 key → `no_key`，前端如实提示去设置配置，**不静默退化成编造**。
+- **AI 开关（enable_llm）照常生效**：手动触发不等于绕过用户明确关闭的 AI——关闭时一个
+  调用都不发（不烧 token），返回 `disabled` 让人话说明去哪开（2026-10-04 裁决；不物化
+  「强制启用副本」以免绕过用户意图与调用方配额前提）。
 - 封闭输出护栏（对齐 action_plan 哲学）：只接受 JSON 数组 `[{"text","summary","evidence"}]`；
   解析失败 / 结构不符 / 超界 → 该条丢弃，全丢 = 空清单（前端如实说「这次没整理出」），
   绝不允许模型随口一段散文变成「记忆」。
@@ -22,13 +25,31 @@
    prompt/system/ignore/不要返回」等元词与行为封禁词）→ 丢弃记 `dropped.injection`。
    它只是兜底——真正的防线是出处核验 + 封闭输出闸 + 人工预览勾选。
 安全门语义不变：任何一道不过都**丢弃**（宁缺毋滥），不降级、不编造。
+
+2026-09-29 协作规则卡（记忆层 RSI 落地，additive）：抽取扩「协作规则」类目
+（用户对助手行为的持久要求），条目在 `{text, summary, evidence}` 上加性多两个字段
+`{trigger?, tier?}`——**tier 在场即规则条目**（其余类目逐位不变，不加任何字段）。
+2026-09-29 融合批：原第 3 类「明确说过的约束」与「协作规则」语义重复（都是「不要 X /
+必须 Y」的持久要求），**退役并轨**进后者——抽取 prompt 由四类目收敛为三类目，类目定义与
+示例只留一处；咨询层（只存本机、不进上下文）只保留「研究偏好 / 工作习惯」两类。输出侧
+判据一个字不改（仍看 `tier` 在不在）：并轨落在**数据**（prompt 的类目定义）上，不新增
+任何「把某条记忆改判成规则」的代码分支——按关键词猜类目会在「不要小鼠」这类合法记忆偏好
+上误判，且那等于同一件事有两条判定通道。
+两道闸按**类目分档**（`_GATE_PROFILES` 表驱动，不写特例分支）：
+- 注入审查换词表：规则类目**保留元词封禁**（忽略/你现在是/系统提示/指令/prompt/system/
+  ignore/override 等），但**放行行为否定词**「不要/不许(返回|显示|回答)」——规则本体
+  常就是「不要自动执行」这类行为约束，原词表会连规则一起吃掉；
+- 出处核验分档：`tier=explicit`（用户明说这是一条规则）**1 段逐字出处**即成立——
+  用户逐条点「确认」这个动作本身替代了第二段证据；`tier=implicit`（从多次行为推断）
+  仍要 ≥2 段不同对话。tier 缺失/非法一律按 `implicit` 计（fail-safe：宁可要求更多证据）。
+规则条目**不进 `memories`**，走独立 `rules` 字段 + 服务端账本（agent/collab_rules.py）。
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, NamedTuple
 
 from .llm_client import (
     LLMConfig,
@@ -44,30 +65,56 @@ DREAM_SUMMARY_MAX = 240        # 单条依据摘要上限（字）
 DREAM_EVIDENCE_MAX = 120       # 单段 evidence 上限（字）
 DREAM_EVIDENCE_SPANS = 2       # 每条最多证据段数
 DREAM_MIN_SPAN_CHARS = 4       # 归一后短于它的片段不算有效证据（防「数据」这类随处可命中）
+DREAM_TRIGGER_MAX = 80         # 单条协作规则的触发条件上限（字）
 DREAM_MAX_CONVERSATIONS = 12   # 一次最多带入的对话段数
 DREAM_CHAT_PER_CONV_MAX = 40   # 每段对话最多带入的消息条数（与前端 CB_LOG_MAX 对齐）
 DREAM_CONV_CHAR_MAX = 1500     # 每段对话拼进 prompt 的字符预算
 
-_PROMPT_HEAD = """你是一个「研究记忆整理员」。下面是一位生物医学数据检索用户的历史对话记录
-（每段：当时的检索需求 + 对话过程）。请从中提炼**值得长期记住**的信息，写成记忆条目。
+#: 协作规则的证据档（tier）：explicit=用户明说这是一条规则；implicit=从行为推断。
+#: **tier 在场即规则条目**——其余类目不加这两个字段，故既有输出逐位不变。
+DREAM_TIER_EXPLICIT = "explicit"
+DREAM_TIER_IMPLICIT = "implicit"
+DREAM_TIERS = (DREAM_TIER_EXPLICIT, DREAM_TIER_IMPLICIT)
+#: tier 归一表（模型可能写中文或大小写变体）：认不出的值一律回落 implicit（fail-safe）。
+_TIER_ALIASES = {
+    "explicit": DREAM_TIER_EXPLICIT, "明说": DREAM_TIER_EXPLICIT, "明确": DREAM_TIER_EXPLICIT,
+    "implicit": DREAM_TIER_IMPLICIT, "推断": DREAM_TIER_IMPLICIT, "隐含": DREAM_TIER_IMPLICIT,
+}
+#: 规则条目的助手行为线索（kind/type 字段可写可不写；写了就认，本模块不回填这个字段——
+#: 回填会让非规则条目的解析产物多一个键，破坏既有断言与逐位口径）。
+_RULE_KIND_HINTS = frozenset({"rule", "rules", "规则", "协作规则", "collab_rule"})
 
-只提炼这几类：
+_PROMPT_HEAD = """你是一个「研究记忆整理员」。下面是一位生物医学数据检索用户的历史对话记录
+（每段：当时的检索需求 + 对话过程）。请从中提炼**值得长期记住**的信息，写成条目。
+
+只提炼这三类：
 1. 研究偏好：反复出现或被明确强调的方向（物种/组织/疾病/平台/数据类型偏好）；
 2. 工作习惯：反复出现的操作意图（例如总要 FASTQ 原始数据、总要打包下载、关注某类来源）；
-3. 明确说过的约束：排除什么、只要什么、时间范围等。
+3. 协作规则：用户**提出过的持久要求**——既包括对**助手行为**的要求（例如「不要自动替我
+   执行写操作」「汇报里不要用夸张措辞」「先给结论再给依据」），也包括用户明确说过要长期
+   遵守的约束（例如「只要人类数据」「排除小鼠」「只看近三年」）。第 3 类要另外填两个字段：
+   - tier="explicit"：用户**明确说过这是一条规则/要求**（例如「以后都……」「记住……」）；
+   - tier="implicit"：你从用户多次行为里**推断**出来的规则（用户自己没有明说）；
+   - trigger：这条规则**什么时候适用**（例如「涉及写操作时」「汇报结果时」），没有就不填。
+   前 2 类**不要**填 trigger / tier。
 
 规则：
 - 只写对话里**确实出现**的信息，不许推测、不许编造没有说过的偏好；
 - 一次性、随口的话不写（只出现一次且无强调的不写）；
 - 每条 text 是可直接回填检索框的一句需求或偏好陈述（不超过 60 字）；
+  第 3 类的 text 写的是**对助手的要求或长期约束**（「不要…」「先…再…」「只要…」），
+  不是一次性的检索需求；
 - 每条 summary 用一句话写明依据（哪段对话、出现了几次）；
 - 每条必须附 evidence：1~2 段**逐字摘自对话原文**的小片段（每段不超过 60 字）。
   系统会逐字核验：这些片段必须真的出现在对话里、且加起来至少覆盖**两段不同对话**；
+  例外：tier="explicit" 的第 3 类条目——用户明确说过一次即可，1 段就够；
   核验不过的条目会被直接丢弃——所以**照抄原文、不要改写、不要翻译**；
 - 最多 8 条；没有值得写的就返回空数组。
 
 输出**只有** JSON 数组，不要任何其它文字：
 [{"text": "…", "summary": "…", "evidence": ["原文片段", "…"]}, …]
+第 3 类（协作规则）多两个字段：
+[{"text": "…", "summary": "…", "evidence": ["原文片段"], "tier": "explicit", "trigger": "…"}, …]
 
 历史对话：
 """
@@ -127,11 +174,59 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
+def normalize_tier(value: Any) -> str:
+    """tier 归一（单一真源）：认不出的一律回落 `implicit`——fail-safe 方向是
+    「多要一段证据」，绝不让一个写错的值把非法条目放宽成 explicit。"""
+    return _TIER_ALIASES.get(_norm(value), DREAM_TIER_IMPLICIT)
+
+
+def _is_rule_item(item: dict[str, Any]) -> bool:
+    """规则条目判据：**带 tier 字段**（或显式写了 kind=rule 之类的线索）。
+    其余类目两个字段都不填 → 判定为 False，走原路径，产物逐位不变。"""
+    if _norm(item.get("tier")):
+        return True
+    return _norm(item.get("kind") or item.get("type") or "") in _RULE_KIND_HINTS
+
+
+def normalize_rule_candidate(item: Any) -> dict[str, Any] | None:
+    """协作规则候选收口（**单一真源**：dream 抽取端与入库端点都用它）。
+
+    做三件事：字段白名单 + 长度截断（`DREAM_*` 上限）+ 注入审查（规则档词表）。
+    不合格（非 dict / 无 text / 命中注入词表）返回 None——调用方记 `rejected` 计数，
+    绝不降级、绝不猜。返回形状与 `parse_dream_output` 的规则条目逐位同形，故入库端
+    与抽取端不会长出两套契约。"""
+    if not isinstance(item, dict):
+        return None
+    text = str(item.get("text") or "").strip()[:DREAM_TEXT_MAX]
+    if not text:
+        return None
+    trigger = str(item.get("trigger") or "").strip()[:DREAM_TRIGGER_MAX]
+    summary = str(item.get("summary") or "").strip()[:DREAM_SUMMARY_MAX]
+    if _injection_hit(_GATE_PROFILES["rule"], (text, summary, trigger)):
+        return None
+    raw_ev = item.get("evidence")
+    spans_in = raw_ev if isinstance(raw_ev, list) else ([raw_ev] if raw_ev else [])
+    spans: list[str] = []
+    for span in spans_in:
+        span_text = str(span or "").strip()[:DREAM_EVIDENCE_MAX]
+        if span_text and span_text not in spans:
+            spans.append(span_text)
+        if len(spans) >= DREAM_EVIDENCE_SPANS:
+            break
+    out: dict[str, Any] = {"text": text, "summary": summary, "evidence": spans,
+                           "tier": normalize_tier(item.get("tier"))}
+    if trigger:
+        out["trigger"] = trigger
+    return out
+
+
 def parse_dream_output(raw: str | None) -> list[dict[str, Any]]:
     """封闭输出解析：只认 JSON 数组 [{text, summary, evidence}]；坏条丢弃、全坏为空（绝不编造）。
     evidence 容忍模型给单字符串（收进列表）；每段截 DREAM_EVIDENCE_MAX、每条至多
     DREAM_EVIDENCE_SPANS 段、空段丢弃——**没有 evidence 的条目在这里不丢**（解析≠核验），
-    由 `_evidence_coverage` 统一裁决（那样丢弃原因才可计数上报）。"""
+    由 `_evidence_checks` 统一裁决（那样丢弃原因才可计数上报）。
+    第 3 类（协作规则）的条目加性多 `tier`（必在）与 `trigger`（非空才在）：**tier 在场即
+    规则条目**；其余类目的产物因此与历史**逐位同形**（不多键、不改值）。"""
     if not raw:
         return []
     text = str(raw).strip()
@@ -169,7 +264,13 @@ def parse_dream_output(raw: str | None) -> list[dict[str, Any]]:
         if not t or key in seen:
             continue
         seen.add(key)
-        out.append({"text": t, "summary": s, "evidence": spans})
+        row: dict[str, Any] = {"text": t, "summary": s, "evidence": spans}
+        if _is_rule_item(item):
+            row["tier"] = normalize_tier(item.get("tier"))
+            trigger = str(item.get("trigger") or "").strip()[:DREAM_TRIGGER_MAX]
+            if trigger:
+                row["trigger"] = trigger
+        out.append(row)
         if len(out) >= DREAM_MAX_ITEMS:
             break
     return out
@@ -180,7 +281,7 @@ def _default_llm_call(prompt: str, config: LLMConfig) -> str | None:
     return result.text if result.succeeded else None
 
 
-# ==================== B6 两道机械闸 ====================
+# ==================== B6 两道机械闸（2026-09-29 起按类目分档） ====================
 
 #: 注入形态词表（纵深防御，不是安全门）：元词（系统/提示词/指令/ignore 等）+
 #: 行为封禁（不要/不许 返回|显示|回答）。刻意**不收**「不要 mouse」这类排除偏好——
@@ -190,9 +291,49 @@ _INJECTION_RE = re.compile(
     r"|prompt|system|ignore|不要(返回|显示|回答)|不许(返回|显示|回答))",
     re.IGNORECASE)
 
+#: 规则类目词表：**保留元词封禁、放行行为否定词**。规则本体常就是「不要自动执行」
+#: 「不许直接返回」这类对助手行为的约束——沿用记忆档词表会把规则本体一起吃掉
+#: （2026-09-29 协作规则卡初版实测命中）。放行是有意的：行为约束正是规则类目要收的东西，
+#: 真正的门是逐条人工「确认」。
+_RULE_INJECTION_RE = re.compile(
+    r"(忽略(之前|上面|以上|前面)|你现在是|你是(一个|名)?(AI|助手|模型)|系统提示|提示词"
+    r"|jailbreak|override|prompt|system|ignore)",
+    re.IGNORECASE)
 
-def _looks_injection(text: str) -> bool:
-    return bool(_INJECTION_RE.search(text or ""))
+
+class _GateProfile(NamedTuple):
+    """一个类目的两道闸参数（**表驱动**：新类目只加一行数据，不再加 if 分支）。"""
+
+    injection_re: re.Pattern[str]
+    #: tier → 证据须覆盖的不同对话段数；键 "" 表示该档无 tier 概念（记忆类目）。
+    coverage_by_tier: dict[str, int]
+    default_tier: str
+
+
+#: 类目 → 闸参数单一真源。
+#: - `memory`：原 B6 口径逐位不变（元词+行为封禁词表、≥2 段对话）。
+#: - `rule`：换词表（放行行为否定词）+ tier 分档（explicit 1 段 / implicit 2 段）。
+_GATE_PROFILES: dict[str, _GateProfile] = {
+    "memory": _GateProfile(_INJECTION_RE, {"": 2}, ""),
+    "rule": _GateProfile(_RULE_INJECTION_RE,
+                         {DREAM_TIER_EXPLICIT: 1, DREAM_TIER_IMPLICIT: 2},
+                         DREAM_TIER_IMPLICIT),
+}
+
+
+def _injection_hit(profile: _GateProfile, fields: Iterable[str]) -> bool:
+    return any(profile.injection_re.search(str(f or "")) for f in fields)
+
+
+def _gate_profile_of(item: dict[str, Any]) -> _GateProfile:
+    """条目 → 闸参数：规则条目走规则档，其余走记忆档（判据单一真源在 `_is_rule_item`）。"""
+    return _GATE_PROFILES["rule" if _is_rule_item(item) else "memory"]
+
+
+def _required_coverage(profile: _GateProfile, item: dict[str, Any]) -> int:
+    return profile.coverage_by_tier.get(
+        str(item.get("tier") or profile.default_tier),
+        profile.coverage_by_tier[profile.default_tier])
 
 
 def _conversation_evidence_pools(conversations: list[dict[str, Any]]) -> list[tuple[int, str]]:
@@ -222,35 +363,56 @@ def _conversation_evidence_pools(conversations: list[dict[str, Any]]) -> list[tu
     return pools
 
 
-def _evidence_coverage(spans: list[str], pools: list[tuple[int, str]]) -> int:
-    """全部 span 合计覆盖的不同对话段数：每段 span 归一后**逐字**落在哪几段对话的**单条
-    消息**里；短于 DREAM_MIN_SPAN_CHARS 的片段不算（防「数据」这类随处可命中的伪证据）。"""
+def _evidence_checks(spans: list[str], pools: list[tuple[int, str]]) -> tuple[bool, int]:
+    """逐段核验 + 覆盖计数，返回 `(全部 span 合格?, 覆盖的不同对话段数)`。
+
+    - **逐段合格**：每个非空 span 归一后必须**逐字**落在某条消息里——任一段造假即整条
+      不合格（旧口径只累计覆盖数：真＋假两段可因真段使 coverage 达标而夹带假段放行）。
+    - **覆盖计数**：短于 DREAM_MIN_SPAN_CHARS 的片段照核验但不计覆盖（防「数据」这类
+      随处可命中的伪证据凑对话数）。"""
     covered: set[int] = set()
     for span in spans:
         needle = _norm(span)
-        if len(needle) < DREAM_MIN_SPAN_CHARS:
+        if not needle:
             continue
+        hit = False
         for conv_index, unit in pools:
             if needle in unit:
-                covered.add(conv_index)
-    return len(covered)
+                hit = True
+                if len(needle) >= DREAM_MIN_SPAN_CHARS:
+                    covered.add(conv_index)
+        if not hit:
+            return False, len(covered)
+    return True, len(covered)
 
 
 def _apply_gates(memories: list[dict[str, Any]],
                  conversations: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """两道闸（注入审查 → 出处核验），被拦条目计数上报；任何一道不过都丢弃，不降级。"""
+    """两道闸（注入审查 → 出处核验），被拦条目计数上报；任何一道不过都丢弃，不降级。
+    2026-09-29 起按**条目类目**取闸参数（`_GATE_PROFILES`）：记忆类目逐位不变，
+    规则类目换词表 + 按 tier 要证据（explicit 1 段 / implicit 2 段）。"""
     pools = _conversation_evidence_pools(conversations)
     kept: list[dict[str, Any]] = []
     dropped = {"injection": 0, "evidence": 0}
     for mem in memories:
-        if _looks_injection(mem["text"]) or _looks_injection(mem["summary"]):
+        profile = _gate_profile_of(mem)
+        if _injection_hit(profile, (mem.get("text"), mem.get("summary"), mem.get("trigger"))):
             dropped["injection"] += 1
             continue
-        if _evidence_coverage(mem.get("evidence") or [], pools) < 2:
+        ev_ok, ev_coverage = _evidence_checks(mem.get("evidence") or [], pools)
+        if not ev_ok or ev_coverage < _required_coverage(profile, mem):
             dropped["evidence"] += 1
             continue
         kept.append(mem)
     return kept, dropped
+
+
+def _partition_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict], list[dict]]:
+    """按类目分流：带 tier 的进规则清单，其余进记忆清单（两条生命周期不同：
+    记忆写浏览器本机、规则进服务端账本等用户逐条确认）。原始顺序各自保持。"""
+    memories = [c for c in candidates if "tier" not in c]
+    rules = [c for c in candidates if "tier" in c]
+    return memories, rules
 
 
 def dream_from_conversations(
@@ -259,8 +421,11 @@ def dream_from_conversations(
     config: LLMConfig | None = None,
     llm_call: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
-    """对话快照 → 记忆候选清单。`llm_call` 可注入（签名 `(prompt) -> str | None`），
-    确定性测试据此完全避开网络（与 action_plan 同契约）。"""
+    """对话快照 → 记忆候选清单 + 协作规则候选清单。`llm_call` 可注入（签名
+    `(prompt) -> str | None`），确定性测试据此完全避开网络（与 action_plan 同契约）。
+    `count` 恒等于 `memories` 长度（旧语义不动）；规则条数另给 `rules_count`——
+    规则**绝不混进 `memories`**（前端记忆 kind 白名单只认 note/search/dream，
+    混进去会被静默折算成「已存需求」，正是本批要避开的静默降级）。"""
     convs = _clip_conversations(conversations)
     if not convs:
         raise DreamError("empty_input", "还没有可以整理的历史对话。")
@@ -272,18 +437,23 @@ def dream_from_conversations(
             detail = _sanitize_provider_error(exc)[:80]
             raise DreamError("config_error", f"AI 配置读取失败（{detail}）——请检查环境变量配置后重试。") from exc
         # mock 短路纪律与 intro/act 层同款（E-02）：call_mock_llm 忽略 prompt、空 records 必败，
-        # 放它走到底只会误报「没能连上 AI」。dream 不查 enable_llm（只认 key），故 require_enabled=False；
-        # 该口径下否定原因只剩 mock_not_used / no_key 两档，下面逐字映射回 DreamError。
+        # 放它走到底只会误报「没能连上 AI」。先用共用闸判 mock/no_key（缺 key 时给最可操作的
+        # 提示，与既有文案逐字一致），**再显式检查 enable 开关**：用户明确关闭
+        # AI 时一个调用都不发（不烧 token），如实回报 disabled——不物化「强制启用副本」，
+        # 那会绕过用户意图与调用方配额前提。
         ok, reason = _should_use_llm(cfg, require_enabled=False)
         if not ok:
             if reason == "mock_not_used":
                 raise DreamError("mock_not_used", "当前是 mock 演示模式，不会真的调用 AI——请关闭 MOCK_LLM 并配好密钥后再整理记忆。")
             raise DreamError("no_key", "还没有配置 AI——先到「设置 → AI / API 配置」填好密钥，再来整理记忆。")
+        if not cfg.enable_llm:
+            raise DreamError("disabled", "AI 已在设置里关闭——要整理记忆，请先在「设置 → AI / API 配置」开启 AI（或使用网站试用额度）。")
         llm_call = lambda prompt: _default_llm_call(prompt, cfg)  # noqa: E731
     raw = llm_call(build_dream_prompt(convs))
     if raw is None:
         raise DreamError("llm_failed", "这次整理没能连上 AI，请稍后再试。")
-    memories = parse_dream_output(raw)
-    memories, dropped = _apply_gates(memories, convs)
-    return {"ok": True, "generated": True, "memories": memories, "count": len(memories),
-            "dropped": dropped}
+    candidates = parse_dream_output(raw)
+    kept, dropped = _apply_gates(candidates, convs)
+    memories, rules = _partition_candidates(kept)
+    return {"ok": True, "generated": True, "memories": memories, "rules": rules,
+            "count": len(memories), "rules_count": len(rules), "dropped": dropped}

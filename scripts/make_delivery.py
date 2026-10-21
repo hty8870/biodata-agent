@@ -23,7 +23,7 @@ import re
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -147,6 +147,65 @@ class GitUnavailable(RuntimeError):
     本脚本只在仓库工作树里运行，git 缺失属异常环境、应当报出来。
     """
 
+
+class DeliveryLinkError(RuntimeError):
+    """交付集里存在符号链接/junction：归档 fail-closed，绝不跟随其目标字节。
+
+    `is_file()`/`zipfile.write` 会跟随链接：链接可指向仓库外或 `.deliveryignore` 排除的
+    文件，字节照样进包、而文本扫描按链接路径看不到真身。链接不是可交付物，一律拒绝。
+    """
+
+
+def _is_link_like(path: Path) -> bool:
+    """符号链接/junction 判定（唯一实现复用 build_release，防第二份判据漂移）。"""
+    import build_release
+    return build_release._is_link_like(path)
+
+
+def assert_delivery_source(path: Path, root: Path = REPO_ROOT) -> None:
+    """单个交付源的 containment 闸（**唯一实现**）：路径上任一级链接/junction 即 fail-closed。
+
+    三道按序：
+    1. **词法**包含——未 resolve 的 path 必须在 root 之下；先 resolve 会丢掉「哪一级是链接」的证据；
+    2. root 到 path 的**每一级祖先与叶子**都不是符号链接/junction/reparse point——父级 junction
+       会让 tracked 后代读到仓库外字节，而叶子自身不是链接、只看叶子判不出来（历史叶级检查盲区）；
+    3. resolve() 之后仍在 root.resolve() 之下——词法绕过/链接判据漏检的双保险。
+
+    判定本身出任何异常同样 fail-closed（核验不了就不放行）。本闸**不**承诺抵御
+    「检查之后再把目录换成链接」的 TOCTOU 竞态——它是归档窗口内的静态核验，不是实时锁。
+
+    消费点：`collect_delivery_files` / `run_delivery_gate` / `build_zip` /
+    `make_submission_package.build`（含额外 launchers）。显式的外部输入（如用户给的
+    说明书 PDF 路径）**不**适用本闸的仓库 containment——它不声称来自仓库。
+    """
+    p = Path(path)
+    base = Path(root)
+    try:
+        rel = p.relative_to(base)
+    except ValueError as exc:
+        raise DeliveryLinkError(f"交付源不在仓库词法根内（fail-closed 不放行）：{p}") from exc
+    probe = base
+    chain: list[Path] = []
+    for part in rel.parts:
+        probe = probe / part
+        chain.append(probe)
+    try:
+        linked = [c for c in chain if _is_link_like(c)]
+    except OSError as exc:
+        raise DeliveryLinkError(f"交付源链接判定失败（fail-closed 不放行）：{p}（{exc}）") from exc
+    if linked:
+        shown = ", ".join(c.relative_to(base).as_posix() for c in linked[:10])
+        raise DeliveryLinkError(
+            "交付源路径上存在符号链接/junction（归档 fail-closed，绝不跟随目标字节；"
+            "父级链接会把仓库外字节带进包）：" + shown)
+    try:
+        resolved_p = p.resolve()
+        resolved_root = base.resolve()
+    except OSError as exc:
+        raise DeliveryLinkError(f"交付源路径解析失败（fail-closed 不放行）：{p}（{exc}）") from exc
+    if not resolved_p.is_relative_to(resolved_root):
+        raise DeliveryLinkError(f"交付源解析后越出仓库根（fail-closed 不放行）：{p} → {resolved_p}")
+
 # 只扫这些扩展名的文本文件（模型权重/图片/压缩包等二进制不扫、也很少进交付）。
 # `.mjs`（ES module 脚本）与 `.example`（示例配置）同属文本，泄漏面一并覆盖。
 _TEXT_SUFFIXES = {
@@ -163,9 +222,19 @@ _TEXT_FILENAMES = {
 }
 
 
+def is_scannable_relative(relative: str) -> bool:
+    """路径字符串版的文本判据（后缀 ∪ 整名，唯一实现）：归档内的相对路径与磁盘 Path 共用。
+
+    无后缀文本（`.gitignore`/`.gitattributes`/`LICENSE`/`Dockerfile` 等）必须走整名表，
+    只按 `suffix` 判断会让它们整类绕过值级扫描——build_release 的 source 门与 zip 复验门
+    一律复用本函数，不再各写一份后缀判断。"""
+    name = PurePosixPath(relative).name
+    return PurePosixPath(name).suffix.lower() in _TEXT_SUFFIXES or name in _TEXT_FILENAMES
+
+
 def _is_scannable_text(path: Path) -> bool:
     """该路径是否属于应被文本扫描覆盖的文件（后缀或整名任一命中）。"""
-    return path.suffix.lower() in _TEXT_SUFFIXES or path.name in _TEXT_FILENAMES
+    return is_scannable_relative(path.name)
 
 
 def _read_scannable_text(path: Path) -> "str | None":
@@ -303,22 +372,58 @@ def collect_delivery_files(root: Path = REPO_ROOT) -> list[Path]:
     2. **git 对账**——只保留**被 git 跟踪**的文件（`tracked_paths`）。这一步同时覆盖了「被忽略」和
        「未跟踪但没被忽略」两类：干净 clone 里两者都不存在。语义上，交付包应当与**干净 clone** 一致；
     3. 可选 `.deliveryignore`——维护者自加的附加排除清单（文件缺失时该层为空）。
+
+    枚举**从 tracked_paths 出发**（不再 rglob）：rglob 会跟随目录 junction 穿进仓库外的树，
+    tracked 后代位于父级 junction 时 `is_file()` 照样为真、叶级链接判定却是假——外部字节
+    就此进包。逐源过 `assert_delivery_source`：任何一级祖先/叶子是链接即 fail-closed。
     """
     patterns = load_ignore_patterns(root)
-    candidates: list[Path] = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root)
+    files: list[Path] = []
+    offenders: list[str] = []
+    for rel_posix in sorted(tracked_paths(root)):
+        rel = PurePosixPath(rel_posix)
         if any(seg in _HARD_SKIP_DIRS for seg in rel.parts):
             continue
-        if _HARD_SKIP_FILE_RE.match(path.name) and not _ENV_TEMPLATE_RE.match(path.name):
+        if _HARD_SKIP_FILE_RE.match(rel.name) and not _ENV_TEMPLATE_RE.match(rel.name):
             continue
-        if _is_ignored(rel.as_posix(), patterns):
+        if _is_ignored(rel_posix, patterns):
             continue
-        candidates.append(path)
-    tracked = tracked_paths(root)
-    return [p for p in candidates if p.relative_to(root).as_posix() in tracked]
+        path = root / Path(rel_posix)
+        try:
+            assert_delivery_source(path, root)
+        except DeliveryLinkError:
+            offenders.append(rel_posix)
+            continue
+        if not path.is_file():
+            continue
+        files.append(path)
+    if offenders:
+        raise DeliveryLinkError(
+            "交付集里存在符号链接/junction（归档 fail-closed，绝不跟随目标字节；"
+            "链接可指向仓库外或被排除文件）：" + ", ".join(sorted(offenders)[:10]))
+    return files
+
+
+def run_delivery_gate(files: list[Path], root: Path = REPO_ROOT) -> dict:
+    """交付安全门禁（**唯一实现**）：专名 / secret 值 / 元数据邮箱 / 冒号残骸 / 不可解码文本 / 未跟踪件。
+
+    `make_delivery`（--check/打包）与 `make_submission_package`（提交包）共用同一份判据：
+    后者此前只跑专名+secret 两项子集，UTF-16 之类不可扫文本整类漏过、邮箱与未跟踪件也不查。
+    返回六类命中；任一类非空即未通过。git 不可用时 `excluded_by_git` 抛 GitUnavailable →
+    调用方 fail-closed（核验不了就不放行）。
+    扫描前先对每个 `files` 成员过 `assert_delivery_source`——`files` 可能由调用方直接构造
+    （未走 collect），链接源必须在任何 read 之前被拒。
+    """
+    for path in files:
+        assert_delivery_source(path, root)
+    return {
+        "violations": scan_forbidden(files, root),
+        "secret_hits": scan_secret_values(files, root),
+        "contact_hits": scan_metadata_contacts(files, root),
+        "colon_hits": scan_orphan_colons(files, root),
+        "unscannable": unscannable_text_files(files, root),
+        "untracked": excluded_by_git(root)["untracked"],
+    }
 
 
 def scan_forbidden(files: list[Path], root: Path = REPO_ROOT) -> list[dict]:
@@ -524,6 +629,10 @@ def excluded_by_git(root: Path = REPO_ROOT) -> "dict[str, list[str]]":
 
 
 def build_zip(out_path: Path, files: list[Path], root: Path = REPO_ROOT) -> int:
+    # 打包侧防御性复核（files 可能来自调用方而非 collect_delivery_files）：
+    # 同一条 containment 闸，**在创建任何输出之前**逐源过完（含父级链接，不只叶子）。
+    for path in files:
+        assert_delivery_source(path, root)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in files:
@@ -541,18 +650,21 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         files = collect_delivery_files()
-    except GitUnavailable as exc:
+        gate = run_delivery_gate(files)
+    except (GitUnavailable, DeliveryLinkError) as exc:
         print(f"\n[交付安全] 无法核验交付集与 .gitignore 是否对账：{exc}", file=sys.stderr)
-        print("这道门挡的是「git 拒绝跟踪的文件混进交付包」（历史上漏过账户密码哈希与 2.27 GB 模型权重）。"
-              "核验不了就不放行——请在仓库工作树内、用可用的 git 重跑。", file=sys.stderr)
+        print("这道门挡的是「git 拒绝跟踪的文件混进交付包」（历史上漏过账户密码哈希与 2.27 GB 模型权重）"
+              "与「符号链接把链接目标字节带进包」。核验不了就不放行——请在仓库工作树内、用可用的 git 重跑。",
+              file=sys.stderr)
         return 1
 
-    violations = scan_forbidden(files)
-    secret_hits = scan_secret_values(files)
-    contact_hits = scan_metadata_contacts(files)
-    colon_hits = scan_orphan_colons(files)
+    violations = gate["violations"]
+    secret_hits = gate["secret_hits"]
+    contact_hits = gate["contact_hits"]
+    colon_hits = gate["colon_hits"]
+    unscannable = gate["unscannable"]
+    untracked = gate["untracked"]
     allowlisted_hits = count_allowlisted_secret_hits(files)
-    unscannable = unscannable_text_files(files)
 
     if args.list:
         excluded = excluded_internal()
@@ -601,23 +713,23 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"\n[交付安全] {allowlisted_hits} 处已审计的脱敏测试夹具命中已按白名单豁免"
               "（make_delivery.SECRET_SCAN_ALLOWLIST，精确到 文件:行）：", file=sys.stderr)
 
+    # 与「已跟踪」取交是**双向**的：它挡住了个人文件混进包，但也会让**刚写的新模块**
+    # 悄悄留在包外——客户拿到的包里，端点 import 的模块根本不存在。这一类不接受 --force
+    # （调试放行只对文本扫描的显式泄漏有意义），且只有在 --check 阶段 fail-closed 才拦得住。
+    if untracked:
+        print(f"[交付安全] 复核未通过：有 {len(untracked)} 个文件不在 git 里，"
+              "客户拿到的包中不会有它们。新模块请先 git add：", file=sys.stderr)
+        for rel in untracked[:40]:
+            print(f"  - {rel}", file=sys.stderr)
+        if len(untracked) > 40:
+            print(f"  …（共 {len(untracked)} 个）", file=sys.stderr)
+        return 1
+
     if violations or secret_hits or contact_hits or colon_hits or unscannable:
         if not args.force:
             print("\n拒绝打包。修掉上述泄漏，或把该文件加入 .deliveryignore 后重试。", file=sys.stderr)
             return 1
     else:
-        # 与「已跟踪」取交是**双向**的：它挡住了个人文件混进包，但也会让**刚写的新模块**
-        # 悄悄留在包外——客户拿到的包里，端点 import 的模块根本不存在。
-        # 这一类只有在 --check 阶段 fail-closed 才拦得住：上一版这里恒打印「复核通过」。
-        untracked = excluded_by_git()["untracked"]
-        if untracked:
-            print(f"[交付安全] 复核未通过：有 {len(untracked)} 个文件不在 git 里，"
-                  "客户拿到的包中不会有它们。新模块请先 git add：", file=sys.stderr)
-            for rel in untracked[:40]:
-                print(f"  - {rel}", file=sys.stderr)
-            if len(untracked) > 40:
-                print(f"  …（共 {len(untracked)} 个）", file=sys.stderr)
-            return 1
         total_mb = sum(f.stat().st_size for f in files) / (1024 * 1024)
         print(f"[交付安全] 复核通过：交付文件集 {len(files)} 个（{total_mb:.1f} MiB），"
               f"0 内部专名 / 0 secret 值 / 0 元数据联系邮箱 / 0 冒号残骸 / 0 不可解码文本命中；"

@@ -412,12 +412,13 @@ def _legacy_tool_parameters(spec):
             "改写后的检索句：把当前查询换成规则更容易正确解析的说法，语义等价、"
             "不新增用户没表达的条件；当前没有可改的查询就不填。"
         ),
-        # 缝合：display（既有）/ target_route 与 reason 通用兜底
-        # （route.request 登记）——与生产侧 `_SLOT_DESCRIPTIONS_ZH` 逐字一致。
-        "display": (
-            "检索结果是否更新到结果区：检索本身就是用户的诉求时填 true——用户等着看结果，"
-            "结果区还没有内容的首次检索更要上屏（收尾前必须至少上屏一次）；"
-            "只是为后续动作探路、中间看一眼时不填（缺省 = 不上屏）。"
+        # display 槽已随 2026-09-13 rerank 处置批退役（上屏唯一出口是 results.show
+        # 动词）——diff 基准同步摘除；新增 handle 槽（results.show 的试跑句柄），
+        # target_route 与 reason 通用兜底（route.request 登记）
+        # ——与生产侧 `_SLOT_DESCRIPTIONS_ZH` 逐字一致。
+        "handle": (
+            "要上屏的试跑结果句柄：latest（最近一次检索/重查试跑，缺省值）/ latest_rank / "
+            "latest_rerank / 步号（如 \"3\"）；没有就不填（=latest）。"
         ),
         "target_route": (
             "要换到的处理路线：search=检索向（找数据/改条件/贴编号）、"
@@ -448,6 +449,14 @@ def _legacy_tool_parameters(spec):
             "也可以是同批前序检索结果的占位引用 `$<N>.top[<i>].dataset_uid`，两种可混用）。"
             "用户原话点名了编号/条数才填；没点名就不填（缺省 = 当前结果）。"
         ),
+        # 2026-09-13 夜批 rerank 双通道：relax 数组槽（与生产侧 `_SLOT_DESCRIPTIONS_ZH`
+        # 逐字一致——diff 基准随新槽位登记同步）。
+        "relax": (
+            "定向放松清单（数组，元素取上次 rerank 结果 probe_zh 报告里列出的 key："
+            "dim:维度 / exclude:维度 / raw / date / only:维度，可多选）。"
+            "填了就走零-LLM 定向放松重检（不再改写）；报告里没有的 key 不要发明，"
+            "拿不准就不填（走默认改写通道）。"
+        ),
     }
     # 2026-08-17：query/reason 的按动词专职描述（与生产侧 `_QUERY_SLOT_DESCRIPTIONS_ZH` /
     # `_REASON_SLOT_DESCRIPTIONS_ZH` 逐字一致——diff 基准随缝合同步）。
@@ -458,6 +467,9 @@ def _legacy_tool_parameters(spec):
     _per_verb_reason_descriptions = {
         "rerank": "为什么需要优化检索词（一句中文，如「原句太口语化」）；没有就不填。",
         "route.request": "为什么要换路线（一句中文，如「用户要找数据、不是管护动作」）；没有就不填。",
+        # 2026-09-14 YOLO ask.relax 刻意更新（与生产侧 `_REASON_SLOT_DESCRIPTIONS_ZH`
+        # 逐字一致——diff 基准随新动词登记同步）。
+        "ask.relax": "为什么判定当前查询的条件不合理/互相打架（一句中文，会展示给用户）；没有就不填。",
     }
     # 评审裁决：三个 curate 动词的 source 描述分派（与生产侧 `_SOURCE_SLOT_DESCRIPTIONS_ZH`
     # 逐字一致——diff 基准随 2026-08-08 刻意更新同步）。
@@ -484,7 +496,9 @@ def _legacy_tool_parameters(spec):
         if slot == "limit":
             props["limit"] = {"type": "integer", "description": "用户明确说了条数才填数字，否则不填。"}
         else:
-            prop_type = ("array" if slot == "uids" else "boolean" if slot == "display" else "string")
+            # display 布尔槽已退役（2026-09-13 rerank 处置批）——类型分派同步摘除；
+            # 现役槽只剩 array（uids/relax）与 string 两类。
+            prop_type = ("array" if slot in ("uids", "relax") else "string")
             prop = {"type": prop_type,
                     "description": ((_per_verb_source_descriptions.get(spec.verb)
                                      if slot == "source" else None)
@@ -503,7 +517,7 @@ def _legacy_tool_parameters(spec):
 #: 新版相对旧版**唯一允许**增多的键（约束信息）：source→enum；limit→minimum/maximum；
 #: uids→items（数组元素类型，2026-08-20 批）。
 _ALLOWED_NEW_KEYS = {"source": {"enum"}, "limit": {"minimum", "maximum"},
-                     "uids": {"items"}}
+                     "uids": {"items"}, "relax": {"items"}}
 
 
 def test_generated_schema_diff_against_legacy_is_only_tightening():
@@ -631,12 +645,17 @@ def test_network_loop_tools_are_the_registry_minus_db_status():
     2026-08-17 rb1 刻意更新：curate.rollback 是本地文件操作（回收站移动/写字节，不触网），
     同属「纯本地」排除项。
     2026-08-18 四工具批刻意更新：compare.datasets / cite.export / compat.find /
-    fair.check 全部本地（对比/引文/兼容/FAIR 自检不触网），同属「纯本地」排除项。"""
+    fair.check 全部本地（对比/引文/兼容/FAIR 自检不触网），同属「纯本地」排除项。
+    2026-09-13 rerank 处置批刻意更新：results.show 重放的是本地检索管线
+    （use_llm=False 确定性重放 + 指纹复核，不触网），同属「纯本地」排除项。
+    2026-09-14 YOLO 批刻意更新：ask.relax 只做本地确定性预演生成选择卡
+    （零 LLM、不触网），同属「纯本地」排除项。"""
     assert agent_exec._NETWORK_LOOP_TOOLS == frozenset(
         set(agent_exec.LOOP_TOOLS) - {"curate.db_status", "search.rerun", "rank", "rerank",
                                       "route.request", "curate.rollback",
                                       "compare.datasets", "cite.export",
-                                      "compat.find", "fair.check"})
+                                      "compat.find", "fair.check", "results.show",
+                                      "ask.relax"})
     assert "联网暂停" in agent_exec._NETWORK_MORATORIUM_BLOCK_ZH
     # 注入段如实写明离线 db_status 与离线快照源检查都不连坐
     assert "离线工具 curate.db_status 与**离线快照源**" in agent_exec._NETWORK_MORATORIUM_BLOCK_ZH
@@ -655,10 +674,21 @@ def test_error_code_literals_match_actual_raise_points():
         "sync_busy",
         # 按 operation_id 撤回时查无此操作（真实 raise 点在 recall_sync_operation）
         "unknown_operation",
+        # 回收站记账失败已回滚（真实 raise 点在回收站移动记账段）
+        "journal_failed",
+        # 文件已移动但记账及回滚均失败（真实 raise 点同上段）
+        "move_partial",
+        # 候选覆盖不完整如实降级（真实 raise 点在同步候选覆盖检查）
+        "coverage_limited",
+        # 2026-10-04：写目标经目录链接映射进冻结基准/只读层
+        # （真实 raise 点在 _move_with_manifest / apply_restore 的 fs_utils 守卫翻译）
+        "bad_store_path",
     }
     assert set(get_args(uploads.UploadCode)) == {
         "bad_file", "bad_encoding", "invalid_json", "no_records", "too_large", "journal_failed",
         "lock_busy",   # 2026-08-10 P1-5：跨进程摄取锁等待超时（真实 raise 点在 _acquire_os_ingest_lock）
+        "uid_conflict",   # 同一上传批次编号对应不同内容（真实 raise 点在 patch_package 批内去重）
+        "bad_store_path",   # 2026-10-04：external 经链接映射进冻结基准/只读层
     }
     assert set(get_args(AP.ActionPlanCode)) == {"empty_input", "too_large"}
     # 纯标注的运行时证明：字面量构造照常（不 enforce），码属性原样可读。

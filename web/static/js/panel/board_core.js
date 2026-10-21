@@ -17,6 +17,182 @@ export var CB_DIM_LABEL = {
    实测 50 帧×20 条响应下限约 3.5MB，现代浏览器无感；回放只渲染当前帧）。 */
 export var CB_MAX_FRAMES = 50;
 
+/* 结果 pill 文案 = 实际命中/生效的关键词——把 query_constraints（同 _queryHits 的
+   {dim,label,values} 形状）里「生效」的取值用顿号连起来（如「FASTQ、乳腺癌」），太长截断；
+   取不到 → 空串，调用方回退原 query。只用 include（正向硬条件）：排除/优先/被忽略的
+   不是「命中的关键词」。活路径与共享会话恢复路径共用这一个出口。 */
+export function cbHitKeywords(qc) {
+    if (!Array.isArray(qc) || !qc.length) return "";
+    var seen = Object.create(null), parts = [];
+    qc.forEach(function (c) {
+        if (!c || typeof c !== "object") return;
+        if (String(c.polarity || "include") !== "include") return;
+        (c.values || []).forEach(function (v) {
+            var s = String(v || "").trim();
+            if (!s || seen[s]) return;
+            seen[s] = true;
+            parts.push(s);
+        });
+    });
+    if (!parts.length) return "";
+    var joined = parts.join("、");
+    // 太长截断：超长整体截断、留尾部省略号（视觉省略仍由 .ft-pill-q 的 ellipsis 兜底）。
+    return joined.length > 40 ? joined.slice(0, 39) + "…" : joined;
+}
+
+export function cbSharedRestore(conversation) {
+    var frames = conversation.frames || [];
+    if (frames.some(function (f) { return !f.payload || !Array.isArray(f.payload.results); })
+        || ((conversation.current_state || {}).has_results && !frames.length)) {
+        throw new Error("服务端还没返回完整的结果快照，未用本机缓存替代；请刷新核对任务记录。");
+    }
+    var stack = frames.map(function (f) {
+        var state = f.state || {}, sp = state.search_params || {};
+        return { id: Number(f.seq), serverId: f.id, runId: f.run_id, messageBoundary: f.message_boundary, state: state,
+            query: String(state.query || ""), resp: f.payload, facets: sp.facet_filters || [],
+            suppressed: sp.suppressed_constraints || [], lenient: sp.lenient_dims || [],
+            queryHits: f.payload.query_constraints || [] };
+    });
+    var log = (conversation.messages || []).map(function (m) {
+        var related = stack.filter(function (f) { return !!m.run_id && f.runId === m.run_id; });
+        if (!related.length) {
+            var following = stack.filter(function (f) { return Number.isInteger(f.messageBoundary) && f.messageBoundary >= m.seq; });
+            var boundary = Math.min(...following.map(function (f) { return f.messageBoundary; }));
+            related = following.filter(function (f) { return f.messageBoundary === boundary; });
+        }
+        var last = related[related.length - 1];
+        return { id: "sm-" + encodeURIComponent(String(conversation.id || "")) + "-" + m.seq, kind: m.role === "user" ? "say" : "sys", text: String(m.text || ""),
+            note: "", frameId: last ? last.id : null,
+            pills: m.role === "assistant" ? related.map(function (f) {
+                return { frameId: f.id, batchId: "",
+                    label: cbHitKeywords(f.resp.query_constraints) || f.query || "检索结果",
+                    count: (f.resp.results || []).length };
+            }) : [] };
+    });
+    var active = (conversation.current_state || {}).active_frame_id;
+    var cursor = stack.findIndex(function (f) { return f.serverId === active; });
+    return { stack: stack, log: log, cursor: cursor < 0 ? stack.length - 1 : cursor };
+}
+
+export function cbLegacyImport(rows) {
+    var restored = cbHistoryRestore(rows, 0), latest = (rows || [])[rows.length - 1] || {};
+    var frames = restored.stack.map(function (f, index) {
+        var frameId = "f_" + (index + 1), intent = (f.resp.interpretation || {}).intent || {};
+        var state = { query: f.query, active_frame_id: frameId, search_params: {
+            facet_filters: f.facets, suppressed_constraints: f.suppressed, lenient_dims: f.lenient,
+            date_from: intent.date_from || "", date_to: intent.date_to || "" },
+            current_filters: f.resp.query_constraints || [],
+            has_results: (f.resp.results || []).length > 0, result_total: f.resp.result_total || 0 };
+        if (Array.isArray(f.resp.applied_sources)) state.sources = f.resp.applied_sources.slice();
+        var later = restored.stack.slice(index + 1).map(function (next) { return next.id; });
+        var boundary = restored.log.findIndex(function (m) { return later.includes(m.frameId); });
+        return { payload: f.resp, state: state, message_boundary: boundary < 0 ? restored.log.length : boundary };
+    });
+    return { title: String(latest.query || ""), messages: restored.log.map(function (m) {
+        return { role: m.kind === "sys" ? "assistant" : "user", text: m.text };
+    }), frames: frames, current_state: frames.length ? frames[frames.length - 1].state : {} };
+}
+
+/* 历史消息保留原有紧凑字段，并显式保存结果帧和回复的呈现数据。
+   白名单避免把运行期控制器、凭据或反馈采集对象写入会话。 */
+export function cbHistoryMessages(log) {
+    return (log || []).map(function (e) {
+        var row = { k: e.kind, t: e.text, n: e.note || "", i: e.id || "", r: e.frameId ?? null };
+        if (e.msgFb) row.f = e.msgFb;
+        if (e.needsAgent) row.a = true;
+        if (e.isError) row.e = true;
+        if (e.llmTag) row.l = true;
+        if (e.html) row.h = e.html;
+        if (e.flow) row.flow = JSON.parse(JSON.stringify(e.flow));
+        if (e.pills) row.pills = JSON.parse(JSON.stringify(e.pills));
+        return row;
+    });
+}
+
+/* 分支前缀同时截断帧与累计消息。较早一行可能在下一轮开始时存过尚未归属的用户消息；
+   最终累计消息里的显式归属才是边界，不能只截历史行数。旧格式仍取各轮保存的累计内容。 */
+export function cbHistoryPrefix(rows, count) {
+    rows = (Array.isArray(rows) ? rows : []).filter(Boolean);
+    var latest = rows[rows.length - 1] || {}, state = latest.conversation;
+    var frameIds = state && state.version === 2 ? state.frameIds || [] : null;
+    var limit = Math.max(1, Number(count) || 1);
+    var selectedIds = frameIds ? frameIds.slice(0, limit) : null;
+    if (state && state.version === 2) {
+        // 历史行可能已因容量限制缺失；轮次基于保存的帧序列，不能向后错位。
+        if (!rows.some(function (h) { return h.frameId === selectedIds[selectedIds.length - 1]; })) return [];
+        rows = rows.filter(function (h) { return frameIds.includes(h.frameId); });
+    }
+    var prefix = selectedIds ? rows.filter(function (h) { return selectedIds.includes(h.frameId); }) : rows.slice(0, limit);
+    var chat = Array.isArray(latest.chat) ? latest.chat : [];
+    if (!prefix.length || !chat.some(function (e) { return e && Object.prototype.hasOwnProperty.call(e, "r"); })) return prefix;
+    var later = frameIds ? frameIds.slice(limit) : rows.slice(prefix.length).map(function (h) { return h.frameId; });
+    var boundary = chat.findIndex(function (e) { return e && later.includes(e.r); });
+    var last = prefix[prefix.length - 1];
+    prefix[prefix.length - 1] = Object.assign({}, last, {
+        chat: boundary < 0 && later.length ? last.chat : chat.slice(0, boundary < 0 ? chat.length : boundary),
+        conversation: { version: 2, frameIds: selectedIds || prefix.map(function (h) { return h.frameId; }),
+            cursorId: last.frameId, view: {} }
+    });
+    return prefix;
+}
+
+/* 新格式以最后一次累计消息和显式帧号为准；旧格式沿用累计消息的归属，
+   但按消息 id 对齐，兼容旧版日志窗口滚动后的等长快照。结果只取保存的数据。 */
+export function cbHistoryRestore(rows, frameSeq, options) {
+    rows = (Array.isArray(rows) ? rows : []).filter(Boolean);
+    var latest = rows[rows.length - 1] || {};
+    var state = latest.conversation;
+    var savedState = !!(state && state.version === 2);
+    // 较早一轮仍保留显式消息帧号，但会话呈现态只在最新一行；不能按旧格式猜归属。
+    var modern = savedState || (Array.isArray(latest.chat) && latest.chat.some(function (e) {
+        return e && Object.prototype.hasOwnProperty.call(e, "r");
+    }));
+    var asBranch = !!(options && options.asBranch);
+    var stack = [], frameMap = new Map(), legacyMessages = [], seen = new Map();
+    var previousLength = 0, seq = Number(frameSeq) || 0;
+    rows.forEach(function (h) {
+        var id = null;
+        var wanted = !savedState || (state.frameIds || []).includes(h.frameId);
+        if (wanted && h.snap && Array.isArray(h.snap.results)) {
+            id = ++seq;
+            frameMap.set(h.frameId, id);
+            stack.push({ id: id, historyAt: h.at, query: String(h.query || ""), resp: h.snap,
+                facets: h.facetFilters || [], suppressed: h.suppressed || [], lenient: h.lenientDims || [],
+                queryHits: h.queryHits || [] });
+        }
+        if (!modern) {
+            var chat = Array.isArray(h.chat) ? h.chat : [{ k: "say", t: String(h.query || "") }];
+            chat.forEach(function (e, i) {
+                if (e.i && seen.has(e.i)) {
+                    legacyMessages[seen.get(e.i)].row = e;
+                } else if (e.i || i >= previousLength) {
+                    if (e.i) seen.set(e.i, legacyMessages.length);
+                    legacyMessages.push({ row: e, frameId: id });
+                }
+            });
+            previousLength = chat.length;
+        }
+    });
+    var messages = modern
+        ? (Array.isArray(latest.chat) ? latest.chat : []).map(function (e) { return { row: e, frameId: frameMap.get(e.r) ?? null }; })
+        : legacyMessages;
+    var log = messages.filter(function (m) { return m.row && String(m.row.t || "").trim(); }).map(function (m) {
+        var e = m.row;
+        var pills = Array.isArray(e.pills) ? e.pills.map(function (p) {
+            var pill = Object.assign({}, p);
+            if (pill.frameId != null) pill.frameId = frameMap.get(pill.frameId) ?? null;
+            return pill;
+        }) : undefined;
+        return { kind: ["say", "sys", "refine", "action"].includes(e.k) ? e.k : "refine",
+            text: String(e.t), note: String(e.n || ""), id: String(e.i || ""),
+            frameId: m.frameId, msgFb: e.f === "up" || e.f === "down" ? e.f : "",
+            needsAgent: !!e.a, isError: !!e.e, llmTag: !!e.l, html: String(e.h || ""), flow: e.flow, pills: pills };
+    });
+    var cursorId = savedState && !asBranch ? frameMap.get(state.cursorId) : null;
+    var cursor = cursorId == null ? stack.length - 1 : stack.findIndex(function (f) { return f.id === cursorId; });
+    return { stack: stack, cursor: cursor, log: log, frameSeq: seq, view: savedState && !asBranch ? state.view || {} : {} };
+}
+
 /* 筛选项编号 → 中文条件名。与后端 _label_for_filter_id 同构：
    已忽略的行拿不到取值（取值在被忽略后已不在返回里），只能从编号还原条件名。 */
 export function cbLabelForFilterId(filterId) {

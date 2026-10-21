@@ -310,6 +310,25 @@ def test_search_refinebio_curation_accession_lookup_for_sync(tmp_path, monkeypat
     assert rec["species"] == "Human"
 
 
+def test_search_refinebio_curation_accession_lookup_respects_species(tmp_path, monkeypatch):
+    """accession 直查与关键词路径共用物种政策——词表内物种按本地核定（对立拒绝），
+    词表外物种保留「不假过滤、明确提示」既有行为。"""
+    monkeypatch.setattr(cc, "_fetch_logged",
+                        lambda url, **kw: REFINEBIO_DETAIL_PAYLOAD)   # HOMO_SAPIENS
+    ok, _w = cc.SOURCE_ADAPTERS["refinebio"]["search"](
+        "SRP111833", species="Human", limit=5, project_root=tmp_path)
+    assert len(ok) == 1 and ok[0]["species"] == "Human"
+    with pytest.raises(cc.CurateError) as ei:
+        cc.SOURCE_ADAPTERS["refinebio"]["search"](
+            "SRP111833", species="Mouse", limit=5, project_root=tmp_path)
+    assert ei.value.code == "no_candidates" and "不一致" in ei.value.hint
+    # 词表外物种：不过滤但原因用户可见（既有行为保留）
+    out_of_vocab, warnings = cc.SOURCE_ADAPTERS["refinebio"]["search"](
+        "SRP111833", species="Lepidoptera", limit=5, project_root=tmp_path)
+    assert len(out_of_vocab) == 1
+    assert any("不在已知词表" in w for w in warnings)
+
+
 def test_search_refinebio_curation_accession_404_is_honest_empty(tmp_path, monkeypatch):
     """副号（GSE）直查 404 → 空结果 + 如实 warning（直达只认主 accession），不抛不炸。"""
     def fake_404(url, **kw):

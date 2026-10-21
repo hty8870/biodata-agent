@@ -19,12 +19,50 @@ from pathlib import Path
 from typing import Sequence
 
 from ..app.runtime_paths import AppPaths, get_app_paths
-from .model_worker import MODEL_ID, model_files_ready
+from .model_worker import (
+    MAX_DOCUMENT_CHARS,
+    MAX_PAIRS,
+    MAX_QUERY_CHARS,
+    MAX_REQUEST_BYTES,
+    MAX_TEXTS,
+    MODEL_ID,
+    model_files_ready,
+)
 from .vector_recall import DEFAULT_CROSS_ENCODER_MODEL, DEFAULT_EMBEDDING_MODEL
 
 READY_SCHEMA = "biodata-model-runtime/v1"
 STARTUP_TIMEOUT_S = 300.0
 SCORE_TIMEOUT_S = 180.0
+#: 单次请求序列化字节预算：协议上限扣掉信封/转义余量。条数合法但字节超限的批次
+#（512×8000 汉字 ≈ 12.3 MB）此前被 worker 丢弃、客户端干等到 SCORE_TIMEOUT_S——
+# 现在在客户端就按同一预算切块，单条自身超预算则 fail-fast。
+REQUEST_BYTES_BUDGET = MAX_REQUEST_BYTES - 64 * 1024
+
+
+def _json_size(item: object) -> int:
+    """序列化**字节**数（UTF-8）：中文一字三字节，按字符数计预算会低估三倍。"""
+    return len(json.dumps(item, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _split_by_budget(items: Sequence, *, limit: int = REQUEST_BYTES_BUDGET) -> "list[list]":
+    """按序列化字节预算把 items 切块（pairs/texts 共用同一机制）。
+
+    单条自身超预算 → `ValueError`（fail-fast：绝不发出去换一个必然被丢弃的等待）。"""
+    chunks: "list[list]" = []
+    current: list = []
+    size = 2          # "[]"
+    for item in items:
+        piece = _json_size(item) + 1      # + 逗号
+        if piece + 2 > limit:
+            raise ValueError("request_item_too_large")
+        if current and size + piece > limit:
+            chunks.append(current)
+            current, size = [], 2
+        current.append(item)
+        size += piece
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def runtime_root(paths: "AppPaths | None" = None) -> Path:
@@ -66,37 +104,17 @@ def read_ready_manifest(paths: "AppPaths | None" = None) -> dict:
 
 
 def _manifest_files_intact(manifest: dict, paths: "AppPaths | None" = None) -> bool:
-    """核对 READY manifest 记录的关键文件大小与磁盘实际一致。
-
-    旧 manifest 若无 ``model_files`` 尺寸清单，退化为仅存在性检查（model_files_ready 已覆盖）。
-    清单必须覆盖配置、分词器与真权重，缺项即视为不完整（防 manifest 被篡改/写坏）。"""
+    """核对逐文件 SHA256 证据；无哈希的旧清单不认证 READY，显式重装后恢复。"""
     files = manifest.get("model_files")
     if not isinstance(files, dict) or not files:
-        return True
+        return False
     return _files_intact(files, model_dir(paths))
 
 
 def _files_intact(files, target: Path) -> bool:
-    """尺寸清单完整性核对（两个模型目录共用的同一机制）：清单必须覆盖配置、分词器与
-    真权重，缺项/大小不符即视为不完整（防 manifest 被篡改/写坏）。"""
-    if not isinstance(files, dict) or not files:
-        return False
-    for relative, expected in files.items():
-        path = target / relative
-        if not path.is_file():
-            return False
-        try:
-            if path.stat().st_size != int(expected):
-                return False
-        except (OSError, ValueError, TypeError):
-            return False
-    if "config.json" not in files:
-        return False
-    if not any(name in files for name in ("tokenizer.json", "tokenizer_config.json")):
-        return False
-    if not any(name.endswith((".safetensors", ".bin")) for name in files):
-        return False
-    return True
+    """统一 SHA256 证据校验；尺寸清单本身不再构成可信完整性证据。"""
+    from .model_worker import verify_model_manifest
+    return verify_model_manifest(target, files)
 
 
 def _embed_manifest_files_intact(manifest: dict, paths: "AppPaths | None" = None) -> bool:
@@ -140,15 +158,31 @@ class _WorkerProcess:
         self.responses: "queue.Queue[dict]" = queue.Queue()
         self.stderr_lines: "queue.Queue[str]" = queue.Queue(maxsize=40)
         self.lock = threading.Lock()
+        from .model_worker import model_generation
+        self.model_generation = model_generation(self._model_dir())
 
-    def _reader(self, stream) -> None:
+    def _model_dir(self) -> Path:
+        raise NotImplementedError
+
+    def _generation(self):
+        from .model_worker import model_generation
+        path = ready_manifest_path(self.paths)
+        try:
+            stat = path.stat()
+            ready = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino, stat.st_dev)
+        except OSError:
+            ready = None
+        return ready, model_generation(self._model_dir())
+
+    def _reader(self, stream, responses=None) -> None:
+        responses = self.responses if responses is None else responses
         for line in stream:
             try:
                 payload = json.loads(line)
             except (TypeError, ValueError):
                 continue
             if isinstance(payload, dict):
-                self.responses.put(payload)
+                responses.put(payload)
 
     def _stderr_reader(self, stream) -> None:
         for line in stream:
@@ -169,10 +203,17 @@ class _WorkerProcess:
         raise NotImplementedError
 
     def _start(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            return
+        generation = self._generation()
+        if generation[1] != self.model_generation:
+            self.close()
+            raise RuntimeError("encoder_generation_changed")
         if not self._ready():
             raise RuntimeError("model_runtime_not_ready")
+        if self.process is not None and self.process.poll() is None:
+            if getattr(self, "_loaded_generation", None) == generation:
+                return
+            self.close()
+        self.responses = queue.Queue()
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         self.process = subprocess.Popen(
             self._serve_command(),
@@ -186,7 +227,7 @@ class _WorkerProcess:
             creationflags=flags,
         )
         assert self.process.stdout is not None and self.process.stderr is not None
-        threading.Thread(target=self._reader, args=(self.process.stdout,), daemon=True).start()
+        threading.Thread(target=self._reader, args=(self.process.stdout, self.responses), daemon=True).start()
         threading.Thread(target=self._stderr_reader, args=(self.process.stderr,), daemon=True).start()
         deadline = time.monotonic() + STARTUP_TIMEOUT_S
         while time.monotonic() < deadline:
@@ -197,6 +238,10 @@ class _WorkerProcess:
             except queue.Empty:
                 continue
             if payload.get("ready") is True:
+                if generation != self._generation():
+                    self.close()
+                    raise RuntimeError("encoder_generation_changed")
+                self._loaded_generation = generation
                 return
         self.close()
         raise TimeoutError("model_worker_start_timeout")
@@ -217,9 +262,17 @@ class _WorkerProcess:
                 except queue.Empty:
                     continue
                 if payload.get("id") != request_id:
+                    # fail-fast：无 id 的失败回执（如 worker 的 request_too_large）属于
+                    # 本请求——roundtrip 持锁串行、超时路径会 close worker，不存在他人旧帧；
+                    # 立刻失败，不再空等到 SCORE_TIMEOUT_S（超时预算本身不动）。
+                    if payload.get("ok") is False:
+                        raise RuntimeError("model_worker_request_rejected")
                     continue
                 if payload.get("ok") is not True:
                     raise RuntimeError("model_worker_bad_response")
+                if self._loaded_generation != self._generation():
+                    self.close()
+                    raise RuntimeError("encoder_generation_changed")
                 return payload
             self.close()
             raise TimeoutError("model_worker_score_timeout")
@@ -244,17 +297,24 @@ class ExternalCrossScorer(_WorkerProcess):
     def _ready(self) -> bool:
         return external_runtime_ready(self.paths)
 
+    def _model_dir(self) -> Path:
+        return model_dir(self.paths)
+
     def _serve_command(self) -> "list[str]":
         return [str(runtime_python(self.paths)), str(worker_script(self.paths)),
                 "--serve", str(model_dir(self.paths))]
 
     def __call__(self, pairs: "Sequence[tuple[str, str]]") -> "list[float]":
-        request = {"id": uuid.uuid4().hex, "pairs": [[str(a), str(b)] for a, b in pairs]}
-        payload = self._roundtrip(request)
-        scores = payload.get("scores")
-        if not isinstance(scores, list):
-            raise RuntimeError("model_worker_bad_response")
-        return [float(value) for value in scores]
+        prepared = [[str(a)[:MAX_QUERY_CHARS], str(b)[:MAX_DOCUMENT_CHARS]] for a, b in pairs]
+        scores: "list[float]" = []
+        # 按字节预算切块（同一机制服务 pairs/texts）；单条超预算 → ValueError fail-fast。
+        for chunk in _split_by_budget(prepared[:MAX_PAIRS]):
+            payload = self._roundtrip({"id": uuid.uuid4().hex, "pairs": chunk})
+            part = payload.get("scores")
+            if not isinstance(part, list) or len(part) != len(chunk):
+                raise RuntimeError("model_worker_bad_response")
+            scores.extend(float(value) for value in part)
+        return scores
 
 
 class ExternalEmbedder(_WorkerProcess):
@@ -267,17 +327,25 @@ class ExternalEmbedder(_WorkerProcess):
     def _ready(self) -> bool:
         return external_embed_ready(self.paths)
 
+    def _model_dir(self) -> Path:
+        return embed_model_dir(self.paths)
+
     def _serve_command(self) -> "list[str]":
         return [str(runtime_python(self.paths)), str(worker_script(self.paths)),
                 "--serve", str(embed_model_dir(self.paths)), "--embed"]
 
     def __call__(self, texts: "Sequence[str]") -> "list[list[float]]":
         batch = [str(t)[: self.MAX_TEXT_CHARS] for t in texts]
-        payload = self._roundtrip({"id": uuid.uuid4().hex, "texts": batch})
-        vectors = payload.get("vectors")
-        if not isinstance(vectors, list) or len(vectors) != len(batch):
-            raise RuntimeError("model_worker_bad_response")
-        return [[float(x) for x in vec] for vec in vectors]
+        out: "list[list[float]]" = []
+        # 条数合法但字节超协议 cap 的批次（512×8000 汉字 ≈ 12.3 MB）此前被 worker
+        # 丢弃、客户端干等 180s；这里按同一字节预算切块，超单条预算的输入 fail-fast。
+        for chunk in _split_by_budget(batch):
+            payload = self._roundtrip({"id": uuid.uuid4().hex, "texts": chunk})
+            vectors = payload.get("vectors")
+            if not isinstance(vectors, list) or len(vectors) != len(chunk):
+                raise RuntimeError("model_worker_bad_response")
+            out.extend([float(x) for x in vec] for vec in vectors)
+        return out
 
 
 _WORKERS: "list[_WorkerProcess]" = []

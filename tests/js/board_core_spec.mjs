@@ -180,4 +180,179 @@ const src = readFileSync(fileURLToPath(new URL("../../web/static/js/panel/board_
         ok(src.indexOf(bad) < 0, "纯核里不该出现 " + bad);
     });
 
+/* 会话原样恢复：消息和结果引用独立保存，重编号后仍指向同一批结果。 */
+const richLog = [
+    { kind: "say", text: "第一句", id: "m1", frameId: 11 },
+    { kind: "sys", text: "最终 AI 回复\n第二行", id: "m2", frameId: 11, llmTag: true,
+        html: '<div class="receipt">附件</div>', flow: { summaryText: "执行了检索", expanded: [] },
+        pills: [{ frameId: 11, batchId: "", label: "第一批", count: 3, active: true }], msgFb: "up" },
+    { kind: "say", text: "第二句", id: "m3", frameId: 12 },
+    { kind: "sys", text: "暂时失败", id: "m4", frameId: 12, isError: true, needsAgent: true },
+    { kind: "sys", text: "检索之后的继续对话", id: "m5", frameId: null },
+];
+const savedMessages = core.cbHistoryMessages(richLog);
+const historyRows = [
+    { at: 100, query: "第一句", frameId: 11, snap: { results: [{ uid: "first" }] }, chat: savedMessages.slice(0, 2) },
+    { at: 200, query: "第二句", frameId: 12, snap: { results: [] }, chat: savedMessages,
+        facetFilters: [{ dim: "species", value: "Human" }], suppressed: ["include:tissue"], lenientDims: ["disease"],
+        conversation: { version: 2, frameIds: [11, 12], cursorId: 11,
+            view: { queryDraft: "草稿\n原样保留", chatDraft: "继续问", mode: "board", chatScroll: 37, openDetails: [true] } } },
+];
+const restoredHistory = core.cbHistoryRestore(historyRows, 80);
+const pendingNextRows = structuredClone(historyRows);
+pendingNextRows[0].chat.push({ k: "say", t: "第二句", i: "m3", r: null });
+const beforePrefix = JSON.stringify(pendingNextRows);
+const selectedPrefix = core.cbHistoryPrefix(pendingNextRows, 1);
+eq(core.cbHistoryRestore(selectedPrefix).log.map((m) => m.text), richLog.slice(0, 2).map((m) => m.text),
+    "按最终归属截断累计消息，较早行提前保存的下一句不混入分支");
+eq(JSON.stringify(pendingNextRows), beforePrefix, "裁剪前缀不改写原会话");
+eq(core.cbHistoryRestore(core.cbHistoryPrefix(historyRows, 2)).cursor, 1, "完整前缀分支停在所选末轮而非父会话旧游标");
+const prunedRows = structuredClone(historyRows);
+prunedRows[1].conversation.frameIds = [12];
+eq(core.cbHistoryPrefix(prunedRows, 1).map((h) => h.frameId), [12], "已回退删除的旧帧不计入分支轮次");
+eq(core.cbHistoryPrefix(historyRows.slice(1), 1), [], "首轮历史行被容量裁掉后不能拿后面的结果当分支点");
+const retainedLatestPrefix = core.cbHistoryPrefix(historyRows.slice(1), 2);
+eq(retainedLatestPrefix.map((h) => h.frameId), [12], "缺失更早结果时按保存的帧序列定位最新分支点");
+eq(core.cbHistoryRestore(retainedLatestPrefix).log.map((m) => m.text), richLog.map((m) => m.text), "仍保留截至分支点的完整消息");
+eq(restoredHistory.log.map((e) => e.text), richLog.map((e) => e.text), "全部消息和原有换行原样恢复");
+eq(restoredHistory.log.map((e) => e.frameId), [81, 81, 82, 82, null], "消息显式结果归属不按累计长度猜测");
+eq(restoredHistory.cursor, 0, "离开时查看旧批次，重新打开仍停在旧批次");
+eq(restoredHistory.log[1].pills[0].frameId, 81, "结果按钮随帧号重映射");
+eq(restoredHistory.log[1].flow, richLog[1].flow, "工具摘要恢复");
+ok(restoredHistory.log[1].llmTag && restoredHistory.log[1].msgFb === "up", "AI 来源和反馈保留");
+ok(restoredHistory.log[3].isError && restoredHistory.log[3].needsAgent, "错误和设置入口保留");
+eq(restoredHistory.view, historyRows[1].conversation.view, "草稿、滚动和展开态保留");
+eq(restoredHistory.stack[1].suppressed, ["include:tissue"], "被忽略的过滤条件保留");
+eq(restoredHistory.stack[1].lenient, ["disease"], "宽容维度保留");
+richLog[1].pills[0].count = 99;
+eq(savedMessages[1].pills[0].count, 3, "保存数据与运行时数据隔离");
+const longChat = Array.from({ length: 90 }, (_, i) => ({ k: i % 2 ? "sys" : "say", t: "消息" + i, i: "m" + i, r: null }));
+eq(core.cbHistoryRestore([{ chatOnly: true, chat: longChat, conversation: { version: 2, frameIds: [] } }]).log.length,
+    90, "超过旧40条窗口的对话不丢消息");
+const missingResult = core.cbHistoryRestore([{ ...historyRows[1], snap: null, snap_evicted: true }]);
+eq(missingResult.stack.length, 0, "缺失快照不伪造结果");
+eq(missingResult.log.map((e) => e.text), savedMessages.map((e) => e.t), "结果被清退仍保留原回复");
+const legacyHistory = core.cbHistoryRestore([
+    { query: "旧句", snap: { results: [1] }, chat: [{ k: "say", t: "旧句", i: "m1" }] },
+    { query: "新句", snap: { results: [2] }, chat: [{ k: "sys", t: "旧回复", i: "m2" }, { k: "say", t: "新句", i: "m3" }] },
+]);
+eq(legacyHistory.log.map((e) => e.text), ["旧句", "旧回复", "新句"], "旧版累计窗口滚动仍找回新增消息");
+eq(core.cbHistoryRestore([{ query: "只剩查询" }]).log[0].text, "只剩查询", "最早格式保留原查询");
+const prefixMissingResult = core.cbHistoryRestore([
+    { ...historyRows[0], snap: null, snap_evicted: true },
+], 0, { asBranch: true });
+eq(prefixMissingResult.stack, [], "首轮快照缺失时分支不借用后续结果");
+eq(prefixMissingResult.log.map((m) => m.text), richLog.slice(0, 2).map((m) => m.text), "快照缺失的分支仍保留所选轮次的消息");
+eq(prefixMissingResult.log.map((m) => m.frameId), [null, null], "缺失结果的消息不伪造帧归属");
+eq(core.cbHistoryRestore([{ query: "旧句", snap: { results: [1] }, chat: [{ k: "say", t: "旧句" }] }],
+    0, { asBranch: true }).log[0].text, "旧句", "旧格式仍能按前缀建立分支");
+
+/* 使用真正 core.js 的存储实现，验证晚到的回复、账户隔离与配额降级。 */
+const coreSource = readFileSync(fileURLToPath(new URL("../../web/static/js/core/core.js", import.meta.url)), "utf8")
+    .replace(/^import .*;\r?$/gm, "");
+globalThis.window = {};
+const historyStorage = new Map();
+let storageLimit = Infinity;
+globalThis.localStorage = {
+    getItem: (key) => historyStorage.get(key) ?? null,
+    setItem: (key, value) => { if (value.length > storageLimit) throw new Error("quota"); historyStorage.set(key, value); },
+    removeItem: (key) => historyStorage.delete(key),
+};
+const historyCore = await import("data:text/javascript;base64," + Buffer.from(coreSource).toString("base64"));
+let liveLog = [{ kind: "say", text: "提问", id: "m1", frameId: 1 }];
+let liveState = { owner: "history_owner", frames: [{ id: 1, query: "提问", resp: { results: [1] }, facets: [], suppressed: [], lenient: [], queryHits: [] }], cursorId: 1,
+    view: { chatDraft: "未发送的草稿", chatScroll: 17 } };
+historyCore.setCurrentUser({ id: "history_owner" });
+historyCore.setHistHooks({ convId: () => "saved-conversation", logForHistory: () => core.cbHistoryMessages(liveLog), stateForHistory: () => liveState });
+historyCore.pushHist("提问", liveState.frames[0].resp, [], [], [], [], false);
+liveLog.push({ kind: "sys", text: "实际系统回复", id: "m2", frameId: 1 });
+historyCore.syncHistConversation();
+eq(historyCore.getHist()[0].chat[1].t, "实际系统回复", "初次结果写入后到达的系统回复同步保存");
+liveLog[1].text = "AI 最终原位改写"; liveLog[1].llmTag = true;
+historyCore.syncHistConversation();
+eq(historyCore.getHist()[0].chat[1].t, "AI 最终原位改写", "异步改写后的最终显示内容同步保存");
+eq(historyCore.getHist()[0].conversation.view.chatDraft, "未发送的草稿", "离开前的草稿写入同一会话");
+historyCore.setCurrentUser({ id: "other_owner" });
+eq(historyCore.syncHistConversation(), false, "旧会话异步保存拒绝写入新账户");
+eq(historyCore.getHist(), [], "其他账户看不到本会话");
+historyCore.setCurrentUser({ id: "history_owner" });
+liveState.frames[0].resp = { results: ["X".repeat(10000)] };
+storageLimit = 3000;
+historyCore.syncHistConversation();
+ok(historyCore.getHist()[0].snap_evicted, "空间不足按结果载荷降级");
+eq(historyCore.getHist()[0].chat[1].t, "AI 最终原位改写", "配额降级不丢系统回复");
+ok(historyCore.getHist()[0].conversation.version === 2, "配额降级保留恢复状态");
+historyCore.setCurrentUser({ id: "full_storage_owner" });
+liveState = { frames: [], cursorId: null, view: {} }; storageLimit = 0;
+eq(historyCore.syncHistConversation(), false, "连纯对话都存不下时终止重试，避免递归溢出");
+storageLimit = Infinity;
+historyCore.setCurrentUser({ id: "fork_owner" });
+let forkConvId = "parent";
+liveLog = richLog.slice(0, 4);
+liveState = { owner: "fork_owner", frames: [
+    { id: 11, query: "第一句", resp: { results: [{ uid: "first" }] }, facets: [], suppressed: [], lenient: [], queryHits: [] },
+    { id: 12, query: "第二句", resp: { results: [{ uid: "second" }] }, facets: [], suppressed: [], lenient: [], queryHits: [] },
+], cursorId: 12, view: {} };
+historyCore.setHistHooks({ convId: () => forkConvId, logForHistory: () => core.cbHistoryMessages(liveLog), stateForHistory: () => liveState });
+eq(historyCore.syncHistConversation(), false, "普通保存不复活不存在的会话");
+ok(historyCore.syncHistConversation({ createFrames: true }), "显式分支立即独立保存继承的结果帧");
+const parentRows = historyCore.getHist();
+forkConvId = "fork";
+liveLog.push({ kind: "sys", text: "分支提示", id: "m5", frameId: 12 });
+ok(historyCore.syncHistConversation({ createFrames: true }), "新分支保留继承的帧与新消息");
+const forkRows = historyCore.getHist().filter((r) => r.convId === "fork").reverse();
+eq(historyCore.getHist().filter((r) => r.convId === "parent"), parentRows, "分支保存不改写原会话");
+const reopenedFork = core.cbHistoryRestore(forkRows);
+eq(reopenedFork.stack.map((f) => f.resp.results[0].uid), ["first", "second"], "独立回看仍有继承的每轮结果");
+eq(reopenedFork.log.map((m) => m.text), liveLog.map((m) => m.text), "独立回看仍保留分支全部消息");
+eq(core.cbHistoryRestore(forkRows.slice(0, 1), 0, { asBranch: true }).log.map((m) => m.text),
+    richLog.slice(0, 2).map((m) => m.text), "对分支再次从首轮分支仍只保留首轮历史");
+historyCore.setCurrentUser({ id: "another_fork_owner" });
+eq(historyCore.syncHistConversation({ createFrames: true }), false, "显式分支保存同样遵守账户所属校验");
+eq(historyCore.getHist(), [], "跨账户分支不写入继承内容");
+const shared = core.cbSharedRestore({ current_state: { active_frame_id: "f_2" },
+    messages: [{ seq: 1, role: "user", text: "第一轮", run_id: "r1" }, { seq: 2, role: "assistant", text: "结果", run_id: "r1" },
+        { seq: 3, role: "assistant", text: "MCP 新轮", run_id: "r2" }],
+    frames: [{ id: "f_1", seq: 1, run_id: "r1", payload: { results: [{ uid: "a" }] }, state: { query: "首句", search_params: { date_from: "2020-03-12", facet_filters: [{ dim: "species", value: "human" }] } } },
+        { id: "f_2", seq: 2, run_id: "r2", payload: { results: [] }, state: { query: "零命中" } }] });
+eq(shared.stack.map((f) => f.serverId), ["f_1", "f_2"], "共享帧保留服务端不透明编号和零命中帧");
+eq(shared.cursor, 1, "共享现场由 active_frame_id 决定");
+eq(shared.log.map((m) => m.text), ["第一轮", "结果", "MCP 新轮"], "共享消息不沿用本机累计缓存");
+eq(shared.log[2].frameId, 2, "MCP 新轮按 run_id 关联结果");
+eq(shared.stack[0].state.search_params.date_from, "2020-03-12", "共享帧保留精确日期而非折为年份");
+let missingFrameRejected = false;
+try { core.cbSharedRestore({ current_state: { has_results: true }, frames: [], messages: [] }); }
+catch (_error) { missingFrameRejected = true; }
+ok(missingFrameRejected, "共享缺帧是协议错误，不会用本机缓存假装已恢复");
+const importData = core.cbLegacyImport(forkRows);
+eq(importData.frames.length, 2, "显式导入复用既有历史恢复机制保留每轮快照");
+eq(importData.messages.map((m) => m.role), liveLog.map((m) => m.kind === "sys" ? "assistant" : "user"), "显式导入消息身份准确");
+eq(importData.frames.map((f) => f.message_boundary), [2, 5], "显式导入保存每个结果的消息边界");
+const imported = core.cbSharedRestore({ current_state: importData.current_state,
+    frames: importData.frames.map((f, i) => ({ ...f, id: "f_" + (i + 1), seq: i + 1, run_id: "" })),
+    messages: importData.messages.map((m, i) => ({ ...m, seq: i + 1, run_id: "original-task" })) });
+eq(imported.log.map((m) => m.frameId), [1, 1, 2, 2, 2], "分支或导入没有原 run_id 时以真实消息边界关联各轮结果");
+historyCore.setCurrentUser({ id: "shared_owner" });
+historyCore.setHistHooks({ convId: () => "server_conv", logForHistory: () => [{ k: "say", t: "共享" }], stateForHistory: () => liveState, shared: () => true });
+historyCore.pushHistChatOnly(); historyCore.pushHist("共享", { results: [] }, [], [], [], []); historyCore.syncHistConversation({ createFrames: true });
+eq(historyCore.getHist(), [], "共享会话不会混写或覆盖本机旧历史");
+const messageIn = (id) => core.cbSharedRestore({ id, messages: [{ seq: 1, role: "assistant", text: "reply" }], frames: [], current_state: {} }).log[0].id;
+ok(messageIn("conversation-A") !== messageIn("conversation-B"), "共享消息id必须带会话身份，避免评论草稿串会话");
+eq(messageIn("conversation-A"), messageIn("conversation-A"), "同一会话刷新保留稳定消息id");
+// 命中关键词唯一真源：只取 include 生效值、去重、顿号连接、超长截断；两条 pill 路径共用。
+eq(core.cbHitKeywords([{ polarity: "include", values: ["FASTQ", "乳腺癌"] },
+    { polarity: "exclude", values: ["石蜡"] }, { polarity: "include", values: ["乳腺癌", "Human"] }]),
+    "FASTQ、乳腺癌、Human", "pill 关键词只取正向硬条件且去重");
+eq(core.cbHitKeywords([]), "", "空约束回退空串交给调用方回退原 query");
+eq(core.cbHitKeywords([{ polarity: "prefer", values: ["新"] }]), "", "软偏好不算命中关键词");
+ok(core.cbHitKeywords([{ polarity: "include", values: ["超长词".repeat(20)] }]).endsWith("…"), "超长关键词整体截断");
+const kwShared = core.cbSharedRestore({ current_state: {},
+    messages: [{ seq: 1, role: "assistant", text: "结果", run_id: "r1" }],
+    frames: [{ id: "f_1", seq: 1, run_id: "r1", state: { query: "整句查询" },
+        payload: { results: [{ uid: "a" }], query_constraints: [{ polarity: "include", values: ["Human", "FASTQ"] }] } }] });
+eq(kwShared.log[0].pills[0].label, "Human、FASTQ", "共享恢复 pill 显示命中关键词而非原始 query");
+const kwFallback = core.cbSharedRestore({ current_state: {},
+    messages: [{ seq: 1, role: "assistant", text: "结果", run_id: "r1" }],
+    frames: [{ id: "f_1", seq: 1, run_id: "r1", state: { query: "整句查询" }, payload: { results: [{ uid: "a" }] } }] });
+eq(kwFallback.log[0].pills[0].label, "整句查询", "无约束信息时 pill 回退整句 query");
 console.log("BOARD_CORE_SPEC_OK  断言 " + checks + " 条");

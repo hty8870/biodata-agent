@@ -9,9 +9,61 @@ per-test 临时路径；test_mcp_call_log.py 再用自己的 monkeypatch 精细�
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 
 import pytest
+
+
+def _drain_conversation_services():
+    """Conversation workers may schedule learning and replay before they retire."""
+    closed = set()
+    webapp = sys.modules.get("dataset_recommender.app.webapp")
+    if webapp is not None:
+        with webapp._CONVERSATION_RUNTIME_LOCK:
+            runtime, webapp._CONVERSATION_RUNTIME = webapp._CONVERSATION_RUNTIME, None
+        if runtime is not None:
+            runtime.close()
+            closed.add(runtime)
+    for name, lock_name, is_conversation in (
+        ("mcp_agent_tools", "_LOCK", True),
+        ("learning_service", "_SERVICES_LOCK", False),
+    ):
+        module = sys.modules.get("dataset_recommender.app." + name)
+        if module is None:
+            continue
+        while True:
+            with getattr(module, lock_name):
+                services = list(module._SERVICES.values())
+                module._SERVICES.clear()
+            if not services:
+                break
+            for service in services:
+                runtime = service.runtime if is_conversation else service
+                if runtime not in closed:
+                    runtime.close()
+                    closed.add(runtime)
+    replay = sys.modules.get("dataset_recommender.app.replay_service")
+    if replay is not None:
+        for worker in threading.enumerate():
+            if worker.name == "replay-digest":
+                worker.join(timeout=30)
+                if worker.is_alive():
+                    raise RuntimeError("Replay worker did not finish before test teardown")
+        with replay._DRAW_GUARD:
+            replay._DRAW.clear()
+    if webapp is not None:
+        with webapp._rate_lock:
+            webapp._rate_buckets.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_conversation_runtime(monkeypatch, tmp_path):
+    """Drain real workers before monkeypatch restores their model and storage seams."""
+    _drain_conversation_services()
+    monkeypatch.setenv("BIODATA_RUNS_DB", str(tmp_path / "conversation-runs.sqlite"))
+    yield
+    _drain_conversation_services()
 
 # 包身份单一真源：历史上一半测试经
 # `src.dataset_recommender.*`（repo 根在 sys.path 时的命名空间包）导入、另一半经
@@ -83,3 +135,17 @@ def _stub_route_consensus_globally(monkeypatch):
         except ImportError:
             return
     monkeypatch.setattr(module, "_run_route_consensus", lambda *a, **k: ("general", []))
+
+
+@pytest.fixture(autouse=True)
+def _pin_legacy_route_defaults(monkeypatch):
+    """分流三改（2026-09-19）环境钉：测试会话默认钉旧通道——三分类分流、
+    L0 级联关、检索闸关（生产默认已是 binary + L0 开 + 闸开；套件里既有用例
+    大量打在 FakeModel 应答序列/flight 起跑时序上，默认值翻转会造成全线错位，
+    与上方 route_consensus stub 同一问题）。三分类作为文档化兜底通道由既有套件
+    继续全量覆盖；新默认通道（binary/L0 级联/检索闸）的覆盖在
+    tests/test_route_gates.py——各用例显式 setenv 启用（conftest 先执行，
+    测试体内的 monkeypatch 后执行生效）。"""
+    monkeypatch.setenv("BIODATA_ROUTE_MODE", "three_class")
+    monkeypatch.setenv("BIODATA_ROUTE_L0", "0")
+    monkeypatch.setenv("BIODATA_PRELIM_GATE", "0")

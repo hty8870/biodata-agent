@@ -227,11 +227,60 @@ def test_cite_export_writes_ris_and_bibtex_and_receipt(_stub_results, tmp_path):
     assert "@misc{" in bib_text and "@article" not in bib_text
 
 
+def test_relaxed_trial_scope_flows_into_default_export(monkeypatch, tmp_path):
+    """端到端：严格条件零结果 → rerank 单维放松上屏后，「导出当前结果」默认对象
+    必须仍落在**同一批**（该试跑的生效范围）——旧实现按入口旧条件重跑，刚放松的条件
+    被恢复成空集，导出无从谈起。"""
+    from types import SimpleNamespace
+
+    import dataset_recommender.app.workflow as wf
+
+    calls: list[dict] = []
+
+    class _Flow:
+        def run_with_meta(self, p=None, **kwargs):
+            kw = vars(p) if p is not None else dict(kwargs)
+            calls.append(kw)
+            rows = [] if not kw.get("suppressed_constraints") else [
+                {"dataset_uid": "fake-a", "dataset_name": "Human Lung Cancer Visium",
+                 "source": "10x Genomics"},
+                {"dataset_uid": "fake-b", "dataset_name": "Mouse Brain Xenium",
+                 "source": "10x Genomics"}]
+            return SimpleNamespace(result_total=len(rows), retrieved_data=rows,
+                                   active_filters=[])
+
+    monkeypatch.setattr(wf, "DatasetRecommendationWorkflow", _Flow)
+    monkeypatch.setattr(agent_exec, "_full_corpus", lambda root: [REC_A, REC_B])
+    ctx = {"current_query": "人类肺癌", "search_sources": None,
+           "search_suppressed_constraints": [], "search_facet_filters": [],
+           "search_lenient_dims": [], "search_date_from": "", "search_date_to": "",
+           "steps": [{"verb": "rerank", "ok": True, "card_kind": "rerank",
+                      "result": {"health": "degenerate", "total": 2,
+                                 "rewritten_query": "人类肺癌",
+                                 "relaxed": ["include:disease"]}}]}
+    out = agent_exec._loop_cite_export({}, tmp_path, ctx)
+    assert calls and calls[-1]["suppressed_constraints"] == ["include:disease"]
+    assert out["uids"] == ["fake-a", "fake-b"], "默认导出对象必须与放松试跑同一批"
+    assert out["n_datasets"] == 2 and out["files"]
+
+
 def test_cite_export_honest_when_no_results(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_exec, "_recent_result_records", lambda ctx, root: (None, None))
     out = agent_exec._loop_cite_export({}, tmp_path, {})
     assert out["n_datasets"] == 0 and out["files"] == []
     assert "没有可导出的检索结果" in out["note_zh"]
+
+
+def test_same_second_citation_exports_preserve_previous_files(_stub_results, tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_exec.time, "strftime", lambda *args: "20000101-000000")
+    first = agent_exec._loop_cite_export({"uids": ["fake-a"]}, tmp_path, {})
+    root = Path(first["out_dir"])
+    original = {f["filename"]: (root / f["filename"]).read_bytes() for f in first["files"]}
+    second = agent_exec._loop_cite_export({"uids": ["fake-b"]}, tmp_path, {})
+    assert not set(original) & {f["filename"] for f in second["files"]}
+    assert all((root / name).read_bytes() == data for name, data in original.items())
+    for receipt in (first, second):
+        assert len({Path(f["filename"]).stem for f in receipt["files"]}) == 1
 
 
 def test_cite_export_respects_limit_slot(_stub_results, tmp_path):

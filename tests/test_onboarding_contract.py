@@ -152,30 +152,55 @@ def test_tutorial_copy_explains_ranking_polish_trace_and_refinement_boundaries()
 
 
 def test_step0_true_branch_final_copy_with_accent_and_bold_marks():
-    """ob2/S5：第0步反馈强化版（BENCHFB_BUILD=true 分支）终稿契约；ux1 起文案如实化。
+    """ob2/S5 + 2026-10-04 F-privacy：教程里的采集承诺收敛到 `COPY.privacy` 单一锚点。
 
-    - 正文逐字含「默认开启本地数据采集」「每个账户首次发送前独立确认」
-      「经明文 HTTP 上传到项目所有者的服务器（保留 90 天）」「不采集 API Key、密码和账户名」
-      （2026-08-22 ux1：旧的「安全 HTTPS 通道」虚口径已如实改写为明文 HTTP + 90 天 + 结构性去标识；
-      2026-08-22 ov1-fix2：结构性去标识 → 尽力过滤（手机号/证件号/邮箱自动遮蔽、API Key 等直接
-      标识删除，并非匿名化），与 consent v2 口径一致）；
-    - 评分频率新口径入正文（每会话最多两次）+ 隐私提醒（勿输入患者隐私/样本信息/未公开课题）；
-    - 旧「导出反馈包 / 手动发给开发者」口径已清除（导出仅作兜底，不再出现在 step0 正文）；
-    - 样式只走 additive 字段 titleAccent/boldText（与 BENCHFB_BUILD 绑定），渲染端 classList.toggle
-      挂类、CSS 用主题色变量（--tour-accent = 全局 --accent）——主线版 false 分支文案与视觉一律不动。
+    - 第 0 步与结尾「使用反馈」步都取 `COPY.privacy.commitment`，**不许**在 onboarding.js 里
+      各自重写同族事实（旧版两处各硬写一份，改一处漏一处）；
+    - 事实边界逐句可查：默认本地数据采集 / 每个账户首次发送前独立确认 / 尽力过滤并非匿名化 /
+      只有运营方配置了上传通道时才自动上传（通道与保留时间以当前服务说明为准；没配置通道时
+      记录只留在本机）/ 不采集 API Key、密码和账户名 / 采集授权不含模型训练；
+    - 旧静态口径已清除：写死「明文 HTTP 上传」与固定「保留 90 天」的承诺（2026-08-22 版曾逐字
+      写进正文；TLS + 运营方配置通道 + 独立训练 consent 落地后不再成立）。禁语断言用剥掉注释的
+      代码，防「为什么删掉那句话」的复盘注释本身被判违规（同文件里踩过的坑）；
+    - 评分频率口径（每会话最多两次）+ 隐私提醒（勿输入患者隐私/样本信息/未公开课题）仍在正文；
+    - 样式仍只走 additive 字段 titleAccent/boldText（与 BENCHFB_BUILD 绑定），渲染端
+      classList.toggle 挂类、CSS 用主题色变量（--tour-accent = 全局 --accent）——主线版
+      false 分支文案与视觉一律不动。
     """
     js = (ROOT / "web/static/js/core/onboarding.js").read_text(encoding="utf-8")
+    copy_js = (ROOT / "web/static/js/core/copy.js").read_text(encoding="utf-8")
     css = (ROOT / "web/static/css/app.css").read_text(encoding="utf-8")
-    assert "默认开启本地数据采集" in js
-    assert "每个账户首次发送前独立确认" in js
-    assert "记录经尽力过滤（手机号/证件号/邮箱自动遮蔽、API Key 等直接标识删除，并非匿名化）后经明文 HTTP 上传到项目所有者的服务器（保留 90 天）" in js
-    assert "配置安全 HTTPS 通道后才会脱敏自动上传" not in js
-    assert "不采集 API Key、密码和账户名" in js
-    assert "请尽管用真需求考验它" in js
-    assert "评分只在你最关注的检索/执行轮主动出现（每个会话最多两次）" in js
-    assert "请勿输入患者隐私、样本信息或未公开的研究内容" in js
-    assert "导出的.json程序包手动发给开发者" not in js
-    assert "若您愿意贡献您的使用与评价记录用于改善产品" not in js
+    code = _strip_js_comments(js)
+    # 单一锚点：两步共用同一段承诺，正文只活在 copy.js
+    assert 'import { COPY } from "#copy";' in code and "COPY.privacy.commitment" in code
+    assert code.count("COPY.privacy.commitment") == 2, (
+        "第 0 步与结尾「使用反馈」步都必须经 COPY.privacy.commitment 取承诺（不许各自硬写）"
+    )
+    # 过时静态口径不得从任何一处溜回来（含锚点文件）
+    for stale in ("明文 HTTP", "保留 90 天", "上传到项目所有者的服务器",
+                  "配置安全 HTTPS 通道后才会脱敏自动上传"):
+        assert stale not in code, f"教程正文不得再写死过时口径：{stale}"
+        assert stale not in _strip_js_comments(copy_js), f"文案锚点不得再写死过时口径：{stale}"
+    for fact in (
+        "默认开启本地数据采集",
+        "每个账户首次发送前独立确认",
+        "手机号/证件号/邮箱自动遮蔽、API Key 等直接标识删除，并非匿名化",
+        "只有运营方配置了上传通道时才会自动上传",
+        "上传通道和保留时间以当前服务说明为准",
+        "没配置通道时记录只留在本机、可以自己导出",
+        "不采集 API Key、密码和账户名",
+        "这项授权不包含模型训练或微调",
+        "训练需要另行同意，可随时在设置里撤回",
+    ):
+        assert copy_js.count(fact) == 1, f"采集承诺事实必须在 COPY.privacy 恰好维护一次：{fact}"
+    # 整段承诺由分句拼成，不许在旁边再手写一份同样内容
+    assert "PRIVACY_FACTS" in copy_js and 'join("；")' in copy_js
+    assert "请尽管用真需求考验它" in code
+    assert "评分只在你最关注的检索/执行轮主动出现（每个会话最多两次）" in code
+    assert "请勿输入患者隐私、样本信息或未公开的研究内容" in code
+    assert "想关、清空本地待发记录、手动导出" in code
+    assert "导出的.json程序包手动发给开发者" not in code
+    assert "若您愿意贡献您的使用与评价记录用于改善产品" not in code
     assert "titleAccent: BENCHFB_BUILD" in js and "boldText: BENCHFB_BUILD" in js
     assert 'classList.toggle("onboarding-title-accent"' in js
     assert 'classList.toggle("onboarding-text-bold"' in js
@@ -235,7 +260,9 @@ def test_api_key_persistence_requires_separate_explicit_opt_in():
     assert "if (rk.checked) $(\"cfgSaveSession\").checked = true;" in interactions
     assert "if (!ss.checked) $(\"cfgRememberApiKey\").checked = false;" in interactions
     assert "c.save === true && c.rememberApiKey === true" in shell
-    assert "if (rememberApiKey) stored.apiKey = c.api_key" in shell
+    # key 落盘在「显式授权」之上再叠一道「护栏政策已知且非护栏」——
+    # 未知期（health 快照未到）不落 secret（BYOK 当前输入只活表单/内存）。
+    assert "if (rememberApiKey && webGuardKnown()) stored.apiKey = c.api_key" in shell
     assert "delete c.apiKey" in shell, "旧版无独立授权的残留 Key 必须主动清理"
     assert "apiKey: c.api_key" not in shell, "不得把 Key 混入普通设置的无条件持久化对象"
 

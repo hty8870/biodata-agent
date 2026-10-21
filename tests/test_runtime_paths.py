@@ -36,8 +36,17 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
-def _isolate_runtime_paths_cache():
-    """每个测试前后清 runtime_paths 与 get_settings 缓存：env 改动即时生效、不跨测试泄漏。"""
+def _isolate_runtime_paths_cache(monkeypatch):
+    """每个测试前后清 runtime_paths 与 get_settings 缓存：env 改动即时生效、不跨测试泄漏。
+
+    同时显式清掉 RESOURCE/DATA 根变量（离线验证 harness 会预置它们做数据隔离）——本文件断言
+    source 模式的逐字节历史布局，两个根必须回到「未设」口径；测试内部要模拟分根时再用
+    monkeypatch.setenv 自己设。另清掉账户/会话文件覆盖变量：它们会覆盖「由根派生子路径」的
+    契约，而本文件断言的正是派生规则。这不是放行任何写操作，只是让口径不依赖外部环境。"""
+    monkeypatch.delenv(RESOURCE_ROOT_ENV, raising=False)
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+    monkeypatch.delenv("BIODATA_ACCOUNTS_FILE", raising=False)
+    monkeypatch.delenv("BIODATA_SESSIONS_FILE", raising=False)
     reset_app_paths_cache()
     _llm_get_settings.cache_clear()
     yield
@@ -220,8 +229,13 @@ def test_consumers_source_mode_match_historical_paths():
     assert default_cross_encoder_dir("m") == _REPO_ROOT / "models" / "cross_encoders" / "m"
 
 
-def test_get_settings_source_mode_matches_historical():
-    """get_settings：project_root/data_dir/output_dir 与历史逐字节一致（DATA_DIR 未设）。"""
+def test_get_settings_source_mode_matches_historical(monkeypatch):
+    """get_settings：project_root/data_dir/output_dir 与历史逐字节一致（DATA_DIR 未设）。
+
+    离线验证 harness 禁止读真实 .env（秘密文件防线）；本断言只涉及根派生，故把 env 文件
+    候选加载桩成 no-op——不触碰真实 .env，也不改变被断言的派生逻辑。"""
+    from dataset_recommender.llm import config as _llm_config
+    monkeypatch.setattr(_llm_config, "load_env_candidates", lambda root: None)
     s = _llm_get_settings()
     assert s.project_root == _REPO_ROOT
     assert s.data_dir == _REPO_ROOT / "database" / "base"
@@ -292,17 +306,23 @@ def test_external_write_lands_only_in_user_layer(tmp_path, monkeypatch):
 
 
 def test_external_invalidate_semantics_preserved(tmp_path, monkeypatch):
-    """invalidate_external_cache 语义保持：新文件在清缓存前不可见（lru 缓存键不变）、清后可见。"""
+    """外部库可见性契约：用户层新文件**无需显式失效即对后续装载可见**——
+    廉价目录指纹折进既有 generation 缓存键（跨进程/崩溃 healer 保证，独立 reader 下一次
+    正常检索即见已提交字节）。显式 invalidate_external_cache() 仍保持既有作用：清后语义
+    不变、不重复、不丢失（同进程代数仍由此入口推进）。"""
     from dataset_recommender.corpus.corpus import invalidate_external_cache, load_full_corpus
 
     p, _res, _data = _make_split_corpus(tmp_path, monkeypatch)
     invalidate_external_cache()
     before = len(load_full_corpus(p.data_root / "database" / "base", p.data_root))
     _write_records_file(p.user_external_dir / "upload_late.json", [_rec("晚到", "UserSource")])
-    assert len(load_full_corpus(p.data_root / "database" / "base", p.data_root)) == before, "未失效 → 缓存命中旧快照"
+    immediate = load_full_corpus(p.data_root / "database" / "base", p.data_root)
+    assert len(immediate) == before + 1, "新文件必须即时可见（目录指纹 healer），不依赖显式失效"
+    assert [r.dataset_name for r in immediate].count("晚到") == 1, "即时可见且每文件只装载一次"
     invalidate_external_cache()
-    after = len(load_full_corpus(p.data_root / "database" / "base", p.data_root))
-    assert after == before + 1, "失效后 → 新文件即时可见可检索"
+    after = load_full_corpus(p.data_root / "database" / "base", p.data_root)
+    assert len(after) == before + 1, "显式失效后仍逐位可见（不得回退陈旧快照）"
+    assert [r.dataset_name for r in after].count("晚到") == 1, "显式失效不引入重复装载"
 
 
 def test_base_dir_falls_back_to_shipped_in_split_layout(tmp_path, monkeypatch):
@@ -336,7 +356,7 @@ def test_consumers_split_layout_resolve_to_data_layer(tmp_path, monkeypatch):
     """双根分离：账户/账本/trace/模型/回收站等写盘侧全部落 data 层；官方快照读 resource 层。"""
     from dataset_recommender.app.accounts import default_sessions_path, default_store_path
     from dataset_recommender.agent.trace.recorder import trace_root
-    from dataset_recommender.corpus.corpus_curation import _net_ledger_path, _recycle_dir
+    from dataset_recommender.corpus.corpus_curation import _net_ledger_path, recycle_dir
     from dataset_recommender.retrieval.vector_recall import default_cross_encoder_dir, default_model_dir
 
     p, res, data = _make_split_corpus(tmp_path, monkeypatch)
@@ -344,7 +364,7 @@ def test_consumers_split_layout_resolve_to_data_layer(tmp_path, monkeypatch):
     assert default_sessions_path(p.data_root) == data / ".userdata" / "sessions.json"
     assert trace_root(p.data_root) == data / "database" / "trace"
     assert _net_ledger_path(p.data_root) == data / ".userdata" / "curate_net_ledger.jsonl"
-    assert _recycle_dir(p.data_root) == data / ".userdata" / "recycle"
+    assert recycle_dir(p.data_root) == data / ".userdata" / "recycle"
     assert default_model_dir("m") == data / "models" / "embeddings" / "m"
     assert default_cross_encoder_dir("m") == data / "models" / "cross_encoders" / "m"
     assert str(res) != str(data)  # 布置确认：双根确实分离

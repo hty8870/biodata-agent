@@ -33,6 +33,7 @@ DEFAULT_MANIFEST = REPO_ROOT / "automation" / "quality-gates.json"
 # （env 名已脱敏，但命令**输出**不受 env 脱敏保护）。落盘前用同一批锚定模式做 redaction，防持久化二次泄漏。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from secret_patterns import redact as _redact_secrets  # noqa: E402
+from process_tree import run as run_process_tree  # noqa: E402
 PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 TOOL_PLACEHOLDERS = {"python", "node", "powershell"}
 REQUIRED_GATE_FIELDS = {
@@ -456,7 +457,7 @@ def _run_profile(
 
             started = time.monotonic()
             try:
-                result = subprocess.run(
+                result = run_process_tree(
                     command,
                     cwd=REPO_ROOT,
                     env=env,

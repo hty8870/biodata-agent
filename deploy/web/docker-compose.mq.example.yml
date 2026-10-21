@@ -16,6 +16,11 @@
 #     -f docker-compose.web.yml -f docker-compose.mq.example.yml -p biodata-web up -d
 # 回到默认形态：去掉本 override 重新 up -d；开关变量只在本文件内设置，基础 .env 无需改动。
 #
+# Queue/Worker/Job.fetch 统一 JSONSerializer，不接受旧 pickle 作业或自动重放。
+# 从旧格式切换前须停入队/旧 worker、核对在途与实际写入、备份，再换新的 Redis 数据库或演示卷。
+# 不要把旧任务直接重新入队；完整格式、回收和会话边界见 README.md 的「MQ 格式与恢复边界」。
+# JSON 不是执行沙箱，队列写权限仍只授予可信服务；本示例不开放任何 Redis 宿主端口。
+#
 # 三个开关的语义真源在代码侧注释：redis_sessions.py / accounts.py（BIODATA_SESSION_STORE）、
 # rq_jobs.py（BIODATA_JOB_BACKEND）、redis_store.py（BIODATA_REDIS_URL）。
 services:

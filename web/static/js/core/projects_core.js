@@ -9,8 +9,9 @@
  *   「上次检查于 X 天前」文案、「候选状态计数」。
  * - 不是：DOM、IndexedDB、网络、墙钟。时间一律经参数注入（projectsSetClock 注入点，
  *   node 规格可逐字段断言）；写库走 `artifacts.js` 的 CRUD，本文件不碰。
- * - 零 `#` import：本文件只相对 import `./artifacts.js`（纯数据层，同零 DOM）——
- *   不进 import 图、不进环（feedback_core.js 同款先例），node 规格直接相对路径 import。
+ * - import 通道 = 目标模块的属性：`#artifacts` 在 importmap 有键，故走 `#artifacts`（拿到与
+ *   别处同一个带令牌实例，不拉第二份）；无键模块（`./copy.js`）才走相对路径。
+ *   本模块仍不进环（feedback_core.js → #usage_core 同款单向边），node 规格可直跑。
  *
  * ## 上下文卡序列化口径
  *
@@ -20,7 +21,7 @@
  * - 超限按字段优先级截断并显示「另有 N 项未注入」——**不静默截断**（如实第一）。
  */
 
-import { ARTIFACTS_LIMITS, artifactsProvenance, artifactsUidSet } from "./artifacts.js";
+import { ARTIFACTS_LIMITS, artifactsProvenance, artifactsUidSet } from "#artifacts";
 import { COPY } from "./copy.js";
 
 /* ---------- 上下文卡常量（的数值上限，UI 与规格共读） ---------- */

@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -199,12 +200,49 @@ def instance_data_dir_for(project_root: Path, rel: str) -> Path:
     return Path(project_root) / rel
 
 
+def account_data_dir_for(project_root: Path, rel: str, principal: str | None = None) -> Path:
+    """Resolve an account-owned runtime directory; unbound local callers keep their layout."""
+    base = instance_data_dir_for(project_root, rel)
+    if principal is None or principal == "":
+        return base
+    owner = str(principal)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", owner):
+        raise ValueError("Invalid runtime account identifier")
+    return base / ("u_" + owner)
+
+
 def resource_file_for(project_root: Path, rel: str) -> Path:
     """给定调用方项目根，解析随包**静态资源**文件：frozen 布局实例根 → resource_root/rel；
     其余 → project_root/rel。读官方快照/冻结基准/提示词等只读资源用这一侧。"""
     if uses_split_layout(Path(project_root)):
         return get_app_paths().resource_root / rel
     return Path(project_root) / rel
+
+
+def _atomic_write(path: Path, write, *, binary: bool) -> None:
+    """所有单文件原子写共用替换与失败清理；调用方决定原始字节或文本格式。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
+    try:
+        kwargs = {} if binary else {"encoding": "utf-8"}
+        with open(tmp, "wb" if binary else "w", **kwargs) as handle:
+            write(handle)
+        for attempt in range(4):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 3:
+                    raise
+                time.sleep(0.05)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """保留精确字节的原子替换；失败不截断既有文件，供快照及回滚复用。"""
+    _atomic_write(path, lambda handle: handle.write(payload), binary=True)
 
 
 def atomic_write_json(path: Path, payload: Any, *, indent: "int | None" = 2) -> None:
@@ -215,22 +253,8 @@ def atomic_write_json(path: Path, payload: Any, *, indent: "int | None" = 2) -> 
     配额账本/补丁包历史格式）。文本模式默认换行翻译（Windows 下 CRLF）——与各模块
     历史落盘字节逐字节一致，刻意不 fsync、不固定 ``newline``（desktop_launcher 那款
     带 fsync + LF 的 `_atomic_write_json` 语义不同，不属于本通道）。"""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=indent)
-    # Windows 瞬时锁容错：os.replace 的目标被杀毒/索引器瞬时光顾时偶发
-    # PermissionError（全量测试的 tmp_path 落盘曾因此 flaky）。仅对 PermissionError
-    # 做短重试，落盘字节语义不变；重试耗尽或其它异常照常抛。
-    for _attempt in range(4):
-        try:
-            os.replace(tmp, path)
-            break
-        except PermissionError:
-            if _attempt == 3:
-                raise
-            time.sleep(0.05)
+    _atomic_write(path, lambda handle: json.dump(
+        payload, handle, ensure_ascii=False, indent=indent), binary=False)
 
 
 def repo_database_dir() -> Path:
@@ -242,11 +266,15 @@ def assert_runtime_path(path: Path, error_cls: "type[Exception]") -> Path:
     """运行时状态文件绝不许落进仓库 `database/`——那里是冻结基准与元数据库，环境变量
     误配也不许把运行时写引进来。
 
+    两侧都做同一规范化（resolve）：仓库 `database/` 自身可能是符号链接/目录联接，
+    只 resolve 候选会让「指向其真实目录」的路径因前缀不同而漏过。
+
     `error_cls` 须为 ``(code, message)`` 构造的异常类型（AccountError / McpTokenError
     同款约定）；patch_package 的守卫文案保留补丁包语境，不走本函数（仅共用目录真源）。"""
     resolved = Path(path).expanduser().resolve()
+    forbidden = repo_database_dir().resolve()
     try:
-        resolved.relative_to(repo_database_dir())
+        resolved.relative_to(forbidden)
     except ValueError:
         return resolved
     raise error_cls(

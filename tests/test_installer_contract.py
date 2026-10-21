@@ -263,6 +263,25 @@ class TestUninstallBoundary:
         assert "filesandordirs" not in delete_section.lower()
         assert r'Name: "{app}\*"' not in delete_section
 
+    def test_gui_dir_change_before_upgrade_is_refused(self, iss_text):
+        """GUI 改选安装目录不得绕过换目录保护：PrepareToInstall 按 WizardDirValue 再核一次。
+
+        旧实现只在命令行显式给 /DIR 时检查（CommandLineHasDirOverride）——用户在 SelectDir
+        页改目录后无任何拦截，升级清理会递归删除新 {app} 内容并把旧安装孤儿化。
+        PrepareToInstall 在向导存在后、任何删除/复制之前执行，覆盖 GUI 与 /DIR 两条路径。
+        """
+        code_section = _section(iss_text, "Code")
+        assert "function PrepareToInstall" in code_section
+        hook = code_section[code_section.index("function PrepareToInstall"):
+                            code_section.index("function PathHasDotDot")]
+        assert "WizardDirValue" in hook, "GUI 选定目录未参与比较"
+        assert "ReadInstalledLocation" in hook and "SameInstallDir" in hook
+        assert "DirMismatchInstalled" in hook, "不一致时必须给出明确中止消息"
+        # 命令行路径的早闸保留（静默模式仍要在向导出现前拦）
+        assert "CommandLineHasDirOverride" in code_section
+        # 中止发生在清理步骤之前：PrepareToInstall 由 Inno 在 ssInstall 之前调用
+        assert "PrepareToInstall" in code_section
+
     def test_normalize_path_canonicalizes_and_rejects(self, iss_text):
         """删除边界规范化——GetFullPathNameW 真实规范化；拒绝含 .. 段、
         非绝对路径、\\\\?\\ 前缀的输入（fail-closed 返回空串）。"""

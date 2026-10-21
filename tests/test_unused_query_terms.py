@@ -11,7 +11,7 @@ FILLER_DOMAIN` 的**并集逐位不变** → `_residual_salient`/残差门/冻�
 scripts/evaluate_recommendation.py 结构性守护）。本文件补四类行为断言：并集不变式、DOMAIN 成员钉死、
 只报 DOMAIN 不报 facet-头词（否则撒谎）、排序输入与去掉描述词的查询逐位相同。
 """
-from dataset_recommender.retrieval import vocabulary as V
+from dataset_recommender.retrieval import query_lexicon as V
 from dataset_recommender.llm.config import get_settings
 from dataset_recommender.retrieval.query_parser import parse_query, _unused_domain_terms
 
@@ -65,8 +65,15 @@ _DOMAIN_2026_07_22_BATTERY = {
     "特发性", "原发性", "继发性", "获得性", "遗传性", "家族性",
 }
 
+# 2026-09-11 OOD 批次：样本/分析语境领域词（无筛选维度承载，回显「未作为筛选维度」）。
+# 源自 297 条真实语域 OOD 评测集的弃权普查（ffpe 已在既有批次，不重复）。
+_DOMAIN_2026_09_11 = {
+    "tme", "ctc", "ctdna",
+}
+
 _DOMAIN_BATCHES = (_DOMAIN_ORIGINAL, _DOMAIN_2026_07_22,
-                   _DOMAIN_2026_07_22_NIGHT, _DOMAIN_2026_07_22_BATTERY)
+                   _DOMAIN_2026_07_22_NIGHT, _DOMAIN_2026_07_22_BATTERY,
+                   _DOMAIN_2026_09_11)
 
 
 def test_filler_domain_membership_pinned():

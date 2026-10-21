@@ -83,19 +83,30 @@ def _utc_now() -> str:
 
 
 @contextmanager
-def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
-    """短连接：连上 → 建表（幂等）→ 交还连接 → commit → close。job 状态写频率极低
-    （一次任务两三次），不值得维护长连接与线程本地状态；短连接顺带天然规避跨线程共享。"""
-    path = Path(db_path)
+def open_database(db_path: Path, *, schema: str = _SCHEMA,
+                  write: bool = False) -> Iterator[sqlite3.Connection]:
+    """Shared short-connection transaction for runtime SQLite state."""
+    path = assert_runtime_path(Path(db_path), error_cls=JobStoreError)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     try:
+        conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        conn.execute(_SCHEMA)
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(schema)
+        if write:
+            conn.execute("BEGIN IMMEDIATE")
         yield conn
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
+
+
+def _connect(db_path: Path):
+    return open_database(db_path)
 
 
 def record_running(kind: str, started_at: str, *, db_path: Path) -> None:

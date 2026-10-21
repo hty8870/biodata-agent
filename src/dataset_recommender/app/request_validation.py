@@ -48,6 +48,8 @@ def validate_query(query: str) -> str:
     结果，把「装作查过了」当推荐；④ 超长 → bad_query（防纯浪费）。返回原串不 strip：
     是否去首尾空白是各端口的既有行为，不借校验之名改变。
     """
+    if not isinstance(query, str):
+        raise ParamValidationError("bad_query", "query 需要是纯文本字符串。")
     if not query or not query.strip():
         raise ParamValidationError("empty_query", "query 不能为空，例：「人类肺癌的单细胞数据，要有 FASTQ」。")
     ctrl = sorted({c for c in query if c not in "\t\n\r" and unicodedata.category(c) in ("Cc", "Cf")})
@@ -80,7 +82,7 @@ def validate_iso_date(value: "str | None", *, name: str) -> str:
     s = (str(value) if value is not None else "").strip()
     if not s:
         return ""
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", s):
         raise ParamValidationError("bad_param", f"{name} 需要 YYYY-MM-DD 格式的日期（收到 {s!r}）。")
     year, month, day = (int(part) for part in s.split("-"))
     try:

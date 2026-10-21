@@ -27,7 +27,8 @@
 """
 import pytest
 
-from dataset_recommender.retrieval import vocabulary as V
+from dataset_recommender.retrieval import query_lexicon as V
+from dataset_recommender.domains.biodata import vocabulary as _BV
 from dataset_recommender.llm.config import get_settings
 from dataset_recommender.retrieval.query_parser import parse_query
 
@@ -147,7 +148,7 @@ def test_unknown_protected_compound_still_abstains(compound):
 def test_protected_list_has_no_dead_entries():
     """表里每一条都必须**确有劫持**才留着：把它从保护里拿掉就会漏出约束。
     这条防的是预防性堆砌——没有实际作用的条目会让人误以为有保护。"""
-    cn_aliases = [str(a) for entries in V.CATALOG.values() for e in entries
+    cn_aliases = [str(a) for entries in _BV.CATALOG.values() for e in entries
                   for a in e.get("aliases", []) if all("一" <= ch <= "鿿" for ch in str(a))]
     dead = [c for c in V.ALIAS_PROTECTED_COMPOUNDS
             if not any(a in c and a != c for a in cn_aliases)]

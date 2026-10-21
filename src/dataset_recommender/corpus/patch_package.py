@@ -27,7 +27,7 @@
 ----
 - 补丁库存放路径必须在仓库 `database/` 之外（运行时数据；守卫同 accounts._assert_runtime_path 口径）。
 - 补丁文件**损坏即 fail-closed**（PatchError patch_corrupt）：绝不静默重建覆盖用户数据（账户库同哲学）。
-- 写盘全部原子写（tmp + os.replace）；每账户一把线程锁，计数/去重/落盘同一临界区。
+- 写盘全部原子写（tmp + os.replace）；每账户一把可重入线程锁 + OS 文件锁，计数/去重/落盘及回滚 CAS 同一事务。
 - 冻结基准结构性免疫：补丁只影响绑定作用域内的视图，不碰 base/external 任何一个字节。
 """
 from __future__ import annotations
@@ -38,7 +38,6 @@ import json
 import os
 import re
 import secrets
-import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -192,18 +191,67 @@ def load_patch(project_root: Path, account_id: str) -> dict:
     return _validate_patch_shape(data, aid)
 
 
-_PATH_LOCKS: "dict[str, threading.RLock]" = {}
-_PATH_LOCKS_GUARD = threading.Lock()
+_PATCH_MUTATIONS: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "biodata_patch_mutations", default=None)
 
 
-def _lock_for(path: Path) -> threading.RLock:
-    key = str(path)
-    with _PATH_LOCKS_GUARD:
-        lock = _PATH_LOCKS.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _PATH_LOCKS[key] = lock
-        return lock
+@contextmanager
+def collect_patch_mutations() -> Iterator[list[dict]]:
+    """收集本 context 内真实读改写的前像与写后指纹；不持锁、不收其他线程/进程的写入。
+    前像仅在内存中传给 trace finalize，不进入工具结果或 JSON 事件。"""
+    receipts: list[dict] = []
+    token = _PATCH_MUTATIONS.set(receipts)
+    try:
+        yield receipts
+    finally:
+        _PATCH_MUTATIONS.reset(token)
+
+
+@contextmanager
+def patch_critical_section(project_root: Path, account_id: str) -> Iterator[None]:
+    """所有补丁写入与回滚 CAS 共用的账户级、可重入跨进程事务锁。
+    外层若已有摄取锁，锁序为摄取 → 补丁；补丁事务内不反向获取摄取锁。"""
+    from .fs_utils import FileLockBusy, file_critical_section
+
+    path = patch_path_for(Path(project_root), account_id)
+    try:
+        with file_critical_section(path.with_suffix(".lock")):
+            yield
+    except FileLockBusy:
+        raise PatchError("lock_busy", "另一个会话正在写入补丁包，等待超时；请稍后重试。") from None
+
+
+def _patch_bytes(path: Path) -> bytes | None:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+@contextmanager
+def _patch_transaction(project_root: Path, account_id: str) -> Iterator[None]:
+    with patch_critical_section(project_root, account_id):
+        receipts = _PATCH_MUTATIONS.get()
+        if receipts is None:
+            yield
+            return
+        path = patch_path_for(project_root, account_id)
+        before = _patch_bytes(path)
+        try:
+            yield
+        finally:
+            try:
+                after = _patch_bytes(path)
+            except OSError:
+                receipts.append({"scope": account_id, "target": str(path), "trusted": False})
+            else:
+                if before != after:
+                    receipts.append({
+                        "scope": account_id, "target": str(path), "trusted": True,
+                        "before": before,
+                        "after": ({"sha256": hashlib.sha256(after).hexdigest(), "size": len(after)}
+                                  if after is not None else None),
+                    })
 
 
 def _save_patch(project_root: Path, patch: dict) -> None:
@@ -220,6 +268,63 @@ def _save_patch(project_root: Path, patch: dict) -> None:
 
 def record_uid(record: dict) -> str:
     return str(record.get("dataset_uid") or "").strip()
+
+
+def restore_patch_file(project_root: Path, account_id: str, *,
+                       existed: bool, data: bytes = b"") -> None:
+    """trace 回滚的**补丁恢复接口**（生产者侧）：按补丁包自己的锁与原子写，
+    把该账户补丁文件恢复成「某次写操作之前」的状态。
+
+    - `existed=True`：`data` 必须是快照捕获到的规范补丁字节——fail-closed 校验
+      （JSON + 形状 + 账户一致），坏字节抛 PatchError(patch_corrupt)，绝不写回；
+      字节级恢复不是内容更新：`updated_at` 也回到旧值（不经过 `_save_patch`）。
+    - `existed=False`：写之前补丁文件不存在 → 删除之（恢复「不存在」）。
+    全程持同一账户可重入跨进程补丁锁；回滚调用方须用 patch_critical_section 将
+    写后 CAS、归档与本接口包在同一事务内。"""
+    root = Path(project_root)
+    aid = _validate_account_id(account_id)
+    path = patch_path_for(root, aid)
+    with _patch_transaction(root, aid):
+        if not existed:
+            path.unlink(missing_ok=True)
+            return
+        if not data:
+            raise PatchError("patch_corrupt", "补丁快照为空字节，拒绝写回（防清空用户补丁）。")
+        try:
+            payload = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PatchError(
+                "patch_corrupt", f"补丁快照不是合法 JSON 字节，拒绝写回（{type(exc).__name__}）。") from exc
+        _validate_patch_shape(payload, aid)
+        from ..app.runtime_paths import atomic_write_bytes
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(path, data)
+
+
+def uid_key(value: Any) -> str:
+    """UID **等值比较键**（单一真源）：与 corpus 定位（`uid_cmp_key`）同口径——
+    NFC + 去零宽 + strip + casefold。查重/批内冲突/屏蔽/回收匹配一律用它；
+    存储与展示保留原文。"""
+    from .corpus import uid_cmp_key  # 惰性：patch_package 顶层不拉 corpus（既有纪律）
+
+    return uid_cmp_key(value)
+
+
+#: 缺 dataset_uid 记录补发编号的前缀：一眼可辨「系统补号」，且不会与
+#: 公开来源的编号形状混淆。
+_UID_PREFIX = "user-upload-"
+
+
+def _ensure_uid(record: dict) -> str:
+    """缺编号记录在**摄取锚点**补发稳定编号：由内容摘要派生——同内容重复上传
+    得到同一编号（走既有去重），清单/删除/恢复的编号路径因此可达。不查占用表：
+    「同编号」正是去重的依据；不同内容摘要碰撞概率可忽略（48+ 位），万一撞上由既有
+    撞号/去重闸如实处置。"""
+    if record_uid(record):
+        return record_uid(record)
+    uid = _UID_PREFIX + _content_digest(record)[:16]
+    record["dataset_uid"] = uid
+    return uid
 
 
 def _content_digest(record: dict) -> str:
@@ -242,12 +347,13 @@ def apply_patch(
     - `adds`：`include_adds=True` 时归一化后追加；`source_filter` 非空时按其 source 参与筛选
       （与外部库记录的来源筛选语义完全同型）；`include_adds=False`（base-only 口径）不追加。
     """
-    blocks = {str(u).strip() for u in patch.get("blocks", []) if str(u).strip()}
+    blocks = {uid_key(u) for u in patch.get("blocks", []) if uid_key(u)}
     out = records
     if blocks:
         out = [
             r for r in out
-            if record_uid(r.raw if isinstance(getattr(r, "raw", None), dict) else {}) not in blocks
+            if uid_key(record_uid(r.raw if isinstance(getattr(r, "raw", None), dict) else {}))
+            not in blocks
         ]
     if include_adds and patch.get("adds"):
         from ..retrieval.normalizer import normalize_dataset_record  # 惰性：仅在真有补丁时付出 import
@@ -261,13 +367,9 @@ def apply_patch(
     return list(out)
 
 
-def patch_adds_total(project_root: Path, account_id: str) -> int:
-    """只读计数（预算闸用）；损坏语义同 load_patch（fail-closed）。"""
-    return len(load_patch(Path(project_root), account_id)["adds"])
-
-
 def effective_visible_uids(project_root: Path, account_id: str) -> set[str]:
-    """该账户**有效语料视图**内的全部 dataset_uid（基线 ∪ 共享外部 ∪ 本人 adds − 本人 blocks）。
+    """该账户**有效语料视图**内全部 dataset_uid 的**比较键集合**（与定位同口径，
+    判等用；存储与展示仍保留原文 uid）。
 
     写侧去重闸用：防止补丁 adds 与基线/共享库撞号（撞号会让 locate_record 按歧义拒答）。
     惰性 import corpus（本模块被 corpus 惰性回调，两边都惰性即无 import 环）。
@@ -276,17 +378,17 @@ def effective_visible_uids(project_root: Path, account_id: str) -> set[str]:
 
     root = Path(project_root)
     patch = load_patch(root, account_id)
-    blocks = {str(u).strip() for u in patch["blocks"] if str(u).strip()}
-    uids: set[str] = set()
+    blocks = {uid_key(u) for u in patch["blocks"] if str(u).strip()}
+    keys: set[str] = set()
     for r in load_full_corpus(root / "database" / "base", root):
-        uid = record_uid(r.raw if isinstance(getattr(r, "raw", None), dict) else {})
-        if uid and uid not in blocks:
-            uids.add(uid)
+        key = uid_key(record_uid(r.raw if isinstance(getattr(r, "raw", None), dict) else {}))
+        if key and key not in blocks:
+            keys.add(key)
     for raw in patch["adds"]:
-        uid = record_uid(raw)
-        if uid:
-            uids.add(uid)
-    return uids
+        key = uid_key(record_uid(raw))
+        if key:
+            keys.add(key)
+    return keys
 
 
 # ---------------------------------------------------------------- 写侧操作（全部原子 + 同临界区）
@@ -309,34 +411,45 @@ def ingest_records_to_patch(
     from datetime import datetime, timezone
 
     from .uploads import (  # 惰性：写时才付出（读路径/评测永不 import uploads）
-        UploadResult, _append_upload_journal, _ingest_warnings, _tag_records_for_ingest,
+        UploadError, UploadResult, _append_upload_journal, _ingest_warnings, _tag_records_for_ingest,
     )
 
     root = Path(project_root)
     aid = _validate_account_id(account_id)
-    path = patch_path_for(root, aid)
-    with _lock_for(path):
+    with _patch_transaction(root, aid):
         patch = load_patch(root, aid)   # 损坏 fail-closed：绝不覆盖
         fallback_source, _counts, missing_name, unknown_species = _tag_records_for_ingest(
             payload, records, form_source)
 
-        existing_uids = {record_uid(r) for r in patch["adds"] if record_uid(r)}
-        visible = effective_visible_uids(root, aid)   # 基线 ∪ 共享 ∪ 本人 adds − blocks
+        existing_uids = {uid_key(record_uid(r)) for r in patch["adds"] if record_uid(r)}
+        visible = effective_visible_uids(root, aid)   # 比较键集合：基线 ∪ 共享 ∪ 本人 adds − blocks
         accepted: list[dict] = []
+        batch_digests: dict[str, str] = {}
         skipped_dup = 0
         skipped_collision = 0
+        missing_uid = 0
         for r in records:
             uid = record_uid(r)
-            if uid:
-                if uid in existing_uids:
-                    skipped_dup += 1
-                    continue
-                if uid in visible:
-                    # 撞号基线/共享库：放行会让 locate_record 按「uid 撞库」报歧义（谁的视图里
-                    # 都是两条同号记录）。v1 如实拒收并提示；「以我的版本遮蔽基线条目」是后续批。
-                    skipped_collision += 1
-                    continue
+            if not uid:
+                # 缺编号记录在**摄取锚点**补发稳定编号（内容摘要派生）——文档允许的
+                # 无 UID JSON 照常可传，且此后能被常规按编号删除/恢复、释放额度。
+                uid = _ensure_uid(r)
+                missing_uid += 1
+            key = uid_key(uid)
+            if key in batch_digests and _content_digest(r) != batch_digests[key]:
+                raise UploadError(
+                    "uid_conflict", f"同一上传批次的编号 {uid} 对应不同内容，未写入；请先合并或更正编号。")
+            if key in existing_uids:
+                skipped_dup += 1
+                continue
+            if key in visible:
+                # 撞号基线/共享库：放行会让 locate_record 按「uid 撞库」报歧义（谁的视图里
+                # 都是两条同号记录）。v1 如实拒收并提示；「以我的版本遮蔽基线条目」是后续批。
+                skipped_collision += 1
+                continue
             accepted.append(r)
+            existing_uids.add(key)
+            batch_digests[key] = _content_digest(r)
 
         if not accepted:
             # 全跳过 = 零写入（与 duplicate_content 同哲学：如实回报，不落盘）。
@@ -348,6 +461,10 @@ def ingest_records_to_patch(
                 warnings=_skipped_warnings(skipped_dup, skipped_collision)
                 + _ingest_warnings(missing_name, unknown_species),
             )
+        assign_note = (
+            [f"{missing_uid} 条记录原本没有编号，已补发系统编号（user-upload-…，按内容稳定），"
+             "可正常删除/恢复。"]
+            if missing_uid else [])
 
         if len(patch["adds"]) + len(accepted) > MAX_PATCH_ADD_RECORDS:
             raise PatchError(
@@ -384,6 +501,7 @@ def ingest_records_to_patch(
         record_count=len(accepted),
         sources=_count_sources(accepted, fallback_source),
         warnings=_skipped_warnings(skipped_dup, skipped_collision)
+        + assign_note
         + _ingest_warnings(missing_name, unknown_species),
     )
 
@@ -409,54 +527,57 @@ def _skipped_warnings(skipped_dup: int, skipped_collision: int) -> list[str]:
 
 
 def block_uids(project_root: Path, account_id: str, uids: list[str]) -> dict:
-    """把 uid 加入屏蔽列表（该账户视图隐藏基线/共享库记录；共享内容零改动）。幂等。"""
+    """把 uid 加入屏蔽列表（该账户视图隐藏基线/共享库记录；共享内容零改动）。幂等。
+    匹配用比较键（大小写/零宽/NFC 变体同判）；存入 blocks 的仍是原文。"""
     root = Path(project_root)
     aid = _validate_account_id(account_id)
-    path = patch_path_for(root, aid)
     targets = [str(u).strip() for u in uids if str(u or "").strip()]
-    with _lock_for(path):
+    with _patch_transaction(root, aid):
         patch = load_patch(root, aid)
         # 若该 uid 在本人 adds 里，删除语义应是「删掉自己的新增」——调用方（corpus_curation）
         # 已先走 trash_adds；这里兜底：adds 里的 uid 不进 blocks（blocks 只针对共享层）。
-        own = {record_uid(r) for r in patch["adds"] if record_uid(r)}
-        existing = set(patch["blocks"])
-        added = [u for u in targets if u not in existing and u not in own]
+        own = {uid_key(record_uid(r)) for r in patch["adds"] if record_uid(r)}
+        existing = {uid_key(u) for u in patch["blocks"] if str(u).strip()}
+        added = [u for u in targets if uid_key(u) not in existing and uid_key(u) not in own]
         if added:
             patch["blocks"].extend(added)
             _save_patch(root, patch)
-    return {"blocked": added, "already": [u for u in targets if u in existing],
-            "own_adds": [u for u in targets if u in own]}
+    return {"blocked": added, "already": [u for u in targets if uid_key(u) in existing],
+            "own_adds": [u for u in targets if uid_key(u) in own]}
 
 
 def unblock_uids(project_root: Path, account_id: str, uids: list[str]) -> dict:
-    """把 uid 移出屏蔽列表（恢复基线/共享库记录在该账户视图的可见性）。幂等。"""
+    """把 uid 移出屏蔽列表（恢复基线/共享库记录在该账户视图的可见性）。幂等。
+    匹配用比较键。"""
     root = Path(project_root)
     aid = _validate_account_id(account_id)
-    path = patch_path_for(root, aid)
-    targets = {str(u).strip() for u in uids if str(u or "").strip()}
-    with _lock_for(path):
+    targets = {uid_key(u) for u in uids if str(u or "").strip()}
+    raw_targets = {uid_key(u): str(u).strip() for u in uids if str(u or "").strip()}
+    with _patch_transaction(root, aid):
         patch = load_patch(root, aid)
         before = list(patch["blocks"])
-        patch["blocks"] = [u for u in before if u not in targets]
-        removed = [u for u in before if u in targets]
+        patch["blocks"] = [u for u in before if uid_key(u) not in targets]
+        removed = [u for u in before if uid_key(u) in targets]
         if removed:
             _save_patch(root, patch)
-    return {"unblocked": removed, "not_blocked": sorted(targets - set(removed))}
+    return {"unblocked": removed,
+            "not_blocked": sorted(raw_targets[k] for k in targets - {uid_key(u) for u in removed})}
 
 
 def trash_adds(project_root: Path, account_id: str, uids: list[str]) -> dict:
-    """把本人 adds 里的记录移入 trash（回收站式可逆删除）。返回 moved / not_found。"""
+    """把本人 adds 里的记录移入 trash（回收站式可逆删除）。返回 moved / not_found。
+    匹配用比较键（删除 `p-1` 命中存储的 `P-1`）。"""
     root = Path(project_root)
     aid = _validate_account_id(account_id)
-    path = patch_path_for(root, aid)
-    targets = {str(u).strip() for u in uids if str(u or "").strip()}
-    with _lock_for(path):
+    targets = {uid_key(u) for u in uids if str(u or "").strip()}
+    raw_targets = {uid_key(u): str(u).strip() for u in uids if str(u or "").strip()}
+    with _patch_transaction(root, aid):
         patch = load_patch(root, aid)
         moved: list[str] = []
         keep: list[dict] = []
         for r in patch["adds"]:
             uid = record_uid(r)
-            if uid and uid in targets:
+            if uid and uid_key(uid) in targets:
                 moved.append(uid)
                 patch["trash"].append(r)
             else:
@@ -464,32 +585,51 @@ def trash_adds(project_root: Path, account_id: str, uids: list[str]) -> dict:
         if moved:
             patch["adds"] = keep
             _save_patch(root, patch)
-    return {"moved": moved, "not_found": sorted(targets - set(moved))}
+    return {"moved": moved,
+            "not_found": sorted(raw_targets[k] for k in targets - {uid_key(u) for u in moved})}
 
 
 def restore_adds(project_root: Path, account_id: str, uids: list[str]) -> dict:
-    """把 trash 里的记录放回 adds（恢复删除）。uid 当前已在 adds → 跳过（防双重存在）。"""
+    """按 uid_key 恢复每个编号最后进入 trash 的版本；其他版本原样留在回收区。
+    uid 当前已在 adds → 跳过；adds 已有重复编号 → patch_corrupt 拒绝、不静默删记录。
+    仅选中版本占累计额度，条数或字节超限均零落盘变化；already_present 只反映恢复前状态。"""
     root = Path(project_root)
     aid = _validate_account_id(account_id)
-    path = patch_path_for(root, aid)
-    targets = {str(u).strip() for u in uids if str(u or "").strip()}
-    with _lock_for(path):
+    targets = {uid_key(u) for u in uids if str(u or "").strip()}
+    raw_targets = {uid_key(u): str(u).strip() for u in uids if str(u or "").strip()}
+    with _patch_transaction(root, aid):
         patch = load_patch(root, aid)
-        current = {record_uid(r) for r in patch["adds"] if record_uid(r)}
-        restored: list[str] = []
-        keep: list[dict] = []
-        for r in patch["trash"]:
-            uid = record_uid(r)
-            if uid and uid in targets and uid not in current:
-                restored.append(uid)
-                patch["adds"].append(r)
-            else:
-                keep.append(r)
+        current: set[str] = set()
+        for r in patch["adds"]:
+            key = uid_key(record_uid(r))
+            if key:
+                if key in current:
+                    raise PatchError("patch_corrupt", "补丁包新增记录存在重复编号，已停止恢复；请先核对重复版本。")
+                current.add(key)
+        wanted = targets - current
+        selected: dict[str, int] = {}
+        for i, r in enumerate(patch["trash"]):
+            key = uid_key(record_uid(r))
+            if key and key in wanted:
+                selected[key] = i
+        indices = set(selected.values())
+        accepted = [r for i, r in enumerate(patch["trash"]) if i in indices]
+        restored = [record_uid(r) for r in accepted]
         if restored:
-            patch["trash"] = keep
+            if len(patch["adds"]) + len(accepted) > MAX_PATCH_ADD_RECORDS:
+                raise PatchError(
+                    "too_large",
+                    f"补丁包现有 {len(patch['adds'])} 条，恢复这 {len(restored)} 条"
+                    f"会超过单账户上限 {MAX_PATCH_ADD_RECORDS} 条——本次没有恢复，"
+                    "回收区内容原样保留；请先删除不再需要的补丁条目。",
+                )
+            patch["adds"].extend(accepted)
+            patch["trash"] = [r for i, r in enumerate(patch["trash"]) if i not in indices]
             _save_patch(root, patch)
-    return {"restored": restored, "not_found": sorted(targets - set(restored) - current),
-            "already_present": sorted(targets & current)}
+    found = {uid_key(u) for u in restored}
+    return {"restored": restored,
+            "not_found": sorted(raw_targets[k] for k in targets - found - current),
+            "already_present": sorted(raw_targets[k] for k in targets & current)}
 
 
 def summarize_patch(project_root: Path, account_id: str) -> dict:

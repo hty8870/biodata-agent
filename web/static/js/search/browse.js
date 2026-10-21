@@ -1,4 +1,6 @@
 "use strict";
+import { workspaceHistoryGroups, workspaceConversationGroups as histGroups, workspaceProjectColor, WORKSPACE_COPY } from "#workspaces_core";
+import { workspaceProjects, workspaceAssignments, workspaceConversationProject, workspaceSelect, workspaceConversationMenu } from "#workspaces";
 
 /* 本文件是 ES Module：core/cards/progress/results/shell 经 import 取。
    allDatasets/bs 自 search.js 末尾归位本文件（它们从来只服务浏览/收藏/历史，search 从不读写——
@@ -15,13 +17,19 @@ import { buildCard } from "#cards";
 import { resetSubmitButton } from "#progress";
 import { exitResultsLayout, setFacetState } from "#results";
 import { getConfig, setKV, showView, closeHistWin, setHistRenderer, setLibRenderer } from "#shell";
-import { applyRecommendResult, bumpRecSeq, runRecommend } from "#search";
+import { applyRecommendResult, bumpRecSeq, invalidateRecommendMemo, runRecommend } from "#search";
 import { autoGrow, initSourceChips, resetHistClear } from "#interactions";
-import { cbAdoptAsBranch, cbRestoreConversation, renderCondBoard, swSync } from "#board";
+import { cbAdoptAsBranch, cbRestoreConversation, cbSaveConversation, renderCondBoard, swSync } from "#board";
+import { cbHistoryPrefix } from "#board_core";
 import { ACCOUNTS_READY } from "#accounts";
 import { renderFavFolderBar, renderFavFolderGroups, setFavRerender, setCatalogLookup, setCatalogEnsure } from "#fav_folders";
 import { syncReuseBar } from "#reuse_pack";
 import { COPY, armTwoStepConfirm } from "../core/copy.js";
+import { getSharedConversation, listSharedConversations, sharedHistoryRows, sharedConversationAction, forgetSharedConversationRuns } from "#conversation_client";
+import { cbOpenSharedConversation, cbClear, cbSharedConversation, cbRefreshSharedConversation } from "#board";
+import { cbLegacyImport } from "#board_core";
+import { beginRequest, notifyContextChanged, currentAccountScope, registerContextChanged } from "#core";
+import { openModal, closeModal, trapModalFocus } from "#copy";
 
 /* 注册反转：把 renderFavorites 注册给 fav_folders（它不再 import 本文件，沿 core.js
    setHistHooks 同一范式）。函数声明提升使模块求值期即可注册；fav_folders 侧全部调用点都在
@@ -39,6 +47,10 @@ if (typeof setCatalogEnsure === "function") setCatalogEnsure(ensureDatasetsLoade
 /* ---------- browse 状态（所有来源并列展示，可按来源筛选） ---------- */
 let allDatasets = null;
 export const bs = { source: "", species: "", platform: "", fastq: false, q: "", yearFrom: "", yearTo: "", page: 1, pageSize: 24 };
+
+export function setBrowseState(patch) {
+    Object.assign(bs, patch);
+}
 
 let browseYearFacets = [];       // 全库年份集（后端 facet）：时间线 x 轴与下拉的稳定年份列表
 let browseUnknownYears = 0;      // 全库未标日期总数（后备/无筛选时的口径）
@@ -144,8 +156,10 @@ export async function ensureDatasetsLoaded(force) {
     $("browsePageInfo").textContent = "—";
     $("browsePrev").disabled = true; $("browseNext").disabled = true;
     try {
-        const d = await (await fetch(API.datasets)).json();
-        allDatasets = d.records || [];
+        const response = await fetch(API.datasets);
+        const d = await response.json();
+        if (!response.ok || !d || d.ok !== true || !Array.isArray(d.records)) throw new Error("数据集目录加载失败");
+        allDatasets = d.records;
         datasetsGen++;   // 内容可能变了——让 renderBrowse 的内容签名失效、判旧重建
         browseYearFacets = d.facets && d.facets.published_year || [];
         browseUnknownYears = Number(d.unknown_year_count) || 0;
@@ -290,23 +304,20 @@ export function renderFavorites() {
    分开列会把一段连贯的对话拆成一串近乎相同的行。同 `convId` 的行合成一组，组内**新→旧**，
    组的先后按其最新一轮（历史本身就是倒序，故按首次出现即可）。
    老历史行没有 convId → 各自成组，显示与从前逐字相同。 */
-function histGroups(hist) {
-    const byId = new Map();
-    const order = [];
-    hist.forEach((h, i) => {
-        const key = (h && h.convId) ? String(h.convId) : "legacy:" + i;
-        if (!byId.has(key)) { byId.set(key, []); order.push(key); }
-        byId.get(key).push(h);
-    });
-    return order.map((k) => byId.get(k));
-}
-
 /* 点历史项：回看**整条对话**——最后一轮的结果 + 全部对话记录，且每一轮的快照都还在（可逐条「查看结果」）。
    `group` 是 histGroups 的一组，**新→旧**；这里先翻成旧→新再交给 cbRestoreConversation。
-   老格式历史（无 snap）→ 回退到重跑。 */
-function viewHistorySnapshot(group) {
-    const chron = Array.isArray(group) ? group.slice().reverse() : [group];   // 旧→新
+   老格式缺失快照时保留对话并说明缺失；重跑由用户显式选择。 */
+export function viewHistorySnapshot(group, options = {}) {
+    cbSaveConversation();
+    const supplied = Array.isArray(group) ? group : [group];
+    if (supplied[0]?.shared) return openSharedHistory(supplied[0].convId);
+    const convId = String((supplied[0] || {}).convId || "");
+    // 完整回看刷新整条会话；分支调用给出的前缀是恢复边界，不能再扩成整条。
+    const current = convId && !options.prefix ? getHist().filter((h) => h && h.convId === convId) : supplied;
+    const chron = (current.length ? current : supplied).slice().reverse();   // 旧→新
     const h = chron[chron.length - 1];                                        // 落在最后一轮上
+    const projectId = workspaceConversationProject(String((h && h.convId) || ""), h && h.project_id);
+    if (!workspaceSelect(projectId, { preserveConversation: true })) return;
     // 仅对话行（2026-08-04）：当时一句检索都没跑过，没有结果快照可落——如实回到
     // 「只有对话没有结果」的态：作废在途、退出结果态（屏上旧结果/分面/条件板随之收起；
     // 其 cbClear 会先归档屏上未归档的对话，同一口径），再把整条对话搬回主区。
@@ -314,20 +325,24 @@ function viewHistorySnapshot(group) {
         bumpRecSeq();
         resetSubmitButton();
         showView("query");
-        const qi = $("queryInput");
-        if (qi) { qi.value = ""; autoGrow(qi); }   // 仅对话：没有「当前检索句」
         exitResultsLayout();
-        cbRestoreConversation(chron);
+        const qi = $("queryInput");
+        if (qi) { qi.value = ""; autoGrow(qi); }
+        cbRestoreConversation(chron, { asBranch: !!options.prefix });
         swSync();   // 无结果 → cbChatInMain 真，恢复出的对话落进主区 #chatMain
-        toast("已回看这条对话（当时只有对话、没有检索）");
         return;
     }
-    if (!h || !h.snap || !h.snap.results) {   // 迁移兜底：老格式无快照 → 重跑（runRecommend 自带 _recSeq 递增与收尾）
-        if (h && h.snap_evicted) {
-            // 快照是配额不足被剥掉的——接下来是**重新检索**，不是「当时的结果」，如实先说。
-            toast("那一次的结果快照没存下来（空间不足被剥掉了），正在按原句重新检索");
-        }
-        showView("query"); $("queryInput").value = (h && h.query) || ""; autoGrow($("queryInput")); runRecommend(); return;
+    if (!h || !h.snap || !h.snap.results) {
+        bumpRecSeq();
+        resetSubmitButton();
+        showView("query");
+        exitResultsLayout();
+        $("queryInput").value = (h && h.query) || "";
+        autoGrow($("queryInput"));
+        cbRestoreConversation(chron, { asBranch: !!options.prefix });
+        swSync();
+        toast("这条旧记录的结果快照已缺失；已恢复保存的对话，可手动重新检索。");
+        return;
     }
     // 关键：让**在途 runRecommend** 失效——否则它稍后到达时 myGen===_recSeq 仍会落地，
     // 把刚渲染的快照顶掉、且用当前（快照的）_facetFilters 回灌一条错配历史。
@@ -342,13 +357,12 @@ function viewHistorySnapshot(group) {
         queryHits: Array.isArray(h.queryHits) ? h.queryHits.map((g) => ({ filter_id: g.filter_id || g.dim, polarity: g.polarity || "include", dim: g.dim, label: g.label, values: (g.values || []).slice() })) : [],   // 恢复原始命中完整快照 → 被忽略的 chip 也随回看正确重现（老快照无 filter_id→回退用 dim）
         lenientDims: Array.isArray(h.lenientDims) ? h.lenientDims.slice() : []   // 恢复诚实降级宽容态（老快照无此字段→空），使回看后再点 caveat 从正确基准 toggle
     });
-    applyRecommendResult(h.snap, h.query, { fromHistory: true });   // fromHistory → 不再回灌历史
+    applyRecommendResult(h.snap, h.query, { fromHistory: true, noScroll: true });   // fromHistory → 不再回灌历史
     // 条件板显式重建成这条对话：否则「回到上一步」会跳到另一条查询的时间线上去。
-    // 顺序不能反：renderCondBoard 里的 cbRenderSteps 会按「前面还有几步」隐掉提示行，
-    // 而 cbRestoreConversation 最后写的正是那句「这是从历史里回看的…」——先板后提示，提示才留得住。
+    // 先恢复结果与条件板，再恢复完整会话及保存的游标、草稿和滚动位置。
     renderCondBoard(h.snap);
-    cbRestoreConversation(chron);
-    toast(chron.length > 1 ? `已回看这条对话，共 ${chron.length} 轮` : "已回看这次检索的结果快照");
+    cbRestoreConversation(chron, { asBranch: !!options.prefix });
+    swSync();
 }
 /* ---------- 历史记录（独立浮窗 #histWin；后拆回单页签）----------
    浮窗骨架（开合/拖动/缩放/落位）唯一属主在 shell.js（initHistWinSkeleton），
@@ -357,53 +371,198 @@ function viewHistorySnapshot(group) {
    对话记录+细化+最后一轮结果整体找回；老格式无快照自动回退重跑）；行尾三个动作——
    新标签页打开（?conv= 链接）、按当前库重新检索、删除（二段确认，仿 histClear armed 模式）。 */
 
-export function renderHistory() {
-    const hist = getHist();
-    const list = $("histList"); const empty = $("histEmpty");
-    // 空历史禁用「清空」；每次渲染复位二段确认态（resetHistClear 在 interactions.js 定义，运行时必已加载）
-    const clearBtn = $("histClear");
-    if (clearBtn) { clearBtn.disabled = !hist.length; if (typeof resetHistClear === "function") resetHistClear(); }
-    if (!list) return;
-    list.innerHTML = "";
-    if (!hist.length) { if (empty) empty.hidden = false; list.style.display = "none"; return; }
-    if (empty) empty.hidden = true; list.style.display = "block";
-    histGroups(hist).forEach((g) => {
-        const h = g[0];   // 组内新→旧：g[0] 就是这条对话的最后一轮
-        // 多轮对话只列最后一句 + 轮数。中间几句在点开后的对话记录里，不在这里堆成一屏。
-        const turns = g.length > 1 ? ` · 共 ${g.length} 轮` : "";
-        // 仅对话行：没有「N 条结果」可报——照实报「仅对话 · N 条消息」；也没有可重跑的检索句
-        // （首句很可能是工具句），不给「重新检索」按钮。
-        const chatOnly = !!h.chatOnly;
-        const meta = chatOnly
-            ? `仅对话 · ${(Array.isArray(h.chat) ? h.chat.length : 0)} 条消息 · ${escapeHtml(fmtTime(h.at))}`
-            : `${h.count} 条 · ${escapeHtml(fmtTime(h.at))}${turns}`;
-        const mainTitle = chatOnly
-            ? "在本标签页找回这条对话：完整对话记录（当时只有对话、没有检索）"
-            : "在本标签页找回这条对话：完整对话记录、每一步细化、最后一轮的检索结果";
-        const row = document.createElement("div"); row.className = "hist-row";
-        row.innerHTML = `<button class="hist-main" type="button" title="${mainTitle}"><span class="hist-txt"><span class="hist-q">${escapeHtml(h.query || "（仅对话）")}</span>`
-            + `<span class="hist-meta">${meta}</span></span></button>`
-            + `<div class="hist-acts">`
-            + (h.convId ? `<button class="btn hist-newtab" type="button" title="在新浏览器标签页中打开这条对话">新标签页</button>` : "")
-            + (chatOnly ? "" : `<button class="btn hist-rerun" type="button" title="按当前库重新检索这句话">重新检索</button>`)
-            + `<button class="btn hist-del" type="button" title="删除这条对话">删除</button></div>`;
-        // 点行本体＝在本标签页找回（无快照的老行在 viewHistorySnapshot 内自动回退重跑）
-        row.querySelector(".hist-main").addEventListener("click", () => { viewHistorySnapshot(g); closeHistWin(); });
-        const nt = row.querySelector(".hist-newtab");
-        if (nt) nt.addEventListener("click", () => {
-            openPopup(location.pathname + "?conv=" + encodeURIComponent(h.convId));
-        });
-        const rr = row.querySelector(".hist-rerun");
-        if (rr) rr.addEventListener("click", () => { $("queryInput").value = h.query; closeHistWin(); showView("query"); runRecommend(); });
-        // 删除：二段确认（仿 histClear 的 armed 模式）——3 秒内再点才执行，超时自动复位
-        const del = row.querySelector(".hist-del");
-        del.addEventListener("click", () => {
-            if (!armTwoStepConfirm(del, { idleText: COPY.common.delete })) return;
-            deleteHistoryGroup(g);
-            toast("已删除这条对话");
-        });
-        list.appendChild(row);
+const _historyRequests = {}, _historyOpenRequests = {};
+export async function openSharedHistory(id) {
+    cbSaveConversation(); showView("query");
+    return cbOpenSharedConversation(id);
+}
+async function changeSharedHistory(h, action, fields = {}, options = {}) {
+    const token = beginRequest(_historyOpenRequests);
+    let data;
+    try {
+        data = await sharedConversationAction(h.convId, action, h.revision, fields);
+        if (!token.isCurrent()) return false;
+        if (action === "delete" && data.conversation?.deleted === true) forgetSharedConversationRuns(h.convId);
+        if (cbSharedConversation()?.id === h.convId) {
+            if (action === "delete") { cbClear({ archive: false }); exitResultsLayout(); }
+            else await cbRefreshSharedConversation();
+        }
+    } catch (error) {
+        if (token.isCurrent()) { toast(error.message); if (options.renderOnFailure !== false) await renderHistory(); }
+        return false;
+    }
+    try { await listSharedConversations(); }
+    catch (error) { if (token.isCurrent()) toast("共享对话列表刷新失败：" + error.message); }
+    if (!token.isCurrent()) return false;
+    renderHistory({ refresh: false }); notifyContextChanged("conversations");
+    return data;
+}
+function renderHistoryImportPreview(container, data) {
+    function append(title, value, open = false) {
+        const detail = document.createElement("details"), summary = document.createElement("summary");
+        summary.textContent = title; detail.appendChild(summary);
+        let rendered = false;
+        const render = () => {
+            if (!detail.open || rendered) return;
+            const pre = document.createElement("pre"); pre.className = "raw";
+            pre.textContent = JSON.stringify(value, null, 2); detail.appendChild(pre); rendered = true;
+        };
+        detail.addEventListener("toggle", render); detail.open = open; render(); container.appendChild(detail);
+    }
+    append("对话标题与当前现场", { title: data.title, current_state: data.current_state }, true);
+    for (const [title, rows, size] of [["消息", data.messages, 20], ["结果快照", data.frames, 1]]) {
+        for (let start = 0; start < rows.length; start += size) {
+            const end = Math.min(start + size, rows.length);
+            append(title + " " + (start + 1) + "–" + end + " / " + rows.length, rows.slice(start, end));
+        }
+    }
+}
+async function previewHistoryImport(group) {
+    const owner = currentAccountScope(), token = beginRequest({}), data = cbLegacyImport(group.slice().reverse());
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify({ owner, id: group[0]?.convId, data })));
+    if (!token.isCurrent()) return;
+    const importId = "history_" + Array.from(new Uint8Array(digest)).map((v) => v.toString(16).padStart(2, "0")).join("");
+    const modal = document.createElement("div"); modal.className = "modal-backdrop";
+    modal.innerHTML = '<form class="modal" role="dialog" aria-modal="true" aria-labelledby="historyImportTitle">'
+        + '<div class="modal-head"><h3 id="historyImportTitle">把这条本机记录导入共享对话</h3></div>'
+        + '<p>只导入下方这一条。原记录仍留在本机，不会自动导入其他记录。</p>'
+        + '<p>将上传 ' + data.messages.length + ' 条消息、' + data.frames.length + ' 份结果快照。下方逐段展开查看完整内容：</p><div class="history-import-preview"></div>'
+        + '<label><input type="checkbox" required>我已查看内容，同意把这一条保存到当前账户的服务端</label>'
+        + '<div class="workspace-name-actions"><button type="button" class="btn hist-import-cancel">取消</button>'
+        + '<button type="submit" class="btn btn-primary">确认导入这一条</button></div></form>';
+    renderHistoryImportPreview(modal.querySelector(".history-import-preview"), data);
+    document.body.appendChild(modal);
+    let closed = false, unsubscribe = () => {};
+    const close = () => {
+        if (closed) return;
+        closed = true; unsubscribe(); closeModal(modal); modal.remove();
+    };
+    unsubscribe = registerContextChanged((kind) => { if (kind === "before-account" || kind === "account") close(); });
+    modal.querySelector(".hist-import-cancel").addEventListener("click", close);
+    modal.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); else trapModalFocus(e, modal); });
+    modal.querySelector("form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (closed || !token.isCurrent()) { close(); return; }
+        if (!e.currentTarget.reportValidity()) return;
+        const button = modal.querySelector('[type="submit"]');
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+            const result = await sharedConversationAction("", "import", null, { import_id: importId, data, project_id: group[0]?.project_id || "" });
+            if (!token.isCurrent()) { close(); return; }
+            close(); await listSharedConversations();
+            if (!token.isCurrent()) return;
+            renderHistory({ refresh: false }); notifyContextChanged("conversations"); await openSharedHistory(result.conversation.id);
+        } catch (error) { if (token.isCurrent()) { button.disabled = false; toast(error.message); } else close(); }
     });
+    openModal(modal, { initialFocus: modal.querySelector("input") });
+}
+export function createHistoryRow(g, options = {}) {
+    const h = g[0], shared = h.shared === true, chatOnly = !!h.chatOnly;
+    const turns = !shared && g.length > 1 ? ` · 共 ${g.length} 轮` : "";
+    const meta = (shared ? "共享" + (h.archived ? " · 已归档" : "") : "本机") + " · " + (chatOnly
+        ? `仅对话${shared && h.message_count == null ? "" : " · " + (h.message_count ?? (Array.isArray(h.chat) ? h.chat.length : 0)) + " 条消息"} · ${escapeHtml(fmtTime(h.at))}`
+        : `${h.count} 条 · ${escapeHtml(fmtTime(h.at))}${turns}`);
+    const row = document.createElement("div"); row.className = "hist-row";
+    row.dataset.convId = String(h.convId || "");
+    row.addEventListener("contextmenu", (event) => workspaceConversationMenu(event, row.dataset.convId, h));
+    row.addEventListener("keydown", (event) => {
+        if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) workspaceConversationMenu(event, row.dataset.convId, h);
+    });
+    row.innerHTML = `<button class="hist-main" type="button" title="找回完整对话与逐轮结果"><span class="hist-txt"><span class="hist-q">${escapeHtml(h.query || "（仅对话）")}</span>`
+        + `<span class="hist-meta">${meta}</span></span></button><div class="hist-acts">`
+        + (h.convId ? `<button class="btn hist-newtab" type="button" title="在新浏览器标签页中打开这条对话">新标签页</button>` : "")
+        + (chatOnly ? "" : `<button class="btn hist-rerun" type="button" title="按当前库重新检索这句话">重新检索</button>`)
+        + (shared ? `<button class="btn hist-rename" type="button">重命名</button><button class="btn hist-archive" type="button">${h.archived ? "恢复" : "归档"}</button>`
+            : '<button class="btn hist-import" type="button">预览导入</button>')
+        + `<button class="btn hist-del" type="button" title="删除这条对话">删除</button></div>`;
+    row.querySelector(".hist-main").addEventListener("click", () => {
+        Promise.resolve(shared ? openSharedHistory(h.convId) : viewHistorySnapshot(g))
+            .then((opened) => { if (!shared || opened === true) options.onOpen?.(); }).catch((e) => toast(e.message));
+    });
+    row.querySelector(".hist-newtab")?.addEventListener("click", () => { cbSaveConversation(); openPopup(location.pathname + "?conv=" + encodeURIComponent(h.convId)); });
+    row.querySelector(".hist-rerun")?.addEventListener("click", async () => {
+        if (shared && !(await openSharedHistory(h.convId))) return;
+        $("queryInput").value = shared ? String(cbSharedConversation()?.current_state?.query || "") : h.query;
+        options.onOpen?.(); showView("query"); runRecommend();
+    });
+    row.querySelector(".hist-import")?.addEventListener("click", () => previewHistoryImport(g).catch((e) => toast(e.message)));
+    row.querySelector(".hist-archive")?.addEventListener("click", () => changeSharedHistory(h, h.archived ? "restore" : "archive"));
+    row.querySelector(".hist-rename")?.addEventListener("click", () => {
+        const acts = row.querySelector(".hist-acts"), rename = row.querySelector(".hist-rename");
+        if (!acts || !rename || acts.dataset.editing === "1") return;
+        acts.dataset.editing = "1";
+        const siblings = Array.from(acts.children);
+        const editor = document.createElement("div"); editor.className = "hist-rename-editor";
+        const input = document.createElement("input"); input.type = "text"; input.maxLength = 80;
+        input.value = h.query || ""; input.setAttribute("aria-label", "对话标题");
+        const cancelBtn = document.createElement("button"); cancelBtn.type = "button"; cancelBtn.className = "btn"; cancelBtn.textContent = "取消";
+        const saveBtn = document.createElement("button"); saveBtn.type = "button"; saveBtn.className = "btn btn-primary"; saveBtn.textContent = "保存";
+        editor.append(input, cancelBtn, saveBtn);
+        acts.insertBefore(editor, acts.firstChild);
+        siblings.forEach((el) => { el.hidden = true; });
+        input.focus();
+        const finish = (back) => {
+            if (acts.dataset.editing !== "1") return;
+            editor.remove(); siblings.forEach((el) => { el.hidden = false; });
+            delete acts.dataset.editing;
+            if (back && rename.isConnected) rename.focus();
+        };
+        const submit = async () => {
+            const title = input.value.trim();
+            if (!title) { input.focus(); return; }
+            saveBtn.disabled = true;
+            const ok = await changeSharedHistory(h, "rename", { title }, { renderOnFailure: false });
+            if (!ok && acts.dataset.editing === "1") saveBtn.disabled = false;
+        };
+        cancelBtn.addEventListener("click", () => finish(true));
+        saveBtn.addEventListener("click", submit);
+        input.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") { event.preventDefault(); finish(true); }
+            else if (event.key === "Enter") { event.preventDefault(); submit(); }
+        });
+    });
+    const del = row.querySelector(".hist-del");
+    del.addEventListener("click", async () => {
+        if (!armTwoStepConfirm(del, { idleText: COPY.common.delete })) return;
+        const deleted = shared ? await changeSharedHistory(h, "delete") : (deleteHistoryGroup(g), true);
+        if (!deleted) return;
+        options.onDelete?.();
+        toast(deleted.conversation?.cleanup_pending === true
+            ? "这条对话已无法访问，文件仍待后台清理。" : "已删除这条对话");
+    });
+    return row;
+}
+export async function renderHistory({ refresh = true } = {}) {
+    const local = getHist(), hist = [...sharedHistoryRows(), ...local].sort((a, b) => b.at - a.at);
+    const list = $("histList"), empty = $("histEmpty"), clearBtn = $("histClear");
+    if (clearBtn) { clearBtn.disabled = !local.length; clearBtn.title = "仅清空本机旧历史，不删除共享对话"; resetHistClear(); }
+    if (!list) return;
+    list.innerHTML = ""; list.style.display = hist.length ? "block" : "none";
+    if (empty) empty.hidden = !!hist.length;
+    workspaceHistoryGroups(histGroups(hist), workspaceProjects(), workspaceAssignments()).forEach((bucket) => {
+        const section = document.createElement("section"); section.className = "hist-project-group";
+        section.style.setProperty("--project-color", workspaceProjectColor(bucket.project));
+        const head = document.createElement("h3"); head.className = "hist-project-heading";
+        head.textContent = (bucket.project ? bucket.project.name : WORKSPACE_COPY.global)
+            + (bucket.project && bucket.project.archived ? " · " + WORKSPACE_COPY.archived : "") + " · " + bucket.conversations.length;
+        section.appendChild(head);
+        bucket.conversations.forEach((g) => section.appendChild(createHistoryRow(g, { onOpen: closeHistWin })));
+        list.appendChild(section);
+    });
+    if (refresh) {
+        const token = beginRequest(_historyRequests);
+        try {
+            await listSharedConversations();
+            if (token.isCurrent()) { await renderHistory({ refresh: false }); notifyContextChanged("conversations"); }
+        } catch (error) {
+            if (token.isCurrent()) {
+                list.style.display = "block";
+                const note = document.createElement("p"); note.className = "muted-block";
+                note.textContent = "共享对话暂时没能读取：" + error.message; list.appendChild(note);
+            }
+        }
+    }
 }
 
 /* 删除一条对话：convId 相同的所有行一起删（一段对话产多行历史）；
@@ -420,7 +579,7 @@ function deleteHistoryGroup(g) {
     renderHistory();
 }
 
-export function initHistWin() {
+export async function initHistWin() {
     /* 2026-08-23：历史拆回独立浮窗 #histWin（骨架在 shell.js initHistWinSkeleton），
        收藏迁入 #libWin 收藏页签；本函数（boot.js 调用不变）职责：① 把历史渲染注册进 #histWin
        （setHistRenderer 注册反转）与收藏渲染注册进 #libWin favs 页签（setLibRenderer）；② ?conv=/?fork= 落点处理。 */
@@ -437,11 +596,11 @@ export function initHistWin() {
         const fork = params.get("fork");
         if (conv || fork) {
             history.replaceState(null, "", location.pathname);
-            const run = () => {
+            const run = async () => {
                 if (conv) {
                     const g = histGroups(getHist()).find((grp) => String((grp[0] && grp[0].convId) || "") === conv);
                     if (g) { viewHistorySnapshot(g); toast("已打开这条对话"); }
-                    else toast("这条对话不在本机的历史记录里");
+                    else if (await openSharedHistory(conv)) toast("已打开共享对话");
                 }
                 if (fork) {
                     const sep = fork.lastIndexOf(":");
@@ -450,9 +609,10 @@ export function initHistWin() {
                     const g = histGroups(getHist()).find((grp) => String((grp[0] && grp[0].convId) || "") === convId);
                     if (g) {
                         const chron = g.slice().reverse();   // 组内新→旧 翻成 旧→新
-                        const rows = chron.slice(0, Math.min(n, chron.length));   // 只取前 N 轮（分支起点）
+                        const rows = cbHistoryPrefix(chron, n);   // 帧和累计消息一起截到分支点
+                        if (!rows.length) { toast("这个分支点已不在本机历史里，无法恢复；原对话保持不变。"); return; }
                         if (chron.length < n) toast("原对话在历史里只剩一部分，已按现存内容分支");
-                        viewHistorySnapshot(rows.slice().reverse());   // viewHistorySnapshot 吃「新→旧」
+                        viewHistorySnapshot(rows.slice().reverse(), { prefix: true });   // 新→旧，仅恢复选中的前缀
                         cbAdoptAsBranch();
                         toast("已从这里分支，接着说就会走在这条分支上");
                     } else {
@@ -460,8 +620,8 @@ export function initHistWin() {
                     }
                 }
             };
-            if (ACCOUNTS_READY && typeof ACCOUNTS_READY.then === "function") ACCOUNTS_READY.then(run);
-            else run();
+            if (ACCOUNTS_READY && typeof ACCOUNTS_READY.then === "function") await ACCOUNTS_READY.then(run);
+            else await run();
         }
     } catch (_e) {}
 }
@@ -489,6 +649,7 @@ export async function uploadFile(file) {
         }
         toast("上传成功");
         ensureDatasetsLoaded(true);
+        invalidateRecommendMemo();   // 语料集合变了——同参重搜不许再命中旧缓存
         initSourceChips();
     } catch (err) { $("uploadStatus").textContent = "上传失败，可检查文件是否为有效的 JSON 后重试。原因：" + (err && err.message ? err.message : String(err)); toast("上传失败"); }
     finally { btn.disabled = false; btn.textContent = "上传"; }

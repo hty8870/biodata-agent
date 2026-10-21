@@ -32,6 +32,7 @@ note_zh / channel 字段如实写明实际通道（含 E-GEOD 年代局限），
 from __future__ import annotations
 
 import html as html_lib
+import http.client
 import json
 import re
 import threading
@@ -42,8 +43,6 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from ..app.runtime_paths import instance_data_dir_for
 
 __all__ = [
     "ORGANISM_COMMON",
@@ -97,34 +96,14 @@ ORGANISM_COMMON: dict[str, str] = {
 
 
 # ==============================================================================================
-# 账本与路径小助手（复刻自 corpus_curation，原因见模块 docstring：避免循环 import）
+# 账本与路径小助手——真源 2026-10-01 起收敛到 `corpus/net_ledger.py`（公共名）；
+# 此处保留私有别名兼容本模块与 corpus_curation 转发 seam 的既有引用，不再自行实现。
 # ==============================================================================================
 
-_USERDATA_DIR_NAME = ".userdata"
-_NET_LEDGER_NAME = "curate_net_ledger.jsonl"
-
-
-def _net_ledger_path(project_root: Path) -> Path:
-    """联网账本路径：写盘侧经 runtime_paths 解析用户层（frozen = data_root/.userdata；
-    source/portable 与测试注入根 = project_root/.userdata，历史逐字节一致）。"""
-    return instance_data_dir_for(Path(project_root), _USERDATA_DIR_NAME) / _NET_LEDGER_NAME
-
-
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-# 并发账本写必须互斥：sync def 端点走线程池，Windows 上 open("a") 的 seek-to-EOF+write 跨并发句柄
-# 非原子，裸写会整行覆盖丢行/撕裂（对抗评审 R2-3/R2-8 实测 20 线程丢 7-13%、2 线程也丢）。
-# 一把进程内锁兜住线程池并发；跨进程（Web↔MCP 双实例）残余风险已知悉（审计面，不挡主功能）。
-_ledger_lock = threading.Lock()
-
-
-def _append_jsonl(path: Path, entry: dict) -> None:
-    with _ledger_lock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+from .net_ledger import append_jsonl as _append_jsonl
+from .net_ledger import append_net_ledger as _append_net_ledger
+from .net_ledger import net_ledger_path as _net_ledger_path
+from .net_ledger import now_iso as _now_iso
 
 
 # ==============================================================================================
@@ -203,7 +182,10 @@ def _raw_request(url: str, *, timeout: int, min_interval: float, headers: dict[s
                 time.sleep(1.0 * (2 ** attempt))
                 continue
             raise _NetError(f"HTTP {exc.code}（{url}）") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, http.client.IncompleteRead) as exc:
+            # 分块响应中途断开（`resp.read()` 抛 IncompleteRead，`HTTPException` 族、
+            # 不是 OSError）属传输瞬时故障——进既有三次尝试预算；耗尽转 _NetError，
+            # 由调用方逐源降级，不再让一次来源故障终止整份 check_updates。
             last_exc = exc
             if attempt < _RETRIES - 1:
                 time.sleep(1.0 * (2 ** attempt))
@@ -303,12 +285,12 @@ def fetch_text_logged(
         entry.update({"http_status": None, "records": 0, "error": str(exc)})
         if tries[0] > 1:
             entry["attempts"] = tries[0]
-        _append_jsonl(_net_ledger_path(project_root), entry)
+        _append_net_ledger(_net_ledger_path(project_root), entry)
         raise
     entry.update({"http_status": status, "records": 1 if text else 0})
     if tries[0] > 1:
         entry["attempts"] = tries[0]
-    _append_jsonl(_net_ledger_path(project_root), entry)
+    _append_net_ledger(_net_ledger_path(project_root), entry)
     return text
 
 
@@ -333,7 +315,7 @@ def fetch_json_logged(
     entry: dict[str, Any] = {"ts": _now_iso(), "endpoint": endpoint, "query": query,
                              "method": str(method or "GET").upper()}
     tries = [1]
-    append = ledger_append or _append_jsonl
+    append = ledger_append or _append_net_ledger
     path = (ledger_path or _net_ledger_path)(project_root)
     try:
         if fetcher is None:
@@ -735,19 +717,26 @@ for _latin, _common in ORGANISM_COMMON.items():
     _HCA_SPECIES_TO_LATIN.setdefault(_common.lower(), _latin.capitalize())
 del _latin, _common
 _AZUL_PAGE_SIZE = 75   # 实测 size 上限（>75 → 400）
-_AZUL_MAX_PAGES = 8    # 全库 532 项、size=75 全量 8 页封顶（防分页游标失控的兜底）
+_AZUL_MAX_PAGES = 12   # 展示与管护搜索共用的唯一分页预算，耗尽时必须说明覆盖不完整
 
 
-def search_hca(
+class _HCAParseError(_NetError):
+    """HCA 响应形状漂移；两个入口分别翻译为自己的既有错误契约。"""
+
+
+def search_hca_hits(
     keywords: str,
     *,
     species: str | None = None,
     limit: int = 20,
     project_root: Path,
-) -> dict:
-    """HCA（Azul）轻量 items 搜索：genusSpecies facet 物种过滤（服务端）+ 跟随 pagination.next
-    分页拉取后**本地**关键词匹配（Azul 无服务端全文检索；全库仅 532 项，代价可忽略）。
-    与 corpus_curation 的 ingest 级 `_search_hca` 同一配方，此处只出 items 形态。"""
+    fetcher: Any = None,
+) -> tuple[list[dict], str]:
+    """HCA 两入口共用的分页/物种/关键词匹配：返回原始命中和覆盖受限说明。
+
+    fetcher 只注入带账本的传输接缝，分页预算与选择逻辑不得由消费方复制。
+    词表内物种用服务端 facet；词表外在计入 limit 前按原始 genusSpecies 匹配。
+    """
     terms = [t.lower() for t in str(keywords or "").split() if t.strip()]
     sp = str(species or "").strip()
     latin = _HCA_SPECIES_TO_LATIN.get(sp.lower()) if sp else None
@@ -756,24 +745,20 @@ def search_hca(
         filters = json.dumps({"genusSpecies": {"is": [latin]}}, separators=(",", ":"))
         url += f"&filters={urllib.parse.quote(filters)}"
 
-    items: list[dict] = []
+    matched: list[dict] = []
     seen: set[str] = set()
     pages = 0
-    while url and len(items) < int(limit) and pages < _AZUL_MAX_PAGES:
-        try:
-            payload = fetch_json_logged(
-                url, project_root=Path(project_root), endpoint=AZUL_PROJECTS_API,
-                query=str(keywords or "").strip() or "(全量清单)",
-            )
-        except _NetError as exc:
-            return _fail("network_error", f"HCA（Azul）官方接口请求失败（{exc}）。")
+    while url and len(matched) < int(limit) and pages < _AZUL_MAX_PAGES:
+        payload = (fetcher or fetch_json_logged)(
+            url, project_root=Path(project_root), endpoint=AZUL_PROJECTS_API,
+            query=str(keywords or "").strip() or "(全量清单)",
+        )
         pages += 1
         hits = payload.get("hits") if isinstance(payload, dict) else None
         if not isinstance(hits, list):
-            return _fail(
-                "parse_changed",
+            raise _HCAParseError(
                 "HCA（Azul）接口的响应形状变了（该服务无公开 API 文档，可能随版本静默变更），"
-                "这次没能读出条目；可到 https://data.humancellatlas.org/ 人工核对。",
+                "缺 hits 列表。本次没有拿回任何记录；可到 https://data.humancellatlas.org/ 人工核对。",
             )
         for h in hits:
             if not isinstance(h, dict):
@@ -796,26 +781,52 @@ def search_hca(
             if sp and not latin and sp.lower() not in species_raw.lower():
                 continue  # 词表外物种：本地子串过滤（genusSpecies 原文）
             seen.add(entry_id)
-            date = ""
-            dates = h.get("dates")
-            if isinstance(dates, list) and dates and isinstance(dates[0], dict):
-                date = str(dates[0].get("aggregateSubmissionDate") or "")[:10]
-            items.append({
-                "accession": entry_id,
-                "title": title,
-                "url": HCA_STUDY_TMPL.format(project_id=entry_id),
-                "date": date,
-                "snippet": desc[:200],
-            })
-            if len(items) >= int(limit):
+            matched.append(h)
+            if len(matched) >= int(limit):
                 break
         pagination = payload.get("pagination") if isinstance(payload, dict) else None
         nxt = pagination.get("next") if isinstance(pagination, dict) else None
         # 只跟随同服务绝对 URL（防响应里混入奇怪链接被当成下一页）。
         url = nxt if (isinstance(nxt, str) and nxt.startswith(AZUL_PROJECTS_API)) else None
+    limited = bool(url and pages >= _AZUL_MAX_PAGES and len(matched) < int(limit))
+    note = (f"HCA 搜索已达到 {_AZUL_MAX_PAGES} 页预算，仍有后续页面未检查；"
+            "本次覆盖不完整，不能据此断言没有更多匹配条目。") if limited else ""
+    return matched, note
+
+
+def search_hca(
+    keywords: str,
+    *,
+    species: str | None = None,
+    limit: int = 20,
+    project_root: Path,
+) -> dict:
+    """共用 HCA 搜索的轻量投影；管护入口对同一原始命中生成完整记录。"""
+    try:
+        hits, note = search_hca_hits(keywords, species=species, limit=limit, project_root=project_root)
+    except _HCAParseError as exc:
+        return _fail("parse_changed", str(exc))
+    except _NetError as exc:
+        return _fail("network_error", f"HCA（Azul）官方接口请求失败（{exc}）。")
+    items: list[dict] = []
+    for h in hits:
+        project = h["projects"][0]
+        date = ""
+        dates = h.get("dates")
+        if isinstance(dates, list) and dates and isinstance(dates[0], dict):
+            date = str(dates[0].get("aggregateSubmissionDate") or "")[:10]
+        items.append({
+            "accession": str(h["entryId"]).strip(),
+            "title": str(project["projectTitle"]).strip(),
+            "url": HCA_STUDY_TMPL.format(project_id=str(h["entryId"]).strip()),
+            "date": date,
+            "snippet": re.sub(r"\s+", " ", str(project.get("projectDescription") or "")).strip()[:200],
+        })
     if not items:
+        if note:
+            return _fail("coverage_limited", note)
         return _fail("no_results", f"HCA（Azul）没有匹配 {keywords!r} 的条目。")
-    return {"ok": True, "items": items, "note_zh": f"HCA（Azul）官方接口本地匹配后 {len(items)} 条。"}
+    return {"ok": True, "items": items, "note_zh": f"HCA（Azul）官方接口本地匹配后 {len(items)} 条。" + note}
 
 
 # ---- NCBI GEO（E-utilities）轻量 items 搜索（2026-08-07 接入）--------------------------------

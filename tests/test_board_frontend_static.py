@@ -77,8 +77,8 @@ def test_hist_hooks_registration_contract():
     board 定义并注册 cbConvId/cbLogForHistory，core 暴露 setHistHooks 且 pushHist 经钩子取值。"""
     assert re.search(r"export function cbConvId\(", BOARD), "board.js 缺 cbConvId 定义"
     assert re.search(r"export function cbLogForHistory\(", BOARD), "board.js 缺 cbLogForHistory 定义"
-    assert "setHistHooks({ convId: cbConvId, logForHistory: cbLogForHistory })" in BOARD, (
-        "board.js 未在 initCondBoard 注册历史打标钩子")
+    assert re.search(r"setHistHooks\(\{ convId: cbConvId, logForHistory: cbLogForHistory, stateForHistory: cbStateForHistory,\s*shared: \(\) => _sharedMode \}\)", BOARD), (
+        "board.js 未注册历史与共享会话隔离钩子")
     assert re.search(r"export function setHistHooks\(", CORE), "core.js 缺 setHistHooks"
     assert "_histConvId" in CORE and "_histLogForHistory" in CORE, "core.js pushHist 未经钩子取值"
 
@@ -208,9 +208,9 @@ def test_failed_or_relaxed_screens_do_not_keep_a_stale_board_or_pack():
     catch = re.search(r"\}\s*catch \(err\) \{(.*?)\n\s*\} finally", SEARCH, re.S)
     assert catch, "找不到 runRecommend 的 catch 分支"
     assert 'condBoard' in catch.group(1) and "resetTaskPack(" in catch.group(1)
-    relax = re.search(r"function applyRelaxation\([^)]*\)\s*\{(.*?)\n\}", RESULTS, re.S)
-    assert relax, "找不到 applyRelaxation 的函数体"
-    assert 'condBoard' in relax.group(1) and "resetTaskPack(" in relax.group(1)
+    # 零命中放松已收编为 ask.relax 卡单一通道（2026-09-14）：旧的空态卡 chips 通道
+    # applyRelaxation 整条退役，不许在 results.js 复活。
+    assert "function applyRelaxation" not in RESULTS, "applyRelaxation 已退役，不许复活"
 
 
 def test_task_pack_plan_is_invalidated_on_every_new_result():
@@ -371,7 +371,7 @@ def test_msg_feedback_action_bar_wired():
     assert "cbMsgFbNext(" in BOARD and "cbMsgForkable(" in BOARD and "cbMsgCommentText(" in BOARD
     # 消息 id：cbLogPush 发 id、cbLogForHistory 落盘（i/f 字段）、恢复路径带回
     assert "id: _cbMsgIdNext()" in BOARD, "每条消息必须发唯一 id（反馈关联锚）"
-    assert 'i: e.id || ""' in BOARD, "消息 id 必须随历史落盘"
+    assert 'i: e.id || ""' in BOARD_CORE and "cbHistoryMessages(_cbLog)" in BOARD, "消息 id 必须经纯核随历史落盘"
     assert "_cbMsgIdSeen(" in BOARD, "恢复路径必须避让 id 碰撞"
     # 埋点：msgfb 事件经 usageLog，payload 无文本（conv/mid/v）
     assert "USAGE_KINDS.msgfb" in BOARD, "赞/倒赞必须打 msgfb 事件"
@@ -389,3 +389,33 @@ def test_msg_feedback_action_bar_wired():
     # 样式：操作条与评论编辑器的类都在 CSS 里（漏了就是一排裸按钮）
     for cls in (".cbh-actbar", ".cbh-act", ".cbh-cmt-ta", ".cbh-cmt-send"):
         assert cls in CSS, f"app.css 缺 {cls}"
+
+
+def test_cb_preview_visible_host_follows_chat_log():
+    """#cbPreview（ask.relax 选择卡 / cbShowMessage 追问卡共用）的可见宿主跟随（2026-09-15 修复）。
+
+    根因：它的静态家在条件板 #cbBody 里，而条件板只在「有结果落地」时才被摘 hidden——
+    环内 ask.relax 暂停回合恰恰不落地结果（chat-in-main），卡渲进隐藏宿主 0×0 不可见，
+    用户看到「选完我会按你的选择自动重跑检索并继续」却无东西可点（yolo1 e2e 五连「卡未现」
+    与此同因；探针三连「成功」是 query_selector 只验存在的假阳性）。
+    三门不执行 JS，这里双端钉死：placeCbPreview 的定义、三个调用点（两个渲染口 +
+    placeChatLog 布局链）、以及搬家后不失效的点击委托（绑在 #cbPreview 自身）。
+    """
+    assert re.search(r"\bfunction\s+placeCbPreview\b", BOARD), "placeCbPreview 没有定义"
+    body = re.search(r"function placeCbPreview\(\)\s*\{(.*?)\n\}", BOARD, re.S)
+    assert body, "placeCbPreview 函数体取不到"
+    inner = body.group(1)
+    assert "cbChatInMain()" in inner, "搬离判据必须是 chat-in-main（无结果有对话）"
+    assert "log.nextSibling" in inner, "chat-in-main 时必须停到 #cbHistory 之后（输入框正上方）"
+    assert '"cbBody"' in inner, "非 chat-in-main 时必须回静态家 #cbBody"
+    # 两个渲染口落定后各调一次 + 布局链收口（placeChatLog 末尾）
+    assert re.search(r"function askRelaxShow\([\s\S]*?placeCbPreview\(\);", BOARD), \
+        "askRelaxShow 渲染后必须调 placeCbPreview"
+    assert re.search(r"function cbShowMessage\([\s\S]*?placeCbPreview\(\);", BOARD), \
+        "cbShowMessage 渲染后必须调 placeCbPreview"
+    assert re.search(r'log\.classList\.toggle\("cbh-main"[^)]*\);\s*\n\s*placeCbPreview\(\);', BOARD), \
+        "placeChatLog 链尾必须调 placeCbPreview（搬家同链收口）"
+    # 点击委托：卡会被搬出 #condBoard，委托必须绑在卡自身；命中后止泡防 #condBoard 二次触发
+    assert re.search(r'\$\("cbPreview"\)\.addEventListener\(\s*"click"\s*,\s*function', BOARD), (
+        "#cbPreview 必须自带点击委托（搬出 #condBoard 后原委托够不到）")
+    assert "event.stopPropagation();" in BOARD, "卡自身委托命中后必须止泡，防 #condBoard 重复触发"

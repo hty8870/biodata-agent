@@ -227,10 +227,29 @@ sudo docker exec biodata-web cat /data/.userdata/llm_quota.json
 两个独立开关（语义真源在代码注释：`redis_sessions.py` / `rq_jobs.py` / `redis_store.py`）：
 
 - `BIODATA_SESSION_STORE=redis`：登录会话改存 Redis，多进程/多实例共享登录态；
-- `BIODATA_JOB_BACKEND=rq`：corpus-sync 长任务改投 RQ 队列，由独立 worker 进程执行，
-  web 进程读状态（Redis hash）并在任务终态时于本进程补做缓存失效。
+- `BIODATA_JOB_BACKEND=rq`：corpus-sync 长任务改投 RQ 队列，由独立 worker 进程执行。
+  worker 保存稳定代际；各 Web 进程在普通 API 入口按各自游标调用既有语料/向量失效，
+  无需发起页面继续轮询任务状态。
 
 前置条件：运行环境装有可选依赖（`pip install -r requirements/requirements-mq.txt`；
 默认发布镜像不含，演示需自行扩展镜像或本机源码形态）。compose 叠加示例见
 `deploy/web/docker-compose.mq.example.yml`（含 redis 服务与 worker 服务，文件头有完整
 用法与回退说明）。
+
+### MQ 格式与恢复边界
+
+- Queue、Worker 与恢复查询的 Job.fetch 均使用 `rq.serializers.JSONSerializer`。
+  不接受旧 pickle 作业，也没有 pickle 回退。JSON 不等于执行沙箱：Redis 与队列写权限
+  仍必须限定于可信服务，不能让不可信客户端修改任务函数或参数。
+- 从旧格式切换前，停止 Web 入队与旧 worker，核对在途任务、已完成写入及实际回执并备份。
+  再选择新的 Redis 数据库或全新演示数据卷启用新版本；旧队列不自动迁移、重新入队或执行。
+  不得把可能已完成的写任务直接重发。旧数据的清理须在确认没有在途任务后单独决定。
+  若会话也换到新数据库，既有登录态需要重新登录。
+- 入队连接错误可能发生在事务已提交之后。接口会如实返回确认失败，单飞占位仍保留；
+  只有确认 job 缺失且宽限期结束才按中断回收，不因回包丢失直接允许另一轮写入。
+- RQ 补偿结果初始设置 `result_ttl=-1`，不按默认500秒过期。worker 已确认业务终态写入时，
+  会在 RQ 正常结束时释放不再需要的补偿记录。终态写失败则持久保留，后续核对成功且
+  RQ 已 finished 后才安全回收；不能确认时继续保留并告警。
+  应监控演示 Redis 的容量与持久化，不可用时不会自动切换到线程后端。
+- MQ Web 通知只覆盖该同步任务。其他进程的上传/回滚/管护及 CLI/MCP 缓存的统一版本检测
+  仍须在语料生产者/读取点复用既有代际机制，不应把此通知当成全站缓存一致性保证。

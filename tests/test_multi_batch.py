@@ -194,10 +194,13 @@ def test_rerun_not_adopted_no_batch(monkeypatch):
 
 
 def test_rank_rerank_batches_passthrough(monkeypatch):
-    """rank/rerank display 批次的 kind/label/query_raw/query_effective 由环内工具
-    生成（rerank label=rewritten_query），turn 原样透传不另造口径；legacy 取最后一批。"""
+    """rank/rerank/results.show 上屏批次的 kind/label/query_raw/query_effective 由环内
+    工具生成（rerank label=rewritten_query；results.show 的 kind=**试跑来源动词**——
+    2026-09-13 rerank 处置批：show 只是出口，批次内容来源是试跑的 rank/rerank），
+    turn 原样透传不另造口径；legacy 取最后一批。"""
     rank_payload = {"ok": True, "result_total": 5, "results": []}
     rerank_payload = {"ok": True, "result_total": 4, "results": []}
+    show_payload = {"ok": True, "result_total": 6, "results": []}
     plan = _exec_plan([
         {"verb": "rank", "ok": True,
          "result": {"total": 5, "displayed": True,
@@ -211,16 +214,23 @@ def test_rank_rerank_batches_passthrough(monkeypatch):
                               "query_raw": "human blood",
                               "query_effective": "Homo sapiens blood RNA-seq",
                               "payload": rerank_payload}}},
+        {"verb": "results.show", "ok": True,
+         "result": {"shown": True, "total": 6, "displayed": True,
+                    "batch": {"kind": "rank", "label": "human blood RNA",
+                              "query_raw": "human blood",
+                              "query_effective": "human blood RNA",
+                              "payload": show_payload}}},
     ])
     _stub_agent(monkeypatch, plan)
     out = turn.route_turn("human blood", config=CFG, search_params=SP)
     batches = out["result_batches"]
-    assert [b["kind"] for b in batches] == ["rank", "rerank"]
+    assert [b["kind"] for b in batches] == ["rank", "rerank", "rank"]
     assert batches[1]["label"] == "Homo sapiens blood RNA-seq"[:20]  # label ≤20 字截断
     assert batches[1]["query_raw"] == "human blood"
     assert batches[1]["query_effective"] == "Homo sapiens blood RNA-seq"
-    assert out["active_batch"] == "b2"
-    assert out["result_payload"] is rerank_payload
+    assert batches[2]["query_effective"] == "human blood RNA"
+    assert out["active_batch"] == "b3"
+    assert out["result_payload"] is show_payload
 
 
 def test_accumulation_order_preliminary_first(monkeypatch):

@@ -31,7 +31,7 @@ import { EXPORT_API_PATH, EXPORT_FAIL_FALLBACK_COPY, EXPORT_HISTORY_CLOSE_COPY, 
     EXPORT_RENAME_COPY, exportCandidateSnapshot,
     exportChanges, exportChangesText, exportDoneCopy, exportFailCopy, exportHistoryRows,
     exportKindLabel, exportLastRecord, exportLedgerFailCopy, exportLedgerRecord,
-    exportNameSaveFailCopy, exportNamedCopy, exportRenamedRecord, exportRecordSummary } from "../core/project_exports_core.js";
+    exportNameSaveFailCopy, exportNamedCopy, exportRenamedRecord, exportRecordSummary } from "#project_exports_core";
 
 /* ---------- 模块内状态 ---------- */
 let _lastMount = null;      // 当前挂点元素（projects.js 每次重渲都重建挂点 → 元素身份变化触发重渲）

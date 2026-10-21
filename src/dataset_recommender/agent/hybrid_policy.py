@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 from . import action_plan as _ap
-from ..retrieval import vocabulary as _vocab
+from ..retrieval import query_lexicon as _vocab
 
 
 HYBRID_CURATE_NOUN_GATE = frozenset({"上传", "导入"})
@@ -30,6 +30,12 @@ HYBRID_ACTION_FAMILIES: tuple[tuple[str, re.Pattern, tuple[str, ...], str], ...]
      ("curate.search_online",), "联网检索外部源"),
     ("action.db_status", re.compile(r"数据库状态|库的状态|库容|库.{0,4}?有?(?:多少|几)条"),
      ("curate.db_status",), "清点库容"),
+    # 2026-10-04：引文导出已是环内 LOOP_TOOLS 注册能力（agent_exec 登记），
+    # 能力账必须映射到真动词——此前归 action.generic（verbs 空），只靠婉拒核销，
+    # 成功执行也判缺项、finish 回灌错误结论。
+    ("action.cite_export",
+     re.compile(r"导出.{0,6}?(?:引文|引用|参考文献)|(?:引文|引用格式|参考文献).{0,6}?导出"),
+     ("cite.export",), "导出引文"),
 )
 HYBRID_ACTION_RES_EXTRA = tuple(re.compile(pattern) for pattern in (r"安装",))
 HYBRID_ACTION_RES = tuple(pattern for _, pattern, _, _ in HYBRID_ACTION_FAMILIES) + HYBRID_ACTION_RES_EXTRA

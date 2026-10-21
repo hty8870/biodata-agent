@@ -43,7 +43,7 @@ from .llm_client import (
     should_use_llm as _should_use_llm,
 )
 from ..content import summary_genre
-from ..retrieval.vocabulary import CATALOG
+from ..domain.registry import domain_catalog as _domain_catalog
 
 
 # 铁律写进 user prompt 而非 system slot 的理由：见 llm_client._call_chat_completions 的 system 引用处注释。
@@ -130,7 +130,7 @@ def _ground_terms_for_value(value: str, dim: str) -> "list[str]":
         return []
     low = text.lower()
     matches: "list[tuple[int, int, str]]" = []  # (start, end, canonical)
-    for entry in CATALOG.get(dim) or []:
+    for entry in _domain_catalog().get(dim) or []:
         if not isinstance(entry, dict):
             continue
         canonical = _canonical_zh(entry)

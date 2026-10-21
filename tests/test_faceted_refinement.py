@@ -206,9 +206,15 @@ def test_api_no_facets_field_when_abstain():
         "query": "不要小鼠的原始数据", "sources": _all_sources(),   # 跨维歧义否定→弃权
         "use_llm": False, "mock_llm": True, "top_k": 5,
     }).json()
-    assert resp["results"] == []
-    assert resp["facets"] == []
-    assert resp["resolution_status"] == "abstained"
+    # 2026-09-12 起：弃权不再沉默——向量语义兜底（未经条件核验、语义序里恰好可能含 mouse，
+    # 这正是「未核验」的含义，标注覆盖）；嵌入器不可用的环境回退旧弃权空态。
+    if resp["resolution_status"] == "vector_fallback":
+        assert resp["results"] and resp["vector_fallback"]
+        assert "未经条件核验" in resp["vector_fallback"]["note"]
+    else:
+        assert resp["results"] == []
+        assert resp["facets"] == []
+        assert resp["resolution_status"] == "abstained"
 
 
 def test_api_executable_negation_returns_results_no_mouse():

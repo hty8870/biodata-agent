@@ -49,7 +49,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-from ..retrieval import vocabulary as V
+from ..retrieval import query_lexicon as V
 from ..llm.llm_client import (
     LLMConfig,
     call_llm,
@@ -62,6 +62,12 @@ from ..retrieval.rerank import _first_json_object
 
 
 MAX_UTTERANCE_CHARS = 500
+#: 槽值长度上限（按槽**语义**分档，不是展示口径）：检索句复用入口查询长度契约——通用槽
+#: 曾一律 `[:80]` 静默截断，长检索句尾部的 FASTQ/排除/日期条件会无声消失。
+#: 未列出的槽沿用 80（展示/枚举类短值）。
+_SLOT_VALUE_MAX_CHARS = {"query": MAX_UTTERANCE_CHARS}
+#: 编号/文件名类槽**不做截断**（dataset_uid 可长至 100+ 字符，80 截断会毁形导致定位失败）。
+_SLOT_VALUE_NO_TRUNC = frozenset({"a", "b", "uid", "target"})
 #: 真 LLM 瞬时失败（超时/断流/空回/一次没解析出 JSON）重试**一次**前的停顿秒数。
 #: 执行侧「触发不稳定」实测多是一次性网络抖动，不是判不出来——重试一次直接治好一大半；
 #: 只在生产路径（未注入 caller）发生，测试替身的调用次数仍是断言对象。
@@ -123,7 +129,13 @@ _LEAD_VERBS: tuple[str, ...] = ("打包", "打开", "导出", "整理", "统计"
                                 # 对比/查找：compare.datasets
                                 # 「对比两个数据集」→ 回执「已对比两个数据集」；compat.find
                                 # 「查找兼容数据集」→ 回执「已查找兼容数据集」。
-                                "对比", "查找")
+                                "对比", "查找",
+                                # 更新（2026-09-13 rerank 处置批）：results.show 中文名
+                                # 「更新结果区」→ 回执「已更新结果区」读得通。
+                                "更新",
+                                # 询问（2026-09-14 YOLO 批）：ask.relax 中文名「询问放宽条件」
+                                # → 回执「已询问放宽条件」读得通。
+                                "询问")
 
 
 #: ====================== 封闭动词表 v1（唯一真源）======================
@@ -329,25 +341,53 @@ VERB_SPECS: tuple[VerbSpec, ...] = (
     ),
 )
 
-# rank / rerank：环内检索工具组。
-#   · rank   = 裸新检索 + 可选上屏（display）——与 search.rerun 的界限：rerun 是带
-#     机械闸的换词重检（不动），rank 不做择优、只跑标准管线如实回报；
-#   · rerank = 坏 query 先经独立 LLM 改写（机械健全性检查兜底）再重检。
-# 两者只读、环内专属（无前端 runner，见 FRONTEND_UNWIRED_EXEC_VERBS）。
+# rank / rerank / results.show：环内检索工具组。
+#   · rank   = 裸新检索——与 search.rerun 的界限：rerun 是带机械闸的换词重检（不动），
+#     rank 不做择优、只跑标准管线如实回报；结果经规则程序判定为健康时**自动上屏**
+#     （不经 LLM），不健康时只如实回报、不占屏面；
+#   · rerank = 坏 query 先经独立 LLM 改写（机械健全性检查兜底）再重检——「结果不健康」
+#     告警的对策之一；试跑后机械对照新旧结果健康度，仅明显改善才值得上屏；
+#   · results.show = 屏态唯一出口（2026-09-13 rerank 处置批）：把一次试跑结果放上
+#     结果区；所有上屏都经它，其它工具没有上屏权限（auto-show 是它不经 LLM 的机械直调）。
+# 三者只读、环内专属（无前端 runner，见 FRONTEND_UNWIRED_EXEC_VERBS）。
 VERB_SPECS = VERB_SPECS + (
     VerbSpec(
         "rank", "检索数据集", EXEC,
         "用户要**找数据**：检索一下、查一查有没有、搜某某主题/物种/疾病的数据集。"
-        "用户等着看结果时 display=true（结果区还空着的首次检索更要上屏，"
-        "收尾前至少上屏一次）；只是为后续动作探路时不填。",
-        ("query", "display"), False,
+        "结果健康时会自动上屏，无需额外动作；结果不健康时会收到告警，按告警给出的"
+        "对策处理。",
+        ("query",), False,
     ),
     VerbSpec(
         "rerank", "优化检索词重查", EXEC,
-        "当前检索句**质量差**（太口语化、实体写法不规范、中英错位）需要先**优化检索词**"
-        "再重查时；改写不通过机械检查会如实退回原句重查。"
-        "用户等着看结果时 display=true（收尾前至少上屏一次）。",
-        ("query", "reason", "display"), False,
+        "当前检索句**质量差**（太口语化、实体写法不规范、中英错位）或**条件过严零结果**"
+        "时需要重查。执行前系统会给出当前条件的松弛试算报告（仅建议）：照报告放松时把"
+        "报告里的 key 填进 relax 槽（可多选，零改写确定性重检原句）；不填 relax 则由"
+        "独立改写器先**优化检索词**再重查，改写不通过机械检查会如实退回原句重查。"
+        "收到「结果不健康」告警时本工具是对策之一；执行后系统给出新旧结果的健康度对照，"
+        "仅明显改善时才用 results.show 把新结果上屏。",
+        ("query", "reason", "relax"), False,
+    ),
+    VerbSpec(
+        "results.show", "更新结果区", EXEC,
+        "把环内一次检索/重查的试跑结果**放上结果区**给用户看——屏面唯一出口："
+        "所有上屏都经本工具。槽位 handle 指认哪次试跑（latest / latest_rank / "
+        "latest_rerank / 步号）。仅当试跑结果明显好于当前屏面时才调用；"
+        "试跑与当前现场指纹不符会被机械拒绝并如实回报。",
+        ("handle",), False,
+    ),
+    # ask.relax（2026-09-14 YOLO 批）：「问用户放松哪个条件」的环内工具——LLM 判定
+    # 坏结果的病根在**用户条件本身**（互相打架/过严）时调用；系统机械闸只在屏面
+    # degenerate 时放行，确定性预演生成「放松哪个条件→各救回多少条」的选择卡
+    # 弹给用户；用户点选后前端以原查询+所选 suppressed_constraints 重搜（零 LLM，
+    # 复用条件板 cbCommit 通道）。本工具不上屏（屏态唯一出口仍是 results.show）。
+    VerbSpec(
+        "ask.relax", "询问放宽条件", EXEC,
+        "屏面**没有经条件核验的结果**，且病根在**用户条件互相打架或过严**（不是措辞差）时，"
+        "弹一张「放松哪个条件」选择卡问用户：选项与各选项能救回多少条都由系统确定性预演，"
+        "用户点选后自动按所选放松条件重搜。屏面健康、或问题在措辞/实体写法时不选我"
+        "（那是 rerank）。每轮至多 1 次。",
+        ("reason",), False,
     ),
 )
 
@@ -415,18 +455,22 @@ VERB_SPECS = VERB_SPECS + (
 #: 本工具的采纳与否由后端机械闸裁定（同集/条件丢失如实拒绝；2026-08-23 起改空也采纳），
 #: 前端 runner 直接打 /api/recommend 会绕过这道闸，等于让 LLM 的改写跳过裁决直接换屏。
 #: 环内专属动词，前端无任何独立触发路径。
-#: rank / rerank（转正常驻）：同为环内专属检索工具——上屏
-#: 与否由 display 槽与后端批次机制（M3）裁决，前端 runner 会绕过这层口径，同哲学豁免。
+#: rank / rerank（转正常驻）：同为环内专属检索工具——上屏与否由 results.show 唯一出口
+#: 与后端批次机制裁决（2026-09-13 起 display 槽退役），前端 runner 会绕过这层口径，
+#: 同哲学豁免。results.show（同批新增）：屏态唯一出口——句柄解析与指纹复核都依赖
+#: 环内 steps 实录，前端单步 runner 没有这个现场，同哲学永久豁免。
 #: curate.rollback（2026-08-17 rb1）：回滚目标由机械闸从**本轮 steps 实录**里的快照锚
 #: 现定——前端单步 runner 没有这个现场（也没有快照锚可传），同哲学永久豁免。
 #: compare.datasets / compat.find / fair.check：环内专属「结果
 #: 处理」工具——默认对象是「当前结果第 N 条/前两条」，前端单步 runner 没有当前结果集
 #: 这个现场（后端经 ctx 重跑标准管线取数），同哲学永久豁免。cite.export 不上此表：
 #: 它双通道（环内执行 + 保底通道前端 runner 仍可用，仅 .ris 缺口由环内执行补上）。
+#: ask.relax（2026-09-14 YOLO 批）：环内专属「问用户放松哪个条件」——选择卡由
+#: /api/utterance 响应的 ask_relax 键驱动（board.js 渲染），无前端 runner 独立入口。
 FRONTEND_UNWIRED_EXEC_VERBS: tuple[str, ...] = ("search.rerun", "rank", "rerank",
-                                                "curate.rollback",
+                                                "results.show", "curate.rollback",
                                                 "compare.datasets", "compat.find",
-                                                "fair.check")
+                                                "fair.check", "ask.relax")
 
 VERB_BY_NAME: dict[str, VerbSpec] = {s.verb: s for s in VERB_SPECS}
 ACTION_VERBS: tuple[str, ...] = tuple(s.verb for s in VERB_SPECS)
@@ -447,10 +491,16 @@ ROUTE_QUERY_VERBS: tuple[str, ...] = ("search.new", "refine.conditions", "lookup
 #: 并降 none，与未知 verb 同一条「不做，但要说」渠道）——提示不是围栏，闸才是。
 PLAN_ACTION_EXCLUDED_VERBS: tuple[str, ...] = (
     "search.rerun", "rank", "rerank", "route.request", "curate.rollback",
+    # 2026-09-13 rerank 处置批：results.show 是屏态唯一出口，句柄解析与指纹复核依赖
+    # 环内 steps 实录——单次分流没有这个现场，与 search.rerun/rank/rerank 同哲学排除。
+    "results.show",
     # 2026-08-18 四工具批：compare.datasets / compat.find / fair.check 是环内专属结果
     # 处理工具——默认对象依赖环内现场（当前结果集 / steps 实录），单次分流没有这个
     # 现场；cite.export 不进此表（保底通道前端 runner 仍在，双通道各司其职）。
-    "compare.datasets", "compat.find", "fair.check")
+    "compare.datasets", "compat.find", "fair.check",
+    # 2026-09-14 YOLO 批：ask.relax 是环内专属「问用户放松哪个条件」——选择卡依赖
+    # 环内屏面基线与确定性预演现场，单次分流没有这个现场。
+    "ask.relax")
 PLAN_ACTION_VERBS: tuple[str, ...] = tuple(
     s.verb for s in VERB_SPECS if s.verb not in PLAN_ACTION_EXCLUDED_VERBS)
 _PLAN_ACTION_SPECS: tuple[VerbSpec, ...] = tuple(
@@ -600,7 +650,7 @@ _TOOLS_CHANNEL_RULE_BODIES_ZH: tuple[str, ...] = (
     "用户**明确说不做**某个动作时 → 动词照选，并填 cancelled=true；「能不能/要不要…吧」是征询，照常执行。",
     "limit 只在用户**明确说了条数**时填，否则不填；不要把年份、编号、版本号当条数。",
     "只是在**描述要找什么数据** → 那是检索需求：表里有检索工具（rank）就选它"
-    "（用户等着看结果时 display=true），没有就选 none。",
+    "（结果健康会自动上屏），没有就选 none。",
     "规则匹配零命中或整句弃权 **不等于** 这句话无效——工具调用句往往零命中。",
 )
 
@@ -1234,21 +1284,18 @@ def build_plan_from_raw(
         slots["limit"] = limit
         slot_sources["limit"] = source
         deltas.extend(limit_deltas)
-    # 其余声明槽位（source/keywords/species/target 等字符串槽）：原样透传、截断上限。
+    # 其余声明槽位（source/keywords/species/target 等字符串槽）：按**槽语义**过长度闸——
+    # 检索句复用入口查询长度契约（超限整槽弃用、记 delta，绝不静默截断丢尾部条件）；
+    # 编号/文件名类不截断（长 uid 截断即毁形）；其余沿用 80。
     # 归因同 limit 的口径：值逐字出现在原话里才算「用户说的」，否则标 guessed——
     # 槽值不是本工具核对出来的就必须说出来（见 UNCERTAINTY_ZH 的注释）。
     for slot in spec.slots:
         if slot == "limit":
             continue
         raw_value = raw.get(slot)
-        if slot == "display":
-            # display 布尔槽（2026-08-17 rank/rerank）：认 JSON 布尔 true 与字符串
-            # "true"（大小写不敏感——decide 的 JSON 兜底壳实测会给字符串），其余一律
-            # 不进 slots（缺省 = 不上屏）。上屏与否是模型的判断、不是原话槽值 → guessed。
-            if raw_value is True or str(raw_value or "").strip().lower() == "true":
-                slots[slot] = True
-                slot_sources[slot] = "guessed"
-            continue
+        # display 布尔槽已退役（2026-09-13 rerank 处置批）：上屏唯一出口是 results.show
+        # 动词（rank 健康结果由后端不经 LLM 机械直调），rank/rerank 不再声明该槽；
+        # 此处曾有的「认 JSON 布尔 true / 字符串 "true"」净化分支随之摘除。
         if slot == "uids":
             # uids 数组槽（2026-08-20 批）：cite.export 的编号清单——保留
             # **列表形状**（逐个清洗/去空/去重，上限 20），不许走下方「列表拍平成字符串」
@@ -1267,13 +1314,46 @@ def build_plan_from_raw(
                 slot_sources["uids"] = (
                     "said" if all(x in utterance for x in uid_items) else "guessed")
             continue
+        if slot == "relax":
+            # 数组槽（2026-09-13 夜批 rerank 双通道）：定向放松 key 清单——保留列表形状
+            # （逐项清洗/去重），不许走下方「列表拍平成字符串」的旧逻辑——拍平后
+            # `"dim:disease raw"` 会被当成一个 key 校验，合法多选确定性放松直接 bad_param，
+            # 还白耗本轮唯一 rerank 预算。key 合法性裁决归 `_relax_to_suppressed`。
+            relax_items: list[str] = []
+            for item in (raw_value if isinstance(raw_value, (list, tuple)) else [raw_value]):
+                s = str(item or "").strip()
+                if s and s not in relax_items:
+                    relax_items.append(s)
+            if relax_items:
+                slots["relax"] = relax_items
+                slot_sources["relax"] = (
+                    "said" if all(x in utterance for x in relax_items) else "guessed")
+            continue
         if isinstance(raw_value, (list, tuple)):
             # 模型偶发把字符串槽给成列表（2026-08-06 A/B 实测：v4-pro 约 2% 把 keywords
             # 给成 ["..."]）——拍平成空格连接的字符串再走统一口径；直接 str() 会把
             # Python 列表语法（引号、方括号）灌进 keywords，污染联网搜索词。
             raw_value = " ".join(
                 str(item).strip() for item in raw_value if str(item).strip())
-        value = str(raw_value or "").strip()[:80]
+        raw_text = str(raw_value or "").strip()
+        if slot in _SLOT_VALUE_NO_TRUNC:
+            value = raw_text
+        else:
+            cap = _SLOT_VALUE_MAX_CHARS.get(slot, 80)
+            if len(raw_text) > cap:
+                if slot == "query":
+                    # 检索句超过入口上限（模型给出的句比用户原话还长）：不静默截断——
+                    # 静默砍尾部会丢硬条件且不记录；整槽弃用并如实记 delta，
+                    # 执行层的缺 query 报错是明确拒绝。
+                    deltas.append({
+                        "slot": "query", "said": f"{len(raw_text)} 字", "used": "未采用",
+                        "why_zh": (f"检索句超过入口上限 {MAX_UTTERANCE_CHARS} 字，"
+                                   "这一步没有采用它。"),
+                    })
+                    slot_sources[slot] = "dropped"
+                    continue
+                raw_text = raw_text[:cap]
+            value = raw_text
         if value:
             slots[slot] = value
             slot_sources[slot] = "said" if value in utterance else "guessed"
@@ -1374,6 +1454,7 @@ def plan_action(
     current_query: str = "",
     current_filters: Any = None,
     allowed_verbs: Any = None,
+    conversation_history: list[dict] | None = None,
 ) -> dict[str, Any]:
     """一句话 → 一份**只描述该做什么**的 plan。永不执行、永不抛（除入参非法）。
 
@@ -1424,6 +1505,9 @@ def plan_action(
         retrieval=retrieval, current_query=current_query, current_filters=current_filters,
         verbs=narrow_specs,   # 保底通道不出环内专属动词（提示层）；suggested_recipe 再收窄
     )
+    if conversation_history is not None:
+        from ..app.conversation_contracts import history_block
+        prompt += history_block(conversation_history)
     # 瞬时失败重试一次再认栽（见 _RETRY_BACKOFF_SECONDS）。注入的 caller 是测试替身：
     # 只调一次，调用次数留给测试断言。
     raw: dict[str, Any] = {}

@@ -13,6 +13,15 @@ coachmark、任务卡说明、wd 面板、pex 导出区）全部静默失效。�
 剥掉注释与字符串后，对 `web/static/css/*.css` 逐文件做 `{}`/`()`/`[]` 配平扫描，
 报出第一个失衡点的行列号。它不验证语义（选择器是否写错、属性是否存在不归它管），
 只钉死「解析器不会因为括号未闭合而静默丢弃尾部规则」这一底线。
+
+2026-10-11 追加注释配平门（test_css_comments_wellformed）。事故背景：CSS 注释不嵌套，
+注释内第一个 `*/` 即关门；app.css 三处注释里列举了 `.intro-*/.compat-*`、
+`.g-*/.graph-*`、`.point*/.thread*` 这类「星号紧跟斜杠」的写法，注释被提前关门，
+其后的散文被解析器当作非法选择器，**连带吞掉紧随的下一条规则**——被吞的包括
+`body.dataset-page-body{background}`、`.rp-graph-col .refs` 与复盘 pane 的
+`.rp-pane:not([hidden]){display:flex;flex-direction:column}`（后者令复盘页签上下二分
+布局整体失效，输入框无法贴底）。括号配平门抓不到它（被吞规则自身括号是平衡的），
+故增设本门：注释外出现 `*/`（孤儿关门）或文件尾仍在注释内（未闭合）即失败。
 """
 from pathlib import Path
 
@@ -68,9 +77,82 @@ def _first_imbalance(text: str):
     return None
 
 
+def _comment_imbalance(text: str):
+    """扫描注释配平；返回 (行, 列, 说明)，配平返回 None。行列均 1 起。
+
+    CSS 注释不嵌套：注释内第一个 */ 即关门。注释内再写 */（如列举 .foo-*/.bar-*）
+    会提前关门，断点到下一个 */ 之间的内容被解析器当作选择器/规则吞掉。
+    字符串内的 /* 与 */ 不算注释边界（如 content:"/*"）。
+    """
+    in_comment = False
+    start = None
+    line, col = 1, 0
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        col += 1
+        if ch == "\n":
+            line, col = line + 1, 0
+            i += 1
+            continue
+        two = text[i:i + 2]
+        if in_comment:
+            if two == "*/":
+                in_comment = False
+                start = None
+                i += 2
+                col += 1
+            else:
+                i += 1
+            continue
+        if two == "/*":
+            in_comment = True
+            start = (line, col)
+            i += 2
+            col += 1
+            continue
+        if two == "*/":
+            return (line, col, "注释外出现 */（孤儿关门）：上方注释内的 */ 已提前关门，断点到下一 */ 之间的规则会被吞掉")
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            while i < n:
+                c = text[i]
+                col += 1
+                if c == "\n":
+                    line, col = line + 1, 0
+                if c == "\\":
+                    i += 1
+                    if i < n:
+                        if text[i] == "\n":
+                            line, col = line + 1, 0
+                        else:
+                            col += 1
+                    i += 1
+                    continue
+                i += 1
+                if c == quote:
+                    break
+            continue
+        i += 1
+    if in_comment:
+        return (start[0], start[1], "注释 /* 直到文件尾未闭合（其后内容被整体吞掉）")
+    return None
+
+
 def test_css_files_exist():
     assert CSS_DIR.is_dir(), f"缺目录：{CSS_DIR}"
     assert list(CSS_DIR.glob("*.css")), "web/static/css/ 下没有任何 .css"
+
+
+def test_css_comments_wellformed():
+    failures = []
+    for path in sorted(CSS_DIR.glob("*.css")):
+        hit = _comment_imbalance(path.read_text(encoding="utf-8"))
+        if hit:
+            line, col, msg = hit
+            failures.append(f"{path.name}:{line}:{col} {msg}")
+    assert not failures, "CSS 注释不配平（解析器会吞掉断点附近的规则）：\n" + "\n".join(failures)
 
 
 def test_css_brackets_balanced():

@@ -132,6 +132,21 @@ def _relevance_overrides(record: dict[str, Any], rating: dict[str, Any]) -> dict
     return out
 
 
+def _rating_rev_of(row: dict[str, Any]) -> int:
+    value = row.get("rating_rev")
+    return value if isinstance(value, int) and not isinstance(value, bool) else -1
+
+
+def _prefer_row(candidate: dict[str, Any], incumbent: dict[str, Any]) -> bool:
+    """Same (query, topk) dedupe: higher label revision first, then labelled over unlabelled,
+    and only then the canonical-lowest source representation (the historical tiebreak)."""
+    cand_rank = (_rating_rev_of(candidate), 1 if _is_human_labeled(candidate.get("rating")) else 0)
+    keep_rank = (_rating_rev_of(incumbent), 1 if _is_human_labeled(incumbent.get("rating")) else 0)
+    if cand_rank != keep_rank:
+        return cand_rank > keep_rank
+    return (candidate["_source_sort"], candidate["example_id"]) < (incumbent["_source_sort"], incumbent["example_id"])
+
+
 def _time_bucket(timestamp: datetime, days: int) -> str:
     ordinal = timestamp.date().toordinal()
     start = ordinal - (ordinal % days)
@@ -206,6 +221,9 @@ def _prepare_records(records: list[dict[str, Any]], *, purpose: str, bucket_days
             "system_topk_uids": topk,
             "graded_relevance": graded,
             "rating": rating,
+            # 标签修订号（导出侧 rating_rev；无 rev 的历史行为 None）：同 (query, topk)
+            # 多行并存时按它取最高 rev，改口不被已有 qid 静默跳过。
+            "rating_rev": record.get("rating_rev"),
             "policy": record.get("policy"),
             "experiment_arm": record.get("experiment_arm"),
             "propensity": record.get("propensity"),
@@ -216,11 +234,12 @@ def _prepare_records(records: list[dict[str, Any]], *, purpose: str, bucket_days
             "_source_sort": _sha256_bytes(_canonical_json(record).encode("utf-8")),
         })
 
-    # Dedupe is independent of input order: retain the canonical-lowest full source representation.
+    # Dedupe is independent of input order: the highest label revision wins, then a row with a
+    # human label over an unlabelled one, and only then the canonical-lowest source representation.
     deduped: dict[str, dict[str, Any]] = {}
     for row in prepared:
         previous = deduped.get(row["_dedupe_key"])
-        if previous is None or (row["_source_sort"], row["example_id"]) < (previous["_source_sort"], previous["example_id"]):
+        if previous is None or _prefer_row(row, previous):
             if previous is not None:
                 exclusions["duplicate_query_topk"] += 1
             deduped[row["_dedupe_key"]] = row
