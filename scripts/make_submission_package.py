@@ -89,18 +89,37 @@ START_HERE = """BioData Agent · 提交包
 """
 
 
+class SubmissionError(ValueError):
+    """输出目录不安全或交付输入不完整。"""
+
+
 def build(out_root: Path, manual_pdf: Path | None) -> int:
     files = MD.collect_delivery_files(REPO_ROOT)
-    violations = MD.scan_forbidden(files, REPO_ROOT)
-    secrets = MD.scan_secret_values(files, REPO_ROOT)
-    if violations or secrets:
-        print(f"[提交包] 拒绝生成：交付复核未通过（{len(violations)} 内部专名 / {len(secrets)} secret）。"
-              "先跑 scripts/make_delivery.py --check 定位。", file=sys.stderr)
+    # collect 已逐源过闸；此处对（可能被调用方直接构造/打桩的）files 复核同一条
+    # containment 闸——**在创建任何输出、read/copy 任何字节之前**。
+    for src in files:
+        MD.assert_delivery_source(src, REPO_ROOT)
+    out_root = out_root.resolve()
+    repo = REPO_ROOT.resolve()
+    if (out_root == repo or repo.is_relative_to(out_root)
+            or out_root.is_relative_to(repo / "database")
+            or any(src.resolve().is_relative_to(out_root) for src in files)):
+        raise SubmissionError("输出目录与仓库、数据库或交付源重叠，请选择专用输出子目录。")
+    if out_root.exists() and (not out_root.is_dir() or any(out_root.iterdir())):
+        raise SubmissionError("输出目录已存在且非空，拒绝覆盖；请选择新的专用目录。")
+    if manual_pdf is not None and not manual_pdf.is_file():
+        raise SubmissionError(f"说明书 PDF 不存在：{manual_pdf}")
+    # 与 make_delivery 同一份交付门禁（唯一实现）：不止专名/secret——不可解码文本
+    # （UTF-16 等扫描器零命中也要 fail-closed）、元数据邮箱、冒号残骸、未跟踪件一并拦。
+    gate = MD.run_delivery_gate(files, REPO_ROOT)
+    if any(gate.values()):
+        print(f"[提交包] 拒绝生成：交付复核未通过（专名 {len(gate['violations'])} / secret "
+              f"{len(gate['secret_hits'])} / 邮箱 {len(gate['contact_hits'])} / 冒号残骸 "
+              f"{len(gate['colon_hits'])} / 不可解码文本 {len(gate['unscannable'])} / 未跟踪件 "
+              f"{len(gate['untracked'])}）。先跑 scripts/make_delivery.py --check 定位。", file=sys.stderr)
         return 1
 
     inner = out_root / INNER_DIR_NAME
-    if out_root.exists():
-        shutil.rmtree(out_root)
     inner.mkdir(parents=True)
 
     for src in files:
@@ -111,13 +130,19 @@ def build(out_root: Path, manual_pdf: Path | None) -> int:
         shutil.copy2(src, dst)
 
     (out_root / START_HERE_NAME).write_text(START_HERE, encoding="utf-8")
-    shutil.copy2(REPO_ROOT / "launchers" / LAUNCHER_NAME, out_root / LAUNCHER_NAME)
-    shutil.copy2(REPO_ROOT / "launchers" / SHORTCUT_NAME, out_root / SHORTCUT_NAME)
+    # 额外 launchers 与交付集同一条 containment 闸（copy 前逐源核验）。
+    launcher_bat = REPO_ROOT / "launchers" / LAUNCHER_NAME
+    shortcut_bat = REPO_ROOT / "launchers" / SHORTCUT_NAME
+    MD.assert_delivery_source(launcher_bat, REPO_ROOT)
+    MD.assert_delivery_source(shortcut_bat, REPO_ROOT)
+    shutil.copy2(launcher_bat, out_root / LAUNCHER_NAME)
+    shutil.copy2(shortcut_bat, out_root / SHORTCUT_NAME)
 
     if manual_pdf is not None:
         if not manual_pdf.is_file():
             print(f"[提交包] 说明书 PDF 不存在：{manual_pdf}", file=sys.stderr)
             return 1
+        # manual_pdf 是用户显式给出的**外部**路径，不声称来自仓库——不适用仓库 containment 闸。
         shutil.copy2(manual_pdf, out_root / manual_pdf.name)
 
     total_bytes = sum(f.stat().st_size for f in out_root.rglob("*") if f.is_file())
@@ -131,12 +156,12 @@ def build(out_root: Path, manual_pdf: Path | None) -> int:
 
 def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(description="生成对外提交包文件夹")
-    ap.add_argument("--out", required=True, help="提交包目标文件夹（存在则先删除重建）")
+    ap.add_argument("--out", required=True, help="新的或空的专用提交包目录（拒绝覆盖已有内容）")
     ap.add_argument("--manual", help="使用说明书 PDF 路径；不给则不附")
     args = ap.parse_args(argv)
     try:
         return build(Path(args.out), Path(args.manual) if args.manual else None)
-    except MD.GitUnavailable as exc:
+    except (MD.GitUnavailable, MD.DeliveryLinkError, SubmissionError) as exc:
         print(f"[提交包] 无法核验交付集：{exc}", file=sys.stderr)
         return 1
 

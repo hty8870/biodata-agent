@@ -12,10 +12,11 @@
 
    本文件是 ES Module：core/cards/fav_folders 经 import 取（同页三模块全 type=module，
    不再依赖共享全局）。本页无经典消费方、无跨页调用 → 不挂绞杀桥。 */
-import { HEART, $, escapeHtml, fastqInfo, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, revealCards } from "#core";
+import { HEART, $, escapeHtml, fastqInfo, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, revealCards, loadDomainManifest, brandName } from "#core";
 import { buildCard, closeFilesModal, introKeyOf, loadCiteInto, loadCompatInto, loadFairInto, loadFilesInto, loadIntroductionInto, loadLlmIntro, reachBadgeHtml } from "#cards";
 import { openFavPopover } from "#fav_folders";
 import { initDownloads } from "#downloads";
+import { initAccounts, setAccountChangedHook } from "#accounts";
 
 const DS_VIEW_KEY = "biodata_dataset_view_v1";          // 主页写入的完整记录（打开介绍前）
 const DS_COMPARE_POOL_KEY = "biodata_compare_pool_v1";  // 主页每次检索写入的对比池（存完整归一化记录）
@@ -119,10 +120,17 @@ function dsLoadPanel(key) {
 }
 
 /* ---------- 页头（标题 / 徽章 / 来源·日期 / 主操作 / 收藏心形）---------- */
+/* 品牌名随活动领域包（biodata 默认「BioData Agent」，与历史逐位一致）；首渲染未解析到就用默认，
+   清单到达后按当前条目名回写一次标题，保证换域部署下标题也对。 */
+let _brandName = "BioData Agent";
+loadDomainManifest().then((m) => {
+    _brandName = brandName(m);
+    if (DS_ITEM && DS_ITEM.dataset_name) document.title = DS_ITEM.dataset_name + " · " + _brandName;
+});
 function dsRenderHeader() {
     const it = DS_ITEM;
     const name = it.dataset_name || "数据集介绍";
-    document.title = name + " · BioData Agent";
+    document.title = name + " · " + _brandName;
     $("dsTitle").textContent = name;
 
     const fq = fastqInfo(it.raw_data_status);
@@ -144,9 +152,9 @@ function dsRenderHeader() {
     // 主操作：与检索卡同口径——有独立数据集页则「打开数据集页」为主按钮、下载为软按钮；否则下载升主按钮。
     const dl = it.download_url || it.url;
     const hasPage = isHttp(it.url) && it.url !== dl;
-    const pageBtn = hasPage ? `<a class="cta cta-primary" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开数据集页 ↗</a>` : "";
+    const pageBtn = hasPage ? `<a class="cta cta-primary" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开数据集页</a>` : "";
     const dlBtn = isHttp(dl)
-        ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据 ↓</a>`
+        ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据</a>`
         : `<span class="cta cta-disabled" aria-disabled="true">暂无下载</span>`;
     $("dsActions").innerHTML = pageBtn + dlBtn;
 
@@ -268,8 +276,8 @@ function dsOpenSplit(a, b) {
     wrap.setAttribute("role", "dialog");
     wrap.setAttribute("aria-label", "数据集并排对比");
     wrap.innerHTML = `<div class="ds-split-top">`
-        + `<a class="ds-split-home" href="/" title="返回 BioData Agent 检索主页">`
-        + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>BioData Agent</a>`
+        + `<a class="ds-split-home" href="/" title="返回 ${escapeHtml(_brandName)} 检索主页">`
+        + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>${escapeHtml(_brandName)}</a>`
         + `<span class="ds-split-title">数据集并排对比</span>`
         + `<button class="ds-split-exit" id="dsSplitExit" type="button" title="退出对比" aria-label="退出对比，回到当前数据集">✕ 退出对比</button></div>`
         + `<div class="ds-split-panes">${paneHtml("当前数据集", a)}${paneHtml("对比数据集", b)}</div>`;
@@ -300,11 +308,16 @@ function dsOpenSplit(a, b) {
 }
 
 /* ---------- 初始化 ---------- */
-function dsInit() {
+async function dsInit() {
+    await initAccounts({ identityOnly: true });
     if (DS_EMBED) document.body.classList.add("ds-embedded");   // 分屏 iframe：隐藏自己的返回主页 topbar
     initDownloads();   // dl-browser-queue：页头/介绍行/文件弹窗的 data-dlq 直链统一进下载队列
     DS_ITEM = dsResolveItem(dsParams());
     dsRenderHeader();
+    setAccountChangedHook(() => {
+        const fav = $("dsFav");
+        if (fav && DS_ITEM) fav.classList.toggle("active", isFav(DS_ITEM));
+    });
     dsRenderTabs(DS_ITEM);
     _dsLoaded.intro = true;
     dsRenderIntro();

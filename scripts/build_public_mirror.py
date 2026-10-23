@@ -10,14 +10,39 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import build_release as release  # noqa: E402
 POLICY_PATH = ROOT / "packaging" / "public-mirror" / "policy.json"
 FILES_PATH = ROOT / "packaging" / "public-mirror" / "files.txt"
+
+# 多 profile（2026-09-23 骨肉分离批）：`assembled`（默认，= 现行装配体公开仓，逐位不变）、`skeleton`（骨架公开仓）、`biodata-pack`
+# （领域包公开仓）。profile X 读取 policy.<X>.json + files.<X>.txt；assembled 沿用原文件名，行为逐位不变。
+# profile 一律显式传参，进程内不留隐式状态（缺省恒为 assembled）。
+_PROFILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _resolve_profile(profile: str | None) -> str:
+    chosen = profile or "assembled"
+    if not _PROFILE_RE.fullmatch(chosen):
+        raise MirrorBuildError(f"invalid mirror profile name: {chosen!r}")
+    return chosen
+
+
+def _policy_path(profile: str) -> Path:
+    if profile == "assembled":
+        return POLICY_PATH
+    return POLICY_PATH.with_name(f"policy.{profile}.json")
+
+
+def _files_path(profile: str) -> Path:
+    if profile == "assembled":
+        return FILES_PATH
+    return FILES_PATH.with_name(f"files.{profile}.txt")
 MANIFEST_PATH = "public-mirror.json"
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -46,6 +71,7 @@ def _git(root: Path, *args: str, timeout: int = 60) -> str:
         ["git", "-c", f"safe.directory={root}", "-C", str(root), *args],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=timeout,
     )
     if result.returncode:
@@ -69,17 +95,31 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _relative(value: str) -> str:
-    if not isinstance(value, str) or not value or "\\" in value or value.startswith("/"):
+    if not isinstance(value, str):
         raise MirrorBuildError(f"invalid mirror path: {value!r}")
-    path = PurePosixPath(value)
-    if any(part in ("", ".", "..") for part in path.parts):
-        raise MirrorBuildError(f"non-canonical mirror path: {value!r}")
-    return path.as_posix()
-
-
-def load_policy(root: Path = ROOT) -> dict[str, Any]:
     try:
-        policy = json.loads((root / POLICY_PATH.relative_to(ROOT)).read_text(encoding="utf-8"))
+        return release._validate_relative(value).as_posix()
+    except release.ReleaseError as exc:
+        raise MirrorBuildError(str(exc)) from exc
+
+
+def _contained_path(root: Path, relative: str) -> Path:
+    """所有镜像读写共用路径闸；不能经父目录链接跳到工作树之外。"""
+    base = root.resolve()
+    path = base.joinpath(*PurePosixPath(_relative(relative)).parts)
+    for parent in path.parents:
+        if parent == base:
+            break
+        if parent.is_symlink() or getattr(parent, "is_junction", lambda: False)():
+            raise MirrorBuildError(f"linked mirror parent: {relative}")
+    if not path.resolve().is_relative_to(base):
+        raise MirrorBuildError(f"mirror path escapes root: {relative}")
+    return path
+
+
+def load_policy(root: Path = ROOT, profile: str | None = None) -> dict[str, Any]:
+    try:
+        policy = json.loads(_contained_path(root, _policy_path(_resolve_profile(profile)).relative_to(ROOT).as_posix()).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise MirrorBuildError("cannot read public mirror policy") from exc
     if policy.get("schema_version") != 1 or policy.get("transform_version") != "3":
@@ -101,8 +141,8 @@ def load_policy(root: Path = ROOT) -> dict[str, Any]:
     return policy
 
 
-def load_output_paths(root: Path = ROOT) -> list[str]:
-    path = root / FILES_PATH.relative_to(ROOT)
+def load_output_paths(root: Path = ROOT, profile: str | None = None) -> list[str]:
+    path = _contained_path(root, _files_path(_resolve_profile(profile)).relative_to(ROOT).as_posix())
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
@@ -139,16 +179,25 @@ def _delivery_ignored(root: Path) -> set[str]:
     return {chunk.decode("utf-8") for chunk in result.stdout.split(b"\0") if chunk}
 
 
-def _validate_classification(root: Path, paths: list[str], mappings: dict[str, str]) -> None:
+def _validate_classification(root: Path, paths: list[str], mappings: dict[str, str], *, profile: str = "assembled") -> None:
     """Require every tracked path to be public source or explicitly private.
 
     This closes the main quality gap of a plain allowlist: a newly added source
     file can no longer disappear from the public repository merely because the
     release operator forgot to edit ``files.txt``.
+
+    多 profile 语义：非装配体 profile 的「私有分类」额外并上**装配体清单**——
+    一个 tracked 文件只要声明在任一公开 profile（本 profile 或装配体/其他 profile 经装配体并集）
+    或 `.deliveryignore`，即视为已分类；这保证「加文件只进装配体清单」不会让
+    skeleton/biodata-pack 的分类门误红，并集覆盖由 `tests/test_public_mirror_profiles.py` 钉死。
     """
     tracked = _tracked(root)
     public_sources = {mappings.get(destination, destination) for destination in paths}
     private_sources = _delivery_ignored(root)
+    if profile != "assembled":
+        assembled_policy = load_policy(root, "assembled")
+        assembled_paths = load_output_paths(root, "assembled")
+        private_sources |= {assembled_policy["mappings"].get(d, d) for d in assembled_paths}
     unclassified = sorted(tracked - public_sources - private_sources)
     if unclassified:
         raise MirrorBuildError(
@@ -194,7 +243,13 @@ def _global_ips(text: str) -> list[str]:
 
 
 def _portable_key(relative: str) -> str:
-    return unicodedata.normalize("NFC", relative).casefold()
+    return release._portable_path_key(relative)
+
+
+def _regular_file(path: Path) -> bool:
+    """生成与比较共用的叶子文件类型守卫；不跟随链接认定普通文件。"""
+    return (not path.is_symlink() and not getattr(path, "is_junction", lambda: False)()
+            and path.is_file())
 
 
 def _scan_source(relative: str, path: Path, policy: dict[str, Any]) -> None:
@@ -247,24 +302,26 @@ def render_tree(
     *,
     source_commit: str,
     source_dirty: bool,
+    profile: str | None = None,
 ) -> tuple[dict[str, bytes], dict[str, Any]]:
-    policy = load_policy(private_root)
-    paths = load_output_paths(private_root)
+    profile = _resolve_profile(profile)
+    policy = load_policy(private_root, profile)
+    paths = load_output_paths(private_root, profile)
     tracked = _tracked(private_root)
     mappings: dict[str, str] = policy["mappings"]
-    _validate_classification(private_root, paths, mappings)
-    forbidden_prefixes = tuple(policy.get("forbidden_output_prefixes") or [])
+    _validate_classification(private_root, paths, mappings, profile=profile)
+    forbidden_prefixes = tuple(_portable_key(p) for p in policy.get("forbidden_output_prefixes") or [])
     outputs: dict[str, bytes] = {}
     portable: dict[str, str] = {}
 
     for destination in paths:
-        if destination.startswith(forbidden_prefixes):
+        if _portable_key(destination).startswith(forbidden_prefixes):
             raise MirrorBuildError(f"private-only path is present in public allowlist: {destination}")
         source = mappings.get(destination, destination)
         if source not in tracked:
             raise MirrorBuildError(f"mirror source is not tracked: {source} -> {destination}")
-        path = private_root / source
-        if not path.is_file() or path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        path = _contained_path(private_root, source)
+        if not _regular_file(path):
             raise MirrorBuildError(f"mirror source is not a regular file: {source}")
         key = _portable_key(destination)
         if key in portable:
@@ -280,9 +337,9 @@ def render_tree(
         raise MirrorBuildError("mapped destinations missing from allowlist: " + ", ".join(unmapped_destinations))
 
     policy_payload = (
-        (private_root / POLICY_PATH.relative_to(ROOT)).read_bytes()
+        (private_root / _policy_path(profile).relative_to(ROOT)).read_bytes()
         + b"\0"
-        + (private_root / FILES_PATH.relative_to(ROOT)).read_bytes()
+        + (private_root / _files_path(profile).relative_to(ROOT)).read_bytes()
     )
     runtime_version = _runtime_version(private_root)
     manifest = {
@@ -321,13 +378,53 @@ def _source_state(root: Path, *, allow_dirty: bool) -> tuple[str, bool]:
 
 def _write_tree(root: Path, files: dict[str, bytes]) -> None:
     for relative, payload in files.items():
-        destination = root.joinpath(*PurePosixPath(relative).parts)
+        destination = _contained_path(root, relative)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(payload)
 
 
 def _public_files(root: Path) -> set[str]:
     return _tracked(root)
+
+
+def _compare_index(root: Path, expected: dict[str, bytes]) -> list[str]:
+    """核验将提交的树：Git stage-0 普通文件及真实 blob 字节，不以工作树代替。"""
+    result = subprocess.run(
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), "ls-files", "--stage", "-z"],
+        capture_output=True, timeout=60,
+    )
+    if result.returncode:
+        raise MirrorBuildError("cannot read public index")
+    entries: dict[str, str] = {}
+    errors: list[str] = []
+    for entry in result.stdout.split(b"\0"):
+        if not entry:
+            continue
+        metadata, name = entry.split(b"\t", 1)
+        mode, oid, stage = metadata.decode("ascii").split()
+        relative = name.decode("utf-8")
+        if stage != "0" or mode not in {"100644", "100755"}:
+            errors.append(f"index-mode:{relative}")
+        entries[relative] = oid
+    if set(entries) != set(expected):
+        errors.append("index-paths:public tree must be fully staged")
+    if errors:
+        return errors
+    # 前一步已逐字节核对工作树等于 expected。由 Git 的同一 clean 规则计算其 blob ID，
+    # 保留 .gitattributes 的 CRLF/LF 语义；不能把合法 checkout 转换当作内容漂移。
+    # 不传 -w，不写对象库；批量输入避免逐文件启动 Git。
+    paths = sorted(expected)
+    hashed = subprocess.run(
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), "hash-object", "--stdin-paths"],
+        input=("\n".join(paths) + "\n").encode("utf-8"), capture_output=True, timeout=60,
+    )
+    hashes = hashed.stdout.decode("ascii").splitlines()
+    if hashed.returncode or len(hashes) != len(paths):
+        raise MirrorBuildError("cannot calculate expected public blob identities")
+    for relative, oid in zip(paths, hashes):
+        if entries[relative] != oid:
+            errors.append(f"index-content:{relative}")
+    return errors
 
 
 def compare_public(public_root: Path, expected: dict[str, bytes]) -> list[str]:
@@ -339,28 +436,70 @@ def compare_public(public_root: Path, expected: dict[str, bytes]) -> list[str]:
     for relative in sorted(actual_paths - expected_paths):
         errors.append(f"extra:{relative}")
     for relative in sorted(expected_paths & actual_paths):
-        path = public_root.joinpath(*PurePosixPath(relative).parts)
         try:
+            path = _contained_path(public_root, relative)
+            if not _regular_file(path):
+                errors.append(f"non-regular:{relative}")
+                continue
             payload = path.read_bytes()
         except OSError:
             errors.append(f"unreadable:{relative}")
             continue
+        except MirrorBuildError:
+            errors.append(f"unsafe:{relative}")
+            continue
         if payload != expected[relative]:
             errors.append(f"content:{relative}")
-    return errors
+    # 工作树类型守卫先执行；通过后同一 expected 再比 index，保证提交与所见一致。
+    return errors or _compare_index(public_root, expected)
 
 
-def apply_public(public_root: Path, expected: dict[str, bytes]) -> None:
+def _validate_public_target(private_root: Path, public_root: Path, profile: str) -> None:
+    """写前只核对 checkout 身份与隔离，不改变公开树生成规则。"""
+    private_root, public_root = private_root.resolve(), public_root.resolve()
+    if (private_root.is_relative_to(public_root)
+            or public_root.is_relative_to(private_root)):
+        raise MirrorBuildError("private and public worktrees must be separate")
+    for root in (private_root, public_root):
+        if Path(_git(root, "rev-parse", "--show-toplevel")).resolve() != root:
+            raise MirrorBuildError("mirror root must be a checkout top-level")
+    policy = load_policy(private_root, profile)
+    wanted = policy["public_repository"].casefold()
+    # 新 checkout 用 origin 验明身份；无 remote 的既有镜像用生成标记验明身份。
+    if "origin" in _git(public_root, "remote").splitlines():
+        remote = _git(public_root, "remote", "get-url", "origin")
+        match = re.fullmatch(
+            r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+            r"([\w.-]+/[\w.-]+?)(?:\.git)?/?", remote, re.IGNORECASE)
+        if not match or match.group(1).casefold() != wanted:
+            raise MirrorBuildError("public origin does not match the selected profile")
+    else:
+        try:
+            marker = json.loads((public_root / MANIFEST_PATH).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise MirrorBuildError("public target needs a matching origin or mirror manifest") from None
+        if (not isinstance(marker, dict) or marker.get("schema_version") != 2
+                or marker.get("public_repository") != policy["public_repository"]
+                or marker.get("private_repository") != policy["private_repository"]):
+            raise MirrorBuildError("public target manifest identity does not match the selected profile")
+
+
+def apply_public(public_root: Path, expected: dict[str, bytes], *,
+                 private_root: Path = ROOT, profile: str = "assembled") -> None:
+    _validate_public_target(private_root, public_root, profile)
     if _git(public_root, "status", "--porcelain"):
         raise MirrorBuildError("public worktree must be clean before apply")
     tracked = _public_files(public_root)
     expected_paths = set(expected)
+    # 所有目标先验完再删除/替换，避免遇到后面的坏路径时已经部分写入。
+    targets = {relative: _contained_path(public_root, relative)
+               for relative in tracked | expected_paths}
     for relative in sorted(tracked - expected_paths, reverse=True):
-        path = public_root.joinpath(*PurePosixPath(relative).parts)
+        path = targets[relative]
         if path.exists():
             path.unlink()
     for relative in sorted(expected_paths):
-        destination = public_root.joinpath(*PurePosixPath(relative).parts)
+        destination = targets[relative]
         destination.parent.mkdir(parents=True, exist_ok=True)
         payload = expected[relative]
         if destination.is_file() and destination.read_bytes() == payload:
@@ -370,10 +509,11 @@ def apply_public(public_root: Path, expected: dict[str, bytes]) -> None:
         os.replace(temporary, destination)
 
 
-def snapshot_allowlist(private_root: Path, public_root: Path) -> int:
-    policy = load_policy(private_root)
+def snapshot_allowlist(private_root: Path, public_root: Path, profile: str | None = None) -> int:
+    profile = _resolve_profile(profile)
+    policy = load_policy(private_root, profile)
     paths = sorted(_public_files(public_root) - set(policy["generated_paths"]))
-    target = private_root / FILES_PATH.relative_to(ROOT)
+    target = private_root / _files_path(profile).relative_to(ROOT)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(paths) + "\n", encoding="utf-8", newline="\n")
     return len(paths)
@@ -381,6 +521,8 @@ def snapshot_allowlist(private_root: Path, public_root: Path) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="deterministically build the public repository mirror")
+    parser.add_argument("--profile", default="assembled",
+                        help="mirror profile: assembled（默认，装配体）| skeleton | biodata-pack（policy.<X>.json + files.<X>.txt）")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for name in ("check", "apply"):
         sub = subparsers.add_parser(name)
@@ -397,15 +539,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        profile = _resolve_profile(args.profile)
         private_root = args.private_root.resolve()
         public_root = args.public_root.resolve() if hasattr(args, "public_root") else None
         if args.command == "snapshot-allowlist":
-            count = snapshot_allowlist(private_root, public_root)
+            count = snapshot_allowlist(private_root, public_root, profile)
             print(f"public mirror allowlist snapshotted: {count} paths")
             return 0
         allow_dirty = bool(getattr(args, "allow_dirty_private", False))
         commit, dirty = _source_state(private_root, allow_dirty=allow_dirty)
-        expected, manifest = render_tree(private_root, source_commit=commit, source_dirty=dirty)
+        expected, manifest = render_tree(private_root, source_commit=commit, source_dirty=dirty, profile=profile)
         if args.command == "validate":
             print(
                 f"public mirror source valid: files={manifest['file_count']} "
@@ -424,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"tree={manifest['tree_sha256']} source={manifest['source_private_commit']}"
             )
             return 0
-        apply_public(public_root, expected)
+        apply_public(public_root, expected, private_root=private_root, profile=profile)
         print(
             f"public mirror applied: files={manifest['file_count']} "
             f"tree={manifest['tree_sha256']} source={manifest['source_private_commit']}"

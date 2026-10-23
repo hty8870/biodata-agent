@@ -57,16 +57,40 @@ _load = fs_utils.make_sidecar_loader(
     missing={},
 )
 
+#: 台账文件指纹（mtime_ns, size）。骨架的缓存键是**路径**——同一路径被别的进程
+#: （patrol 重建 / seed 播种）重写后，长驻 Web/MCP 进程会永远读旧结论。
+#: 每次读现算指纹，变了就 cache_clear() 让骨架重读；文件缺失 → None（缺失=稳定空值，
+#: 文件后来出现时指纹从 None 变实值，同一条路径也会被重读）。
+_fingerprint: "tuple | None" = None
+
+
+def _ledger_fingerprint(path: str) -> "tuple | None":
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _current() -> dict:
+    """本模块唯一读取口：先做新鲜度校验再走骨架装载（路径/文件指纹一变即失效重读）。"""
+    global _fingerprint
+    fp = _ledger_fingerprint(_data_path())
+    if fp != _fingerprint:
+        _load.cache_clear()
+        _fingerprint = fp
+    return _load()
+
 
 def is_available() -> bool:
     """活台账是否成功加载（供诊断/自检/测试）。"""
-    cur = _load()
+    cur = _current()
     return bool(cur.get("by_uid"))
 
 
 def snapshot_info() -> "dict | None":
     """全局快照元信息：schema / snapshot_id / snapshot_date / source / totals；未就绪返回 None。"""
-    cur = _load()
+    cur = _current()
     if not cur.get("by_uid"):
         return None
     return {
@@ -123,7 +147,7 @@ def status_for(uid: "str | None", url: "str | None") -> "dict | None":
     """查某数据集某文件（按 dataset_uid + 文件直链）的派生状态；无记录返回 None。"""
     if not uid or not url:
         return None
-    rec = _load().get("by_uid", {}).get(uid)
+    rec = _current().get("by_uid", {}).get(uid)
     if not rec:
         return None
     v = (rec.get("f") or {}).get(norm(url))
@@ -141,7 +165,7 @@ def file_status(uid: "str | None") -> "dict[str, dict]":
     """
     if not uid:
         return {}
-    rec = _load().get("by_uid", {}).get(uid)
+    rec = _current().get("by_uid", {}).get(uid)
     if not rec:
         return {}
     return {u: _derive(u, v) for u, v in (rec.get("f") or {}).items()}
@@ -151,7 +175,7 @@ def dataset_summary(uid: "str | None") -> "dict | None":
     """某数据集的 provisioning 摘要：文件数 / 问题数 / 是否全绿 / 最近核验；无记录返回 None。"""
     if not uid:
         return None
-    rec = _load().get("by_uid", {}).get(uid)
+    rec = _current().get("by_uid", {}).get(uid)
     if not rec:
         return None
     nf = rec.get("nf", 0)
@@ -162,6 +186,6 @@ def dataset_summary(uid: "str | None") -> "dict | None":
         "provisioning_ok": npb == 0,
         "problem_rate": round(npb / nf, 4) if nf else None,
         "last_verified": rec.get("lv"),
-        "snapshot_id": _load().get("snapshot_id"),
-        "snapshot_date": _load().get("snapshot_date"),
+        "snapshot_id": _current().get("snapshot_id"),
+        "snapshot_date": _current().get("snapshot_date"),
     }

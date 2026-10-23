@@ -356,7 +356,6 @@ def test_executable_allowlist_matches_real_scripts() -> None:
 # ----------------------------------------------------------------- ⑤ assemble.py 基本契约
 
 
-@pytest.mark.skipif(BASH is None, reason="bash not available")
 def test_assemble_py_produces_exec_preserving_zip(tmp_path: Path) -> None:
     """assemble.py 应从 RC zip + PDF 产出 mac/Linux 交付 zip，且入口/引擎脚本 exec 位保留。"""
     import importlib.util as ilu
@@ -392,3 +391,214 @@ def test_assemble_py_produces_exec_preserving_zip(tmp_path: Path) -> None:
     assert infos["biodata-agent/README.md"] == 0o100644
     assert infos["从这里开始.txt"] == 0o100644
     assert infos["BioData Agent 使用说明书.pdf"] == 0o100644
+
+
+def _assemble_module():
+    spec = importlib.util.spec_from_file_location("delivery_assemble", ROOT / "packaging/delivery-posix/assemble.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("mutation", ["extra", "content", "unsafe"])
+def test_assemble_rejects_invalid_rc_before_touching_output(tmp_path, mutation):
+    asm = _assemble_module()
+    source = tmp_path / "repo"
+    source.mkdir()
+    _minimal_project(source)
+    valid = Path(build_release.build_release(source, tmp_path / "rc")["archive"])
+    invalid = tmp_path / "invalid.zip"
+    with zipfile.ZipFile(valid) as original, zipfile.ZipFile(invalid, "w") as changed:
+        for info in original.infolist():
+            payload = original.read(info.filename)
+            if mutation == "content" and info.filename == "README.md":
+                payload = b"tampered\n"
+            changed.writestr(info, payload)
+        if mutation in {"extra", "unsafe"}:
+            name = "extra.txt" if mutation == "extra" else "../outside.txt"
+            changed.writestr(asm._zip_info(name, 0o100644), b"unexpected\n")
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    out = tmp_path / "out"
+    previous = out / "biodata-agent-2026-10-02"
+    previous.mkdir(parents=True)
+    marker = previous / "keep.txt"
+    marker.write_bytes(b"previous delivery")
+    with pytest.raises(asm.build_release.ReleaseError):
+        asm.build_delivery(invalid, pdf, out, "2026-10-02")
+    assert marker.read_bytes() == b"previous delivery"
+    assert not (out / "biodata-agent-2026-10-02.zip").exists()
+    assert asm.main([str(invalid), str(pdf), "-o", str(out), "--date", "2026-10-02"]) == 1
+    assert marker.read_bytes() == b"previous delivery"
+
+
+@pytest.mark.parametrize("date", ["2026-10-01/../../outside", "../outside", "C:/outside",
+                                 "20261002", "2026-02-30", "2026-1-1", "", "2026-10-02 "])
+def test_delivery_date_rejected_before_io(tmp_path, monkeypatch, date):
+    asm = _assemble_module()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "keep.txt"
+    marker.write_bytes(b"keep")
+    monkeypatch.setattr(asm.shutil, "rmtree", lambda *_: pytest.fail("must not delete"))
+    monkeypatch.setattr(asm.build_release, "verify_release", lambda *_: pytest.fail("must reject before IO"))
+    with pytest.raises(ValueError):
+        asm.build_delivery(tmp_path / "input.zip", tmp_path / "manual.pdf", tmp_path / "out", date)
+    assert marker.read_bytes() == b"keep"
+    assert not (tmp_path / "out").exists()
+
+
+def test_delivery_refuses_unowned_existing_dir(tmp_path):
+    """同日同输出目录重跑：不是本装配器上次的产物（无所有权指纹/含用户文件）→ refuse。
+
+    旧实现无条件 rmtree(delivery_dir) 并覆盖同名 zip——用户目录/输入材料被先删后建。
+    """
+    asm = _assemble_module()
+    source = tmp_path / "repo"
+    source.mkdir()
+    _minimal_project(source)
+    rc = Path(build_release.build_release(source, tmp_path / "rc")["archive"])
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    out = tmp_path / "deliver"
+
+    # 先成功装配一次（写好所有权指纹），再在同目录重跑：允许（是自己上次的产物）
+    first = asm.build_delivery(rc, pdf, out, "2026-10-02")
+    assert first.is_file()
+    assert (out / "biodata-agent-2026-10-02" / asm.OWNER_MARKER).is_file()
+    assert asm.build_delivery(rc, pdf, out, "2026-10-02").is_file()
+
+    # 用户手工目录（无指纹）+ sentinel：必须 refuse，sentinel 原样保留
+    foreign = out / "biodata-agent-2026-10-03"
+    foreign.mkdir()
+    sentinel = foreign / "用户材料.txt"
+    sentinel.write_bytes(b"my notes")
+    with pytest.raises(ValueError, match="refusing to delete"):
+        asm.build_delivery(rc, pdf, out, "2026-10-03")
+    assert sentinel.read_bytes() == b"my notes"
+    assert not (out / "biodata-agent-2026-10-03.zip").exists()
+
+    # 有指纹但树内混入用户内容 → 递归对账 refuse（顶层白名单挡不住嵌套新增）
+    owned = out / "biodata-agent-2026-10-04"
+    assert asm.build_delivery(rc, pdf, out, "2026-10-04").is_file()
+    tree = out / "biodata-agent-2026-10-04"
+    nested = tree / "biodata-agent" / "src" / "用户新增笔记.md"
+    nested.write_bytes("user nested file".encode("utf-8"))
+    with pytest.raises(ValueError, match="产物树与所有权指纹不一致"):
+        asm.build_delivery(rc, pdf, out, "2026-10-04")
+    assert nested.read_bytes() == b"user nested file"      # 用户内容原样保留
+
+    # 改已有产物内文件的字节 → 同样 refuse
+    nested.unlink()
+    target_file = next(p for p in (tree / "biodata-agent").rglob("*") if p.is_file())
+    original = target_file.read_bytes()
+    target_file.write_bytes(original + b"\n# user edit\n")
+    with pytest.raises(ValueError, match="产物树与所有权指纹不一致"):
+        asm.build_delivery(rc, pdf, out, "2026-10-04")
+    assert target_file.read_bytes().endswith(b"# user edit\n")
+    target_file.write_bytes(original)
+
+    # 额外 PDF（放进源码树里，顶层白名单看不见）→ refuse
+    extra_pdf = tree / "biodata-agent" / "额外说明.pdf"
+    extra_pdf.write_bytes(b"%PDF user")
+    with pytest.raises(ValueError, match="产物树与所有权指纹不一致"):
+        asm.build_delivery(rc, pdf, out, "2026-10-04")
+    assert extra_pdf.read_bytes() == b"%PDF user"
+
+    # 恢复成与指纹一致的旧产物 → 允许安全重建
+    extra_pdf.unlink()
+    assert asm.build_delivery(rc, pdf, out, "2026-10-04").is_file()
+
+    # 旧版 schema 1 指纹（只有顶层白名单）不再接受重建 → refuse（默认保守）
+    legacy = out / "biodata-agent-2026-10-05"
+    legacy.mkdir()
+    (legacy / asm.OWNER_MARKER).write_text(
+        '{"schema_version": 1, "generator": "packaging/delivery-posix/assemble.py"}',
+        encoding="utf-8")
+    (legacy / "stray.bin").write_bytes(b"user data")
+    with pytest.raises(ValueError, match="完整所有权指纹"):
+        asm.build_delivery(rc, pdf, out, "2026-10-05")
+    assert (legacy / "stray.bin").read_bytes() == b"user data"
+
+
+def test_delivery_zip_temp_is_exclusive_and_never_truncates_others(tmp_path):
+    """旧的固定 `<archive>.tmp` 名可被预先做成链接/普通文件而截断他人目标；
+    新实现用独占唯一临时档，且替换前核验最终 ZIP 落点。"""
+    asm = _assemble_module()
+    source = tmp_path / "repo"
+    source.mkdir()
+    _minimal_project(source)
+    rc = Path(build_release.build_release(source, tmp_path / "rc")["archive"])
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n")
+    out = tmp_path / "deliver"
+    out.mkdir()
+    outside = tmp_path / "outside-target.bin"
+    outside.write_bytes(b"KEEP ME INTACT")
+    legacy_tmp = out / "biodata-agent-2026-10-06.zip.tmp"
+    try:
+        legacy_tmp.symlink_to(outside)                     # 固定名被做成链接 → 旧实现会截断目标
+    except (OSError, NotImplementedError):
+        pytest.skip("本机/该文件系统不支持创建符号链接")
+    archive = asm.build_delivery(rc, pdf, out, "2026-10-06")
+    assert archive.is_file() and archive.stat().st_size > 0
+    assert outside.read_bytes() == b"KEEP ME INTACT"       # 他人目标零损坏
+    assert not list(out.glob("*.zip.*.tmp"))               # 自己的临时档已清理
+    assert legacy_tmp.is_symlink()                         # 既有同名 tmp 未被覆盖/删除
+
+
+@pytest.mark.parametrize("kind", ["is_symlink", "is_junction"])
+def test_delivery_refuses_linked_output_before_deleting(tmp_path, monkeypatch, kind):
+    asm = _assemble_module()
+    target = tmp_path / "out/biodata-agent-2026-10-02"
+    target.mkdir(parents=True)
+    marker = target / "keep.txt"
+    marker.write_bytes(b"keep")
+    archive, pdf = tmp_path / "input.zip", tmp_path / "manual.pdf"
+    archive.write_bytes(b"fixture")
+    pdf.write_bytes(b"fixture")
+    original = getattr(Path, kind, lambda p: False)
+    monkeypatch.setattr(Path, kind, lambda p: p == target or original(p), raising=False)
+    monkeypatch.setattr(asm.build_release, "verify_release", lambda *_: None)
+    monkeypatch.setattr(asm.shutil, "rmtree", lambda *_: pytest.fail("must not delete"))
+    with pytest.raises(ValueError, match="linked delivery path"):
+        asm.build_delivery(archive, pdf, target.parent, "2026-10-02")
+    assert marker.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("input_kind", ["pdf", "rc_zip"])
+@pytest.mark.parametrize("linked", [False, True])
+def test_delivery_refuses_inputs_inside_owned_tree_before_cleanup(tmp_path, input_kind, linked):
+    asm = _assemble_module()
+    source = tmp_path / "repo"
+    source.mkdir()
+    _minimal_project(source)
+    nested_rc = Path(build_release.build_release(source, tmp_path / "nested-rc")["archive"])
+    (source / "web/static/fixture.zip").write_bytes(nested_rc.read_bytes())
+    rc = Path(build_release.build_release(source, tmp_path / "rc")["archive"])
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"%PDF-1.4\noriginal input\n")
+    out = tmp_path / "deliver"
+    archive = asm.build_delivery(rc, pdf, out, "2026-10-04")
+    tree = out / "biodata-agent-2026-10-04"
+    before = {p.relative_to(tree).as_posix(): p.read_bytes()
+              for p in tree.rglob("*") if p.is_file()}
+    archive_before = archive.read_bytes()
+    internal = tree / (pdf.name if input_kind == "pdf" else "biodata-agent/web/static/fixture.zip")
+    if linked:
+        alias = tmp_path / "tree-alias"
+        try:
+            alias.symlink_to(tree, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            result = subprocess.run(["cmd", "/c", "mklink", "/J", str(alias), str(tree)],
+                                    capture_output=True, text=True) if os.name == "nt" else None
+            if result is None or result.returncode:
+                pytest.skip("directory links unavailable")
+        internal = alias / internal.relative_to(tree)
+    inputs = (rc, internal) if input_kind == "pdf" else (internal, pdf)
+    with pytest.raises(ValueError, match="input.*delivery"):
+        asm.build_delivery(*inputs, out, "2026-10-04")
+    assert {p.relative_to(tree).as_posix(): p.read_bytes()
+            for p in tree.rglob("*") if p.is_file()} == before
+    assert archive.read_bytes() == archive_before
+    assert asm.build_delivery(rc, pdf, out, "2026-10-04").read_bytes() == archive_before

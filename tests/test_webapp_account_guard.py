@@ -269,14 +269,37 @@ def test_quota_trial_bucket_independent(client, monkeypatch, session_cookie):
     _gate(req)   # 正式通道照过
 
 
+@pytest.mark.parametrize("materialized", [False, True])
+def test_trial_arbitrary_request_key_still_counts_and_limits(client, monkeypatch, session_cookie, materialized):
+    monkeypatch.setenv("BIODATA_TRIAL_DAILY_PER_USER", "1")
+    cfg = _server_cfg(provider="trial", key=TRIAL_KEY)
+    monkeypatch.setattr(webapp, "_materialize_request_llm_config", lambda *a, **kw: cfg)
+    req = _raw_request(session_cookie)
+    kwargs = dict(provider="trial", cfg=cfg if materialized else None, api_key="not-a-real-key")
+    _gate(req, **kwargs)
+    with pytest.raises(HTTPException) as excinfo:
+        _gate(req, **kwargs)
+    assert excinfo.value.status_code == 429
+    assert llm_quota.usage_snapshot(webapp.PROJECT_ROOT, "alice", trial=True) == 1
+
+
 def test_quota_trial_429_message_mentions_trial(client, monkeypatch, session_cookie):
-    monkeypatch.setenv("BIODATA_TRIAL_DAILY_PER_USER", "0")  # 0 = 不限
-    monkeypatch.setenv("BIODATA_TRIAL_DAILY_GLOBAL", "1")
+    """trial 文案门：真触**每账号**试用桶（全站桶放宽到不触发），并断言 429 detail 是中文试用文案。
+
+    旧写法用 per_user=0（不限）+ global=1：429 来自全站熔断桶，per-user 的试用文案从未被走到，
+    用例名与实际断言不符（且正式桶是否被误计也没验）。
+    """
+    monkeypatch.setenv("BIODATA_TRIAL_DAILY_PER_USER", "1")   # 真触 per-user 试用桶
+    monkeypatch.setenv("BIODATA_TRIAL_DAILY_GLOBAL", "100")   # 全站桶放宽，排除串道
     req = _raw_request(session_cookie)
     _gate(req, provider="trial", cfg=_server_cfg(provider="trial", key=TRIAL_KEY))
     with pytest.raises(HTTPException) as excinfo:
         _gate(req, provider="trial", cfg=_server_cfg(provider="trial", key=TRIAL_KEY))
     assert excinfo.value.status_code == 429
+    detail = str(excinfo.value.detail)
+    assert "限量试用" in detail and "每日最多 1 轮" in detail, f"429 detail 不是试用文案：{detail!r}"
+    assert llm_quota.usage_snapshot(webapp.PROJECT_ROOT, "alice", trial=True) == 1
+    assert llm_quota.usage_snapshot(webapp.PROJECT_ROOT, "alice", trial=False) == 0  # 正式桶不受影响
 
 
 # ---------------------------------------------------------------- 配额闸（HTTP 集成：/api/dream）

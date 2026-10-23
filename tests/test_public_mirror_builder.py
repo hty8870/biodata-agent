@@ -154,3 +154,171 @@ def test_new_tracked_path_must_be_public_or_explicitly_private(tmp_path: Path) -
     _git(root, "commit", "-m", "unclassified")
     with pytest.raises(mirror.MirrorBuildError, match="not classified"):
         mirror.render_tree(root, source_commit=commit, source_dirty=False)
+
+
+@pytest.mark.parametrize("target_kind", ["private", "nested", "unknown", "wrong_origin"])
+def test_apply_rejects_unidentified_or_overlapping_target(tmp_path, target_kind):
+    private = tmp_path / "private"
+    private.mkdir()
+    head = _private_fixture(private)
+    expected, _ = mirror.render_tree(private, source_commit=head, source_dirty=False)
+    public = tmp_path / "public"
+    public.mkdir()
+    _git(public, "init")
+    if target_kind == "private":
+        public = private
+    elif target_kind == "nested":
+        public = private / "child"
+        public.mkdir()
+    elif target_kind == "wrong_origin":
+        _git(public, "remote", "add", "origin", "https://github.com/hty8870/biodata-agent-private.git")
+    before = (private / "README.md").read_bytes()
+    with pytest.raises(mirror.MirrorBuildError):
+        mirror.apply_public(public, expected, private_root=private)
+    assert (private / "README.md").read_bytes() == before
+
+
+@pytest.mark.parametrize("origin", ["https://github.com/hty8870/biodata-agent.git",
+                                   "git@github.com:hty8870/biodata-agent.git", None])
+def test_apply_accepts_matching_public_identity(tmp_path, origin):
+    private = tmp_path / "private"
+    private.mkdir()
+    head = _private_fixture(private)
+    expected, _ = mirror.render_tree(private, source_commit=head, source_dirty=False)
+    public = tmp_path / "public"
+    public.mkdir()
+    _git(public, "init")
+    if origin:
+        _git(public, "remote", "add", "origin", origin)
+    else:
+        mirror._write_tree(public, expected)
+        _git(public, "add", "-A")
+        _git(public, "-c", "user.name=fixture", "-c", "user.email=fixture@example.com",
+             "commit", "-m", "fixture")
+    mirror.apply_public(public, expected, private_root=private)
+    assert (public / "README.md").read_bytes() == expected["README.md"]
+
+
+@pytest.mark.parametrize("kind", ["symlink", "directory"])
+def test_compare_refuses_nonregular_without_reading(tmp_path, monkeypatch, kind):
+    target = tmp_path / "README.md"
+    if kind == "directory":
+        target.mkdir()
+    else:
+        target.write_bytes(b"expected")
+        original = Path.is_symlink
+        monkeypatch.setattr(Path, "is_symlink", lambda p: p == target or original(p))
+    monkeypatch.setattr(mirror, "_public_files", lambda _: {"README.md"})
+
+    def no_read(path):
+        pytest.fail("非普通文件不应进入内容读取")
+
+    monkeypatch.setattr(Path, "read_bytes", no_read)
+    assert mirror.compare_public(tmp_path, {"README.md": b"expected"}) == ["non-regular:README.md"]
+
+
+@pytest.mark.parametrize("value", ["C:/out/x", "C:x", "a:stream", "../x", "a/../x",
+    "a//x", "a/./x", ".", "a/", "a\\x", "CON.txt", "a/NUL", "a/x.", "a/x ",
+    'a/"x', "a/<x", "a/>x", "a/x|y", "a/?x", "a/*x", "a/\x01x"])
+def test_relative_rejects_nonportable_paths(value):
+    with pytest.raises(mirror.MirrorBuildError):
+        mirror._relative(value)
+
+
+def test_forbidden_prefix_uses_portable_casefold(tmp_path):
+    head = _private_fixture(tmp_path)
+    policy_path = tmp_path / "packaging/public-mirror/policy.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["mappings"]["PRIVATE/secret.md"] = "README.md"
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    files_path = tmp_path / "packaging/public-mirror/files.txt"
+    entries = files_path.read_text(encoding="utf-8").splitlines() + ["PRIVATE/secret.md"]
+    files_path.write_text("\n".join(sorted(entries)) + "\n", encoding="utf-8")
+    with pytest.raises(mirror.MirrorBuildError, match="private-only"):
+        mirror.render_tree(tmp_path, source_commit=head, source_dirty=True)
+
+
+@pytest.mark.parametrize("kind", ["is_symlink", "is_junction"])
+def test_parent_link_refused_for_read_and_write(tmp_path, monkeypatch, kind):
+    parent = tmp_path / "linked"
+    parent.mkdir()
+    original = getattr(Path, kind, lambda p: False)
+    monkeypatch.setattr(Path, kind, lambda p: p == parent or original(p), raising=False)
+    with pytest.raises(mirror.MirrorBuildError, match="linked mirror parent"):
+        mirror._write_tree(tmp_path, {"linked/file.txt": b"must not be written"})
+    assert not (parent / "file.txt").exists()
+    monkeypatch.setattr(mirror, "_public_files", lambda _: {"linked/file.txt"})
+    assert mirror.compare_public(tmp_path, {"linked/file.txt": b""}) == ["unsafe:linked/file.txt"]
+
+
+def test_apply_preflights_all_paths_before_mutation(tmp_path, monkeypatch):
+    target = tmp_path / "old.txt"
+    target.write_bytes(b"keep")
+    monkeypatch.setattr(mirror, "_validate_public_target", lambda *a: None)
+    monkeypatch.setattr(mirror, "_git", lambda *a: "")
+    monkeypatch.setattr(mirror, "_public_files", lambda _: {"old.txt"})
+    with pytest.raises(mirror.MirrorBuildError):
+        mirror.apply_public(tmp_path, {"C:/outside.txt": b"new"})
+    assert target.read_bytes() == b"keep"
+
+
+def _public_fixture(root: Path, expected: dict[str, bytes]) -> None:
+    root.mkdir()
+    mirror._write_tree(root, expected)
+    _git(root, "init")
+    _git(root, "config", "core.autocrlf", "false")
+    _git(root, "add", "-A")
+
+
+def test_verify_rejects_old_staged_blob_even_when_worktree_matches(tmp_path):
+    import verify_public_mirror as verifier
+
+    private = tmp_path / "private"
+    private.mkdir()
+    head = _private_fixture(private)
+    expected, _ = mirror.render_tree(private, source_commit=head, source_dirty=False)
+    public = tmp_path / "public"
+    _public_fixture(public, expected)
+    target = public / "README.md"
+    target.write_bytes(b"staged obsolete content\n")
+    _git(public, "add", "README.md")
+    target.write_bytes(expected["README.md"])
+    assert "index-content:README.md" in mirror.compare_public(public, expected)
+    with pytest.raises(verifier.MirrorError, match="index-content:README.md"):
+        verifier.verify(private, public)
+    _git(public, "add", "README.md")
+    assert mirror.compare_public(public, expected) == []
+    assert verifier.verify(private, public)["source_private_commit"] == head
+
+
+def test_compare_rejects_same_content_symlink_in_index(tmp_path):
+    # 无需 OS symlink 权限：工作树仍为同字节普通文件，待提交 mode 已是链接。
+    public = tmp_path / "public"
+    expected = {"README.md": b"same content\n"}
+    _public_fixture(public, expected)
+    oid = _git(public, "rev-parse", ":README.md")
+    _git(public, "update-index", "--cacheinfo", f"120000,{oid},README.md")
+    assert mirror.compare_public(public, expected) == ["index-mode:README.md"]
+
+
+def test_compare_requires_new_generated_files_to_be_staged(tmp_path):
+    public = tmp_path / "public"
+    expected = {"README.md": b"same content\n"}
+    _public_fixture(public, expected)
+    expected["new.txt"] = b"generated\n"
+    (public / "new.txt").write_bytes(expected["new.txt"])
+    assert "missing:new.txt" in mirror.compare_public(public, expected)
+    _git(public, "add", "new.txt")
+    assert mirror.compare_public(public, expected) == []
+
+
+def test_index_comparison_honors_declared_checkout_line_endings(tmp_path):
+    public = tmp_path / "public"
+    expected = {".gitattributes": b"*.txt text eol=crlf\n", "name with space.txt": b"text\r\n"}
+    _public_fixture(public, expected)
+    assert _git(public, "show", ":name with space.txt") == "text"
+    assert mirror.compare_public(public, expected) == []
+    (public / "name with space.txt").write_bytes(b"old\r\n")
+    _git(public, "add", "name with space.txt")
+    (public / "name with space.txt").write_bytes(expected["name with space.txt"])
+    assert mirror.compare_public(public, expected) == ["index-content:name with space.txt"]

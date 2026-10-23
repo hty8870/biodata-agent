@@ -28,7 +28,7 @@ from typing import Any, Literal
 
 from ..app.runtime_paths import instance_data_dir_for
 from . import fs_utils
-from .corpus import EXTERNAL_DIR_NAME, invalidate_external_cache
+from .corpus import EXTERNAL_DIR_NAME, invalidate_external_cache, publish_corpus_write
 from .data_loader import extract_records
 
 # 归属来源缺省名（每条记录未显式声明 source、且未给表单/包裹层 source 时的兜底标签）。
@@ -125,7 +125,9 @@ _STAMP_PATTERN = re.compile(r"[0-9]{8}_[0-9]{6}_[0-9]{6}")
 #: journal_failed=落盘成功但流水账写不进去（事务回滚）；2026-08-10 增
 #: lock_busy=跨进程摄取锁等待超时）。纯类型标注。
 UploadCode = Literal["bad_file", "bad_encoding", "invalid_json", "no_records",
-                     "too_large", "journal_failed", "lock_busy"]
+                     "too_large", "journal_failed", "lock_busy", "uid_conflict",
+                     # 2026-10-04：写目标经目录链接/联接映射进冻结基准/只读层。
+                     "bad_store_path"]
 
 
 class UploadError(ValueError):
@@ -318,6 +320,12 @@ def _ingest_write_and_journal(
         payload, records, form_source)
 
     upload_dir = instance_data_dir_for(Path(project_root), EXTERNAL_DIR_NAME)
+    # 目录链接/联接守卫——external 指向 database/base 或随包只读层时拒绝写入
+    # （只拼路径挡不住链接；守卫在 fs_utils 单锚点，上传/恢复共用）。
+    try:
+        fs_utils.assert_writable_dir(upload_dir, project_root=Path(project_root))
+    except fs_utils.WritableRootError as exc:
+        raise UploadError("bad_store_path", str(exc)) from None
     upload_dir.mkdir(parents=True, exist_ok=True)
     target = upload_dir / safe_name
     if target.exists():
@@ -361,6 +369,7 @@ def _ingest_write_and_journal(
         tmp.unlink(missing_ok=True)
         raise
     invalidate_external_cache()   # 清外部库缓存 → 下次读盘看到新文件 → 即时可见可检索
+    publish_corpus_write(project_root)   # 发布跨进程写入代际标记（独立 reader 可见）
 
     return UploadResult(
         filename=target.name,

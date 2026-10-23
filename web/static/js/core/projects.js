@@ -304,7 +304,7 @@ function renderProjectDetail(p) {
             + "</div>"
             + (cc.display_query ? '<div class="prj-check-query">原始检索句：' + _esc(cc.display_query) + "</div>" : "")
             + '<div class="prj-check-spec">' + rows.join("") + "</div>"
-            + '<div class="prj-check-mount" data-p4-mount-check hidden></div><!-- ENG-P4-MOUNT：P4 在此挂「检查更新/重试基线」交互；无 P4 时不渲染 -->'
+            + '<div class="prj-check-mount" data-p4-mount-check data-p4-project-id="' + _esc(p.project_id) + '" hidden></div><!-- ENG-P4-MOUNT：P4 在此挂「检查更新/重试基线」交互；无 P4 时不渲染。属主 id 供异步回包核对 -->'
             + "</section>";
     }
 
@@ -723,7 +723,7 @@ async function projectsSaveFromSearch() {
         provenanceParts: {
             query: q,
             retrieval_params: retrParams,
-            search_trace: (data && data.search_trace) || [],
+            search_trace: (data && data.search_trace) || {},   // 后端 search_trace 是对象（不许清成数组）
             filters: {
                 active: _facetFilters.map((f) => f.dim + "=" + f.value),
                 suppressed: _suppressed.slice(),

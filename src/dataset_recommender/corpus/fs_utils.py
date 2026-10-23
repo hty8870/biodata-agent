@@ -2,10 +2,11 @@
 """corpus 包文件级共享基元：旁挂台账缓存装载、跨进程文件锁。唯一锚点，勿复制变体。"""
 from __future__ import annotations
 
-import contextlib
 import json
 import os
+import threading
 import time
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
@@ -63,6 +64,66 @@ def by_uid_shape(label_zh: str) -> Callable[[Any], "tuple[dict, dict]"]:
         by_url = {r.get("url"): r for r in by_uid.values() if r.get("url")}
         return by_uid, by_url
     return gate
+
+
+# ==================================================================================================
+# 写侧目录守卫：目录链接不得把写入映射进冻结基准/随包只读层
+# ==================================================================================================
+
+
+class WritableRootError(ValueError):
+    """写目标（解析后）落入冻结基准或随包只读层——调用方翻成各自的领域错误码。"""
+
+
+def _resolved_under(child: Path, parent: Path) -> bool:
+    try:
+        Path(child).expanduser().resolve(strict=False).relative_to(
+            Path(parent).expanduser().resolve(strict=False))
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def assert_writable_dir(target: Path, *, project_root: Path | None = None) -> None:
+    """写侧共享守卫（唯一锚点，勿复制变体）：写目标目录（或其链接目标）不得落进
+    冻结基准 `database/base` 与随包只读资源层（分离布局的 resource_root）。
+
+    上传/恢复等写入口只拼接 `database/external`，若该目录是指向 `database/base` 的
+    符号链接/目录联接，一次正常上传就会在冻结基准新增 JSON；指向随包资源层则写到只读
+    发布面。这里对**解析后**路径做前缀判定（Windows junction 由 resolve 跟随）；
+    目标尚不存在也安全（strict=False 解析已存在的前缀）。常态路径与两处不相交，零影响。
+
+    `project_root`：调用方的项目根——只有**分离布局实例根**（frozen：资源层与数据层
+    分家）才做资源层前缀判定；测试注入的临时根（恰在仓库 = 资源根之内）不做，
+    保持单目录语义与历史逐位一致。"""
+    from ..app.runtime_paths import get_app_paths, repo_database_dir, uses_split_layout
+
+    # 冻结基准候选：仓库真源 base + 调用方根下的 base（测试注入根/单目录布局下
+    # `root/database/base` 就是该实例的冻结基准）。任一命中即拒绝。
+    frozen_candidates = [repo_database_dir() / "base"]
+    if project_root is not None:
+        frozen_candidates.append(Path(project_root) / "database" / "base")
+    for frozen_base in frozen_candidates:
+        if _resolved_under(Path(target), frozen_base):
+            raise WritableRootError(
+                "写入目标实际落在冻结基准 database/base 内（目录链接/联接映射）——已拒绝写入；"
+                "请把 database/external 恢复为真实目录后重试。")
+    if project_root is None:
+        return
+    try:
+        if not uses_split_layout(Path(project_root)):
+            return
+        paths = get_app_paths()
+    except Exception:
+        return
+    # 分离布局：写目标不得落在**随包只读层**的 base / external 快照目录（数据层 external
+    # 是指向它们的链接时拒绝）。刻意不比整个 resource_root——测试/运行可能把 data_root
+    # 放在 resource 树内，整根前缀判定会误伤正常写入。
+    for shipped in (paths.shipped_base_dir, paths.shipped_external_dir):
+        if _resolved_under(Path(target), shipped):
+            raise WritableRootError(
+                "写入目标实际落在随包只读层内（数据层目录是指向资源层快照的链接）——已拒绝写入；"
+                "请修正实例数据根后重试。")
 
 
 # ==================================================================================================
@@ -126,17 +187,59 @@ def release_file_lock(fh) -> None:
         fh.close()
 
 
-@contextlib.contextmanager
-def hold_file_lock(
-    lock_path: "str | Path",
-    *,
-    wait: bool = True,
-    timeout: float = 60.0,
-    poll_interval: float = 0.1,
-):
-    """`acquire_file_lock`/`release_file_lock` 的 with 形态：进入持锁、退出必释放。"""
-    fh = acquire_file_lock(lock_path, wait=wait, timeout=timeout, poll_interval=poll_interval)
+_PATH_LOCKS: "dict[str, threading.RLock]" = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def path_lock(path: Path) -> threading.RLock:
+    """按路径记忆化的进程内锁（2026-10-01 整理批单源化：原 agent/trace/recorder、
+    app/replay_store、app/session_log、corpus/patch_package 四处各自实现——两份 Lock
+    两份 RLock，统一为 RLock 超集；跨模块同路径从此共享同一把锁）。"""
+    key = str(path)
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PATH_LOCKS[key] = lock
+        return lock
+
+
+_FILE_LOCK_STATE = threading.local()
+
+
+@contextmanager
+def file_critical_section(lock_path: Path, *, timeout: float = 60.0):
+    """同路径读改写事务：线程 RLock → OS 文件锁，同线程同路径重入不重复锁 OS。
+    锁文件只创建不删除；不同路径独立，调用方不应在事务内等待网络或模型。"""
+    path = Path(os.path.normcase(str(Path(lock_path).expanduser().resolve())))
+    key = str(path)
+    held = getattr(_FILE_LOCK_STATE, "held", None)
+    if held is None:
+        held = _FILE_LOCK_STATE.held = {}
+    if key in held:
+        held[key] += 1
+        try:
+            yield
+        finally:
+            held[key] -= 1
+        return
+    deadline = time.monotonic() + max(0.0, timeout)
+    lock = path_lock(path)
+    if not lock.acquire(timeout=max(0.0, timeout)):
+        raise FileLockBusy(f"文件锁被占用：{path.name}")
     try:
-        yield fh
+        fh = acquire_file_lock(path, timeout=max(0.0, deadline - time.monotonic()))
+        try:
+            held[key] = 1
+            yield
+        finally:
+            held.pop(key, None)
+            release_file_lock(fh)
     finally:
-        release_file_lock(fh)
+        lock.release()
+
+
+def reset_path_locks_for_test() -> None:
+    """清空 path_lock 注册表（测试隔离用；运行期调用会丢弃在用的锁对象，仅限测试间调用）。"""
+    with _PATH_LOCKS_GUARD:
+        _PATH_LOCKS.clear()

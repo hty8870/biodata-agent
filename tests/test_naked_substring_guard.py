@@ -13,7 +13,7 @@
 """
 import pytest
 
-from dataset_recommender.retrieval import vocabulary as V
+from dataset_recommender.retrieval import query_lexicon as V
 from dataset_recommender.llm.config import get_settings
 from dataset_recommender.retrieval.query_parser import parse_query
 from dataset_recommender.retrieval.retriever import _word_hit

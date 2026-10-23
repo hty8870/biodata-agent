@@ -7,19 +7,27 @@
    actAfterSearch 经 import 取（互调成环——绑定都只在函数体内使用，ESM 允许）。
    board/task_pack/act/accounts/memory/results/facets 与 browse/interactions 经 import
    取本文件导出（绞杀桥已全退役）。 */
-import { API, $, MOTION, cacheGeneration, pushHist, toast } from "#core";
+import { API, $, MOTION, cacheGeneration, pushHist, toast, beginRequest, invalidateRequest } from "#core";
 import { placeFacetBar, renderFacets } from "#facets";
-import { QCACHE_MAX, _queryCache, estimateDuration, finishProgress, resetSubmitButton, startProgress } from "#progress";
+import { estimateDuration, finishProgress, resetSubmitButton, startProgress } from "#progress";
 import { _facetFilters, _lenientDims, _queryHits, _suppressed, renderResults, resetActionHint, resetFacetState } from "#results";
 import { getConfig, renderStatus } from "#shell";
 import { USAGE_KINDS, usageActiveTurnId, usagePolicyRef } from "#usage_core";
 import { usageExperimentContext, usageLog, usageLogSearch, usageEnabled, usageSetEnabled, usageConsentGiven, requestUsageConsent, usageScope } from "#usage_log";
 import { benchfbTurnError, benchfbTurnSearch } from "#benchfb";
+import { replayTurnDone } from "#replay";
+import { replayConvFields } from "#replay_core";
 import { SOURCES_READY, getDateRange, queryForRetrieval, setLastInterpretation, updateSrcSummary, updateTimeSummary } from "#interactions";
-import { cbArchiveChatOnly, cbLogClear, cbLogPush, cbProgressBegin, cbProgressDone, cbProgressRelabel, cbPushCurrent, renderCondBoard } from "#board";
+import { cbArchiveChatOnly, cbLogClear, cbLogPush, cbProgressBegin, cbProgressDone, cbProgressRelabel, cbPushCurrent, cbRollConvId, renderCondBoard, cbSharedConversation, ubSubmit } from "#board";
 import { resetTaskPack } from "#task_pack";
 import { actAfterSearch } from "#act";
 
+/* ---------- 查询结果缓存（会话内存，避免相同查询+设置重跑后端） ----------
+   键＝决定后端结果的**全部**入参（检索 query、sources、日期、LLM/重排/召回配置…），**排除 api_key**
+   （不影响结果、且不让密钥进键）。数组值排序、对象键排序 → 规范化，命中即秒出、不再走网络。
+   纯前端、仅本会话内存（刷新即清）；官方评测走 sources=None 的后端直连、**从不经过此路径**，故确定性不受影响。 */
+const _queryCache = new Map();
+const QCACHE_MAX = 60;
 export let LAST_RECOMMEND_DATA = null;
 /* 属主写口（约定 #4：可变跨模块状态他人写必经 setter）：board.js 对齐回当前帧、
    interactions.js 输入即失效，都经它写；消费方经 import 拿这个函数。 */
@@ -37,7 +45,9 @@ function _ubLandingFill(query, sentText) {
 }
 function queryCacheKey(body) {
     const { api_key, ...rest } = body;
-    const norm = {};
+    // 语料代进键：在途请求（mutation 前发出）回来时按**旧代**建键落库，
+    // 下一次检索按新代取键必然 miss——旧语料的响应不会被当成新语料的结果。
+    const norm = { "__corpus_gen": _corpusMemoGen };
     // 数组值规范化：元素若是对象（如 facet_filters 的 {dim,value}）先 stable-stringify 再排序，
     // 使「同一组过滤、不同点选顺序」映射到同一键——否则默认 .sort() 对对象数组是 no-op、会漏缓存。
     Object.keys(rest).sort().forEach((k) => {
@@ -47,6 +57,15 @@ function queryCacheKey(body) {
             : v;
     });
     return JSON.stringify(norm);
+}
+/* 语料代数：上传 / 删除 / 恢复 / 联网入库 / 同步等**任何改变语料集合的 mutation**
+   都必须经本函数作废本会话的查询结果 memo（唯一失效入口，拥有者=本模块；别处不得自建
+   第二份失效逻辑或第二个缓存）。此前 LRU 键与语料无关、也没有失效出口——删掉的记录
+   同参重搜仍从旧缓存展示，新传的记录看不见。 */
+let _corpusMemoGen = 0;
+export function invalidateRecommendMemo() {
+    _corpusMemoGen += 1;
+    _queryCache.clear();
 }
 function queryCacheGet(key) {
     if (!_queryCache.has(key)) return null;
@@ -75,7 +94,8 @@ export function searchParamSnapshot(query) {
     const experiment = usageExperimentContext();
     const params = Object.assign({
         top_k: cfg.top_k, rerank: cfg.rerank, recall: cfg.recall, strategy: cfg.strategy,
-        polish: cfg.polish,
+        polish: cfg.polish, auto_parse_sources: cfg.auto_parse_sources,
+        auto_allow_llm: cfg.auto_allow_llm, rerank_top_n: cfg.rerank_top_n,
         facet_filters: _facetFilters.map((f) => ({ dim: f.dim, value: f.value })),
         suppressed_constraints: _suppressed.slice(),
         lenient_dims: _lenientDims.slice()
@@ -107,7 +127,6 @@ export function applyRecommendResult(data, query, opts) {
     };
     renderResults(data.results || [], data, _imp);
     renderFacets(data);   // 结果上方的分面面板（面包屑 + 可细化维度）
-    if (!opts.fromHistory) pushHist(query, data, _facetFilters, _suppressed, _queryHits, _lenientDims, opts.replaceHist);   // 存下这次的结果快照（回看历史时不再回灌）；replaceHist=分面细化重跑→原地更新，新查询→新行
     // 折叠 pill 的「最终落到的筛选条件」——两者都只据输入文字判定（源/时间对称，未点名即「不限」），不看结果集
     updateSrcSummary();
     updateTimeSummary();
@@ -147,6 +166,8 @@ export function landRecommendResult(data, query, opts) {
     cbPushCurrent(data, query, { keepProgress: !!(opts.fromPrelim || opts.keepProgress),
         toolVerbs: _tv.length ? _tv : null, actPending: !!opts.actPending, sentText: opts.sentText });
     _ubLandingFill(query, opts.sentText);   // 落地才回填「当前检索句」（B 守卫），在途窗口保持发送即空
+    // 推帧并生成系统回执后再保存，消息和结果归属同一轮。AI 后续改写由同步钩子补存。
+    if (!opts.fromHistory) pushHist(query, data, _facetFilters, _suppressed, _queryHits, _lenientDims, opts.replaceHist);
     // 零命中救回不再自动跑——零命中时的放宽/换词选项改由 board.js 的救回选择条
     // 呈现（零命中 pill「点击处理」），用户点了才作为下一句走既有管线，不再自动发
     // /api/agent/search-rescue、也不自动产 sys 气泡。诚实回执（disclosure_zh）仍在地段上屏。
@@ -165,25 +186,37 @@ export function landRecommendResult(data, query, opts) {
 /* 请求代号：分面芯片在请求进行中仍可点（有意保持响应），故可能并发多个 runRecommend。
    每次进入自增、捕获本次 myGen；只有「仍是最新一次」的响应/错误/收尾才落地——
    丢弃晚到的旧响应，杜绝「结果/计数属于旧筛选、面包屑却是新筛选」的错配。 */
+const _recommendRequests = {};
 let _recSeq = 0;
 /* 请求代号自增的属主写口：browse.js 历史回看、board.js cbReplay 都要作废在途请求（同 `++_recSeq`），
    消费方经 import 拿它（可变状态只许属主写——外部 `_recSeq += 1` 裸写在对 import 绑定的赋值上本就会 TypeError）。 */
-export function bumpRecSeq() { _recSeq += 1; }
+export function bumpRecSeq() { _recSeq += 1; invalidateRequest(_recommendRequests); }
 /* ubSubmit 发送时快照检索代（preliminary 帧落地前的代际闸——用户在环跑期间
    点了分面重跑，晚到的先行帧不得盖新屏）。只读，不写。 */
 export function recSeqNow() { return _recSeq; }
 export async function runRecommend(opts) {
     opts = opts || {};
+    if (!opts.prefetched && cbSharedConversation()) {
+        const shared = cbSharedConversation();
+        const query = String(opts.queryOverride || (opts.sharedUtterance != null ? shared.current_state?.query : $("queryInput")?.value)
+            || shared.current_state?.query || $("queryInput")?.value || "").trim();
+        if (!query) { toast("请先输入检索需求"); return; }
+        const utterance = String(opts.sharedUtterance ?? opts.sayText ?? opts.sentText ?? query).trim() || query;
+        return ubSubmit(shared.id ? "chat" : "hero", { text: utterance, sharedQuery: query, sharedRerun: true,
+            sayPushed: !!opts.sayPushed, messageKind: opts.messageKind, preserveComposer: opts.sharedUtterance != null || !!opts.sayPushed });
+    }
     // 统一路由（ubSubmit 分发）的检索句经 opts.queryOverride 显式到来——不读输入框：
     // 发送即空贯穿整个在途窗口（owner 新指①），框不再是这条路在途期的取数口。
     // 其余全部调用点（分面 chip / 放宽 / 历史重跑 / 回退……）照旧读框里的「当前检索句」。
     const query = String(opts.queryOverride || ($("queryInput").value || "")).trim();
     if (!query) { toast("请先输入检索需求"); return; }
+    const requestToken = beginRequest(_recommendRequests);
     const telemetryScope = usageScope();   // 请求全生命周期固定；账户切换不改变晚到回调归属
     // consent 首次告知（设计 §3）：开关开着且没同意过 → 弹窗拦截，不点确认不发送。
     // 开关关着（usageEnabled() 为假）不弹；'disable' → 关掉采集开关，本次照常发送。
     if (usageEnabled() && !usageConsentGiven()) {
         const r = await requestUsageConsent();
+        if (!requestToken.isCurrent()) return;
         if (r === "disable") usageSetEnabled(false);
     }
     // 新查询（非分面细化重跑）清空既有分面筛选 + 原始命中抑制表 + 命中快照：三者都是「针对某次查询」，换查询即失效（快照随纯净结果重建）。
@@ -202,7 +235,13 @@ export async function runRecommend(opts) {
         // 这里不清仓补一行就永久丢失（hero 首句自己那句 say 会被 cbArchiveChatOnly 识别跳过）。
         // 排除串必须是**那句 say 本身**（opts.sayText=用户原话）：hero 首句被 LLM 改写时
         // query 已是改写句，比错对象会误产幽灵「仅对话」行（同一句在历史里出现两次）。
-        if (!opts.keepConv) { cbArchiveChatOnly(String(opts.sayText || query)); cbLogClear(); }
+        if (!opts.keepConv) {
+            // 独立新检索（历史重跑等不走 ubSubmit 的路径）：conv id 在请求体构造**之前**滚
+            // （2026-09-28 复盘批；ubSubmit 来源已在路由前滚过——handSubmit 标记防双滚，
+            // 双滚会把首句与续段拆进两个 id）。
+            if (!opts.handSubmit) cbRollConvId({ shared: false });
+            cbArchiveChatOnly(String(opts.sayText || query)); cbLogClear();
+        }
         // sayPushed（turn pipeline）：统一路由分发前原话 say 已上屏，这里不再重复推；
         // sayText（同）：hero 首句被 LLM 改写时，对话开头的 say 仍记**用户原话**
         // （改写句由 ubDispatch 的 sys 回显如实交代），不许把改写的句子记成用户说的。
@@ -221,17 +260,21 @@ export async function runRecommend(opts) {
     // 等来源清单就绪再取配置：否则 /api/sources 返回前 getSelectedSources 会兜底成仅 10x，
     // 把检索悄悄缩成基础库、漏掉外部平台库（HCA/EBI/CELLxGENE）且用户无感。
     try { await SOURCES_READY; } catch (_e) {}
+    if (!requestToken.isCurrent()) return;
     const cfg = getConfig();
     const btn = $("submitBtn");
     const reqBody = Object.assign({ query: queryForRetrieval(query), provider: cfg.provider, use_llm: cfg.use_llm, mock_llm: cfg.mock_llm, api_key: cfg.api_key, base_url: cfg.base_url, model: cfg.model, auto_allow_llm: cfg.auto_allow_llm, rerank_top_n: cfg.rerank_top_n, sources: cfg.sources, auto_parse_sources: cfg.auto_parse_sources }, searchParamSnapshot(query));
     const cacheKey = queryCacheKey(reqBody);
+    // 复盘会话标识（2026-09-28 复盘批，additive）：在 cacheKey 之后挂进请求体——
+    // conv_id 是对话身份不是检索语义，进缓存键会把查询缓存按对话击穿（同一句换对话就 miss）。
+    Object.assign(reqBody, replayConvFields());
     // final a 档（设计 §2.1）：环内采纳的更优结果随 utterance final 抵达
     // （opts.prefetched）——不再发 /api/recommend，把它当本次响应走完落地+收尾链；
     // 缓存查询整段跳过（它是环内择优管线的产物，按本请求 reqBody 建键会错位缓存/错位命中）。
     const prefetched = opts.prefetched || null;
     const cached = prefetched ? null : queryCacheGet(cacheKey);
     if (cached) {   // 命中：秒出、不走网络
-        if (myGen === _recSeq) {
+        if (myGen === _recSeq && requestToken.isCurrent()) {
             try {
                 landRecommendResult(cached, query, { noScroll: keep, replaceHist: opts.keepFacets, sentText: opts.sentText, planSteps: opts.planSteps,
                     actPending: !!opts.actPlan,
@@ -248,7 +291,7 @@ export async function runRecommend(opts) {
                 actAfterSearch(query, opts);
             } finally {
                 // 缓存命中不走网络、也就没有下方 finally 的收尾。但**在途的旧请求**（含统一框路由前的
-                // startProgress）已把按钮置成 disabled + .loading，而它的 finally 守卫（myGen === _recSeq）
+                // startProgress）已把按钮置成 disabled + .loading，而它的 finally 守卫（myGen === _recSeq && requestToken.isCurrent()）
                 // 此刻已因本次自增而失配 → 不在这里收尾，按钮就永久卡死。
                 // 复现：搜一次（结果入缓存 K0）→ 点分面芯片（发请求）→ 请求返回前再点同一枚芯片
                 // （取消该分面 → 请求体退回 K0 → 命中缓存）→ 检索按钮从此点不动、永远转圈。
@@ -290,7 +333,7 @@ export async function runRecommend(opts) {
             const llmRequested = reqBody.use_llm && !reqBody.mock_llm;
             if (!llmRequested || data.llm_response_used === true) queryCacheSet(cacheKey, data);   // 缓存与代号无关，恒可写
         }
-        if (myGen !== _recSeq) return;   // 已被更晚的请求取代 → 丢弃，避免旧结果覆盖新状态/错配面包屑
+        if (myGen !== _recSeq || !requestToken.isCurrent()) return;   // 已被更晚的请求取代 → 丢弃，避免旧结果覆盖新状态/错配面包屑
         landRecommendResult(data, query, { noScroll: keep, replaceHist: opts.keepFacets, sentText: opts.sentText,
             fadeIn: !!opts.fadeIn, keepProgress: !!opts.keepProgress, planSteps: opts.planSteps,
             actPending: !!opts.actPlan,
@@ -305,7 +348,7 @@ export async function runRecommend(opts) {
         // 会让同一句话反复产包（用户点一下芯片就又下一个 zip）。
         actAfterSearch(query, opts);
     } catch (err) {
-        if (myGen !== _recSeq) return;   // 陈旧错误也不覆盖新状态
+        if (myGen !== _recSeq || !requestToken.isCurrent()) return;   // 陈旧错误也不覆盖新状态
         const raw = (err && err.message) ? String(err.message) : String(err);   // 去双重「Error: Error:」前缀
         // 浏览器网络层拒连（fetch 抛 TypeError）只有平台原文「Failed to fetch」一类，用户读不懂——
         // 上屏翻成人话；原始串不退正文，随结构化代号进失败卡详情行（可诊断、不甩机器码）。
@@ -321,17 +364,17 @@ export async function runRecommend(opts) {
         // error:true → 让 renderResults 走独立「检索失败」分支（如实报故障、不套用弃权话术）；并收起分面条避免陈旧残留。
         renderResults([], { markdown: emsg, error: true, error_code: ecode, error_raw: raw });
         // 条件板与任务包清单描述的是**上一次成功检索**。屏幕上已经是「检索失败」了，
-        // 它们还挂在那里，就是拿旧一次的条件和结果条数给这一屏背书。分面条、条件板、常驻查询条件栏一起收。
+        // 它们还挂在那里，就是拿旧一次的条件和结果条数给这一屏背书。分面条（抽屉内）、条件板一起收。
         // **顺序要紧**：必须在 placeFacetBar（内部会 swSync）**之前**把 condBoard/#facetActive 判成空，
-        // 否则 swSync 读到 condBoard 仍可见 → 保留对话记录卡、把上一次成功检索的 #facetActive 搬进 #swHits，
-        // 「检索失败」屏上就挂着旧一次的查询条件（含可点的 忽略/× 按钮）——正是本分支要防的陈旧背书。
+        // 否则 swSync 读到 condBoard 仍可见 → 保留对话记录卡、筛选抽屉里留着上一次成功检索的
+        // #facetActive 查询条件（含可点的 忽略/× 按钮）——正是本分支要防的陈旧背书。
         const _cb = $("condBoard"); if (_cb) _cb.hidden = true;
         const _fa = $("facetActive"); if (_fa) { _fa.hidden = true; _fa.innerHTML = ""; }
         $("facetBar").hidden = true;
-        placeFacetBar();   // 据上面已置的 hidden：拆二分、分面条搬回结果区、swSync 收起整卡 + 常驻栏（_facetFilters 保留供重试）
+        placeFacetBar();   // 据上面已置的 hidden：收起「筛选」入口钮、swSync 收起整卡（_facetFilters 保留供重试）
         resetTaskPack();
         toast("检索失败，可在「设置 → 开发者信息 / 诊断」里运行诊断");
-    } finally { if (myGen === _recSeq) { finishProgress(); btn.disabled = false; btn.removeAttribute("aria-busy"); } }
+    } finally { if (myGen === _recSeq && requestToken.isCurrent()) { finishProgress(); btn.disabled = false; btn.removeAttribute("aria-busy"); replayTurnDone(); } }
 }
 
 /* allDatasets/bs 两个浏览态已归位 browse.js（它们从来只服务浏览/收藏/历史，本文件从不读写——

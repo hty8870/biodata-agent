@@ -9,10 +9,10 @@
  *
  * ## 为什么队列在浏览器侧
  *
- * 生产是纯 HTTP（http://<server-ip>），Service Worker 与 File System Access 都不可用；
- * fetch→blob 对几十 GB 的数据文件会爆内存。所以数据文件的唯一可行通道是浏览器原生
- * `<a download>`（跨域时 download 属性被忽略、退化为浏览器自身的下载/新标签行为，
- * 故一律 target=_blank rel=noopener，绝不劫持当前标签页）。
+ * fetch→blob 对几十 GB 的数据文件会爆内存，Service Worker 截流也救不了浏览器侧内存。
+ * 所以数据文件的唯一可行通道是浏览器原生下载：同源走 `<a download>` 原地静默下载；
+ * 跨域（download 属性被忽略）走 `window.open(url, "_blank")` 新标签——
+ * 绝不劫持当前页（双通道与被拦检测详见 _fire 注释）。
  *
  * ## 诚实红线（这条比功能重要）
  *
@@ -43,7 +43,7 @@
  *   不是 downloads 反向 import task_pack。
  * ========================================================================== */
 
-import { $, API, downloadBlobAs, escapeHtml, isHttp, toast } from "#core";
+import { $, API, currentAccountScope, downloadBlobAs, escapeHtml, isHttp, toast } from "#core";
 import { tpBytes } from "#act_core";
 import { USAGE_KINDS } from "#usage_core";
 import { usageLog } from "#usage_log";
@@ -91,8 +91,28 @@ function _mkItem(raw) {
         status: raw.status || "queued",
         note: String(raw.note || ""),
         ts: _seq,
+        // 条目归属生成时刻的账户——面板/去重/泵都按当前账户过滤，换号后
+        // 别人的下载记录不可见、不可续、不参与去重（B 看到 A 记录且去重互串的根因）。
+        owner: currentAccountScope(),
     };
 }
+
+/* 换账户的惰性清理：所有读/写/泵入口先扫一遍——**未发射**（queued）的外账户条目
+   就地中止（如实记原因；把 A 的文件交给浏览器是跨账户动作，绝不能发生）。
+   已发射（fired/done）的条目**不谎称已停**：它们已在浏览器手里、页面管不了，只是不再
+   显示给别的账户（记录随主人的账户回来时仍在他自己的列表里）。 */
+function _sweepOwner() {
+    const owner = currentAccountScope();
+    for (let i = 0; i < _queue.length; i += 1) {
+        const q = _queue[i];
+        if (q.status === "queued" && q.owner !== owner) {
+            q.status = "cancelled";
+            q.note = "账户已切换：这一条还没开始下载，已中止。";
+        }
+    }
+    return owner;
+}
+function _isOwn(q) { return q.owner === currentAccountScope(); }
 
 function _nameFromUrl(url) {
     try {
@@ -110,42 +130,65 @@ function _blobKind(name) {
     return "other";
 }
 
-/* 同 URL 已在排队或已交给浏览器：不重复占排、不重复发射。
+/* 同 URL **在本账户**已在排队或已交给浏览器：不重复占排、不重复发射。
    重复点「下载」不该把 5.5GB 的主文件再下一遍；fired 想重下走行内「重下」（dlqRetryItem）。 */
 function _activeSameUrl(url) {
     return _queue.some(function (q) {
-        return q.url === url && (q.status === "queued" || q.status === "fired");
+        return q.url === url && _isOwn(q) && (q.status === "queued" || q.status === "fired");
     });
 }
 
 /* ---------------- 发射 ---------------- */
 
-/* url 类条目的唯一发射点。target=_blank + rel=noopener 是硬要求：跨域直下时若服务端
-   没回 Content-Disposition，浏览器会**导航**而非下载——没有 _blank 就把当前页顶掉了。 */
+/* url 类条目的唯一发射点。两条通道按 origin 分（2026-09-12 探针实测定稿）：
+   - 同源（/api 代理、静态资源）：临时锚点 + download 属性，原地静默下载，不开标签；
+   - 跨域：window.open(url, "_blank")——跨域锚点若服务端没回 Content-Disposition 会
+     **导航**顶掉当前页，必须另开标签；新建标签才可能触发弹窗拦截，被拦时 window.open
+     返回 null（标准行为，可如实检测）。
+   不用 noopener 特性：它使 window.open 恒返回 null（2026-09-12 实测），「被拦」与
+   「成功」无法区分；改用手动 w.opener=null 防 tabnabbing。也不用具名复用：复用已注册
+   窗口时同样返回 null（实测），null 语义会被污染。
+   返回 false = 被浏览器拦截（条目留 queued，等用户手势经 dlqResume 重发）。 */
 function _fire(item) {
-    const a = document.createElement("a");
-    a.href = item.url;
-    a.download = item.name || "";
-    a.target = "_blank";
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    let sameOrigin = false;
+    try { sameOrigin = new URL(item.url, window.location.href).origin === window.location.origin; } catch (_e) { /* 非法 url 走跨域通道兜底 */ }
+    if (sameOrigin) {
+        const a = document.createElement("a");
+        a.href = item.url;
+        a.download = item.name || "";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        item.status = "fired";
+        return true;
+    }
+    const w = window.open(item.url, "_blank");
+    if (!w) return false;
+    try { w.opener = null; } catch (_e) { /* 防 tabnabbing；置 opener 失败不挡下载 */ }
     item.status = "fired";
+    return true;
 }
 
 /* 单链错峰泵：每次只发射队首一个 queued（有 url 的），150ms 后再看下一个。
    不入队不清链——enqueue 追加的条目会被在途的链自然带走。 */
 function _pump() {
     if (_pumpTimer) return;
+    const owner = _sweepOwner();   // 外账户的未发射条目先中止再泵
     for (let i = 0; i < _queue.length; i += 1) {
-        if (_queue[i].status === "queued" && _queue[i].url) {
-            _fire(_queue[i]);
+        if (_queue[i].status === "queued" && _queue[i].url && _queue[i].owner === owner) {
+            if (!_fire(_queue[i])) {
+                /* 被拦（无用户激活的自动发射，如 chat 异步回执）：留队列 + sticky 提醒
+                   + 断链。面板「开始下载/继续下载」按钮是真实手势，经 dlqResume 重发时
+                   5s 激活窗内错峰链可逐发通过。 */
+                toast(COPY.common.popupBlocked, { sticky: true });
+                _renderZones();
+                return;
+            }
             break;
         }
     }
     _renderZones();
-    const more = _queue.some(function (q) { return q.status === "queued" && q.url; });
+    const more = _queue.some(function (q) { return q.status === "queued" && q.url && q.owner === owner; });
     if (more) {
         _pumpTimer = setTimeout(function () { _pumpTimer = null; _pump(); }, FIRE_GAP_MS);
     }
@@ -219,6 +262,10 @@ export async function dlqEnqueueDatasets(uids, opts) {
     const list = Array.isArray(uids) ? uids.slice() : [];
     const res = { ok: true, n_datasets: list.length, n_files: 0, bytes: 0, already: 0, unsupported: [], failed: [] };
     if (!list.length) { res.ok = false; res.error = "没有选中任何数据集"; return res; }
+    /* 迟回包闸：逐 uid 取清单是网络往返，期间用户可能换账户——那一刻这批文件属于
+       上一个账户，绝不入队/发射/打点（把 A 的文件交给浏览器是跨账户动作）。
+       已发射的旧条目不受影响（页面管不了已交出去的那部分，如实不谎称已停）。 */
+    const launchOwner = currentAccountScope();
     const rows = await Promise.all(list.map(async function (uid) {
         try {
             const d = await (await fetch(API.files + "?uid=" + encodeURIComponent(uid))).json();
@@ -227,6 +274,12 @@ export async function dlqEnqueueDatasets(uids, opts) {
             return { uid: uid, ok: false, files: [], error: String((err && err.message) || err) };
         }
     }));
+    if (launchOwner !== currentAccountScope()) {
+        res.ok = false;
+        res.switched = true;
+        res.error = "账户已切换：这批下载没有开始（清单作废）。";
+        return res;
+    }
     const items = [];
     rows.forEach(function (r) {
         const title = String((r.files[0] && (r.files[0].dataset_title || r.files[0].title)) || r.uid);
@@ -279,9 +332,11 @@ export async function dlqEnqueueDatasets(uids, opts) {
 }
 
 /* ---------------- 队列操作 ---------------- */
+/* 全部按**当前账户**作用：别的账户的条目不可见也不可操作——
+   行号来自面板渲染（本来就只画当前账户的行），这里再兜一道（防伪造的 id 调用）。 */
 
 export function dlqCancelItem(id) {
-    const it = _queue.find(function (q) { return q.id === id; });
+    const it = _queue.find(function (q) { return q.id === id && _isOwn(q); });
     if (!it || it.status !== "queued") return false;
     it.status = "cancelled";
     _renderZones();
@@ -291,14 +346,14 @@ export function dlqCancelItem(id) {
 /* 取消全部还在排队的（已交给浏览器的不归我们管，面板文案如实说）。返回取消条数。 */
 export function dlqCancelQueued() {
     let n = 0;
-    _queue.forEach(function (q) { if (q.status === "queued") { q.status = "cancelled"; n += 1; } });
+    _queue.forEach(function (q) { if (q.status === "queued" && _isOwn(q)) { q.status = "cancelled"; n += 1; } });
     _renderZones();
     return n;
 }
 
 /* fired/error/cancelled 且有 url → 回 queued 重发（浏览器拦了多文件下载时的补救）。 */
 export function dlqRetryItem(id) {
-    const it = _queue.find(function (q) { return q.id === id; });
+    const it = _queue.find(function (q) { return q.id === id && _isOwn(q); });
     if (!it || !it.url || it.status === "queued") return false;
     it.status = "queued";
     it.note = "";
@@ -307,17 +362,18 @@ export function dlqRetryItem(id) {
     return true;
 }
 
-/* 清掉一切非排队记录（fired/done/cancelled/error/unsupported）；queued 不受影响。 */
+/* 清掉当前账户一切非排队记录（fired/done/cancelled/error/unsupported）；queued 不受影响。 */
 export function dlqClearFinished() {
     for (let i = _queue.length - 1; i >= 0; i -= 1) {
-        if (_queue[i].status !== "queued") _queue.splice(i, 1);
+        if (_queue[i].status !== "queued" && _isOwn(_queue[i])) _queue.splice(i, 1);
     }
     _renderZones();
 }
 
-/* 只读快照（测试锚钉 / act.js 回执用；绝不暴露内部数组引用）。 */
+/* 只读快照（测试锚钉 / act.js 回执用；绝不暴露内部数组引用）。只含**当前账户**的条目。 */
 export function dlqSnapshot() {
-    return _queue.map(function (q) { return Object.assign({}, q); });
+    _sweepOwner();
+    return _queue.filter(_isOwn).map(function (q) { return Object.assign({}, q); });
 }
 
 /* ---------------- 面板 ---------------- */
@@ -343,16 +399,18 @@ function _rowHtml(q) {
 }
 
 function _dlqHtml(info) {
-    if (!_queue.length) return "";
-    const queued = _queue.filter(function (q) { return q.status === "queued"; });
-    const finished = _queue.length - queued.length;
-    const unsData = _queue.filter(function (q) { return q.status === "unsupported" && q.kind === "data"; });
+    _sweepOwner();   // 渲染前先中止外账户未发射条目
+    const mine = _queue.filter(_isOwn);   // 面板只展示**当前账户**的下载记录
+    if (!mine.length) return "";
+    const queued = mine.filter(function (q) { return q.status === "queued"; });
+    const finished = mine.length - queued.length;
+    const unsData = mine.filter(function (q) { return q.status === "unsupported" && q.kind === "data"; });
     let html = '<div class="dlq"><div class="dlq-head"><strong>下载队列</strong>'
-        + '<span class="dlq-count">' + _queue.length + '</span>'
+        + '<span class="dlq-count">' + mine.length + '</span>'
         + '<span class="dlq-head-acts">';
     if (queued.length) {
         html += '<button type="button" class="btn btn-primary dlq-btn" data-dlq-action="resume">'
-            + (_queue.some(function (q) { return q.status === "fired"; }) ? "继续下载" : "开始下载")
+            + (mine.some(function (q) { return q.status === "fired"; }) ? "继续下载" : "开始下载")
             + "（" + queued.length + " 个排队中）</button>"
             + '<button type="button" class="btn dlq-btn" data-dlq-action="cancel-queued">取消排队</button>';
     }
@@ -360,8 +418,8 @@ function _dlqHtml(info) {
         html += '<button type="button" class="btn dlq-btn" data-dlq-action="clear">清除记录</button>';
     }
     html += "</span></div>";
-    html += '<ul class="dlq-list">' + _queue.map(_rowHtml).join("") + "</ul>";
-    if (_queue.some(function (q) { return q.status === "fired"; })) {
+    html += '<ul class="dlq-list">' + mine.map(_rowHtml).join("") + "</ul>";
+    if (mine.some(function (q) { return q.status === "fired"; })) {
         html += '<p class="dlq-foot">「已交给浏览器」的文件，进度与取消在浏览器自带的下载管理里（Ctrl+J）；'
             + "本面板能取消的是还没开始的排队项。若浏览器询问「是否允许下载多个文件」，请选允许；"
             + escapeHtml(COPY.common.popupBlocked)
@@ -439,8 +497,12 @@ export function initDownloads() {
                     uid: anchor.getAttribute("data-dlq-uid") || "",
                     title: anchor.getAttribute("data-dlq-title") || name,
                 }], { auto: true });
-                if (added.some(function (q) { return q.status === "queued"; })) {
-                    toast("已开始下载：" + name + "（记录见下载面板）。" + COPY.common.popupBlocked);
+                /* 判定必须含 fired：dlqEnqueue(auto:true) 内已同步泵出队首（单文件点下载时
+                   唯一条目已被发成 fired）——只数 queued 会把**首次成功下载**误判进
+                   「没有重复下载」分支，拦截提醒 sticky toast 永不可达（与 2026-08-31
+                   dlqEnqueueDatasets 修正同类，2026-09-12 用户实测实锤）。 */
+                if (added.some(function (q) { return q.url && (q.status === "queued" || q.status === "fired"); })) {
+                    toast("已开始下载：" + name + "（记录见下载面板）。" + COPY.common.popupBlocked, { sticky: true });
                 } else {
                     toast("「" + name + "」已在下载队列里或已交给浏览器，没有重复下载；要重下请到下载面板点「重下」。");
                 }

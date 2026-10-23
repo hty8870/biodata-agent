@@ -145,3 +145,43 @@ def test_api_no_relaxation_when_results_exist():
     data = resp.json()
     assert len(data["results"]) >= 1                   # 有结果
     assert data["relaxation_options"] == []            # 不显示放宽
+
+
+def test_relaxation_options_carry_suppress_filter_ids():
+    """每项带 suppress＝**本项**放松量的 filter_id 清单（`relax_key_to_suppressed`
+    单锚点，仅本项、不含调用方既有忽略）——放松卡/agent 环内点选后原样下发为
+    suppressed_constraints 即可零 LLM 重搜；缺这个字段，前端只能把 key→条件的
+    映射再猜一遍（双份真源）。"""
+    recs = _corpus()
+    r = DatasetRetriever(top_k=5)
+    intent = parse_query("拟南芥的乳腺癌数据")
+    by_key = {o["key"]: o for o in r.relaxation_options(recs, intent, top_k=5)}
+    assert by_key["dim:species"]["suppress"] == ["include:species"]
+    assert by_key["dim:disease"]["suppress"] == ["include:disease"]
+
+    intent3 = parse_query("小鼠的乳腺癌 FASTQ 数据")
+    only = next(o for o in r.relaxation_options(recs, intent3, top_k=5)
+                if o["key"] == "only:species")
+    # 「只按物种搜」＝其余全部放松：疾病 + FASTQ（顺序即锚点产出顺序）
+    assert only["suppress"] == ["include:disease", "raw:required"]
+
+
+def test_api_relaxation_suppress_merges_request_level_suppressed():
+    """/api/recommend 把请求级 suppressed_constraints 与本项放松量保序去重合并后下发
+    （整组替换语义，2026-09-14 收编：与环内 ask.relax 卡同口径）——不合并的话，前端
+    点选后原样回传会把用户已松开的条件偷偷拧回去。"""
+    s = get_settings()
+    all_sources = [x["value"] for x in available_sources(s.data_dir, s.project_root)]
+    client = TestClient(app, base_url="http://127.0.0.1")
+    resp = client.post("/api/recommend", json={
+        "query": "拟南芥的乳腺癌 FASTQ 数据", "sources": all_sources,
+        "use_llm": False, "mock_llm": True, "top_k": 5,
+        "suppressed_constraints": ["raw:required"],     # 已忽略 FASTQ，仍零命中
+    })
+    assert resp.status_code == 200
+    opts = resp.json()["relaxation_options"]
+    by_key = {o["key"]: o for o in opts}
+    # 既有忽略在前、本项放松量在后；已被忽略的条件不再出现在可放松项里
+    assert by_key["dim:species"]["suppress"] == ["raw:required", "include:species"]
+    assert by_key["dim:disease"]["suppress"] == ["raw:required", "include:disease"]
+    assert not any(o["key"] == "raw" for o in opts)

@@ -21,7 +21,6 @@ import json
 import os
 import re
 import sys
-import threading
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
@@ -52,9 +51,8 @@ _OFF_VALUES = frozenset({"off", "0", "false", "no"})
 #: 我们的 id 来源受控（账户 principal / uuid），白名单替换即可，不需要可逆编码。
 _SEGMENT_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
-#: 每路径一把写锁（webapp 的 SSE worker 是多线程；同一路径的追加不交错）。
-_PATH_LOCKS: dict[str, threading.Lock] = {}
-_PATH_LOCKS_GUARD = threading.Lock()
+#: 每路径一把写锁（webapp 的 SSE worker 是多线程；同一路径的追加不交错）——
+#: 真源 2026-10-01 起收敛到 corpus/fs_utils.path_lock（见下方 _lock_for 别名）。
 
 #: 观测设施自身故障的 warn-once 集合（与 agent_exec._warn_once 同纪律）。
 _WARNED: set[str] = set()
@@ -97,14 +95,7 @@ def _safe_segment(value: Any) -> str:
     return seg or "x"
 
 
-def _lock_for(path: Path) -> threading.Lock:
-    key = str(path)
-    with _PATH_LOCKS_GUARD:
-        lock = _PATH_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _PATH_LOCKS[key] = lock
-        return lock
+from ...corpus.fs_utils import path_lock as _lock_for  # noqa: E402
 
 
 class TracePayloadError(ValueError):
@@ -188,10 +179,10 @@ class TraceRecorder:
 
 
 def _now_iso() -> str:
-    """时间戳真源：复用 corpus_curation（与联网台账同一口径，两账可按 ts 互查）。"""
-    from ...corpus.corpus_curation import _now_iso as _cc_now_iso
+    """时间戳真源：corpus/net_ledger（与联网台账同一口径，两账可按 ts 互查）。"""
+    from ...corpus.net_ledger import now_iso
 
-    return _cc_now_iso()
+    return now_iso()
 
 
 # ---- contextvars 传递（集成零签名变更：webapp 的 SSE worker 线程内天然隔离）-------------

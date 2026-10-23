@@ -3,7 +3,7 @@
 /* 本文件是 ES Module：core 的工具/常量、usage 层、reuse_pack 的 downloadTextBlob 与
    fav_folders 的 openFavPopover 经 import 取（cards↔fav_folders 成环，绑定只在函数体内使用）。
    dataset_page/browse/fav_folders/interactions/act 经 import 取卡片与介绍渲染函数（绞杀桥已全退役）。 */
-import { API, HEART, MOTION, $, copyTextAny, escapeHtml, escapeHtmlStrong, fastqInfo, fmtThousands, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, toast } from "#core";
+import { API, HEART, MOTION, $, copyTextAny, escapeHtml, escapeHtmlStrong, fastqInfo, fmtThousands, isFav, isHttp, normalizeItem, prettyPlatform, prettySource, toast, beginRequest, invalidateRequest } from "#core";
 import { USAGE_KINDS } from "#usage_core";
 import { usageCardRank, usageLog, usageLogCardAction } from "#usage_log";
 import { downloadTextBlob } from "#reuse_pack";
@@ -19,8 +19,32 @@ export function reachBadgeHtml(it) {
         : "";
 }
 
+/* 「同系列」标记的唯一构造点（结果卡与任何按本响应 rows 渲染的列表共用）。
+   collection_doi 是 **collection 级**编号：同一篇论文下的 core/extended 等条目共用它，标题与
+   元数据几乎逐字相同、却是不同数据集（样本量/范围不同）。两张这样的卡并排出现，观感上像
+   「重复」，本标记如实说明「这是同系列的多条」——**不隐藏任何合法条目**，也不跨页/跨响应统计。 */
+export function seriesCountsOf(items) {
+    const counts = new Map();
+    (Array.isArray(items) ? items : []).forEach((it) => {
+        const doi = String((it && it.collection_doi) || "").trim();
+        if (doi) counts.set(doi, (counts.get(doi) || 0) + 1);
+    });
+    return counts;
+}
+
+/* 卡片徽章行的小标：同一非空 collection_doi 在本响应里 ≥2 条才出现（N=条数）。counts 为空（详情页/
+   库卡片/对比窗的卡没有「本响应」概念）时恒不显示——那才是诚实的缺省。 */
+export function seriesBadgeHtml(rawItem, counts) {
+    const doi = String((rawItem && rawItem.collection_doi) || "").trim();
+    const n = (doi && counts) ? (counts.get(doi) || 0) : 0;
+    if (n < 2) return "";
+    const why = `同一系列（同 collection DOI）在本页共 ${n} 条：标题相近但为不同数据集，不是重复。`;
+    return `<span class="series" title="${escapeHtml(why)}">同系列 ×${n}</span>`;
+}
+
 /* opts 一览：rank=结果序号角标；compact=精简卡（介绍弹窗下半窗的兼容网格/对比用——
-   隐藏「数据集详情」「查看全部文件」按钮、rank 角标与承诺行，保留心形/徽章/CTA 直链）。 */
+   隐藏「数据集详情」按钮与下载钮的文件清单更多区、rank 角标与承诺行，保留心形/徽章/CTA 直链）；
+   seriesCounts=本响应 rows 的 collection_doi 计数（seriesCountsOf 算好），供「同系列 ×N」小标。 */
 export function buildCard(rawItem, opts) {
     opts = opts || {};
     const it = normalizeItem(rawItem);
@@ -42,47 +66,48 @@ export function buildCard(rawItem, opts) {
     const dl = it.download_url || it.url;
     // 主 CTA 行：数据集页面(有独立页则填充=主按钮，视觉权重 ≥ 下载) 与 下载数据 等宽同排；
     // 无独立数据集页面时下载升为填充主按钮；下载无直链则灰禁占位（不再让「数据集页面」缩成隐形文字链）。
+    // 「下载数据」右侧的更多区（.cta-split-more，仅 n_files>1 出现）打开文件清单弹窗——
+    // 与主下载同钮一体，入口合并、弹窗复用 openFilesModal。
     const hasPage = isHttp(it.url) && it.url !== dl;
     const pageBtn = hasPage
-        ? `<a class="cta cta-primary" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开数据集页 ↗</a>`
+        ? `<a class="cta cta-primary" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开数据集页</a>`
         : "";
-    const dlBtn = library ? ""
-        : isHttp(dl) ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据 ↓</a>`
-        : `<span class="cta cta-disabled" aria-disabled="true">暂无下载</span>`;
+    const nFiles = it.n_files || 0;
+    const filesEntry = (!opts.compact && !library && nFiles > 1);
+    const dlCore = library ? ""
+        : isHttp(dl) ? `<a class="cta ${hasPage ? "cta-soft" : "cta-primary"}${filesEntry ? " cta-split-main" : ""}" href="${escapeHtml(dl)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据</a>`
+        : `<span class="cta cta-disabled${filesEntry ? " cta-split-main" : ""}" aria-disabled="true">暂无下载</span>`;
+    const dlBtn = (dlCore && filesEntry)
+        ? `<span class="cta-split">${dlCore}<button class="cta cta-split-more" type="button" aria-haspopup="dialog" aria-label="查看全部 ${nFiles} 个文件" title="查看全部 ${nFiles} 个文件"><span class="fo-ico" aria-hidden="true">▤</span></button></span>`
+        : dlCore;
     // 「查看介绍」改为打开**独立浏览器标签页** /dataset（不再模态弹窗）。链接携 uid/url/name/source；
     // 点击时把**完整记录**写进 localStorage 供新标签页取回 download_url/n_files 等 URL 带不了的字段（见下方 detailLink 接线）。
     // href 用**同源相对路径** /dataset?… 直插（参数 encodeURIComponent，目标恒为本站 /dataset，绝不涉外部方案，
     // 非整值插值 → 不触发 isHttp sink 门；见 tests/test_frontend_url_safety.py）。
-    // 改名「数据集详情 ↗」并从 card-foot 文字链升格为 .card-cta 之下的独立全宽按钮行（.btn-detail）。
-    const detail = opts.compact ? "" : `<a class="btn-detail" href="/dataset?uid=${encodeURIComponent(it.dataset_uid || "")}&url=${encodeURIComponent(it.url || "")}&name=${encodeURIComponent(it.dataset_name || "")}&source=${encodeURIComponent(it.source || "")}" target="_blank" rel="noopener" aria-label="查看 ${escapeHtml(it.dataset_name || "该数据集")} 的数据集详情页（含介绍、文件、FAIR、引文、对比；在新标签页打开）">数据集详情 ↗</a>`;
+    // 改名「数据集详情」并从 card-foot 文字链升格为 .card-cta 之下的独立全宽按钮行（.btn-detail）。
+    const detail = opts.compact ? "" : `<a class="btn-detail" href="/dataset?uid=${encodeURIComponent(it.dataset_uid || "")}&url=${encodeURIComponent(it.url || "")}&name=${encodeURIComponent(it.dataset_name || "")}&source=${encodeURIComponent(it.source || "")}" target="_blank" rel="noopener" aria-label="查看 ${escapeHtml(it.dataset_name || "该数据集")} 的数据集详情页（含介绍、文件、FAIR、引文、对比；在新标签页打开）">数据集详情</a>`;
     // 国内可达性徽章：构造函数见本文件 reachBadgeHtml（唯一锚点）
     const reachBadge = reachBadgeHtml(it);
+    // 「同系列 ×N」：计数由调用方按**本响应 rows** 算好传进来（opts.seriesCounts，见本文件
+    // seriesCountsOf）；没传（详情页头 / 库卡片 / 兼容网格 / 对比窗）时恒不显示——那些卡没有
+    // 「本响应」这个概念，硬凑一个跨页计数就是在编造。
+    const seriesBadge = seriesBadgeHtml(rawItem, opts.seriesCounts);
 
-    const nFiles = it.n_files || 0;
-    const filesBtnHtml = (!opts.compact && !library && nFiles > 1)
-        ? `<button class="files-open" type="button"><span class="fo-ico">▤</span>查看全部 ${nFiles} 个文件<span class="fo-arrow">→</span></button>`
-        : "";
     // 样本量/基因数过千分位（与首页覆盖声明、可行性面板同一记数法；年份不过——
     // 4 位年份会被加成 2,025）。每段包 .sample-bit nowrap，折行只许发生在分隔符上——
     // 此前「发表」与年份被拆到两行（年份孤挂）。
     const footBits = [`<b>样本量</b> ${escapeHtml(fmtThousands(it.sample_size))}`];
     if (it.gene_count) footBits.push(`<b>基因数</b> ${escapeHtml(fmtThousands(it.gene_count))}`);
     if (it.published_date) footBits.push(`<b>发表</b> ${escapeHtml(String(it.published_date).slice(0, 4))}`);
-    // 底部钉齐：无文件按钮的完整卡补同盒尺寸占位槽（visibility:hidden、aria-hidden，结构与真实按钮一致 → 高度恒等），
-    // 同行各卡「查看全部 N 个文件」有/无不再把 CTA 行错开；compact/库卡片不出按钮也不出槽。
-    const filesRegion = (library || opts.compact) ? ""
-        : (!filesBtnHtml) ? `<span class="files-open files-open-slot" aria-hidden="true"><span class="fo-ico">▤</span>查看全部<span class="fo-arrow">→</span></span>`
-        : filesBtnHtml;
     card.innerHTML = `
         <button class="fav ${faved ? "active" : ""}" title="收藏" aria-label="收藏">${HEART}</button>
-        <div class="badges">${rank}${metaText}<span class="fastq ${fq.cls}">${fq.label}</span>${reachBadge}</div>
+        <div class="badges">${rank}${metaText}<span class="fastq ${fq.cls}">${fq.label}</span>${seriesBadge}${reachBadge}</div>
         <h3 class="card-title">${escapeHtml(it.dataset_name || "未命名数据集")}</h3>
         ${it.reason ? `<p class="card-why"><b>推荐理由</b> ${escapeHtml(it.reason)}</p>` : ""}
         <div class="card-tags">${tags}</div>
         <div class="card-foot"><span class="sample">${footBits.map((b) => `<span class="sample-bit">${b}</span>`).join('<span class="sample-sep" aria-hidden="true"> · </span>')}</span></div>
         <div class="card-cta">${pageBtn}${dlBtn}</div>
-        ${detail}
-        ${filesRegion}`;
+        ${detail}`;
 
     const favBtn = card.querySelector(".fav");
     // 心形不再直接 toggle：交给收藏夹 popover（fav_folders.js）——未收藏先选夹，已收藏给「取消 / 移到」菜单。
@@ -92,7 +117,7 @@ export function buildCard(rawItem, opts) {
         openFavPopover(favBtn, it);
     });
 
-    const filesBtn = card.querySelector("button.files-open");   // 占位槽是 span.files-open-slot，只给真按钮绑事件
+    const filesBtn = card.querySelector(".cta-split-more");
     if (filesBtn) filesBtn.addEventListener("click", (event) => openFilesModal(it, event.currentTarget));
     // 详情按钮自身 target=_blank 导航到 /dataset；点击时同步把完整记录写进 localStorage（导航前执行，新标签页读得到）。
     const detailLink = card.querySelector(".btn-detail");
@@ -165,8 +190,8 @@ export function renderIntroduction(it, opts) {
     const reason = it.reason ? `<section class="intro-reason"><h4>为什么推荐给你</h4><p>${escapeHtml(it.reason)}</p></section>` : "";
     // 下载/来源页直链移到标题下常驻 tab 栏（href/target/rel 逐位保持）；
     // bare 正文（对比窗）仍给一行直链，方便对照时直接点走。
-    const sourceLink = isHttp(it.url) ? `<a class="btn" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开来源页 ↗</a>` : "";
-    const downloadLink = isHttp(it.download_url) ? `<a class="btn btn-primary" href="${escapeHtml(it.download_url)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据 ↓</a>` : "";
+    const sourceLink = isHttp(it.url) ? `<a class="btn" href="${escapeHtml(it.url)}" target="_blank" rel="noopener">打开来源页</a>` : "";
+    const downloadLink = isHttp(it.download_url) ? `<a class="btn btn-primary" href="${escapeHtml(it.download_url)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-uid="${escapeHtml(it.dataset_uid || "")}" data-dlq-name="${escapeHtml(it.dataset_name || "")}">下载数据</a>` : "";
     const directRow = (opts.bare && (downloadLink || sourceLink))
         ? `<div class="intro-bare-actions">${downloadLink}${sourceLink}</div>` : "";
     // LLM 中文导读（实验性、opt-in）。`llm_status` 键**只在用户点过「AI 导读」**（llm=1）后才出现，
@@ -305,7 +330,7 @@ export async function loadCompatInto(wrap, it) {
 }
 
 /* 兼容数据集卡**完全对齐真正的检索结果卡**——直接用缺省 buildCard（心形 / 徽章 / 标题 / tags /
-   样本量 /「数据集详情 ↗」/「查看全部 N 个文件」/ CTA 直链一应俱全，仅无结果序号角标），每条卡底附
+   样本量 /「数据集详情」/ 下载钮（含文件清单更多区）/ CTA 直链一应俱全，仅无结果序号角标），每条卡底附
    `_compat_basis` 兼容依据；顶部「必要非充分」caveat 逐字保留（诚实红线，不说「可整合」）。
    （旧版 compact 精简卡是下半窗窄栏的迁就；详情页子标签页空间充足，回归全卡。） */
 export function renderCompatCards(wrap, data) {
@@ -419,7 +444,7 @@ export function renderFairInto(wrap, report) {
 }
 
 /* ---------- files modal ----------
-   点卡片「查看全部 N 个文件」→ 居中弹窗展示该数据集全部真实直链。
+   点卡片「下载数据」右侧的更多区（.cta-split-more）→ 居中弹窗展示该数据集全部真实直链。
    按需拉取一次并按 uid/url 缓存；开合动效经 MOTION 门控，无 GSAP 时纯显隐。 */
 const _filesCache = new Map();
 
@@ -451,7 +476,7 @@ export function renderFilesList(files) {
         const label = escapeHtml(f.title || f.filename || "文件");
         const fn = f.filename ? `<span class="file-fn">${escapeHtml(f.filename)}</span>` : "";
         const dl = isHttp(f.download_url)
-            ? `<a class="file-dl" href="${escapeHtml(f.download_url)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-name="${escapeHtml(f.filename || f.title || "数据文件")}">下载 ↓</a>`
+            ? `<a class="file-dl" href="${escapeHtml(f.download_url)}" target="_blank" rel="noopener" download data-dlq="data" data-dlq-name="${escapeHtml(f.filename || f.title || "数据文件")}">下载</a>`
             : `<span class="file-dl disabled">暂无下载</span>`;
         return `<li class="file-row${primary ? " primary" : ""}${f.problem ? " warn" : ""}"><span class="file-type">${escapeHtml(tag)}</span>`
             + `<span class="file-info"><span class="file-name">${label}${badge}${warn}</span>${fn}</span>`
@@ -463,6 +488,7 @@ export function renderFilesList(files) {
 /* 返回 `{ok, count, error?}`。**必须有返回值**：一句话执行层要据此渲染回执——
    没有返回值就只能照「成功」渲染，断网时也会写成「已经打开了 N 个文件的清单」。 */
 export async function loadFilesInto(body, it) {
+    const token = beginRequest(body);
     const key = it.dataset_uid || it.url || "";
     if (_filesCache.has(key)) {
         const cached = _filesCache.get(key);
@@ -473,12 +499,16 @@ export async function loadFilesInto(body, it) {
     try {
         const q = it.dataset_uid ? ("uid=" + encodeURIComponent(it.dataset_uid))
                                  : ("url=" + encodeURIComponent(it.url || ""));
-        const d = await (await fetch(API.files + "?" + q)).json();
-        const files = d.files || [];
+        const response = await fetch(API.files + "?" + q);
+        const d = await response.json();
+        if (!response.ok || !d || d.ok !== true || !Array.isArray(d.files)) throw new Error("文件清单加载失败");
+        const files = d.files;
+        if (!token.isCurrent()) return { ok: false, stale: true };
         _filesCache.set(key, files);
         body.innerHTML = renderFilesList(files);
         return { ok: true, count: files.length };
     } catch (_e) {
+        if (!token.isCurrent()) return { ok: false, stale: true };
         body.innerHTML = `<div class="files-hint">加载失败，请刷新页面后重试</div>`;
         return { ok: false, count: 0, error: "没能取到这一条的文件清单" };
     }
@@ -488,12 +518,13 @@ export async function loadFilesInto(body, it) {
    手点这个弹窗的路径不 await，行为逐位不变。 */
 export function openFilesModal(it, trigger) {
     const back = $("filesModal");
+    invalidateRequest(back);
     _filesReturnFocus = trigger || document.activeElement;
     const _openCard = trigger && trigger.closest ? trigger.closest(".card") : null;
     const _openRank = usageCardRank(_openCard);
     usageLogCardAction(_openCard, USAGE_KINDS.open, { what: "files", r: _openRank, uid: String(it.dataset_uid || ""), pos: _openRank });
     $("filesModalTitle").textContent = it.dataset_name || "数据集文件";
-    $("filesModalSub").textContent = `共 ${it.n_files || 0} 个文件 · 点每行右侧「下载 ↓」保存到本地`;
+    $("filesModalSub").textContent = `共 ${it.n_files || 0} 个文件 · 点每行右侧「下载」保存到本地`;
     const body = $("filesModalBody"); body.scrollTop = 0;
     openModal(back, { returnFocus: _filesReturnFocus, initialFocus: $("filesModalClose") });
     if (MOTION) {
@@ -509,9 +540,12 @@ export function openFilesModal(it, trigger) {
 export function closeFilesModal() {
     const back = $("filesModal");
     if (back.hidden) return;
+    const token = beginRequest(back);
+    const body = $("filesModalBody");
+    if (body) invalidateRequest(body);
     let doneRan = false;
     const done = () => {
-        if (doneRan) return; doneRan = true;   // 幂等：onComplete 与兜底 timer 谁先到谁执行
+        if (doneRan || !token.isCurrent()) return; doneRan = true;
         closeModal(back);
     };
     if (MOTION) {

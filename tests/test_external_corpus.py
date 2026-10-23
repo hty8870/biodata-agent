@@ -173,3 +173,72 @@ def test_ingest_organism_mapping():
     assert ing.map_species(["Foo bar baz"]) == "Foo bar baz"
     assert ing.platform_hint(["10x 3' v3"]) == "Chromium"
     assert ing.platform_hint(["Visium Spatial Gene Expression V1"]) == "Visium"
+
+
+# ---------------------------------------------------------------- 跨进程写入代际
+
+def test_cross_process_write_token_refreshes_external_cache(tmp_path):
+    """另一个进程（CLI/stdio MCP/RQ worker）上传后，本进程**不调失效入口**也能读到——
+    跨进程可见的写入代际令牌进缓存键（不是第二份缓存，也不依赖状态轮询）。"""
+    import json
+
+    from dataset_recommender.corpus import corpus as C
+
+    base = tmp_path / "database" / "base"
+    base.mkdir(parents=True)
+    (base / "base.json").write_text(
+        json.dumps([{"dataset_uid": "B1", "dataset_name": "Base"}]), encoding="utf-8")
+    ext = tmp_path / "database" / "external"
+    ext.mkdir(parents=True)
+    (ext / "upload_a.json").write_text(
+        json.dumps({"records": [{"dataset_uid": "U1", "dataset_name": "First"}]}),
+        encoding="utf-8")
+
+    first = [r.dataset_name for r in C.load_full_corpus(base, tmp_path)]
+    gen1 = C.corpus_cache_generation(base, tmp_path)
+    assert "First" in first and "Second" not in first
+
+    # 模拟「另一个进程」：写文件 + 发布写入代际令牌（刻意不调用 invalidate_external_cache）
+    (ext / "upload_b.json").write_text(
+        json.dumps({"records": [{"dataset_uid": "U2", "dataset_name": "Second",
+                                 "source": "SRC_X"}]}), encoding="utf-8")
+    assert C.corpus_write_generation(tmp_path) == ""
+    C.publish_corpus_write(tmp_path)
+    assert C.corpus_write_generation(tmp_path) != ""
+
+    second = [r.dataset_name for r in C.load_full_corpus(base, tmp_path)]
+    assert "Second" in second, "跨进程写入必须被本进程读侧发现（无需通知通道）"
+    assert C.corpus_cache_generation(base, tmp_path) != gen1, "整库键必须换代（旧 ETag 不再命中）"
+
+
+def test_committed_bytes_visible_when_token_publish_lost(tmp_path):
+    """**数据已提交、令牌未发布之间进程被杀**的窗口——独立 reader 的
+    下一次正常检索靠目录指纹 healer 立即看到真实已提交字节（不解析全库、不加第二 cache）。"""
+    import json
+
+    from dataset_recommender.corpus import corpus as C
+
+    base = tmp_path / "database" / "base"
+    base.mkdir(parents=True)
+    (base / "base.json").write_text(
+        json.dumps([{"dataset_uid": "B1", "dataset_name": "Base"}]), encoding="utf-8")
+    ext = tmp_path / "database" / "external"
+    ext.mkdir(parents=True)
+    (ext / "upload_a.json").write_text(
+        json.dumps({"records": [{"dataset_uid": "U1", "dataset_name": "First"}]}),
+        encoding="utf-8")
+    first = [r.dataset_name for r in C.load_full_corpus(base, tmp_path)]
+    assert "First" in first and "Second" not in first
+
+    # 故障注入：另一进程写盘已提交，但在发布令牌**之前**被杀（无令牌、无失效入口调用）
+    (ext / "upload_b.json").write_text(
+        json.dumps({"records": [{"dataset_uid": "U2", "dataset_name": "Second",
+                                 "source": "SRC_X"}]}), encoding="utf-8")
+    assert C.corpus_write_generation(tmp_path) == "", "确证令牌未发布"
+    hotted = [r.dataset_name for r in C.load_full_corpus(base, tmp_path)]
+    assert "Second" in hotted, "已提交字节必须被独立 reader 下一次检索看到（指纹 healer）"
+
+    # failed 事务不产生假数据：坏文件不入库、也不改变已提交视图
+    (ext / "upload_broken.json").write_text("{bad json", encoding="utf-8")
+    after = sorted(r.dataset_name for r in C.load_full_corpus(base, tmp_path))
+    assert after == ["Base", "First", "Second"], "坏文件被宽容跳过：不产生假记录、已有视图不变"

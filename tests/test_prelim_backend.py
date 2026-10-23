@@ -24,6 +24,31 @@
 """
 import json
 
+
+def test_legacy_preliminary_smoke_delegates_to_single_main(monkeypatch):
+    import runpy
+    import sys
+    from pathlib import Path
+    from types import ModuleType
+    import pytest
+
+    legacy = Path(__file__).resolve().parents[1] / "scripts/smoke_preliminary.py"
+    if not legacy.exists():
+        pytest.skip("旧命令兼容入口仅保留在源仓")
+    calls = []
+
+    async def main():
+        calls.append("canonical")
+        return 7
+
+    canonical = ModuleType("smoke_prelim_backend")
+    canonical.main = main
+    monkeypatch.setitem(sys.modules, "smoke_prelim_backend", canonical)
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(str(legacy), run_name="__main__")
+    assert exit_info.value.code == 7
+    assert calls == ["canonical"]
+
 import pytest
 
 from dataset_recommender.agent import action_plan as AP  # noqa: E402
@@ -502,3 +527,37 @@ def test_endpoint_idem_fingerprint_covers_search_params(monkeypatch):
     assert r3.status_code == 200, "同号同参 = 合法重发，回缓存体"
     r4 = client.post("/api/utterance", json={**req, "polish": False})
     assert r4.status_code == 409, "polish 进指纹：同号不同 polish 也是另一次请求"
+
+
+@pytest.mark.parametrize('controls', [
+    {}, {'auto_parse_sources': True}, {'auto_allow_llm': False}, {'rerank_top_n': None},
+    {'auto_parse_sources': True, 'auto_allow_llm': False, 'rerank_top_n': 17}])
+def test_legacy_optional_search_controls_only_when_explicit(monkeypatch, controls):
+    sink = []
+    _capture_route_turn(monkeypatch, sink)
+    response = TestClient(app, base_url='http://127.0.0.1').post('/api/utterance',
+        json={'utterance': 'human blood', 'agent': False, **controls})
+    assert response.status_code == 200, response.text
+    expected = {'top_k': None, 'rerank': 'off', 'recall': 'off', 'strategy': 'fixed',
+        'facet_filters': [], 'suppressed_constraints': [], 'lenient_dims': [],
+        'date_from': '', 'date_to': '', 'polish': True, **controls}
+    assert sink[0][1]['search_params'] == expected
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('experiment', [None, {'id': 'test', 'arm': 'control', 'propensity': .5}])
+def test_legacy_experiment_contract_json_and_sse(monkeypatch, stream, experiment):
+    _capture_route_turn(monkeypatch, [])
+    payload = {'utterance': 'human blood', 'agent': False, 'stream': stream}
+    if experiment:
+        payload.update(experiment_id=experiment['id'], experiment_arm=experiment['arm'], propensity=experiment['propensity'])
+    response = TestClient(app, base_url='http://127.0.0.1').post('/api/utterance', json=payload)
+    assert response.status_code == 200, response.text
+    body = _sse_frames(response.text)[-1]['data'] if stream else response.json()
+    if experiment:
+        assert body['experiment'] == experiment
+    else:
+        assert 'experiment' not in body
+    assert set(body) == {'ok', 'route', 'query', 'plan', 'echo_zh', 'retrieval', 'via',
+        'needs_agent', 'suggestions', 'agent', 'result_payload', 'preliminary_final',
+        'policy_id', 'policy_id_str'} | ({'experiment'} if experiment else set())

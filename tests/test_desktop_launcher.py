@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -156,12 +157,16 @@ class FakeWin32:
 
 
 class FakeTray:
-    """注入用托盘替身：状态事件可断言；run_message_loop 阻塞至 quit。"""
+    """注入用托盘替身：状态事件可断言；run_message_loop 阻塞至 quit。
+
+    `loop_entered` 在消息泵入口置位——生产顺序是「running 状态 → 浏览器/通知 → 消息泵」，
+    它是「就绪后所有交互面都已落地」的唯一确定性信号（只等 running 是在和主线程赛跑）。"""
 
     def __init__(self, handlers: TrayHandlers):
         self.handlers = handlers
         self.events: list[tuple] = []
         self._loop_exit = threading.Event()
+        self.loop_entered = threading.Event()
 
     def create(self, url: str, status: str) -> None:
         self.events.append(("create", url, status))
@@ -173,6 +178,7 @@ class FakeTray:
         self.events.append(("balloon", title, text))
 
     def run_message_loop(self) -> None:
+        self.loop_entered.set()
         self._loop_exit.wait()
 
     def quit_message_loop(self) -> None:
@@ -237,7 +243,35 @@ def _run_bg(launcher: dl.Launcher, argv=None) -> tuple[threading.Thread, dict]:
 
 
 def _wait_tray_ready(tray_holder: dict, box: dict, timeout: float = 15.0) -> FakeTray:
-    """等待托盘完成 create + 运行中（含服务真正就绪）。"""
+    """等待托盘完成 create + 运行中 + **已进入消息泵**（启动器顺序：running 状态 →
+    浏览器/通知 → 消息泵，消息泵入口 = 就绪后所有交互面都已落地的唯一确定性信号）。
+
+    只等「运行中」状态会提前放行：此刻浏览器/通知尚未执行完，测试线程随后断言
+    opened/notified 就是在和启动线程赛跑。有截止的 Event.wait 分片轮询；
+    launcher 提前异常/退出即时抛出，不等满超时。"""
+    deadline = time.monotonic() + timeout
+    while True:
+        tray = tray_holder.get("tray")
+        if tray is not None and tray.loop_entered.wait(
+                timeout=max(0.0, min(0.05, deadline - time.monotonic()))):
+            break
+        if "error" in box:
+            raise AssertionError(f"launcher 提前异常: {box['error']}")
+        if box.get("rc") is not None:
+            raise AssertionError(f"launcher 提前退出 rc={box['rc']}")
+        if time.monotonic() >= deadline:
+            raise AssertionError("托盘/服务未在时限内就绪")
+        if tray is None:
+            time.sleep(0.05)
+    assert ("status", "运行中") in tray.events, "进入消息泵前必先置运行中（生产顺序不变）"
+    return tray
+
+
+def _wait_tray_ready_old_algorithm(tray_holder: dict, box: dict, timeout: float = 15.0) -> FakeTray:
+    """**仅负控制用**：旧版 helper 的逐位算法（只等 create + running，不等消息泵入口）。
+
+    保留它是为了在同一握手场景里证明：新同步点能**确定性**抓住这种提前返回
+    （正信号永不置位），而不是靠时钟负推断碰运气。产品与新 helper 均不调用本函数。"""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         tray = tray_holder.get("tray")
@@ -249,6 +283,65 @@ def _wait_tray_ready(tray_holder: dict, box: dict, timeout: float = 15.0) -> Fak
             raise AssertionError(f"launcher 提前退出 rc={box['rc']}")
         time.sleep(0.05)
     raise AssertionError("托盘/服务未在时限内就绪")
+
+
+class _OwnedLauncher:
+    """`_owned_launcher` 的状态盒（用例在 with 体内按需登记）。"""
+
+    def __init__(self):
+        self.mp = pytest.MonkeyPatch()
+        self.launcher: "dl.Launcher | None" = None
+        self.thread: "threading.Thread | None" = None       # 主 launcher 线程
+        self.probes: list[threading.Thread] = []            # 自建探针线程
+        self.barriers: list[threading.Event] = []           # 本 case 的屏障（browser 替身等）
+        self.occupied: list[socket.socket] = []             # 外部占用 socket（最后关）
+
+
+@contextlib.contextmanager
+def _owned_launcher():
+    """端到端 launcher 用例的**拥有权清理**（单一实现，真实启动用例共用）。
+
+    进入时清掉会改变启动行为的环境项（BIODATA_NO_BROWSER / BIODATA_SHELL），
+    finally 顺序（任何断言失败也走到，异常聚合如实抛、不吞）：
+    1. 释放登记的全部屏障——browser 替身/探针绝不因 teardown 卡死；
+    2. 经真实 `Launcher._request_quit` 接缝发**幂等**退出（对象已构造但托盘未 ready
+       同样安全：server/tray 任一为 None 各自跳过；不猜 PID、不伪造 instance.json）；
+    3. bounded join 主线程/服务线程/全部自建探针线程，**assert 全部停止**——
+       停不掉 = 服务泄漏进下一个用例，如实报错；
+    4. 最后才关外部占用 socket、撤 MonkeyPatch。
+    """
+    st = _OwnedLauncher()
+    st.mp.delenv("BIODATA_NO_BROWSER", raising=False)
+    st.mp.delenv("BIODATA_SHELL", raising=False)
+    try:
+        yield st
+    finally:
+        errors: list[str] = []
+        for barrier in st.barriers:
+            barrier.set()
+        if st.launcher is not None:
+            try:
+                st.launcher._request_quit()     # 幂等；托盘未 ready 同样安全
+            except Exception as exc:  # noqa: BLE001（清理异常聚合后如实抛，不吞）
+                errors.append(f"request_quit 异常: {exc}")
+        named = [("主线程", st.thread, 15.0)]
+        named += [(f"probe#{i}", t, 6.0) for i, t in enumerate(st.probes)]
+        server_thread = getattr(st.launcher, "_server_thread", None) if st.launcher else None
+        named.append(("服务线程", server_thread, 5.0))
+        for name, thread, budget in named:
+            if thread is None:
+                continue
+            thread.join(timeout=budget)
+            if thread.is_alive():
+                errors.append(f"{name} 未在 {budget:.0f}s 内停止")
+        for sock in st.occupied:
+            try:
+                sock.close()
+            except OSError as exc:
+                errors.append(f"占用 socket 关闭异常: {exc}")
+        st.mp.undo()
+        if errors:
+            raise AssertionError("owned launcher 清理未完全: " + "; ".join(errors))
 
 
 # ===========================================================================
@@ -884,12 +977,13 @@ def test_launcher_end_to_end_clean_exit(tmp_path):
     """主实例全链路：端口先绑 → instance.json → 托盘状态流 → 浏览器 → 退出清理。"""
     paths = _make_paths(tmp_path)
     port = _free_port()
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(dl, "DEFAULT_PORT", port)
-    try:
+    with _owned_launcher() as st:
+        st.mp.setattr(dl, "DEFAULT_PORT", port)
         fake_win = FakeWin32()
         launcher, tray_holder, opened, notified = _make_launcher(paths, fake_win=fake_win)
+        st.launcher = launcher
         thread, box = _run_bg(launcher, [])
+        st.thread = thread
         tray = _wait_tray_ready(tray_holder, box)
         assert opened == [f"http://127.0.0.1:{port}"], "浏览器应在服务就绪后打开"
         assert ("create", f"http://127.0.0.1:{port}", "正在启动") in tray.events
@@ -906,24 +1000,155 @@ def test_launcher_end_to_end_clean_exit(tmp_path):
         thread.join(timeout=15)
         assert "error" not in box and box.get("rc") == 0, box
         assert not launcher._instance_store.path.exists(), "退出必须删除本 PID 的 instance.json"
-        assert bind_socket(port) is not None, "退出后端口已释放"
+        probe = bind_socket(port)
+        assert probe is not None, "退出后端口已释放"
+        probe.close()
         assert ("destroy",) in tray.events
         assert all(m.closed for m in fake_win.mutexes), "mutex 必须释放"
-    finally:
-        monkeypatch.undo()
+
+
+def test_wait_tray_ready_blocks_until_message_loop_not_just_running(tmp_path):
+    """helper 同步点的因果钉：真实 Launcher/uvicorn + browser 替身 Event 阻塞 + 真实握手。
+
+    启动器顺序「running 状态 → 浏览器/通知 → 消息泵」。browser 替身卡在屏障上时 running
+    已可见、loop 未进：
+    - 阶段一（负控制，产品/helper 不改）：旧算法此刻提前返回且从不经过
+      loop_entered.wait——新握手用的正信号对它必不置位（确定性红，不靠 join+alive 碰运气）；
+    - 阶段二：新 helper 必须真的执行到 Event.wait（正信号握手）才继续，
+      屏障释放、浏览器实际完成后放行。
+    失败通知路径由 test_launcher_browser_failure_notifies_service_keeps_running 保留。"""
+    paths = _make_paths(tmp_path)
+    port = _free_port()
+    with _owned_launcher() as st:
+        st.mp.setattr(dl, "DEFAULT_PORT", port)
+        gate = threading.Event()
+        st.barriers.append(gate)
+        opened: list[str] = []
+
+        def _blocked_browser(url: str) -> bool:
+            if not gate.wait(timeout=30):
+                raise AssertionError("browser 屏障 30s 超时——超时不是显式放行")
+            opened.append(url)
+            return True
+
+        launcher, tray_holder, _, _ = _make_launcher(paths, browser=_blocked_browser)
+        st.launcher = launcher
+        thread, box = _run_bg(launcher, [])
+        st.thread = thread
+        # 等 running 出现（启动器 update_status 先于 open_browser），此时浏览器替身仍卡在屏障上
+        tray = None
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            tray = tray_holder.get("tray")
+            if tray is not None and ("status", "运行中") in tray.events:
+                break
+            if "error" in box:
+                raise AssertionError(box["error"])
+            time.sleep(0.05)
+        else:
+            raise AssertionError("running 状态未在时限内出现")
+        assert not tray.loop_entered.is_set(), "前提：尚未进入消息泵"
+        assert opened == [], "前提：浏览器仍被屏障阻塞，opened 必空"
+        # 真实握手：包装 loop_entered.wait（保原 Event.wait 调用），helper 确已执行 wait 时置位
+        real_wait = tray.loop_entered.wait
+        wait_entered = threading.Event()
+
+        def _spy_wait(timeout=None):
+            wait_entered.set()
+            return real_wait(timeout)
+
+        st.mp.setattr(tray.loop_entered, "wait", _spy_wait)
+
+        # ---- 阶段一（负控制）：旧算法提前返回，正信号永不置位 ----
+        old_holder: dict = {}
+
+        def _old_probe():
+            try:
+                old_holder["tray"] = _wait_tray_ready_old_algorithm(tray_holder, box, timeout=5.0)
+            except BaseException as exc:  # noqa: BLE001（探针结果/异常都须显式断言）
+                old_holder["error"] = exc
+
+        old_thread = threading.Thread(target=_old_probe, daemon=True)
+        st.probes.append(old_thread)
+        old_thread.start()
+        old_thread.join(timeout=5.0)
+        assert not old_thread.is_alive(), "旧算法前提：它会提前返回"
+        if "error" in old_holder:
+            raise old_holder["error"]
+        assert old_holder.get("tray") is tray, "旧算法在 loop 未进时已返回（提前放行）"
+        assert not wait_entered.is_set(), "旧算法从不经过 loop_entered.wait → 新握手对它必超时"
+        assert opened == [], "旧算法返回时浏览器仍未完成——下游断言必踩空"
+
+        # ---- 阶段二：新 helper 的真实握手 ----
+        holder: dict = {}
+
+        def _probe():
+            try:
+                holder["tray"] = _wait_tray_ready(tray_holder, box, timeout=10.0)
+            except BaseException as exc:  # noqa: BLE001（探针结果/异常都须显式断言，不留 daemon 假绿）
+                holder["error"] = exc
+
+        probe_thread = threading.Thread(target=_probe, daemon=True)
+        st.probes.append(probe_thread)
+        probe_thread.start()
+        # 正信号：不经过 loop_entered.wait 的实现这里必超时——确定性红
+        assert wait_entered.wait(timeout=5.0), "helper 未执行 loop_entered.wait——同步点不是真实等待"
+        assert not tray.loop_entered.is_set(), "此刻仍不得进入消息泵"
+        assert "tray" not in holder and "error" not in holder, "helper 在 loop 未进时不得返回"
+        gate.set()                     # 释放屏障：浏览器实际完成 → 进入消息泵 → helper 放行
+        probe_thread.join(timeout=10)
+        assert not probe_thread.is_alive(), "helper 未在屏障释放后完成"
+        if "error" in holder:
+            raise holder["error"]
+        assert holder.get("tray") is tray
+        assert opened == [f"http://127.0.0.1:{port}"]
+        hit = HealthProbe(timeout=1.0).probe(port)
+        assert hit is not None and hit.ok, "释放后服务真实可探"
+        tray.handlers.on_quit()
+        thread.join(timeout=15)
+        assert "error" not in box and box.get("rc") == 0, box
+        probe = bind_socket(port)
+        assert probe is not None, "退出后端口已释放"
+        probe.close()
+
+
+def test_owned_launcher_teardown_stops_service_on_midway_failure(tmp_path):
+    """共用清理的因果钉：用例中途断言失败时，finally 必须真实停服——
+    主/服务线程全停、端口可重绑（旧写法 finally 只撤 patch，daemon 服务会泄漏到套件尾部）。"""
+    paths = _make_paths(tmp_path)
+    port = _free_port()
+    leaked: dict = {}
+    with pytest.raises(AssertionError, match="注入的中途失败"):
+        with _owned_launcher() as st:
+            st.mp.setattr(dl, "DEFAULT_PORT", port)
+            launcher, tray_holder, _, _ = _make_launcher(paths)
+            st.launcher = launcher
+            thread, box = _run_bg(launcher, [])
+            st.thread = thread
+            _wait_tray_ready(tray_holder, box)
+            leaked["thread"] = thread
+            leaked["server_thread"] = launcher._server_thread
+            raise AssertionError("注入的中途失败")
+    assert not leaked["thread"].is_alive(), "主线程必须停"
+    server_thread = leaked["server_thread"]
+    assert server_thread is None or not server_thread.is_alive(), "服务线程必须停"
+    probe = bind_socket(port)
+    assert probe is not None, "服务端口必须已释放"
+    probe.close()
 
 
 def test_launcher_browser_failure_notifies_service_keeps_running(tmp_path):
     paths = _make_paths(tmp_path)
     port = _free_port()
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(dl, "DEFAULT_PORT", port)
-    try:
+    with _owned_launcher() as st:
+        st.mp.setattr(dl, "DEFAULT_PORT", port)
         notified: list[tuple[str, str]] = []
         launcher, tray_holder, opened, _ = _make_launcher(
             paths, browser=lambda url: opened.append(url) or False,
             notify=lambda t, x: notified.append((t, x)))
+        st.launcher = launcher
         thread, box = _run_bg(launcher, [])
+        st.thread = thread
         tray = _wait_tray_ready(tray_holder, box)
         # 浏览器失败 → 简洁提示（含可复制 URL），服务继续跑
         assert opened and opened[0] == f"http://127.0.0.1:{port}"
@@ -934,8 +1159,6 @@ def test_launcher_browser_failure_notifies_service_keeps_running(tmp_path):
         tray.handlers.on_quit()
         thread.join(timeout=15)
         assert box.get("rc") == 0, box
-    finally:
-        monkeypatch.undo()
 
 
 def test_launcher_no_tray_poll_mode_clean_exit(tmp_path):
@@ -1002,22 +1225,22 @@ def test_launcher_warm_failure_does_not_fail_startup(tmp_path):
     """第 5 项：预热在后台跑，warm 抛异常也不得导致启动失败——服务照常就绪。"""
     paths = _make_paths(tmp_path)
     port = _free_port()
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(dl, "DEFAULT_PORT", port)
-    try:
+    with _owned_launcher() as st:
+        st.mp.setattr(dl, "DEFAULT_PORT", port)
+
         def _bad_warm(log):
             raise RuntimeError("model warm boom")
 
         launcher, tray_holder, _, _ = _make_launcher(paths, warm=_bad_warm)
+        st.launcher = launcher
         thread, box = _run_bg(launcher, [])
+        st.thread = thread
         tray = _wait_tray_ready(tray_holder, box)
         assert ("status", "运行中") in tray.events, "预热失败不得导致启动失败"
         assert HealthProbe(timeout=1.0).probe(port) is not None
         tray.handlers.on_quit()
         thread.join(timeout=15)
         assert box.get("rc") == 0, box
-    finally:
-        monkeypatch.undo()
 
 
 def test_launcher_second_instance_attaches_existing(tmp_path):
@@ -1072,13 +1295,15 @@ def test_launcher_frozen_does_not_attach_source_on_default_port(tmp_path):
     模态框卡死、runtime.json/instance.json 不写。收紧后应识破 mode 不同 → 漂移绑新端口，
     自己启动（rc=0、不开浏览器）。"""
     paths = _make_paths(tmp_path, runtime_mode="frozen")
-    occupied = _occupy(P_BASE)
-    try:
+    with _owned_launcher() as st:
+        st.occupied.append(_occupy(P_BASE))
         launcher, tray_holder, opened, _ = _make_launcher(
             paths,
             health=FakeHealth(results={P_BASE: _matching(str(tmp_path / "dev-src"), runtime_mode="source")}),
         )
+        st.launcher = launcher
         thread, box = _run_bg(launcher, [])
+        st.thread = thread
         tray = _wait_tray_ready(tray_holder, box)
         # 启动器应在漂移端口上写了自己的一份 instance.json，并在该端口打开浏览器——
         # 绝不开 source 实例所在的默认端口（P_BASE）。
@@ -1091,8 +1316,6 @@ def test_launcher_frozen_does_not_attach_source_on_default_port(tmp_path):
         tray.handlers.on_quit()
         thread.join(timeout=15)
         assert "error" not in box and box.get("rc") == 0, box
-    finally:
-        occupied.close()
 
 
 def test_launcher_fixed_port_occupied_by_unrelated_errors(tmp_path):

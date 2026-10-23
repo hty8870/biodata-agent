@@ -6,10 +6,11 @@
  * ## 落点与加载
  * - 设置抽屉「使用反馈」卡片新增「向开发者发送意见」按钮（#feedbackSendEntryBtn）→ 本对话框
  *   （#feedbackModal，复用 benchfbModal 同款 modal 组件语言）。
- * - 本文件经 index.html 的 <script type="module"> 加载并**自接线**（不进 boot）：boot 的
- *   `#` 静态 import 会牵动两页 importmap 与 parity 门，而 dataset.html 归 F2 并行包——
- *   与 usage_upload.js / feedback_core.js 的「不进静态图」同哲学（见 usage_log.js 头部注释）。
- *   usage_upload.js 同样只**动态 import**（它的既有红线：静态 import 会牵动两页 importmap）。
+ * - 本文件经 index.html 的 <script type="module"> 加载并**自接线**（不进 boot，同 task_card.js）。
+ *   feedback_dialog_core.js 走 `#feedback_dialog_core`：**import 通道 = 目标模块的属性**，有 importmap
+ *   键的模块一律走 `#键`（2026-10-01 tidy1 修——此前写成相对路径，会按无令牌 URL 再取一遍拉出
+ *   第二实例）。usage_upload.js / feedback_core.js 则**无 importmap 键**，只能相对取，且
+ *   usage_upload.js 只许**动态 import**（见 usage_log.js 头部注释）。
  *
  * ## 授权语义（设计 §8，评审①阻断2 裁决）
  * - 点「发送」= 对该条**不可变记录**的明示单次授权：feedbackEnqueue 入 per-profile
@@ -30,15 +31,20 @@
  *   （设计 §8/§10「接收端侧」），故本文件不调用 usageLog。
  */
 
-import { $, toast, cacheGeneration, copyTextAny, currentAccountScope } from "#core";
+import { $, toast, cacheGeneration, copyTextAny, currentAccountScope, beginRequest, invalidateRequest } from "#core";
 import { usageEnabledForScope, usageEventsForScope } from "#usage_log";
-import { feedbackClipboardText, feedbackDiagBuild, feedbackEntryBuild, feedbackNewId, feedbackTextState } from "./feedback_dialog_core.js";
-import { feedbackEnqueue, feedbackRemoveForScope, hasSendChannel as feedbackHasSendChannel } from "./feedback_core.js";
+import { feedbackClipboardText, feedbackDiagBuild, feedbackEntryBuild, feedbackTextState } from "#feedback_dialog_core";
+/* feedbackNewId 取自**定义它的** feedback_core（该文件 72 行导出），不经 dialog_core 的
+   `export { feedbackNewId }` 转手——转手是多一跳、且 import 图门的导出对账只认声明式 export。 */
+import { feedbackEnqueue, feedbackNewId, feedbackRemoveForScope, hasSendChannel as feedbackHasSendChannel } from "./feedback_core.js";
 import { closeModal, openModal, trapModalFocus } from "./copy.js";
+import { setAccountChangedHook } from "#accounts";
 
 /* ---------- 模块内状态（仅 UI 态；数据真源在 feedback_core 队列） ---------- */
 
 /* 当前对话框会话：{fid, channel, diag, state}。state: "idle"→"sending"→"done"|"failed"|"cancelled" */
+const _feedbackRequests = {};
+let _feedbackCloseTimer = null;
 let _dialog = null;
 
 /* usage_upload.js 只经动态 import 取（它的静态 import 会牵动两页 importmap——本模块同红线）。 */
@@ -110,7 +116,14 @@ function _renderDiagSummary() {
 
 /* ---------- 开合 ---------- */
 
+function _resetDialogRequest() {
+    invalidateRequest(_feedbackRequests);
+    if (_feedbackCloseTimer) clearTimeout(_feedbackCloseTimer);
+    _feedbackCloseTimer = null;
+}
+
 function _openDialog() {
+    _resetDialogRequest();
     const modal = $("feedbackModal");
     if (!modal) return;
     const scope = _scope();
@@ -136,6 +149,7 @@ function _openDialog() {
 }
 
 function _closeDialog() {
+    _resetDialogRequest();
     const modal = $("feedbackModal");
     closeModal(modal);
     _dialog = null;
@@ -160,6 +174,7 @@ async function _onSend() {
         feedback_id: _dialog.fid,
         authorized_at: new Date().toISOString(),
     });
+    const token = beginRequest(_feedbackRequests, () => _dialog);
     _dialog.state = "sending";
     const sendBtn = $("feedbackSendBtn");
     if (sendBtn) sendBtn.disabled = true;
@@ -170,11 +185,12 @@ async function _onSend() {
         const upload = await _loadUploadModule();
         sent = await upload.sendFeedback(scope);
     } catch (_e) { sent = false; }
-    if (!_dialog || _dialog.state !== "sending") return;   // 发送期间被关窗/重开 → 静默放弃展示
+    if (!token.isCurrent()) return;   // 发送期间被关窗/重开 → 静默放弃展示
     if (sent) {
         _dialog.state = "done";
         _setStatus("已发送，谢谢反馈");
-        const t = setTimeout(_closeDialog, 1200);
+        const t = setTimeout(() => { if (token.isCurrent()) _closeDialog(); }, 1200);
+        _feedbackCloseTimer = t;
         if (t && typeof t.unref === "function") t.unref();
     } else {
         _dialog.state = "failed";
@@ -210,6 +226,7 @@ function _onFailCopyCancel() {
 /* ---------- 接线（自接线，全 DOM 自守卫；不进 boot/importmap 键表——见文件头） ---------- */
 
 function _init() {
+    setAccountChangedHook(_closeDialog);
     const entry = $("feedbackSendEntryBtn");
     if (entry) entry.addEventListener("click", _openDialog);
     const close = $("feedbackCloseBtn");

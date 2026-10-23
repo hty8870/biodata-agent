@@ -81,7 +81,29 @@ def test_launcher_expected_version_matches_web_health_version() -> None:
     # 3.0.0：Wave 3 行为合同收口——前端 plan-only 动词不再绕过 Agent 图；
     #        rescue 成为第四套件；退役 rerank_audit/degrade_with_llm/action_audit
     #        三条环外 LLM 通道及串行 RAG 副本。响应/请求面因而 breaking。
-    assert web_match.group(1) == ps_match.group(1) == sh_match.group(1) == "3.0.0"
+    # 3.1.0：复盘批（2026-09-28，additive）——新增对话级 session log（app/session_log.py）与
+    #        `/api/replay/*`（status/points/snapshots/digest/annotate/snapshot(+annotate)/seen/chat/backfill）；
+    #        `/api/utterance`·`/api/recommend` 入参 additive 新增 conv_id/replay_key（缺省=不落痕，
+    #        行为逐位不变）；响应体形状零变化。
+    # 3.1.1：「同系列」标记（2026-09-29，additive）——`/api/recommend` 的 `results[]` 新增
+    #        `collection_doi`（collection 级编号：同一论文下 core/extended 等条目共用它）。
+    #        用户报「LuCA 重复出现两张卡」的根因是**观感**：两条合法不同数据（core 89.2 万 /
+    #        extended 128.4 万细胞）标题逐字相近。前端按本响应 rows 里同 doi 的条数，给那些卡
+    #        加一枚「同系列 ×N」小标——**不藏任何合法条目**（按标题/DOI 去重会把合法数据藏起来）。
+    #        路由数不变（75）；响应体其余形状零变化。
+    # 3.2.0：协作规则卡（2026-09-29，additive）——新增 `/api/rules/list` + `/api/rules/approve`
+    #        + `/api/rules/revoke`（用户**逐条确认**过的「助手行为约束」服务端账本
+    #        `.userdata/collab_rules.jsonl`；撤回是 tombstone、不物理删）；
+    #        `/api/dream` 响应加性新增 `rules` / `rules_count`（抽取扩「协作规则」类目——
+    #        2026-09-29 融合批起原「明确说过的约束」并轨进它，故 prompt 是三类目；
+    #        条目加性多 `tier` / `trigger`；`memories` 形状与既有语义逐位不变）。
+    #        路由数 75 → 78。
+    # 3.5.0: additive project colors, partial edits and persistent project ordering.
+    # 3.5.1: conversation history preserves final replies and the saved conversation view.
+    # 3.5.3: history forks preserve their selected prefix and inherited result frames.
+    # 3.6.0: shared conversation/project/replay API (Web and the high-level MCP agent tools
+    #        read and write the same persisted scene).
+    assert web_match.group(1) == ps_match.group(1) == sh_match.group(1) == "3.7.0"
     assert "src\\dataset_recommender\\app\\webapp.py" in ps_launcher
     assert "src/dataset_recommender/app/webapp.py" in sh_launcher
     assert "src\\dataset_recommender\\webapp.py" not in ps_launcher
@@ -113,13 +135,17 @@ def _mcp_server_version() -> str:
 
 
 def _route_decorator_count() -> int:
-    """`webapp.py` 里的路由装饰器条数（`@app.get/post/...` + `@app.api_route`）。
+    """`webapp.py` 与接口适配模块（`workspace_api` / `conversation_runs_api` / `conversation_api`
+    / `learning_api` / `knowledge_api`）里的路由装饰器条数（`@app.get/post/...` + `@app.api_route`）。
 
     刻意不 import app 去数 `app.routes`：那会把 FastAPI 自带的 `/docs`、`/openapi.json`、
     `/redoc`、`/static` 一起数进来，与文档表里「我们自己声明了哪些路由」不是同一件事。
     """
-    src = (ROOT / "src" / "dataset_recommender" / "app" / "webapp.py").read_text(encoding="utf-8")
-    return len(re.findall(r"^@app\.(?:get|post|put|delete|head|patch|api_route)\(", src, re.MULTILINE))
+    app_root = ROOT / "src" / "dataset_recommender" / "app"
+    files = ["webapp.py", "workspace_api.py", "conversation_runs_api.py", "conversation_api.py",
+             "learning_api.py", "knowledge_api.py"]
+    return sum(len(re.findall(r"^\s*@(?:app|router)\.(?:get|post|put|delete|head|patch|api_route)\(",
+                             (app_root / name).read_text(encoding="utf-8"), re.MULTILINE)) for name in files)
 
 
 def test_developer_doc_route_table_counts_every_decorator() -> None:
@@ -129,7 +155,7 @@ def test_developer_doc_route_table_counts_every_decorator() -> None:
     表里**整行缺失**。「一一对应」这种自我声明没有门就是一句空话。
     """
     text = (ROOT / "DEVELOPMENT.md").read_text(encoding="utf-8")
-    m = re.search(r"与 `webapp\.py` 的路由装饰器一一对应，共 (\d+) 个", text)
+    m = re.search(r"与 `webapp\.py` 及接口适配模块的路由装饰器一一对应，共 (\d+) 个", text)
     assert m, "DEVELOPMENT.md §6 里找不到「与 webapp.py 的路由装饰器一一对应，共 N 个」"
     real = _route_decorator_count()
     assert int(m.group(1)) == real, f"DEVELOPMENT.md 说 {m.group(1)} 条路由，实际装饰器 {real} 条"
@@ -140,7 +166,7 @@ def test_developer_doc_route_table_counts_every_decorator() -> None:
     reason="私有工程文档树公开仓不含；有它时照常校验版本一致性",
 )
 def test_frontend_doc_states_the_real_web_api_version_and_route_count() -> None:
-    """`docs/agent/FRONTEND.md` 是**前端改动的第一读物**，它写错版本会一路带偏。
+    """私有工程文档树里的前端文档是**前端改动的第一读物**（公开镜像不含），它写错版本会一路带偏。
     2026-07-26 抓到它停在 `1.4.0` / 20 条路由——落后两个版本。"""
     text = (ROOT / "docs" / "agent" / "FRONTEND.md").read_text(encoding="utf-8")
     m = re.search(r"Web API 版本 `([0-9]+\.[0-9]+\.[0-9]+)`，(\d+) 条路由", text)
@@ -176,10 +202,14 @@ def test_customer_manual_states_the_real_versions_and_tool_count() -> None:
     assert f"网页服务版本 {web}" in text, f"说明书封面没写「网页服务版本 {web}」"
     assert f"MCP服务版本 {mcp_ver}" in text, f"说明书封面没写「MCP服务版本 {mcp_ver}」"
     assert f"网页服务 {web}、AI 助手接入服务 {mcp_ver}（{n} 个工具）" in text, "说明书末尾的版本声明没对上"
-    # 「除 upload_dataset、provision_dataset 与 curate_datasets 外，其余 N 个工具都不写任何东西」讲的是
-    # **只读**工具数 = 总数 - 3（v1.30.0 起写盘工具有三个：upload_dataset 写外部库、provision_dataset
+    # 「除 upload_dataset、provision_dataset 与 curate_datasets 外，其余 N 个工具都不写内置语料库」讲的是
+    # **总数 - 3** 这个数（v1.30.0 起写语料盘的工具有三个：upload_dataset 写外部库、provision_dataset
     # 写调用方指定目录、curate_datasets 管护 external 的 upload_* 与回收站），与其它「共 N 个工具」
     # 不是同一个数；分开钉，别把写工具声明混进去。
+    # 注意这里的 N - 3 **不是「只读工具数」**：v1.37.0 起这组里还有五个高层 Agent 工具
+    # （agent_chat / agent_conversations / agent_projects / agent_task / agent_replay），它们不写内置
+    # 语料库，但会持久保存会话/项目/复盘现场、并使用可用模型——说明书正文正是这么如实写的，
+    # 断言只钉「其余 N-3 个工具」这个数，不假称它们全是只读。
     assert f"其余 {n - 3} 个工具" in text, f"说明书没写「除三个写盘工具外，其余 {n - 3} 个工具…」"
     for m in re.finditer(r"(?:其余 )?(\d+) 个工具", text):
         expected = n - 3 if m.group(0).startswith("其余") else n
@@ -242,16 +272,28 @@ def test_selfcheck_tool_count_in_tutorial_matches_code() -> None:
     assert not bad, f"教程验收行与真实工具数({n})不符：{bad}"
 
 
-@pytest.mark.skipif(
-    not (ROOT / "docs" / "QUALITY_GATES.md").exists(),
-    reason="私有工程文档树公开仓不含；有它时照常校验工具数一致性",
-)
-def test_quality_gates_doc_states_the_real_tool_count() -> None:
+def _assert_quality_gates_tool_count(path: Path) -> None:
+    rel = path.relative_to(ROOT).as_posix()
     n = len(_expected_tools())
-    text = (ROOT / "docs" / "QUALITY_GATES.md").read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
     m = re.search(r"tools/list（(\d+) 个预期工具", text)
-    assert m, "QUALITY_GATES.md 里找不到「tools/list（N 个预期工具」"
-    assert int(m.group(1)) == n, f"QUALITY_GATES.md 说 {m.group(1)} 个，实际 {n} 个"
+    assert m, f"{rel} 里找不到「tools/list（N 个预期工具」"
+    assert int(m.group(1)) == n, f"{rel} 说 {m.group(1)} 个，实际 {n} 个"
+    online = re.search(r"在线形态\s*(\d+)\s*个", text)
+    assert online, f"{rel} 里找不到在线工具数"
+    assert int(online.group(1)) == n - 2, f"{rel} 在线工具数 {online.group(1)}，应为 {n - 2}"
+
+
+def test_quality_gates_doc_states_the_real_tool_count() -> None:
+    _assert_quality_gates_tool_count(ROOT / "docs" / "QUALITY_GATES.md")
+
+
+_PRIVATE_QUALITY_GATES = ROOT / "docs" / "agent" / "QUALITY_GATES.md"
+
+
+@pytest.mark.skipif(not _PRIVATE_QUALITY_GATES.exists(), reason="可选私有工程文档不在公开仓中")
+def test_private_quality_gates_doc_states_the_real_tool_count() -> None:
+    _assert_quality_gates_tool_count(_PRIVATE_QUALITY_GATES)
 
 
 # ---------------------------------------------------------------- 文档工具表 ↔ _EXPECTED_TOOLS
@@ -284,7 +326,7 @@ def test_developer_doc_lists_every_mcp_tool() -> None:
 def test_all_first_party_static_assets_share_one_cache_generation() -> None:
     html = (ROOT / "web" / "static" / "index.html").read_text(encoding="utf-8")
     versions = re.findall(r'/static/(?:css|js)/[^"?]+\?v=([a-zA-Z0-9-]+)', html)
-    assert len(versions) == 89   # 2026-08-30 dl-browser-queue 实测 89（新增 #downloads importmap 条目；构成 = 1 css + script 标签 + importmap 条目，随模块增删以实测为准。历史： 88 / 87 / eng1 86 / b1 60）
+    assert len(versions) == 105  # Two workspace modules and the shared copy alias add five asset references; 统一知识窗（knowledge_core/knowledge）加四条；WebGL 活点（live_dot）加一条。ladder 三件套退役减六条。
     assert set(versions) == {CACHE_GENERATION}
 
 
@@ -349,8 +391,8 @@ def test_every_first_party_asset_reference_carries_a_token() -> None:
 # **本条立刻红**，报错信息直接告诉你「bump 令牌 + 同步这两个常量」。指纹按行尾归一（`\r\n`/`\r` → `\n`）
 # 后计算，故对 LF/CRLF checkout 差异免疫。
 
-CACHE_GENERATION = "20260909-pp1"  # 弹窗拦截提醒批：openPopup 单通道 + COPY.common.popupBlocked 锚点。
-STATIC_ASSETS_SHA256 = "8d9679b142a3716d9b3e31bcfd41dbc9170c71e8dc378fa2ffa6ff7e6ac7958d"
+CACHE_GENERATION = "20261021-knowledge-review"
+STATIC_ASSETS_SHA256 = "8ce6a572c148b2e97c1df8f320dae1f4b11bcfcd394a83dd41c3478f8b05547b"
 
 
 def _static_assets_digest() -> str:

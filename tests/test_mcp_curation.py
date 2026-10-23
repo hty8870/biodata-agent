@@ -42,6 +42,31 @@ def curate_tmp_root(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.parametrize("options", [{}, {"dry_run": True}])
+def test_sync_updates_dry_run_never_calls_writer(curate_tmp_root, monkeypatch, options):
+    calls = []
+    monkeypatch.setenv("BIODATA_MCP_CALL_LOG", "off")
+    monkeypatch.setattr(cc, "sync_updates", lambda *a, **kw: calls.append(kw))
+    with pytest.raises(M.ToolError, match="bad_param"):
+        M.curate_datasets(action="sync_updates", **options)
+    assert calls == []
+    assert not list((curate_tmp_root / "database/external").iterdir())
+
+
+def test_sync_updates_explicit_execution_uses_shared_writer(curate_tmp_root, monkeypatch):
+    calls = []
+    monkeypatch.setenv("BIODATA_MCP_CALL_LOG", "off")
+
+    def sync(sources, **kwargs):
+        calls.append((sources, kwargs))
+        return {"created_files": [], "operation_id": "test"}
+
+    monkeypatch.setattr(cc, "sync_updates", sync)
+    result = M.curate_datasets(action="sync_updates", source="10x", dry_run=False)
+    assert result["ok"] is True
+    assert calls == [(["10x"], {"project_root": curate_tmp_root})]
+
+
 # BioStudies 假响应（与 tests/test_corpus_curation.py 同型）：搜索 1 条命中 + 详情富化。
 _SEARCH_PAYLOAD = {
     "totalHits": 1,
@@ -90,9 +115,9 @@ def _import_via_tool(records, *, filename="a.json"):
 # ---------------------------------------------------------------- 注册 / schema
 
 def test_curate_tool_registered_with_expected_schema():
-    """工具已注册（_EXPECTED_TOOLS 单一真源，19 个），入参 schema：action 必填、其余可选。"""
+    """工具已注册（_EXPECTED_TOOLS 单一真源，25 个），入参 schema：action 必填、其余可选。"""
     assert "curate_datasets" in M._EXPECTED_TOOLS
-    assert len(M._EXPECTED_TOOLS) == 19
+    assert len(M._EXPECTED_TOOLS) == 25   # v1.38.0 增加独立学习入口；原schema边界保持。
     tool = next(t for t in asyncio.run(M.mcp.list_tools()) if t.name == "curate_datasets")
     schema = tool.inputSchema
     assert set(schema.get("required", [])) == {"action"}

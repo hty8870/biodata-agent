@@ -100,6 +100,7 @@ export function stageFromEvent(evKind, data) {
    plan.steps）合成工具行时才查它。表外 verb 原样回落（展开回看见真名，不虚构）。 */
 const FLOW_VERB_LABEL = {
     "rank": "检索数据集", "rerank": "优化检索词重查", "search.rerun": "检索新查询",
+    "results.show": "更新结果区", "ask.relax": "询问放宽条件",
     "compat.find": "查找兼容数据集",
     "curate.check_updates": "检查来源更新", "curate.search_online": "联网搜索入库",
     "curate.sync_updates": "检查更新并同步入库", "curate.db_status": "汇报数据库状态",

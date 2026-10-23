@@ -14,6 +14,10 @@
   跳转之后落到哪个主机由来源站点决定，白名单只管住我们**主动发起**的那一次请求——这一条
   必须照实说，不能写成「全程主机都在白名单里」。
 - 绝不 `eval` / `Invoke-Expression` / 管道进 shell、绝不自更新、绝不读任何环境变量密钥或 `.env`。
+- **清单是输入，不是可信代码**：`safe_uid` / `safe_name` 先过边界校验（分隔符 / `:` / `.` / `..` /
+  逃出 OUT 一律拒绝该行并计数）；渲染层把所有字段折成单行，控制字符不能伪造列或伪行。
+- **已存在的同名文件不凭大小宣告通过**：来源声明了 md5 就必须本机算出同一个 md5 才跳过；
+  算不了或对不上都重下（`.part` → 回头核对），旧文件不算「已核验」。
 - 先下到 `.part` 再改名；**下完必须回头核对**：有 md5 就比 md5，没有 md5 但来源声明了大小
   就比字节数，两者都不符一律改名成 `.corrupt` 留证据，不覆盖也不删除。
   核不动的（本机没有可用的 md5 工具、来源既没给 md5 也没给大小）如实记成 `unverified`，
@@ -22,11 +26,13 @@
 ## 编码不是小事
 
 `.ps1` 用 CRLF + UTF-8 BOM（Windows PowerShell 5.1 读无 BOM 的 UTF-8 会把中文变成乱码，
-用户看到的是一屏问号）；`.sh` 用 LF 无 BOM；其余文本 LF 无 BOM。
+用户看到的是一屏问号）；脚本内部还会在 stdout 被重定向时把输出编码钉死为无 BOM UTF-8
+（否则英文 locale 的机器上重定向输出里的中文会变成 `?`）；`.sh` 用 LF 无 BOM；其余文本 LF 无 BOM。
 """
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from . import download_plan as DP
@@ -35,6 +41,16 @@ SCHEMA_MANIFEST = "biodata-download-plan/v1"
 
 _TSV_COLUMNS = ("dataset_uid", "safe_uid", "source", "tier", "filename", "filename_derived",
                 "safe_name", "size_bytes", "md5", "verify", "flag_kind", "reason", "url")
+
+#: 单行文本清洗的唯一锚点：TSV 是**行/列结构**，任何控制字符（\t \r \n …）出现在字段里
+#: 等于伪造一个列或一整行。manifest 的字段（source、标题、filename 等）来自数据集元数据，
+#: 是不可信输入——渲染前一律折成空格。`# ` 注释行共用同一口径（组标题里的 uid/标题也走它）。
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def one_line(value: Any) -> str:
+    """任意值 → 单行文本：控制字符（含制表符/换行/回车）折成空格。"""
+    return _CONTROL_CHARS.sub(" ", str(value if value is not None else ""))
 
 
 def human_bytes(size: "int | None") -> str:
@@ -91,14 +107,22 @@ def primary_only_sentence(plan: dict) -> str:
 
 
 def render_manifest_tsv(plan: dict, meta: dict) -> str:
-    hosts = ",".join(plan.get("allowed_hosts") or [])
+    """manifest.tsv 的唯一渲染点。
+
+    **所有字段（含注释行的值）都过 `one_line`**：任一字段里出现换行=伪造一整行数据行
+    （例如把 `source` 写成 `x\\n假的uid\\t../../escape\\t…`），出现制表符=伪造一个列。
+    渲染层负责「结构上不可能注入」，脚本层再做一次路径边界校验（纵深防御，见两个 runner）。
+    """
+    hosts = ",".join(one_line(h) for h in (plan.get("allowed_hosts") or []))
+    inspection = plan.get("inspection", {}) or {}
     lines = [
         "# 这是给脚本读的清单；人请看同目录的 file-list.md。",
-        f"# plan_token: {meta.get('plan_token', '')}",
-        f"# snapshot_id: {meta.get('snapshot_id', '')}  content_digest: {meta.get('content_digest', '')}",
-        f"# retrieval_date: {meta.get('retrieval_date', '')}",
-        f"# 巡检快照: {plan.get('inspection', {}).get('snapshot_date', '未记录')}"
-        f"（{plan.get('inspection', {}).get('scope_zh', '')}）",
+        f"# plan_token: {one_line(meta.get('plan_token', ''))}",
+        f"# snapshot_id: {one_line(meta.get('snapshot_id', ''))}  "
+        f"content_digest: {one_line(meta.get('content_digest', ''))}",
+        f"# retrieval_date: {one_line(meta.get('retrieval_date', ''))}",
+        f"# 巡检快照: {one_line(inspection.get('snapshot_date', '未记录'))}"
+        f"（{one_line(inspection.get('scope_zh', ''))}）",
         f"# allowed_hosts: {hosts}",
         "# md5 语义：来源公布的声明值，本工具没有重新算过。",
         "\t".join(_TSV_COLUMNS),
@@ -111,13 +135,14 @@ def render_manifest_tsv(plan: dict, meta: dict) -> str:
         if row["dataset_uid"] != current_uid:
             current_uid = row["dataset_uid"]
             item = by_uid.get(current_uid, {})
-            title = str(item.get("dataset_name") or current_uid).replace("\t", " ").replace("\n", " ")
-            lines.append(f"# ===== {current_uid} · {title} =====")
-        lines.append("\t".join(str(x) for x in (
+            uid_cell = one_line(current_uid)
+            title = one_line(item.get("dataset_name") or current_uid).strip()
+            lines.append(f"# ===== {uid_cell} · {title} =====")
+        lines.append("\t".join(one_line(x) for x in (
             row["dataset_uid"], row["safe_uid"], row["source"], row["tier"],
             row["filename"], "1" if row["filename_derived"] else "0", row["safe_name"],
             row["bytes"] if row["bytes"] else "-", row["md5sum"] or "-", row["verify"],
-            row["flag_kind"] or "-", (row["flag_reason_zh"] or "-").replace("\t", " "),
+            row["flag_kind"] or "-", row["flag_reason_zh"] or "-",
             row["download_url"],
         )))
     return "\n".join(lines) + "\n"
@@ -169,7 +194,8 @@ def render_file_list_md(plan: dict) -> str:
 
 
 def _cell(value: Any) -> str:
-    return str(value if value is not None else "—").replace("|", "\\|").replace("\n", " ")
+    """Markdown 单元格：竖线转义 + 单行化（与 TSV 共用 `one_line` 的控制字符口径）。"""
+    return one_line(value if value is not None else "—").replace("|", "\\|")
 
 
 def render_start_here(plan: dict) -> str:
@@ -270,6 +296,17 @@ if [ -z "$ALLOWED" ]; then
   exit 2
 fi
 
+# 清单是**输入**，不是可信代码：字段来自数据集元数据，可能夹带路径分隔符或 `..`。
+# safe_uid / safe_name 必须是单个安全路径段（生成侧也只产这种名字）；任何分隔符、`:`、
+# `.`/`..`、以 `.` 开头、空值都拒绝该行——不在拼接路径之后才发现问题。
+unsafe_component() {
+  case "$1" in
+    ""|.*) return 0 ;;
+    /*|*/*|*\\*|*:*) return 0 ;;
+  esac
+  return 1
+}
+
 # 本机有哪个 md5 工具。macOS 自带的是 md5（不是 md5sum），少判这一条会让
 # 「有 md5 可比」的文件在 macOS 上被静默跳过核验——而包里写着「可下载并核对校验和」。
 md5_of() {
@@ -302,16 +339,34 @@ while IFS='	' read -r uid safe_uid source tier filename derived safe_name size m
     echo "跳过（巡检发现有问题，加 --include-flagged 才下）：$filename"
     FLAGGED=$((FLAGGED+1)); continue
   fi
+  if unsafe_component "$safe_uid" || unsafe_component "$safe_name"; then
+    echo "跳过（清单里的路径不安全）：$safe_uid / $safe_name"
+    REJECT=$((REJECT+1)); continue
+  fi
   dir="$OUT/$safe_uid"; target="$dir/$safe_name"
+  case "$dir" in
+    "$OUT"/*) : ;;
+    *) echo "跳过（目标路径逃出下载目录）：$safe_uid"; REJECT=$((REJECT+1)); continue ;;
+  esac
   if [ "$GO" -eq 0 ]; then
     echo "将下载：$safe_uid/$safe_name  ($size 字节)"
     continue
   fi
   mkdir -p "$dir"
   if [ -f "$target" ]; then
-    have=$(wc -c < "$target" | tr -d ' ')
-    if [ "$size" != "-" ] && [ "$have" = "$size" ]; then
-      echo "已存在，跳过：$safe_name"; SKIP=$((SKIP+1)); continue
+    # 已有同名文件不能凭「大小一样」就宣告通过：来源声明了 md5 时，只有本机算出的 md5
+    # 与声明一致才跳过；算不了（本机没有 md5 工具）或对不上都重下——否则一个损坏/被
+    # 替换过的旧文件会被当成「已下载并核验通过」。
+    if [ "$md5" != "-" ]; then
+      got=$(md5_of "$target" 2>/dev/null) || got=""
+      if [ -n "$got" ] && [ "$got" = "$md5" ]; then
+        echo "已存在且校验和一致，跳过：$safe_name"; SKIP=$((SKIP+1)); continue
+      fi
+    elif [ "$size" != "-" ] && [ -n "$size" ]; then
+      have=$(wc -c < "$target" | tr -d ' ')
+      if [ "$have" = "$size" ]; then
+        echo "已存在，跳过：$safe_name"; SKIP=$((SKIP+1)); continue
+      fi
     fi
   fi
   echo "下载中：$safe_uid/$safe_name"
@@ -392,6 +447,14 @@ param(
     [switch] $IncludeFlagged
 )
 $ErrorActionPreference = 'Stop'
+# 输出编码（Windows 专属）：stdout 被重定向（管道/日志文件）时，PowerShell 5.1 用控制台
+# 代码页编码输出，英文 locale 机器上中文会全部变成 `?`。重定向场景钉死为无 BOM UTF-8，
+# 报告与提示在任何 locale 的机器上都能被正确读取；交互窗口保持控制台原生行为不受影响。
+# 支持目标是 Windows PowerShell 5.1 与 7（均有 IsOutputRedirected）：这里不包异常——
+# 设置失败就让它明确报错，绝不静默吞掉输出编码问题。
+if ([Console]::IsOutputRedirected) {
+    [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+}
 # 兼容有人照着 macOS 那条命令敲 --go
 foreach ($a in $args) {
     if ($a -eq '--go') { $Go = $true; Write-Host '已按 -Go 处理。' }
@@ -425,12 +488,22 @@ if ($rows.Count -lt 1) {
 }
 if (-not $allowedLine) { Write-Host 'manifest.tsv 里没有 allowed_hosts 声明，为安全起见不下载。'; exit 2 }
 $allowed = ($allowedLine -replace '^# allowed_hosts:\s*', '').Split(',') | Where-Object { $_ }
+
+# 清单是**输入**，不是可信代码：safe_uid / safe_name 必须是单个安全路径段（与 download.sh
+# 同一条规则）。任何分隔符、`:`（NTFS 备用数据流）、`.`/`..`、以 `.` 开头的名字都拒绝该行。
+function Test-SafeComponent([string]$s) {
+    if ([string]::IsNullOrEmpty($s)) { return $false }
+    if ($s.Contains('/') -or $s.Contains('\') -or $s.Contains(':')) { return $false }
+    if ($s.StartsWith('.')) { return $false }
+    if ($s -match '[\x00-\x1f]') { return $false }
+    return $true
+}
 if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
     Write-Host '没找到 curl.exe（Windows 10 1803 以后自带）。本脚本只用 curl.exe 下载，不改用其它方式，以免绕过断点续传与校验。'
     exit 1
 }
 
-$ok = 0; $skip = 0; $fail = 0; $reject = 0; $unverified = 0; $flagged = 0; $planned = 0
+$ok = 0; $skip = 0; $fail = 0; $reject = 0; $unverified = 0; $flagged = 0; $planned = 0; $notool = 0
 $report = @()
 try {
     foreach ($line in $rows) {
@@ -445,13 +518,36 @@ try {
         if ($flag -ne '-' -and -not $IncludeFlagged) {
             Write-Host "跳过（巡检发现有问题，加 -IncludeFlagged 才下）：$filename"; $flagged += 1; continue
         }
+        if (-not (Test-SafeComponent $safeUid) -or -not (Test-SafeComponent $safeName)) {
+            Write-Host "跳过（清单里的路径不安全）：$safeUid / $safeName"
+            $reject += 1; continue
+        }
         $dir = Join-Path $Out $safeUid
         $target = Join-Path $dir $safeName
+        # 边界复核：拼出来的目标必须在 OUT 之内（`..` 与盘符语法都在这道闸之后失效）。
+        $outFull = [IO.Path]::GetFullPath($Out)
+        $targetFull = [IO.Path]::GetFullPath($target)
+        if (-not $targetFull.StartsWith($outFull + [IO.Path]::DirectorySeparatorChar,
+                                       [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "跳过（目标路径逃出下载目录）：$safeUid"; $reject += 1; continue
+        }
         if (-not $Go) { Write-Host "将下载：$safeUid\$safeName  ($size 字节)"; continue }
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         if (Test-Path -LiteralPath $target) {
-            $have = (Get-Item -LiteralPath $target).Length
-            if ($size -ne '-' -and "$have" -eq $size) { Write-Host "已存在，跳过：$safeName"; $skip += 1; continue }
+            # 已有同名文件不能凭「大小一样」就宣告通过：来源声明了 md5 时，只有本机算出的
+            # md5 与声明一致才跳过；算不了或对不上都重下（旧文件不算已核验）。
+            if ($md5 -ne '-') {
+                $got = ''
+                if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+                    $got = (Get-FileHash -LiteralPath $target -Algorithm MD5).Hash.ToLower()
+                }
+                if ($got -ne '' -and $got -eq $md5.ToLower()) {
+                    Write-Host "已存在且校验和一致，跳过：$safeName"; $skip += 1; continue
+                }
+            } elseif ($size -ne '-' -and $size) {
+                $have = (Get-Item -LiteralPath $target).Length
+                if ("$have" -eq $size) { Write-Host "已存在，跳过：$safeName"; $skip += 1; continue }
+            }
         }
         Write-Host "下载中：$safeUid\$safeName"
         # --proto/--proto-redir 把首次请求和后续跳转都钉死在 https，杜绝被跳到明文 http。
@@ -465,23 +561,32 @@ try {
         # 「只能核对文件大小」那一档以前从来没有比对过任何字节，却照样记 ok。
         $verdict = ''
         if ($md5 -ne '-') {
-            $got = (Get-FileHash -LiteralPath $target -Algorithm MD5).Hash.ToLower()
-            if ($got -eq $md5.ToLower()) { $verdict = 'ok' } else { $verdict = 'md5_mismatch' }
-        } elseif ($size -ne '-' -and $size) {
-            $have = (Get-Item -LiteralPath $target).Length
-            if ("$have" -eq $size) { $verdict = 'size_ok' }
-            else {
-                Write-Host "文件大小与来源声明不符（应为 $size 字节，实得 $have 字节）"
-                $verdict = 'size_mismatch'
-            }
-        } else { $verdict = 'unverified' }
+            # 与 download.sh 同口径：本机算不了 md5（缺 Get-FileHash）时如实记 no_md5_tool，
+            # 绝不把「没核过」写成 ok——「下完了」和「核对过了」是两件事。
+            if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+                $got = (Get-FileHash -LiteralPath $target -Algorithm MD5).Hash.ToLower()
+                if ($got -eq $md5.ToLower()) { $verdict = 'ok' } else { $verdict = 'md5_mismatch' }
+            } else { $notool += 1; $verdict = 'no_md5_tool' }
+        }
+        if ($verdict -eq '' -or $verdict -eq 'no_md5_tool') {
+            if ($size -ne '-' -and $size) {
+                $have = (Get-Item -LiteralPath $target).Length
+                if ("$have" -eq $size) {
+                    if ($verdict -eq 'no_md5_tool') { $verdict = 'size_ok_no_md5_tool' } else { $verdict = 'size_ok' }
+                } else {
+                    Write-Host "文件大小与来源声明不符（应为 $size 字节，实得 $have 字节）"
+                    $verdict = 'size_mismatch'
+                }
+            } elseif ($verdict -eq 'no_md5_tool') { $verdict = 'unverified_no_md5_tool' }
+            else { $verdict = 'unverified' }
+        }
         if ($verdict -eq 'ok' -or $verdict -eq 'size_ok') { $ok += 1 }
-        elseif ($verdict -eq 'unverified') {
-            Write-Host "已下载，但来源既没给校验和也没给大小，无法核对：$safeName"; $unverified += 1
-        } else {
+        elseif ($verdict -eq 'md5_mismatch' -or $verdict -eq 'size_mismatch') {
             Write-Host "核对不通过，已改名保留证据：$safeName.corrupt"
             Move-Item -LiteralPath $target -Destination "$target.corrupt" -Force
             $fail += 1
+        } else {
+            Write-Host "已下载，但本机无法核对这个文件（$verdict）：$safeName"; $unverified += 1
         }
         $report += "$uid`t$safeName`t$verdict"
     }
@@ -500,6 +605,9 @@ if (-not $Go) {
 } else {
     Write-Host "本次：核对通过 $ok，已存在跳过 $skip，未能核对 $unverified，失败或不符 $fail，"
     Write-Host "      按巡检结果跳过 $flagged，按安全规则拒绝 $reject（计划 $planned 条）。"
+    if ($notool -gt 0) {
+        Write-Host "其中 $notool 个文件带 md5，但这台机器上的 PowerShell 算不了 MD5（缺 Get-FileHash），校验和没有核过。"
+    }
     # 一个文件都没落地却打印「文件已保存到 …」，是在报告一件没发生的事。
     if (($ok + $skip + $unverified) -gt 0) { Write-Host "文件已保存到：$Out" }
     else { Write-Host '没有任何文件成功保存。' }

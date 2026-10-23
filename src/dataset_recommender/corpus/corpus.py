@@ -26,9 +26,21 @@ from pathlib import Path
 from ..app.runtime_paths import get_app_paths, instance_data_dir_for, uses_split_layout
 from .data_loader import load_raw_records
 from ..retrieval.normalizer import DatasetRecord, normalize_records
+from ..domain.registry import domain_base_source
 
 EXTERNAL_DIR_NAME = "database/external"
-BASE_SOURCE = "10x Genomics"
+
+
+def __getattr__(name: str):
+    """兼容 shim（PEP 562）：`BASE_SOURCE` 改由活动领域包供给（biodata = "10x Genomics"）。
+    模块内部一律调 `_base_source()`（LOAD_GLOBAL 不走本 shim）。"""
+    if name == "BASE_SOURCE":
+        return _base_source()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _base_source() -> str:
+    return domain_base_source()
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +48,83 @@ logger = logging.getLogger(__name__)
 # invalidate_external_cache()，因此这个单调递增数可作为 Web 大响应缓存的
 # O(1) 失效键。它不是持久化 schema，进程重启后从 0 开始正确重建缓存。
 _EXTERNAL_CACHE_GENERATION = 0
+
+#: 跨进程写入代际标记文件名（实例 .userdata 下的小令牌文件）：每个受控写路径落盘后
+#: 重写一个新令牌；读侧把它折进缓存键/时点复核——**其他进程**（CLI / stdio MCP / RQ worker）
+#: 的上传、删除、恢复因此无需通知通道也能被本进程发现。不是第二份缓存：
+#: 标记本身不含语料数据，只是既有 `invalidate_external_cache` 代际机制的持久可见形式。
+_WRITE_MARKER_NAME = "corpus_write_generation"
+
+
+def _write_marker_path(project_root: Path) -> Path:
+    return instance_data_dir_for(Path(project_root), ".userdata") / _WRITE_MARKER_NAME
+
+
+def corpus_write_generation(project_root: Path) -> str:
+    """跨进程可见的语料写入代际令牌（读侧缓存键与装载时点复核的组件）。
+
+    读不到（未写过/权限问题）→ 空串：与历史行为等价（同进程代际仍由
+    `_EXTERNAL_CACHE_GENERATION` 负责），绝不因标记缺失报错。"""
+    try:
+        return _write_marker_path(Path(project_root)).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def publish_corpus_write(project_root: Path) -> None:
+    """受控写路径的**统一登记**（写数据落盘之后调用）：重写写入代际令牌。
+
+    令牌 = 时间戳 + pid + 随机数——每次 mutation 唯一；独立进程的读侧只靠它发现磁盘变化，
+    不需要状态轮询或专用通知。登记失败 fail-soft（warn-once）：同进程代际仍然生效，
+    只降级跨进程可见性，绝不掀翻已完成的写事务。
+
+    令牌发布**不是唯一信号**——读侧另叠 `_external_fingerprint` 原子
+    指纹（每次现读，不解析内容）；即使在「数据已提交、令牌未发布」之间进程被杀，独立
+    reader 的下一次正常检索也能看到真实已提交字节（可观察的 cheap healer，不需要 pending
+    状态机、不新增 cache）。"""
+    import os as _os
+    import secrets as _secrets
+    import time as _time
+
+    from ..app.runtime_paths import atomic_write_bytes
+
+    token = f"{_time.time_ns()}-{_os.getpid()}-{_secrets.token_hex(4)}"
+    try:
+        atomic_write_bytes(_write_marker_path(Path(project_root)), token.encode("utf-8"))
+    except OSError as exc:
+        _warn_marker_once(f"{type(exc).__name__}")
+
+
+_MARKER_WARNED: set = set()
+
+
+def _warn_marker_once(key: str) -> None:
+    if key in _MARKER_WARNED:
+        return
+    _MARKER_WARNED.add(key)
+    logger.warning(
+        "语料写入代际标记写不进去（%s）：跨进程缓存失效退化为仅同进程生效（本进程读侧不受影响）。",
+        key,
+    )
+
+
+def _external_fingerprint(user_dir: Path) -> tuple:
+    """用户层 external 的**廉价目录指纹**：目录下全部 .json 的
+    (文件名, mtime_ns, size) 排序元组——只做 glob+stat，不解析任何文件内容、不是第二份缓存。
+
+    与令牌互补：令牌是「受控写路径登记了 mutation」的精确信号；指纹观察的是**磁盘上真实
+    已提交的字节**——「数据落盘、令牌未发布之间被杀」的窗口里，独立 reader 下一次正常
+    检索仍能发现变化（读完再核验一次，迟到旧读不缓存）。"""
+    fp: list[tuple] = []
+    for p in Path(user_dir).glob("*.json"):
+        if not p.is_file():
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        fp.append((p.name, st.st_mtime_ns, st.st_size))
+    return tuple(sorted(fp))
 
 
 def _base_fingerprint(data_dir: Path) -> tuple:
@@ -65,7 +154,7 @@ def _base_normalized(data_dir_str: str, fingerprint: tuple) -> "tuple[DatasetRec
     base = normalize_records(load_raw_records(Path(data_dir_str)))
     for r in base:
         if isinstance(r.raw, dict):
-            r.raw["source"] = BASE_SOURCE
+            r.raw["source"] = _base_source()
     return tuple(base)
 
 
@@ -153,8 +242,11 @@ def _load_external_normalized(shipped: Path, user: Path) -> tuple:
     return tuple(normalize_records(raw))
 
 
-def _external_normalized(shipped_dir_str: str, user_dir_str: str) -> tuple:
-    key = (shipped_dir_str, user_dir_str)
+def _external_normalized(shipped_dir_str: str, user_dir_str: str, write_token: str = "",
+                         fingerprint: tuple = ()) -> tuple:
+    """key 含跨进程写入令牌（write_token）+ 用户层目录指纹（fingerprint）+ 进程内代际：
+    任一变化都重装。迟到旧读绝不回写（两次代际核验）；令牌变了/指纹变了同样不缓存本次结果。"""
+    key = (shipped_dir_str, user_dir_str, write_token, fingerprint)
     hit = _EXTERNAL_CACHE.get(key)
     if hit is not None and hit[0] == _EXTERNAL_CACHE_GENERATION:
         return hit[1]
@@ -162,23 +254,28 @@ def _external_normalized(shipped_dir_str: str, user_dir_str: str) -> tuple:
     value = _load_external_normalized(Path(shipped_dir_str), Path(user_dir_str))
     if gen_before == _EXTERNAL_CACHE_GENERATION:
         # 装载期间未发生失效才回写；否则丢弃（旧值绝不重新入缓存）
-        if len(_EXTERNAL_CACHE) >= 2 and key not in _EXTERNAL_CACHE:
+        if len(_EXTERNAL_CACHE) >= 4 and key not in _EXTERNAL_CACHE:
             _EXTERNAL_CACHE.clear()
         _EXTERNAL_CACHE[key] = (gen_before, value)
     return value
 
 
 def _external_normalized_for(project_root: Path) -> tuple[DatasetRecord, ...]:
-    """双层 external 归一入口（lru 键 = 两目录字符串；source/portable 下两键相同）。"""
+    """双层 external 归一入口（键 = 两目录 + 跨进程写入令牌 + 用户层目录指纹）。"""
     shipped, user = _external_layers(Path(project_root))
-    return _external_normalized(str(shipped), str(user))
+    return _external_normalized(str(shipped), str(user),
+                                corpus_write_generation(Path(project_root)),
+                                _external_fingerprint(user))
 
 
 def invalidate_external_cache() -> None:
     """外部平台库目录发生变更（如网页端用户上传/手动放入新数据集文件）后调用 → 清空归一缓存，
     令下次 available_sources / load_full_corpus / load_normalized_corpus 重新读盘归一，
     保证「上传即时可见、可检索」。基础语料走 `_base_fingerprint` 键控缓存（文件变动自动失效），
-    不在本函数职责内。"""
+    不在本函数职责内。
+
+    写事务收尾请**紧跟着**调 `publish_corpus_write(project_root)`（跨进程可见性）；
+    本函数保持零参旧签名，既有 monkeypatch 缝（测试断言「失效被调用」）逐位不变。"""
     global _EXTERNAL_CACHE_GENERATION
     _EXTERNAL_CACHE.clear()
     _EXTERNAL_CACHE_GENERATION += 1
@@ -199,6 +296,11 @@ def corpus_cache_generation(data_dir: Path, project_root: Path) -> tuple:
     key = (
         str(base_dir), _base_fingerprint(base_dir),
         str(shipped), str(user), _EXTERNAL_CACHE_GENERATION,
+        # 跨进程写入令牌 + 用户层目录指纹——其他进程（CLI/MCP/RQ worker）的上传/
+        # 删除/恢复让本进程的浏览缓存与整库键自动换代，不依赖 status 轮询或通知；
+        # 指纹兜住「数据已提交、令牌未发布之间被杀」的窗口（可观察 healer）。
+        corpus_write_generation(Path(project_root)),
+        _external_fingerprint(user),
     )
     from .patch_package import current_patch_scope  # 惰性
     scope = current_patch_scope()
@@ -211,7 +313,7 @@ def corpus_cache_generation(data_dir: Path, project_root: Path) -> tuple:
 def source_of(record: DatasetRecord) -> str:
     """记录来源标签：基础语料装载时已打成 BASE_SOURCE；外部记录取其声明的 raw.source。"""
     raw = record.raw if isinstance(record.raw, dict) else {}
-    return str(raw.get("source") or "").strip() or BASE_SOURCE
+    return str(raw.get("source") or "").strip() or _base_source()
 
 
 def load_normalized_corpus(
@@ -231,9 +333,9 @@ def load_normalized_corpus(
         # 空选择 → 保守回退基础语料
         return _scoped_patch_apply(base, project_root, include_adds=False)
     out: list[DatasetRecord] = []
-    if BASE_SOURCE in wanted:
+    if _base_source() in wanted:
         out.extend(base)
-    if wanted - {BASE_SOURCE}:  # 有外部来源被选中才装载外部库
+    if wanted - {_base_source()}:  # 有外部来源被选中才装载外部库
         ext = _external_normalized_for(project_root)
         out.extend(r for r in ext if source_of(r) in wanted)
     return _scoped_patch_apply(out, project_root, include_adds=True, source_filter=wanted)
@@ -359,6 +461,12 @@ def _cmp_key(value) -> str:
     return _cmp_key_cached(str(value or ""))
 
 
+def uid_cmp_key(value) -> str:
+    """UID **等值比较键**的公共单锚点：定位（`locate_record`）与补丁查重/冲突/
+    匹配共用同一键（NFC + 去零宽 + strip + casefold）。只用于判等；存储与展示一律保留原文。"""
+    return _cmp_key(value)
+
+
 @lru_cache(maxsize=32768)
 def _cmp_key_cached(text: str) -> str:
     """`_cmp_key` 的带缓存主体。按**字符串值**缓存（而非按记录对象/列表）：
@@ -411,12 +519,12 @@ def available_sources(data_dir: Path, project_root: Path) -> list[dict]:
     base = _load_base(_resolve_base_dir(data_dir, project_root))
     ext = _external_normalized_for(project_root)
     records = _scoped_patch_apply(list(base) + list(ext), project_root, include_adds=True)
-    counts: dict[str, int] = {BASE_SOURCE: 0}
+    counts: dict[str, int] = {_base_source(): 0}
     for r in records:
         s = source_of(r)
         counts[s] = counts.get(s, 0) + 1
-    ordered = [BASE_SOURCE] + sorted(
-        (k for k in counts if k != BASE_SOURCE), key=lambda k: -counts[k]
+    ordered = [_base_source()] + sorted(
+        (k for k in counts if k != _base_source()), key=lambda k: -counts[k]
     )
     return [{"value": k, "count": counts[k]} for k in ordered]
 
@@ -456,7 +564,7 @@ def corpus_snapshot(records, *, with_content: bool = False) -> dict:
         uid = str(raw.get("dataset_uid") or "").strip()
         if uid:
             uids.append(uid)
-        src = str(raw.get("source") or "").strip() or BASE_SOURCE
+        src = str(raw.get("source") or "").strip() or _base_source()
         sources[src] = sources.get(src, 0) + 1
         if with_content and uid:
             payload = {key: raw.get(key) for key in _CONTENT_FIELDS}

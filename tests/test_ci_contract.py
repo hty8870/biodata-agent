@@ -29,14 +29,23 @@ def _text(path: Path) -> str:
 def test_workflow_has_safe_triggers_minimal_permissions_and_concurrency():
     workflow = _text(WORKFLOW)
     assert re.search(r"(?m)^on:\s*$", workflow)
-    for event in ("push", "pull_request", "workflow_dispatch"):
-        assert re.search(rf"(?m)^  {event}:\s*$", workflow)
+    assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow)
+    assert not re.search(r"(?m)^  (push|pull_request|schedule):", workflow)
     assert "pull_request_target" not in workflow
     assert re.search(r"(?m)^permissions: \{\}\s*$", workflow)
     assert re.search(r"(?m)^concurrency:\s*$", workflow)
     assert "cancel-in-progress: true" in workflow
     assert workflow.count("timeout-minutes:") >= 2
     assert "${{ secrets." not in workflow
+
+
+def test_hosted_build_and_validation_workflows_are_manual_only():
+    for name in ("ci", "web-image", "installer-build", "release-candidate", "public-mirror"):
+        path = ROOT / ".github" / "workflows" / f"{name}.yml"
+        if not path.exists():
+            continue
+        events = re.findall(r"(?m)^  (push|pull_request|schedule|workflow_dispatch):", _text(path))
+        assert events == ["workflow_dispatch"], name
 
 
 def test_every_action_is_pinned_to_the_reviewed_full_commit_sha():
@@ -83,7 +92,7 @@ def test_ci_uses_one_manifest_runner_across_fixed_linux_and_windows_legs():
 
 
 def test_ci_scans_delivery_surface_for_internal_or_sensitive_content():
-    """源头防污门：每次 push/PR 即复核交付白名单集合，污染当场翻红，不再攒到专项清洗。"""
+    """按需托管验证仍覆盖交付白名单扫描。"""
     workflow = _text(WORKFLOW)
     assert re.search(r"(?m)^  delivery_scan:\s*$", workflow)
     assert "python scripts/make_delivery.py --check" in workflow

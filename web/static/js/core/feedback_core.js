@@ -21,7 +21,7 @@
  * {feedback_id, identity, ephemeral_pubkey(base64 65B), nonce(base64 12B),
  *  ciphertext(base64), with_diag}。
  */
-import { telemetryMaskString } from "./usage_core.js";
+import { telemetryMaskString } from "#usage_core";
 
 /* ============================================================================
  * FEEDBACK_PUBKEY_B64 —— 开发者公钥配置点（2026-08-22 已填生产公钥）
@@ -42,12 +42,12 @@ const _HKDF_INFO = new TextEncoder().encode("biodata-feedback/1");
 export const FEEDBACK_MAX_PENDING = 20;
 export const FEEDBACK_MAX_TEXT = 2000;
 
-/* localStorage 键（与 core.js 的 LS.feedbackPending 同值同源；本模块刻意零 # import，
-   常量在此单点定义，core.js 只读同一字符串，避免把核心模块拖进 import 环）。 */
+/* localStorage 键（与 core.js 的 LS.feedbackPending 同值同源；本模块不 import #core，
+   常量在此单点定义，core.js 只读同一字符串，避免把本模块拖进 #core 的 import 环）。 */
 export const FEEDBACK_PENDING_KEY = "biodata_feedback_pending_v1";
 
 /* 诊断快照里允许聚合并展示的功能 kind（与 usage_core.js USAGE_KINDS 同值同源；
-   零 # import 的单点副本，键对不上只是不计数，不报错）。 */
+   本模块的单点副本，键对不上只是不计数，不报错）。 */
 export const FEEDBACK_DIAG_KINDS = ["search", "open", "dl", "facet", "relax", "conv", "undo", "fav",
     "ai", "err", "view", "imp", "label"];
 

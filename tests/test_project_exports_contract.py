@@ -11,10 +11,11 @@
 1. **纯逻辑核心零 DOM / 零网络 / 零 localStorage / 零 `#` import**：project_exports_core.js
    只做确定性计算（diff/台账条目/折叠推导/文案）；出网与 DOM 全在 project_exports.js 壳层。
 2. **自接线不进 boot**：project_exports.js 经 MutationObserver 发现 projects.js 的
-   ENG-P5-MOUNT 挂点渲染导出区；不进 boot.js 的 import 表（同 feedback.js 哲学——
-   新增 `#` 键会牵动两页 importmap，dataset.html 归 F2 并行包，本包不碰）。
-3. **importmap 只在本页 + package.json**：parity 门只查**被使用**的 specifier——project_exports.js
-   只相对 import 纯逻辑核、不引入新的 `#` 静态 import，故不红。
+   ENG-P5-MOUNT 挂点渲染导出区；不进 boot.js 的 import 表。
+3. **importmap 登记按通道规则**（2026-10-01 tidy1 起）：壳层经 `#project_exports_core` 取纯核
+   （有键模块不得走相对路径——相对会拉出无令牌第二实例）；纯核键被 `#` 静态 import 引用，
+   故按 import 图门的双页覆盖要求两页同登记；#project_exports 是壳键（只由 index.html 的
+   script 标签进入，无人 import），保持 index-only。
 4. **挂点契约**：projects.js 的 ENG-P5-MOUNT 区域内必须有 `data-p5-mount-export`（带课题 id）
    与默认隐藏的 `data-p5-mount-section`；无 P5 时整段不渲染。
 5. **埋点与后端同源**：`export_downloaded` 在 USAGE_KINDS；端点路径常量与 webapp.py
@@ -91,15 +92,17 @@ def test_shell_uses_mutation_observer_and_self_wiring() -> None:
     assert "project_exports" not in boot, "boot.js 出现了 project_exports import（本包自接线，不进 boot）"
 
 
-def test_shell_imports_core_relatively_and_shared_keys_only() -> None:
-    """壳层只相对 import 纯逻辑核；静态 `#` import 只用两页已有的共享键（不新增 specifier）。
+def test_shell_imports_core_via_importmap_and_shared_keys_only() -> None:
+    """壳层经 `#project_exports_core` 取纯逻辑核（有键模块须走 importmap 通道，2026-10-01 tidy1 起）；
+    静态 `#` import 只用已登记的共享键（不新增 specifier）。
 
     2026-08-30 dl-browser-queue：`#downloads` 入列——导出包 blob 走统一下载引擎
     （单通道原则，AGENTS.md §2），这是登记过的共享键，不是私自新增 specifier。"""
     ui = UI.read_text(encoding="utf-8")
-    assert 'from "../core/project_exports_core.js"' in ui, "壳层未相对 import 纯逻辑核"
-    used = re.findall(r'from\s*"(#[A-Za-z_0-9]+)"', ui)
-    assert set(used) <= {"#core", "#artifacts", "#usage_core", "#usage_log", "#downloads"}, f"壳层用了新 # 键：{used}"
+    assert 'from "#project_exports_core"' in ui, "壳层未经 #project_exports_core 取纯逻辑核（有键模块必须走 importmap 通道）"
+    used = set(re.findall(r'from\s*"(#[A-Za-z_0-9]+)"', ui))
+    assert used <= {"#core", "#artifacts", "#usage_core", "#usage_log", "#downloads", "#project_exports_core"}, \
+        f"壳层用了新 # 键：{sorted(used)}"
     assert re.search(r'from\s*"\./usage_upload\.js"', ui) is None, "壳层静态 import 了 usage_upload（应动态）"
 
 
@@ -114,8 +117,10 @@ def test_projects_js_mount_region_contract() -> None:
     assert 'data-p5-mount-section hidden' in ui, "导出区默认整段隐藏缺失（无 P5 时不渲染）"
 
 
-def test_importmap_registration_stays_on_index_page_only() -> None:
-    """importmap 登记只在本页 + package.json（dataset.html 归 F2 并行包，不碰）。"""
+def test_importmap_registration_covers_used_specifiers() -> None:
+    """importmap 登记：index.html + package.json；纯核键另须 dataset.html 同登记（2026-10-01
+    tidy1 起 #project_exports_core 被壳层经 `#` 静态 import 引用，import 图门的双页覆盖要求
+    两页都在）；#project_exports 是壳键（只由 index.html 的 script 标签进入），保持 index-only。"""
     pkg = PKG.read_text(encoding="utf-8")
     index = INDEX.read_text(encoding="utf-8")
     for key, rel in (('"#project_exports_core"', "/static/js/core/project_exports_core.js"),
@@ -124,8 +129,9 @@ def test_importmap_registration_stays_on_index_page_only() -> None:
         assert key in index, f"index.html importmap 缺 {key}"
         assert rel + "?v=" in index, f"index.html 缺 {key} 的 script 标签（{rel}）"
     ds = DATASET.read_text(encoding="utf-8")
-    assert '"#project_exports_core"' not in ds and '"#project_exports"' not in ds, (
-        "dataset.html 出现本包键——该页归另一并行改动，本包不得碰")
+    assert '"#project_exports_core"' in ds, (
+        "dataset.html importmap 缺 #project_exports_core（被 # 静态 import 引用，须两页同登记）")
+    assert '"#project_exports"' not in ds, "dataset.html 不应出现壳键 #project_exports（只由 index.html script 标签进入）"
 
 
 def test_boot_stays_last_in_load_order() -> None:

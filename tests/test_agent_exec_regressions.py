@@ -490,12 +490,17 @@ def test_loop_tools_registry_shape_is_pinned():
     MAX_ROLLBACK 预算，不再计入正向写步预算。
     2026-08-18 四工具批刻意更新：compare.datasets / cite.export / compat.find /
     fair.check 入列——环内结果处理四工具，全带 needs_context=True（默认对象取当前结果）；
-    cite.export 是**写**工具（落盘引文产物，readonly=False），其余三个只读。"""
+    cite.export 是**写**工具（落盘引文产物，readonly=False），其余三个只读。
+    2026-09-13 rerank 处置批刻意更新：results.show 入列——屏态唯一出口（只读，
+    needs_context=True：句柄解析吃 ctx.steps 试跑实录、重放吃结构化现场）。
+    2026-09-14 YOLO 批刻意更新：ask.relax 入列——「问用户放松哪个条件」选择卡
+    （只读，needs_context=True：屏面基线/结构化现场/生效查询都经 ctx 注入）。"""
     table = agent_exec.LOOP_TOOLS
     assert set(table) == {"curate.db_status", "curate.check_updates", "curate.search_online",
                           "curate.sync_updates", "search.rerun", "rank", "rerank",
-                          "route.request", "curate.rollback",
-                          "compare.datasets", "cite.export", "compat.find", "fair.check"}
+                          "route.request", "curate.rollback", "results.show",
+                          "compare.datasets", "cite.export", "compat.find", "fair.check",
+                          "ask.relax"}
     for verb, spec in table.items():
         assert callable(spec.get("run")), verb
         assert isinstance(spec.get("label_zh"), str) and spec["label_zh"], verb
@@ -503,9 +508,103 @@ def test_loop_tools_registry_shape_is_pinned():
         assert isinstance(spec.get("readonly"), bool), verb
     assert {v for v, s in table.items() if s["readonly"]} == {
         "curate.db_status", "curate.check_updates", "search.rerun", "rank", "rerank",
-        "route.request", "compare.datasets", "compat.find", "fair.check",
+        "route.request", "compare.datasets", "compat.find", "fair.check", "results.show",
+        "ask.relax",
     }, "readonly 集合漂移 = 前端 policy 行与审计口径同时失真"
     assert table["curate.db_status"].get("report") is True
     assert table["curate.db_status"].get("observation") is True
     assert table["search.rerun"].get("needs_context") is True
     assert table["curate.rollback"].get("needs_context") is True  # rb1：机械闸吃 ctx.steps
+
+
+# ---------------------------------------------------------------- 建议动作执行边界
+
+_COMPARE_OK = {
+    "a": {"dataset_uid": "u1", "dataset_name": "A", "source": "10x"},
+    "b": {"dataset_uid": "u2", "dataset_name": "B", "source": "10x"},
+    "assumption_zh": "", "fields": [], "n_same": 0, "n_diff": 0, "n_unknown": 0,
+    "identical": False, "comparison_zh": "对比完成。", "wording_source": "deterministic",
+    "degraded": False, "degrade_reason": "", "caveat_zh": "",
+}
+
+_CITE_OK = {
+    "n_datasets": 1, "uids": ["u1"],
+    "files": [{"filename": "x.ris", "format": "ris", "bytes": 5}],
+    "out_dir": "x", "note_zh": "已导出 1 个数据集的引文。",
+}
+
+
+def _execution_spies(monkeypatch):
+    """替身两个环内工具（面内 compare / 面外 cite），记录真实执行次数。"""
+    calls = {"compare": 0, "cite": 0}
+
+    def _compare(slots, root):
+        calls["compare"] += 1
+        return dict(_COMPARE_OK)
+
+    def _cite(slots, root):
+        calls["cite"] += 1
+        return dict(_CITE_OK)
+
+    monkeypatch.setattr(agent_exec, "LOOP_TOOLS", {
+        "compare.datasets": {"run": _compare, "label_zh": "对比数据集",
+                             "card_kind": "compare", "readonly": True},
+        "cite.export": {"run": _cite, "label_zh": "导出引文",
+                        "card_kind": "cite_export", "readonly": False},
+    })
+    return calls
+
+
+def _graph(utterance, model, allowed):
+    return agent_exec.plan_with_agent(
+        utterance, has_results=True, result_total=10,
+        config=CFG, retrieval=None, current_query="", current_filters=None,
+        chat_model=model, allowed_verbs=allowed)
+
+
+def test_recipe_allowed_verbs_block_out_of_set_first_step(monkeypatch):
+    """建议动作允许集是**执行前**闸——模型首步误选面外工具（导出引文）时，
+    工具调用次数必须为 0（旧实现先执行、事后在 turn 层收窄，已落盘操作被答成「不执行」）。"""
+    calls = _execution_spies(monkeypatch)
+    model = _FakeModel(*[_tool_call("cite.export", quoted="对比") for _ in range(6)])
+    try:
+        _graph("对比当前结果的前两条", model,
+               frozenset({"compare.datasets"}))
+    except agent_exec.AgentPlanInvalid:
+        pass   # 面外动词连 repair 仍越界 → 如实失败，由 turn 回退保底通道
+    assert calls["cite"] == 0, "面外工具绝不许先执行再收窄"
+
+
+def test_recipe_allowed_verbs_block_out_of_set_continuation(monkeypatch):
+    """面内首步照常执行；后续 decide 提议面外工具同样在**执行前**被挡
+    （续步/批量共用同一道闸，不许「首步匹配后不再检查」）。"""
+    calls = _execution_spies(monkeypatch)
+    model = _FakeModel(
+        _tool_call("compare.datasets", quoted="对比"),
+        _tool_call("cite.export", quoted="对比"),
+        _tool_call("cite.export", quoted="对比"),
+    )
+    try:
+        plan, _trace = _graph("对比当前结果的前两条", model,
+                              frozenset({"compare.datasets"}))
+        verbs = [s.get("verb") for s in (plan.get("steps") or [])]
+        assert verbs == ["compare.datasets"]
+    except agent_exec.AgentPlanInvalid:
+        pass
+    assert calls["compare"] == 1 and calls["cite"] == 0
+
+
+def test_narrow_decide_face_keeps_controls_drops_out_of_set():
+    """decide 面的收窄规则：动作工具须在允许集内；控制工具与 route.request 逃生口保留。"""
+    specs = [{"function": {"name": n}} for n in
+             ("compare_datasets", "cite_export", "route_request", "finish",
+              "unsupported_next_step")]
+    names = {"compare_datasets": "compare.datasets", "cite_export": "cite.export",
+             "route_request": "route.request"}
+    kept_specs, kept_names = agent_exec._narrow_decide_face(
+        specs, names, frozenset({"compare.datasets"}))
+    assert [s["function"]["name"] for s in kept_specs] == [
+        "compare_datasets", "route_request", "finish", "unsupported_next_step"]
+    assert set(kept_names) == {"compare_datasets", "route_request"}
+    # 缺省 None = 不收窄（旧行为逐位不变）
+    assert agent_exec._narrow_decide_face(specs, names, None) == (specs, names)

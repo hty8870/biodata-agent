@@ -8,27 +8,6 @@ name: Installer build (unsigned-dev)
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - "packaging/**"
-      - ".github/workflows/installer-build.yml"
-      - "scripts/build_windows_runtime.py"
-      - "scripts/build_windows_installer.py"
-      - "scripts/build_supply_chain.py"
-      - "src/dataset_recommender/app/mcp_server.py"
-      - "src/**"
-      - "web/static/**"
-      - "database/base/**"
-      - "database/external/*.json"
-      - "database/external/README.md"
-      - "prompts/**"
-      - ".agents/skills/biodata-dataset-discovery/**"
-      - "使用教程/**"
-      - "tests/test_installer_contract.py"
-      - "tests/test_frozen_runtime_contract.py"
-      - "tests/test_migrate_from.py"
-      - "tests/test_installer_e2e.py"
-      - "tests/test_supply_chain.py"
 
 # 与 ci.yml 同一安全姿态：无默认 token 权限；仅检出作业获得最小只读权限。
 permissions: {}

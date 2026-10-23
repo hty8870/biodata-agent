@@ -330,6 +330,31 @@ def test_canonical_dispatch_chain_pure_search_turn_dispatches_nothing():
     assert out == []
 
 
+def test_canonical_dispatch_chain_pause_turn_returns_head_for_its_receipt():
+    """ask 暂停回合形态钉（2026-09-14 真机核实）：route=tool、无 result_payload、顶层 plan 是
+    环内已跑完的 rank、环内还跑了 ask.relax（非检索步）、带确定性 report_zh、无 pending。
+    批次回执通道没跑过（node 里 cbExecReceiptCovered 恒初始 false）→ 规范清单必须交回头部，
+    让「图内已执行渲染通道」收进度泡 + 落 report_zh；否则屏上永远停在「规划中…」、汇报丢失。
+    对照上面的纯检索钉（同形态但无 report_zh → 仍为空）：只有真有汇报要落地的回合才回本通道。
+    回执已被结果批覆盖的回合（cbExecReceiptCovered=true）仍滤除头部——双泡防线不变。"""
+    payload = {
+        "verb": "rank", "kind": "exec",
+        "report_zh": "三条件同时满足为 0 条，条件过严。选完我会按你的选择自动重跑检索并继续。",
+        "report_source": "deterministic",
+        "steps": [{"verb": "rank", "ok": True, "readonly": True, "card_kind": "rank"},
+                  {"verb": "ask.relax", "ok": True, "readonly": True, "card_kind": "ask_relax"}],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => x.verb)));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == ["rank"]
+
+
 def test_canonical_dispatch_chain_keeps_graph_done_non_retrieval_verb():
     """守护钉：图内已执行的**非检索**动作（compare 等）不被过滤——它的卡片与总结
     只能靠 actDispatchPlan 的「图内已执行渲染通道」上屏，过滤了就是整个总结消失。"""
@@ -442,7 +467,8 @@ def test_sys_echo_is_a_first_class_log_kind():
     assert re.search(r'kind === "say" \|\| kind === "sys"', BOARD), "cbLogPush 没有收 sys"
     assert "cbh-sys" in BOARD and "cbh-sys" in CSS, "sys 气泡的渲染与样式要在两端同时在"
     restore = re.search(r"function cbRestoreConversation\([^)]*\)\s*\{(.*?)\n\}", BOARD, re.S)
-    assert restore and '"sys"' in restore.group(1), "历史回看时 sys 不许被归并成 refine"
+    assert restore and "cbHistoryRestore(rows, _cbFrameSeq, options)" in restore.group(1)
+    assert '["say", "sys", "refine", "action"].includes(e.k)' in _read("panel/board_core.js"), "历史回看时 sys 不许被归并成 refine"
 
 
 def test_needs_agent_echo_renders_the_degradation_bubble():
@@ -712,7 +738,9 @@ def test_chat_in_main_search_keeps_the_conversation_via_waschat():
     assert sub, "找不到 ubSubmit"
     body = _strip_comments(sub.group(1))
     i_capture = body.index("cbChatInMain()")
-    i_saypush = body.index('cbLogPush("say", text)')
+    user_push = re.search(r'else cbLogPush\([^\n]*\? opts.messageKind : "say", text\)', body)
+    assert user_push, "普通输入仍须以 say 为默认身份，共享操作允许显式 messageKind"
+    i_saypush = user_push.start()
     assert "wasChat" in body and i_capture < i_saypush, \
         "wasChat=cbChatInMain() 必须在 say 上屏之前捕获（之后 cbChatInMain 恒真）"
     assert "ubDispatch(text, reply, fromChat, wasChat)" in body, "wasChat 必须串进 ubDispatch"
@@ -845,9 +873,12 @@ def test_chat_only_conversation_is_archived_before_discard():
     assert "chatOnly: true" in wcode, "仅对话行必须带可识别标记"
     assert "_histConvId" in wcode and "_histLogForHistory" in wcode, \
         "convId/chat 必须经 board 注册的钩子取运行期真源（与 pushHist 普通行同形同源）"
-    assert "setHistHooks({ convId: cbConvId, logForHistory: cbLogForHistory })" in BOARD, \
-        "board.js 必须在 initCondBoard 注册历史打标钩子（core→board 反向边已切断，走注册反转）"
-    assert "nsKey(LS.hist)" in wcode, "必须写当前账户命名空间键"
+    assert re.search(r"setHistHooks\(\{ convId: cbConvId, logForHistory: cbLogForHistory, stateForHistory: cbStateForHistory,\s*shared: \(\) => _sharedMode \}\)", BOARD), \
+        "board.js 必须注册历史打标与共享隔离钩子（core→board 反向边已切断，走注册反转）"
+    assert "sharedHistoryActive()" in wcode, "共享会话不可落进或覆盖本机旧历史"
+    assert "writeHistory(a)" in wcode
+    storage = re.search(r"function writeHistory\([^)]*\)\s*\{(.*?)\n\}", core_src, re.S)
+    assert storage and "nsKey(LS.hist)" in storage.group(1), "必须经共享写口写当前账户命名空间键"
     search_src = _read("search/search.js")
     # 钉「归档紧邻清对话之前」这个次序，不过拟合归档调用的实参表达式（实参取
     # 用户原话 sayText、改写时回退 query——比错对象会产幽灵「仅对话」行，见 search.js 注释）。
@@ -899,3 +930,41 @@ def test_search_then_dispatch_keeps_the_say_and_marks_the_right_bubble():
     mcode = _strip_comments(mark.group(1))
     assert 'kind === "say"' in mcode, "回注目标必须按 kind==='say' 找（总结 sys 已先落地，末尾不是原话）"
     assert "_cbLog[_cbLog.length - 1]" not in mcode, "不许再按「最后一条」取回注目标"
+
+
+def test_canonical_dispatch_chain_keeps_graph_done_head_with_renderable_cards():
+    """图内已执行的头部**带着四工具专项卡/写步产物**时必须留在清单里——
+    它进 list 后走 actDispatchPlan 的 steps 分支**只渲染不重跑**（双执行红线），
+    cite/compare 专项卡、汇报与自动下载因此不丢；只按 report_zh 兜底会把它们整批丢掉，
+    而工具已经在后端执行过（steps 是真实记录）。
+    纯检索头（无可渲染内容）仍滤除——纯检索钉（双泡防线）保持不变。"""
+    payload = {
+        "verb": "rank", "kind": "exec",
+        "steps": [
+            {"verb": "rank", "ok": True, "card_kind": "rank"},
+            {"verb": "cite.export", "ok": True, "card_kind": "cite_export",
+             "readonly": False, "result": {"filename": "citations.ris", "files": []}},
+        ],
+    }
+    script = (
+        _ACT_ESM_PRELUDE
+        + 'import { readFileSync } from "node:fs";\n'
+        + 'const p = JSON.parse(readFileSync(0, "utf-8"));\n'
+        + "const out = ns.actCanonicalDispatchPlans(p);\n"
+        + "console.log(JSON.stringify(out.map((x) => x.verb)));\n"
+    )
+    out = _run_node(script, payload, suffix=".mjs")
+    assert out == ["rank"], "带专项卡的图内已执行头部必须保留（否则卡/汇报/下载全丢）"
+
+
+def test_sync_updates_reuses_the_single_async_start_and_poll_channel():
+    """异步 sync 只有一条实现——act.js 必须 import sync_button 的 start/await，
+    且 sync_button.js 里只许有一条 job 轮询 setInterval（复制第二条 poll loop 即门红）。"""
+    sync_button = _read("search/sync_button.js")
+    assert re.search(r'import\s*\{[^}]*\bstartSyncUpdates\b[^}]*\}\s*from\s*"#sync_button"', ACT), \
+        "act.js 必须复用 sync_button 的 start 接口"
+    assert re.search(r'import\s*\{[^}]*\bawaitSyncJob\b[^}]*\}\s*from\s*"#sync_button"', ACT), \
+        "act.js 必须复用 sync_button 的 await 接口"
+    assert ACT.count("setInterval") == 0, "act.js 不许自建轮询循环（单一实现原则）"
+    assert sync_button.count("API.curateSyncJobStatus") == 1, "job 状态轮询只许有一条实现"
+    assert ".async === true" in sync_button, "202 异步分档必须在共享入口里"

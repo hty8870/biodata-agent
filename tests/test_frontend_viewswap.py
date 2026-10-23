@@ -18,6 +18,12 @@
 放宽提示折叠单行（「放宽方式 ▸」钮留在折叠行，:has(+ .cov-detail:not([hidden])) 解除截断，
 max-height 过渡 + reduced-motion 门）；两卡视觉合并为一卡上下节（虚线分隔）。一切紧凑化
 钉在 body.view-swapped + #sideWork[data-sw-mode="board"] 作用域，正常态像素级不变。
+ rp2（2026-10-11）：「筛选」自侧栏页签摘出——侧栏工作卡只剩 对话/复盘 两页签
+（swTabFacets/#sideFacets/#swHits 常驻查询条件栏一并退役，placeHitsBar 删除），唯一入口是
+结果头行 #facetOpenBtn（交换态随 #resultsHead 一起搬回侧栏），点击后 #facetBar 所在面板
+从屏幕右侧推入（#facetDrawer，复用设置抽屉 .drawer 范式，非模态）；#facetBar 恒住抽屉
+不再搬家，placeFacetBar 瘦身为「同步入口钮显隐 + swSync」。页签两枚 → 滑块宽回
+calc((100% - 40px) / 2)。
 
 沿用项目既有的静态门范式（同 test_frontend_fixes.py / test_board_frontend_static.py）：
 钉关键代码形态在场，防回退。运行态行为由内部 Playwright 冒烟脚本（未随公共仓发布）验证。
@@ -94,7 +100,7 @@ def test_place_chat_suite_is_the_single_mover() -> None:
     assert 'grid.classList.remove("grid-mini")' in board
     assert "检索结果（紧凑视图）" in board, "侧栏滚动槽 aria-label 交换文案缺失"
     assert 'tabLabel.textContent = "检索结果"' in board
-    assert 'tabLabel.textContent = "继续对话"' in board, "退出交换必须恢复页签原文案"
+    assert 'tabLabel.textContent = "对话"' in board, "退出交换必须恢复页签原文案"
     assert "把结果放回主区，对话收回侧栏" in board, "交换态按钮 title 文案缺失"
     assert "scopePopOpen(false)" in board, "交换前必须先关范围弹层（锚在 composer 上）"
     # placeChatLog 认识交换态：对话记录的主区家是 #chatStageLog
@@ -117,11 +123,11 @@ def test_compact_grid_and_stage_styles() -> None:
     css = _read("web/static/css/app.css")
     assert "#resultsGrid.grid-mini" in css, "grid-mini 紧凑卡作用域缺失"
     assert ".grid-mini .card-why" in css, "紧凑卡必须隐去推荐理由等非必要块"
-    assert ".grid-mini .files-open" in css
+    assert ".grid-mini .cta-split-more" in css
     assert ".chat-stage" in css and ".chat-stage-log" in css and ".chat-stage-bar" in css
     assert ".sw-swap" in css, "交换钮样式缺失"
-    # 滑块宽度随三格布局重算（原 calc(50% - 4.5px) 的两等分前提已破）
-    assert "width: calc(50% - 20px);" in css, ".sw-glide 宽度未按三格重算"
+    # 滑块宽度随三格布局重算（2026-10-11 rp2：页签三枚→两枚——「筛选」摘出侧栏，交换钮仍在第三格）
+    assert "width: calc((100% - 40px) / 2);" in css, ".sw-glide 宽度未按两页签+交换钮重算"
 
 
 def test_resultshead_styles() -> None:
@@ -131,7 +137,8 @@ def test_resultshead_styles() -> None:
     css = _read("web/static/css/app.css")
     assert "#resultsHead { display: contents; }" in css, "正常态必须对布局完全透明（视觉零变化）"
     assert ".view-swapped #sideBoardScroll .info-bar" in css, "交换态侧栏提示条紧凑规则缺失"
-    assert ".view-swapped #sideBoardScroll .facetbar" in css, "交换态侧栏分面条规则缺失"
+    # rp2：#facetBar 已摘出 #resultsHead（恒住右侧筛选抽屉），交换态侧栏分面条规则随之退役
+    assert ".view-swapped #sideBoardScroll .facetbar" not in css
 
 
 def test_chat_stage_no_card_frame() -> None:
@@ -150,16 +157,47 @@ def test_grid_mini_detail_button_restored() -> None:
     assert ".grid-mini .card-foot, .grid-mini .btn-detail," not in css, ".btn-detail 仍在隐藏清单里"
 
 
-def test_sw_hits_hidden_only_on_swap_board_tab() -> None:
-    """：交换态「检索结果」页签隐藏 #swHits——页签标识 data-sw-mode + 纯 CSS display:none。"""
+def test_facet_drawer_static_pins() -> None:
+    """rp2：「筛选」摘出侧栏页签——结果头行 #facetOpenBtn 为唯一入口，面板住右侧抽屉
+    #facetDrawer（.drawer 范式 + side-facets 样式作用域，非模态），#facetBar 恒住其中不再搬家。"""
+    html = _read("web/static/index.html")
     css = _read("web/static/css/app.css")
     board = _read("web/static/js/panel/board.js")
-    assert 'body.view-swapped #sideWork[data-sw-mode="board"] #swHits { display: none; }' in css, (
-        "缺组合选择器：交换态 + board 页签才隐藏 #swHits（facets 页签/正常态不命中）"
-    )
+    facets = _read("web/static/js/search/facets.js")
+    # 抽屉结构：drawer 范式 + side-facets 作用域类 + 非模态 + 头（标题/关闭钮）+ #facetDrawerBody
+    assert 'class="drawer side-facets" id="facetDrawer"' in html, "缺 #facetDrawer 抽屉（drawer+side-facets 两类缺一不可）"
+    assert 'id="facetDrawer" role="dialog" aria-modal="false"' in html, "筛选抽屉必须非模态（边看结果边挑条件）"
+    assert 'id="facetDrawerBody"' in html and 'id="facetDrawerClose"' in html
+    # #facetBar（含 #facetActive/#facetGroups/#facetStageBar）恒住抽屉内
+    assert html.index('id="facetBar"') > html.index('id="facetDrawerBody"'), "#facetBar 必须在抽屉体内"
+    assert html.index('id="facetBar"') < html.index('id="settings"'), "抽屉必须在设置抽屉之前（同源 markup 区块）"
+    for nid in ('id="facetActive"', 'id="facetGroups"', 'id="facetStageBar"'):
+        assert html.index(nid) > html.index('id="facetBar"'), f"{nid} 必须仍在 #facetBar 内"
+    # 入口钮在结果头行、在可行性钮之前（交换态随 #resultsHead 搬回侧栏）
+    assert html.index('id="facetOpenBtn"') > html.index('class="results-head-acts"')
+    assert html.index('id="facetOpenBtn"') < html.index('id="feasibilityBtn"')
+    # 旧机制全部退役：markup 不再存在，搬家函数删除
+    for stale in ('id="swHits"', 'id="swTabFacets"', 'id="sideFacets"', 'id="sideFacetBody"'):
+        assert stale not in html, f"旧机制残留 {stale}"
+    assert "placeHitsBar" not in board, "placeHitsBar 必须随 #swHits 一并删除"
+    assert "swTabFacets" not in board, "board.js 不得再引用已退役的筛选页签"
+    assert "facets-active" not in board, "facets-active 类机制已退役"
+    # 新机制接线：loud-fail 绑定 + Esc 分层 + 暂存判定锚在抽屉
+    assert '$("facetOpenBtn").addEventListener("click", function () { facetDrawerSet(true); })' in board
+    assert '$("facetDrawerClose").addEventListener("click", function () { facetDrawerSet(false); })' in board
+    assert 'g.closest("#facetDrawer")' in facets, "暂存草稿判定必须锚在抽屉（facetBar 恒住其中→查询页恒暂存模式）"
+    assert "facetDrawerSet(false);   // 提交即关抽屉" in facets, "提交必须关抽屉（脏草稿不丢：先清空再关）"
+    inter = _read("web/static/js/core/interactions.js")
+    assert "if (facetDrawerIsOpen()) { facetDrawerSet(false); return; }" in inter, "Esc 分层链缺筛选抽屉环"
+    # placeFacetBar 瘦身为「入口钮显隐 + swSync」（搬家已退役）
+    assert 'function placeFacetBar()' in facets and 'btn.hidden = bar.hidden' in facets
+    # 页签两枚 → 滑块宽回两格折算
+    assert "width: calc((100% - 40px) / 2);" in css
+    assert 'grid-template-columns: 1fr 1fr auto;' in css, ".sw-switch 必须回到两页签+交换钮三格"
+    # cardEl.dataset.swMode 保留：交换态紧凑样式与复盘态隐藏 #chatComposer 的 CSS 闸门
     assert "cardEl.dataset.swMode = mode" in board, "swApplyMode 未给 #sideWork 落页签标识"
-    # 只钉 display:none 形态（不动节点/hidden 属性），placeHitsBar 搬家逻辑零改动
-    assert "function placeHitsBar()" in board
+    assert '#sideWork[data-sw-mode="replay"] #chatComposer { display: none; }' in css
+    assert "#swHits" not in css, "CSS 不得再残留 #swHits 规则"
 
 
 def test_structural_pin_bottom() -> None:
@@ -207,7 +245,7 @@ def test_dual_span_button_labels() -> None:
 
 def test_compact_head_scoped_to_swap_board() -> None:
     """：紧凑化规则全部钉在 body.view-swapped + #sideWork[data-sw-mode=\"board\"] 作用域——
-    正常态与「细化筛选」页签不命中；标题行并一行（按钮不再纵向满宽）。"""
+    正常态不命中（「筛选」rp2 起在右侧抽屉，本就不受影响）；标题行并一行（按钮不再纵向满宽）。"""
     css = _read("web/static/css/app.css")
     scope = 'body.view-swapped #sideWork[data-sw-mode="board"]'
     # .rs-coverage 哑化上移为通用态（.res-overview .rs-coverage），交换态改钉 .res-overview 紧凑卡壳

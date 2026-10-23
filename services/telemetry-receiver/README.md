@@ -42,6 +42,15 @@ Place the service behind the operator's TLS and network controls. Restrict
 browser origins to the public UI origin and keep administrative credentials
 server-side. Capacity changes require a matching storage and rate-limit plan.
 
+Network boundary in this template: the host port mapping binds
+`127.0.0.1:8471` only, so the receiver is reachable from the host loopback
+where the operator's TLS reverse proxy terminates public traffic. The
+application inside the container still listens on `0.0.0.0:8471`, which is
+container-network reachability, not a public listener. An operator who needs a
+different ingress (direct binding, load balancer, private network) must replace
+the port mapping deliberately and keep the TLS origin and origin allowlist in
+sync with that decision.
+
 ## Operations
 
 The application records the result of its configured cleanup policy for

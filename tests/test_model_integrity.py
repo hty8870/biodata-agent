@@ -46,11 +46,7 @@ def _write_manifest(paths: AppPaths, **overrides) -> dict:
         "installed_at": "2026-08-21T00:00:00+00:00",
         "runtime_bytes": 6,
         "model_bytes": 11,
-        "model_files": {
-            "config.json": 2,
-            "tokenizer.json": 2,
-            "model.safetensors": 7,
-        },
+        "model_files": worker.model_file_manifest(target),
     }
     manifest.update(overrides)
     mr.ready_manifest_path(paths).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
@@ -112,7 +108,7 @@ def _embed_ready(paths: AppPaths) -> dict:
     (target / "config.json").write_text("{}", encoding="utf-8")
     (target / "tokenizer.json").write_text("{}", encoding="utf-8")
     (target / "model.safetensors").write_bytes(b"weights")
-    return {"config.json": 2, "tokenizer.json": 2, "model.safetensors": 7}
+    return worker.model_file_manifest(target)
 
 
 def test_embed_ready_with_dual_model_manifest(tmp_path):

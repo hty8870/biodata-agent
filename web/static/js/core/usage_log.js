@@ -24,7 +24,9 @@ import { queueMigrateLegacyArray, queueRead, queueRemoveIds, queueWrite } from "
  * uvicorn 的 access log）、服务端不存会话、导出走前端 Blob 不写盘。
  * 2026-08-20 起（设计裁决见 `设计文档）：
  * **默认开启本地采集**，行为埋点（usage）+ benchmark 轮次记录（benchfb）经结构性脱敏；
- * 只有部署配置安全 HTTPS 通道后才自动上传，默认仅本地保存；手动导出保留作兜底。
+ * 只有部署方配置了上传通道后才自动上传——公网默认只放行 HTTPS，明文端点须部署方在 meta
+ * 显式登记主机白名单（`biodata-telemetry-allow-insecure`）；端点/令牌未配置则零上传，
+ * 默认仅本地保存；手动导出保留作兜底。
  *
  * 分层：本文件**零网络原语**——唯一出网通道是 `usage_upload.js`（相对路径动态 import，
  * 不进 importmap），契约门（test_usage_telemetry_contract.py）把「遥测层只有它允许出现

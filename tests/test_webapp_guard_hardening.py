@@ -225,11 +225,20 @@ def test_guard_on_download_endpoints_403(client, monkeypatch):
     assert r.status_code == 403 and "任务包" in r.json()["detail"]
 
 
-def test_guard_off_download_plan_open(client):
-    """对照组：闸关时 download/plan 不 403（未知 uid → 200 + unsupported 清单，零网络零落盘）。"""
+def test_guard_off_download_plan_open(client, monkeypatch):
+    """对照组：闸关时 download/plan 不 403（未知 uid → 200 + unsupported 清单，零网络零落盘）。
+
+    **夹具隔离而非生产修复**：本项只验「guard off + 未知 uid」，不验生产 catalog 集成。
+    在既有数据装载接缝 `_records_by_uid` 注入合成空 records——生产 records=None 分支
+    会装载真实语料（base + 全部 external，含 userdata 生成物），与本项无关也不该被
+    测试触达。真正 build_download_plan 与 HTTP guard 原样真跑，未改生产下载实现/audit。"""
+    from dataset_recommender.corpus import download_manager as DM
+    monkeypatch.setattr(DM, "_records_by_uid", lambda records=None: {})
     r = client.post("/api/download/plan", json={"uids": ["test:nonexistent-uid"]})
     assert r.status_code == 200, r.text
-    assert r.json()["ok"] is True
+    body = r.json()
+    assert body["ok"] is True
+    assert [u["dataset_uid"] for u in body["unsupported"]] == ["test:nonexistent-uid"], body
 
 
 # ---------------------------------------------------------------- B9：自定义 base_url 禁入
@@ -284,9 +293,28 @@ def test_guard_on_introduction_llm_counts_quota(client, monkeypatch):
 
 
 def test_guard_off_introduction_llm_no_quota(client, monkeypatch):
-    """对照组：闸关时 llm=1 不进配额（_gate_llm_quota 第一行即返），行为与现状一致。"""
+    """对照组：闸关时 llm=1 不进配额（_gate_llm_quota 第一行即返），行为与现状一致。
+
+    先注册并登录出**真 session cookie**：否则请求没有身份、配额桶压根没被触达，
+    「== 0」只是"没走到闸"的空转；末尾把闸打开用同一 session 交叉验证（0 → 1），
+    证明这个 0 是"闸关"而不是"没身份"。
+    """
+    _guard_on(monkeypatch)
+    assert _register(client).status_code == 200
+    assert client.post("/api/account/login", json={
+        "username": "alice", "password": "password12"}).status_code == 200, "登录失败"
+    assert client.cookies.get(A.SESSION_COOKIE), "未建立真 session cookie——对照会空转"
+    monkeypatch.delenv("BIODATA_REQUIRE_ACCOUNT", raising=False)   # 切回本机形态（闸关）
+
     _stub_introduction(monkeypatch, LLMConfig(
         enable_llm=True, provider="openai-compatible", api_key="server-key"))
     r = client.get("/api/introduction", params={"uid": "x", "llm": 1})
     assert r.status_code == 200, r.text
     assert llm_quota.usage_snapshot(webapp.PROJECT_ROOT, "alice", trial=False) == 0
+
+    # 反空转交叉验证：同一 session、同一请求，闸一开 → 配额真的走到 1
+    _guard_on(monkeypatch)
+    r = client.get("/api/introduction", params={"uid": "x", "llm": 1})
+    assert r.status_code == 200, r.text
+    assert llm_quota.usage_snapshot(webapp.PROJECT_ROOT, "alice", trial=False) == 1, (
+        "同一 session 开闸后配额必须 +1——否则上一步的 0 只是身份缺失的空转")

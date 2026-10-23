@@ -5,17 +5,17 @@
    renderCondBoard（board）、resetTaskPack/syncTaskPackBar（task_pack）、placeFacetBar（facets）、
    getSelectedSources/getSourceMode（interactions）经 import 取（互调成环——绑定都只在函数体内使用）。
    search/board/browse/interactions/act/accounts 经 import 取本文件导出（绞杀桥已全退役）。 */
-import { API, MOTION, $, escapeHtml, escapeHtmlStrong, ghostExit, isHttp, normalizeItem, prettySource, revealCards, toast } from "#core";
+import { API, MOTION, $, escapeHtml, escapeHtmlStrong, ghostExit, isHttp, normalizeItem, prettySource, revealCards, toast, beginRequest, invalidateRequest } from "#core";
 import { CB_DIM_LABEL } from "#board_core";
-import { buildCard } from "#cards";
+import { buildCard, seriesCountsOf } from "#cards";
 import { setRememberSearchAvailable } from "#memory";
-import { USAGE_KINDS, usageActiveImpressionId, usageActiveTurnId, usageBeginImpression, usagePolicyRef, usageSeenCreate, usageSeenPause, usageSeenTick } from "#usage_core";
+import { USAGE_KINDS, usageActiveImpressionId, usageActiveTurnId, usageBeginImpression, usageSeenCreate, usageSeenPause, usageSeenTick } from "#usage_core";
 import { usageBindImpression, usageImpressionItems, usageLog, usageLogImpression, usageMakeImpression } from "#usage_log";
-import { placeFacetBar, renderActiveChips, renderFacets } from "#facets";
-import { cbClear, cbLogPush, closeRescueStrip, renderCondBoard } from "#board";
+import { placeFacetBar } from "#facets";
+import { cbClear, cbLogPush, cbBeginLayoutTransition, renderCondBoard } from "#board";
 import { resetTaskPack, syncTaskPackBar } from "#task_pack";
-import { getSelectedSources, getSourceMode } from "#interactions";
-import { applyRecommendResult, LAST_RECOMMEND_DATA, runRecommend } from "#search";
+import { getSelectedSources, getSourceMode, queryForRetrieval } from "#interactions";
+import { applyRecommendResult, LAST_RECOMMEND_DATA, runRecommend, searchParamSnapshot } from "#search";
 import { benchfbAfterSearchRender } from "#benchfb";   // 结果区重建后重新挂 hero 评分卡槽位
 
 /* ---------- 结果曝光追踪（2026-08-22；重写为 500ms 状态机，schema v3）----------
@@ -25,7 +25,7 @@ import { benchfbAfterSearchRender } from "#benchfb";   // 结果区重建后重�
    - 页面隐藏（hidden/pagehide）：在途区间**冻结不清零**（usageSeenPause），补发一条 view，
      断开观察器但**保留 iid 与已见集合**；可见恢复（visible）后同一 iid 继续，
      重新观察未 seen 的卡（IO 初始回调自动重开可见卡的在途区间）；
-   - 只有 renderResults/applyRelaxation 的 _seenBegin 才开新 iid（上一屏在 _seenFinish 里收尾）。
+   - 只有 renderResults 的 _seenBegin 才开新 iid（上一屏在 _seenFinish 里收尾）。
    view 事件去重：每次展示**首发恒发**（哪怕 seen 为空——证明这屏存在过），之后只在 seen
    集合变大时补发；dwell=可见累计毫秒（hidden 时段不计）。
    tid/iid 用 begin 时捕获的**快照**——发的时候新一轮 turn 可能已经开始，读现值会串号。
@@ -141,8 +141,8 @@ if (typeof document !== "undefined" && document.addEventListener) {
 /* ---------- imp 展示事件 + 卡级归因（2026-08-22，schema v3）----------
    每次非空结果渲染：造一个不可变 ImpressionContext（tid/iid/policy/当屏 items 快照），
    绑到每张卡 DOM 上（之后这张卡的 open/fav 都归因到**这次展示**，新一轮检索/重渲不串号），
-   并发一条 imp 事件。imp 参数缺 tid 时回落当前轮（渲染调用方只有 search.js
-   applyRecommendResult 与下方 applyRelaxation 两条路，都会显式给）。 */
+   并发一条 imp 事件。imp 参数缺 tid 时回落当前轮（渲染调用方 search.js
+   applyRecommendResult 会显式给）。 */
 function _emitImpression(items, imp) {
     if (!items || !items.length) return;
     const grid = $("resultsGrid");
@@ -373,6 +373,7 @@ export function enterResultsLayout() {
     if (!v || v.classList.contains("has-results")) return;
     const hero = v.querySelector(".hero");
     if (!(MOTION && hero)) { v.classList.add("has-results"); return; }
+    if (cbBeginLayoutTransition()) { v.classList.add("has-results"); return; }
     /* 2026-08-30：无对话直达路径（历史回看/切账户重渲——hero 各部还完整可见）的
        display:none 瞬隐软化，与 board.js placeChatLog (a) 的幽灵同一语言。正常首发检索不走到这——
        hero 各部在发送那一刻（chat-main-on）已隐，幽灵已播过（getClientRects 空 → ghostExit 自动跳过）。
@@ -403,7 +404,7 @@ export function exitResultsLayout() {
     cbClear();          // 条件板与撤销栈都「属于那次查询」，随结果区一起收起
     resetTaskPack();    // 任务包清单同理：它是「那一次检索的前 N 条」，换查询即失效
     const bar = $("facetBar");
-    if (bar) { bar.hidden = true; placeFacetBar(); }   // 隐藏后 placeFacetBar 会把它搬回结果区原位并收起侧栏二分
+    if (bar) { bar.hidden = true; placeFacetBar(); }   // 隐藏后 placeFacetBar 收起结果头行「筛选」入口钮并经 swSync 收起侧栏工作卡
     // 本来就不在结果态（wasResults=false，如首页打字后删光）：布局没有任何变化，**不得播 FLIP**——
     // 否则 from 哨兵 0 会让 dy=−hero.top，hero 整屏从上方滑回（2026-08-03 缺陷：删空文字输入框上跳）。
     if (!MOTION || !hero || !wasResults) return;
@@ -417,12 +418,6 @@ export function exitResultsLayout() {
 let _afterRenderHook = null;
 export function setAfterRenderHook(fn) { _afterRenderHook = (typeof fn === "function") ? fn : null; }
 
-/* 下一步行动阶梯（2026-08-22，设计 §5）：同一注册式反转模式——ladder.js 经
-   setLadderRenderHook 注册结果区阶梯 chips 渲染（本模块不 import ladder，单向边不进 SCC）。
-   data=null 表示非完整结果屏（放宽预览），ladder.js 按此整块隐藏。 */
-let _ladderRenderHook = null;
-export function setLadderRenderHook(fn) { _ladderRenderHook = (typeof fn === "function") ? fn : null; }
-
 export function renderResults(items, data, imp) {
     _seenBegin();   // 每次结果区重渲 = 一次新展示（上一屏曝光在 begin 内先收尾）
     // 可行性面板的数据是按「点开那一刻的查询」聚合的——任何一次新结果渲染
@@ -430,10 +425,10 @@ export function renderResults(items, data, imp) {
     // 就是拿别轮的统计给这轮背书。每次渲染先重置（隐藏+清空）；想看得就新条件重新点。
     // renderFeasibilityBar 只钉按钮显隐，管不到「面板正开着」的情形，所以重置收口在这里。
     const _feasP = $("feasibilityPanel");
+    if (_feasP) invalidateRequest(_feasP);
     if (_feasP && !_feasP.hidden) { _feasP.hidden = true; _feasP.innerHTML = ""; }
     enterResultsLayout();
     if (_afterRenderHook) _afterRenderHook(data);   // 空态/失败/弃权各分支早退也不漏（data 恒可判 hasResults）
-    if (_ladderRenderHook) _ladderRenderHook(data);   // 结果区阶梯 chips / 过宽收窄建议
     const wrap = $("resultsWrap");
     const firstReveal = wrap.style.display !== "block";
     wrap.style.display = "block";
@@ -493,13 +488,9 @@ export function renderResults(items, data, imp) {
             revealCards(grid.children, false);   // 同上空态入场对齐
             return;
         }
-        // 未收录词弃权：这**不是**「没有匹配」——系统压根没检索，因为句子里有它不认识的词。
+        // 弃权态：未收录词自 2026-09-10 起由后端自动降级（下方 degraded 分支），走不到这里；
+        // 其余弃权（否定歧义等）如实说明「这次没有做检索」——这**不是**「没有匹配」，
         // 混在「没有匹配的结果」里说，用户会以为库里真没有，转头去别处找。
-        const deg = (data && data.degraded_search) || null;
-        // 弃权态**不依赖**有没有降级建议：只有一部分弃权能给出「忽略某词再搜」的选项
-        //（去词之后仍然看不懂、或一个条件都不剩时就没有）。此前这一整块被 `&& deg` 卡住，
-        // 于是大多数弃权掉进下面的「没有匹配的结果 / 库里没有同时满足所有条件的数据」——
-        // 那是一句**假话**：系统压根没检索，用户却以为库里真没有，转头去别处找。
         if (data && data.resolution_status === "abstained") {
             // 后端的 markdown 首行就是弃权理由（render_no_result → "抱歉，" + abstain_detail），
             // 直接拿来当正文，比前端再编一套说辞诚实，也不会与后端口径漂移。
@@ -508,40 +499,31 @@ export function renderResults(items, data, imp) {
             const raw = String((data && data.markdown) || "").split("\n")[0].replace(/^抱歉，?/, "");
             const why = raw ? escapeHtml(raw)
                 : "这句话里有系统无法可靠理解的说法。为了不返回违背你意图的结果，这次没有做检索。";
-            let relaxBlock = "";
-            if (deg) {
-                const terms = (deg.ignored_terms || []).map((t) => `「${escapeHtml(t)}」`).join("、");
-                // 只列**硬筛选**。软偏好（polarity="prefer"）只影响排序、不筛掉任何数据，
-                // 把它算进「实际在筛的条件」会让用户以为结果都满足这一项——那就是骗人。
-                const conds = (deg.active_filters || [])
-                    .filter((f) => f && f.polarity !== "prefer")
-                    .map((f) => `${escapeHtml(f.label || "")}=${escapeHtml((f.values || []).join("/"))}`)
-                    .join("、");
-                relaxBlock = `<div class="relax"><div class="relax-h">也可以先忽略它看看：</div>
-                <div class="relax-chips"><button type="button" class="relax-chip" data-degrade="1">忽略${terms}再搜<span class="rc-n">${deg.count} 条</span></button></div>
-                <p class="relax-note">忽略之后实际在筛的条件只有：${conds || "（没有条件）"}——结果里<b>不会</b>按${terms}筛。</p>
-                </div>`;
-            }
             grid.innerHTML = `<div class="info-bar noresult"><strong>这次没有做检索</strong>
                 <p>${why}</p>
-                ${relaxBlock}</div>`;
-            const degBtn = grid.querySelector("[data-degrade]");
-            if (degBtn) degBtn.addEventListener("click", () => applyRelaxation(data, "degraded"));
+                </div>`;
             revealCards(grid.children, false);
             return;
         }
         const opts = (data && data.relaxation_options) || [];
-        const relaxHtml = buildRelaxBlock(opts);
+        // 收编（2026-09-14）：「放松哪个条件」唯一通道 = 输入框上方的 ask.relax 选择卡
+        //（零命中批落地后由 board.js maybeAutoRelaxCard 兜底弹出；点选即零 LLM 重搜）。
+        // 空态卡只做如实说明 + 指路，不再内嵌 chips（旧就地预览是冻结快照、条件板不同步，已退役）。
         grid.innerHTML = `<div class="info-bar noresult"><strong>没有匹配的结果</strong>
-            <p>库里没有同时满足所有条件的数据。一般是条件叠得太严，或句子里有系统没看懂的说法——系统不会拿不满足条件的数据来凑数。${opts.length ? "下面几种放宽方式可以直接点。" : ""}</p>${relaxHtml}</div>`;
-        grid.querySelectorAll(".relax-chip").forEach((btn) =>
-            btn.addEventListener("click", () => applyRelaxation(data, +btn.dataset.relax)));
-        bindRelaxMore(grid);
+            <p>库里没有同时满足所有条件的数据。一般是条件叠得太严，或句子里有系统没看懂的说法——系统不会拿不满足条件的数据来凑数。${opts.length ? "输入框上方给出了几种放宽方式，选一个就能直接看结果。" : ""}</p></div>`;
         revealCards(grid.children, false);   // 同上空态入场对齐
         return;
     }
     // degraded：LLM 把关档批准了「忽略未收录词」，结果是**降级**来的。绝不能和正常命中长一个样——
     // 用户必须一眼看到「有几个词没被用来筛」，否则就是把降级结果冒充成精确匹配。
+    // vector_fallback：解析弃权且降级救不回时，后端改用全库向量语义召回——结果**未经条件核验**，
+    // 必须与正常命中/降级结果长得不一样，否则就是把语义相似冒充成条件筛选。
+    if (data && data.resolution_status === "vector_fallback") {
+        const banner = document.createElement("div");
+        banner.className = "relax-banner";
+        banner.innerHTML = `<span>这句话的检索条件<b>未能执行</b>——以下按<b>语义相似度</b>给出，<b>未经条件核验</b>，请自行判断是否合用</span>`;
+        grid.appendChild(banner);
+    }
     if (data && data.resolution_status === "degraded" && data.degraded_search) {
         const d = data.degraded_search;
         const terms = (d.ignored_terms || []).map((t) => `<b>「${escapeHtml(t)}」</b>`).join("、");
@@ -551,7 +533,11 @@ export function renderResults(items, data, imp) {
         banner.innerHTML = `<span>这批结果<b>忽略了</b>${terms}——系统词表里没有它们，结果<b>没有</b>按它们筛${why}</span>`;
         grid.appendChild(banner);
     }
-    items.forEach((it, idx) => grid.appendChild(buildCard(it, { rank: idx + 1 })));
+    // 「同系列」：同一非空 collection_doi 在**本响应**里 ≥2 条时，那些卡各加一枚「同系列 ×N」小标。
+    // 计数只按本屏 rows 算（cards.seriesCountsOf 是唯一构造点）——它讲的是「本页还有同系列的其它条」，
+    // 不是跨页/跨查询的全局统计，更不是去重（合法条目一条都不隐藏）。
+    const seriesCounts = seriesCountsOf(items);
+    items.forEach((it, idx) => grid.appendChild(buildCard(it, { rank: idx + 1, seriesCounts })));
     revealCards(grid.querySelectorAll(".card"), false);
     // 结果区重建（新检索 / 分面重跑 / 放宽 / 历史回看）后把 hero 轮评分卡挂回顶部槽位——
     // 空态/失败/弃权/澄清各分支已在上面 return，那张卡只对「有结果」的屏出现。
@@ -576,147 +562,6 @@ function applyClarification(optionId) {
     inp.value = q;
     runRecommend();
 }
-/* ---------- 引导式放宽：多策略分组 + 展开 ----------
-   后端 `relaxation_options[].kind` 给出两档策略：
-     drop  去掉一个条件（其余条件都还在）——保守档
-     only  只按一个条件搜（其余条件全放开）——激进档，且是「去掉任何单个条件仍是 0 条」时唯一还救得回来的
-   默认只铺开前 RELAX_VISIBLE 个（够用又不刷屏），其余收进「更多放宽方式（N）」。
-   **数量写在按钮上、且真的是剩余条数**——写死「更多」而不说几个，用户不知道展开值不值。 */
-const RELAX_VISIBLE = 3;
-const RELAX_GROUPS = [
-    { kind: "drop", title: "去掉一个条件", note: "其余条件都还在", verb: (l) => "去掉「" + l + "」条件再搜" },
-    { kind: "only", title: "只按一个条件搜", note: "其余条件全放开", verb: (l) => "只按「" + l + "」搜，其它条件都放开" },
-];
-function buildRelaxBlock(opts) {
-    if (!opts || !opts.length) return "";
-    // 下标必须是**原数组下标**（applyRelaxation 按它回查 opts[i]），分组渲染不能重新编号。
-    let shown = 0;
-    const groups = RELAX_GROUPS.map((g) => {
-        const items = opts.map((o, i) => ({ o: o, i: i })).filter((x) => (x.o.kind || "drop") === g.kind);
-        if (!items.length) return "";
-        const chips = items.map((x) => {
-            const extra = shown++ >= RELAX_VISIBLE ? " relax-extra" : "";
-            return `<button type="button" class="relax-chip${extra}" data-relax="${x.i}">`
-                + escapeHtml(g.verb(String(x.o.label || ""))) + `<span class="rc-n">${Number(x.o.count || 0)} 条</span></button>`;
-        }).join("");
-        // 整组芯片都在折叠区时，**整组**（含组标题与它的外边距）一起折叠——
-        // 只折叠标题会在展开前留下一个高度为 0、外边距仍在的空壳。
-        const groupExtra = (shown - items.length) >= RELAX_VISIBLE ? " relax-extra" : "";
-        // data-kind 是给验收/调试用的稳定钩子：`:nth-of-type` 在这里会数错（.relax 里还有标题 div 和按钮），
-        // 靠位置定位这两组迟早认错人——第一版验收脚本就是这么把第一组当成了第二组。
-        return `<div class="relax-group${groupExtra}" data-kind="${escapeHtml(g.kind)}"><div class="relax-gh">${escapeHtml(g.title)}`
-            + `<span class="relax-gh-note">${escapeHtml(g.note)}</span></div>`
-            + `<div class="relax-chips">${chips}</div></div>`;
-    }).join("");
-    const hidden = Math.max(0, opts.length - RELAX_VISIBLE);
-    const more = hidden
-        ? `<button type="button" class="relax-more" aria-expanded="false" data-relax-more="${hidden}">更多放宽方式（${hidden}）</button>`
-        : "";
-    return `<div class="relax"><div class="relax-h">换一种方式再搜（点一下直接看结果）：</div>${groups}${more}</div>`;
-}
-function bindRelaxMore(root) {
-    const btn = root.querySelector(".relax-more");
-    if (!btn) return;
-    btn.addEventListener("click", () => {
-        const box = btn.closest(".relax");
-        const open = box.classList.toggle("is-open");
-        btn.setAttribute("aria-expanded", open ? "true" : "false");
-        btn.textContent = open ? "收起" : `更多放宽方式（${btn.dataset.relaxMore}）`;
-    });
-}
-/* 放宽预览**实际生效**的条件集（真源是后端实际执行集，不是旧解析快照）：
-   - drop（去掉一个条件）：retriever 的放宽就是「原 intent 去掉这一条」，故 = 原响应的
-     query_constraints（后端实际执行集，被忽略的维度本就不在其中）去掉本项对应的 filter_id。
-     key → filter_id 映射（retriever.relaxation_options ↔ query_parser.active_filters）：
-     dim:<d>→include:<d>；exclude:<d>→exclude:<d>（同形）；raw→raw:required/raw:forbidden；date→date:range。
-   - only（只按一个条件搜）：只剩 include:<dim>；prefer 软偏好不参与筛选、但仍影响排序（后端
-     kept intent 未清 preferred_*），chip 保留才如实。
-   - degraded（未收录词降级）：后端直接给了 active_filters（workflow.build_degraded_search），照用。 */
-function relaxEffectiveHits(data, opt, isDeg) {
-    if (isDeg) return (((opt && opt.active_filters) || [])).filter((f) => f && (f.filter_id || f.dim));
-    const qc = (data && data.query_constraints) || [];
-    const key = String((opt && opt.key) || "");
-    if (key.indexOf("only:") === 0) {
-        const keep = "include:" + key.slice(5);
-        return qc.filter((g) => (g.filter_id || g.dim) === keep || g.polarity === "prefer");
-    }
-    const dropId = key === "date" ? "date:range"
-        : key.indexOf("dim:") === 0 ? "include:" + key.slice(4)
-        : key;
-    return qc.filter((g) => {
-        const fid = g.filter_id || g.dim;
-        if (key === "raw") return fid.indexOf("raw:") !== 0;   // required/forbidden 同一个 FASTQ 条件，一并去掉
-        return fid !== dropId;
-    });
-}
-// 引导式放宽：点某放宽芯片 → 把该项后端预算好的预览结果切入结果区（不重发网络、确定性），
-// 顶部加「已放宽 + 返回」横幅；返回则重渲染原「无结果」视图。
-function applyRelaxation(data, i) {
-    // 点空态卡放宽 chip 进入就地预览（不重渲对话流）——若琥珀色选择条还开着同一
-    // 放宽选项，二者错位。进入预览即收起选择条（丢弃其数据态；用户点提交/关闭有自己的收起路径）。
-    closeRescueStrip({ keepData: false });
-    // i === "degraded" 走未收录词降级项（后端 degraded_search），其余是引导式放宽的下标。
-    // 两者形状对齐（count + results），横幅文案不同：一个是「去掉了你写的某个条件」，
-    // 另一个是「忽略了系统不认识的词」——说反了就是撒谎。
-    const isDeg = i === "degraded";
-    const deg = data && data.degraded_search;
-    const opt = isDeg ? deg : ((data && data.relaxation_options) || [])[i];
-    if (!opt) return;
-    // 「用户不得不放宽条件」本身就是一次检索没做好的信号，值得进反馈包。
-    // v2：补维度/键与降级档的被忽略词（截 5 个），分析侧才知放宽的是哪一类条件。
-    const relaxPayload = { d: isDeg ? "未收录词降级" : String(opt.label || opt.dim || "放宽"),
-        dim: String(opt.dim || ""), key: String(opt.key || "") };
-    if (isDeg) relaxPayload.terms = (opt.ignored_terms || []).slice(0, 5).map(String);
-    usageLog(USAGE_KINDS.relax, relaxPayload);
-    _seenBegin();   // 放宽预览也是一次新结果列表展示：换 iid、上一屏曝光收尾
-    // 两档策略的横幅措辞必须各自成立：「去掉「人类」」和「只按「人类」搜」是**相反**的两件事，
-    // 用同一句模板套上去就等于告诉用户系统做了它没做的事（同 isDeg 那条的理由）。
-    const isOnly = !isDeg && (opt.kind || "drop") === "only";
-    const rows = opt.results || [];
-    const grid = $("resultsGrid");
-    // 放宽预览基于**原严格查询**、且 applyRelaxation 绕过 renderResults → 隐去严格查询的结果摘要卡
-    // （方法句 + 内嵌覆盖缺口一并收起），免得陈旧的「另有 N 条未标注…」悬在放宽结果上方误导
-    // （点「返回无结果」会经 renderResults 重新渲染，摘要卡按新数据重出）。
-    const _sum = $("searchTrace"); if (_sum) _sum.hidden = true;
-    const _uqt = $("unusedQueryTerms"); if (_uqt) _uqt.hidden = true;   // 同理隐去陈旧的「未作为筛选维度」框
-    const _idlk = $("identifierLookup"); if (_idlk) _idlk.hidden = true;   // 放宽预览时隐去陈旧的标识符反查框
-    if (_ladderRenderHook) _ladderRenderHook(null);   // 放宽预览不是完整结果屏，阶梯 chips/收窄建议一并隐去
-    // 只收起条件板里的「原严格条件」展示层（摘要 + 经典条件行），**不隐藏整块 #condBoard**——
-    // telegram（对话记录）态下整块条件板就是聊天窗（#cbHistory 在其内、由 placeCondBoard 搬进侧栏），
-    // 整块 hidden 会把用户整段对话记录一起抹掉、直到下条消息才回来（用户反馈的真 bug）。
-    // 与放宽结果冲突的只是「原严格条件」那点展示（摘要/条件行），用 .cb-relax-preview 精确藏这两处；
-    // 聊天记录留着——放宽本身就是一次对话动作。任务包仍单独复位（打包按钮打的还是原严格那批）。
-    const _cb = $("condBoard"); if (_cb) _cb.classList.add("cb-relax-preview");
-    // 「查询条件」chips 同步换成预览**实际生效**的条件——旧代码只藏了 condBoard
-    // 展示层，#facetActive 仍停在原严格查询的快照上（被去掉的「发表时间」chip 还带着「忽略」
-    // 按钮留在栏里，与「这条没参与筛选」矛盾）。渲染走 facets.js 唯一渲染口 renderActiveChips；
-    // 点「返回」时下方 renderFacets(data) 按原数据把 chips/分面组整块复原。
-    renderActiveChips(relaxEffectiveHits(data, opt, isDeg));
-    resetTaskPack();
-    grid.innerHTML = "";
-    const banner = document.createElement("div");
-    banner.className = "relax-banner";
-    banner.innerHTML = isDeg
-        ? `<span>已忽略${(opt.ignored_terms || []).map((t) => `「${escapeHtml(t)}」`).join("、")}：结果<b>没有</b>按这些词筛，库中共 <b>${opt.count}</b> 条，展示前 ${rows.length} 条</span>`
-        : (isOnly
-            ? `<span>已放宽：<b>只按</b>「${escapeHtml(opt.label)}」搜，你写的其它条件这次<b>都没有</b>参与筛选，库中共 <b>${opt.count}</b> 条，展示前 ${rows.length} 条</span>`
-            : `<span>已放宽：去掉「${escapeHtml(opt.label)}」，库中共 <b>${opt.count}</b> 条，展示前 ${rows.length} 条</span>`);
-    const back = document.createElement("button");
-    back.type = "button"; back.className = "relax-back";
-    // 降级档没有「原条件」可回——原句压根没被执行，回去的是那条弃权说明。说成「返回原条件」是撒谎。
-    back.textContent = isDeg ? "← 返回" : "← 返回原条件";
-    // 返回时把条件板一起放回来（renderResults 只管结果区与任务包按钮，不碰条件板）；
-    // chips/分面组也按原数据复原（renderFacets 重跑 = 回到放宽预览前的实时命中镜像）。
-    back.addEventListener("click", () => { renderResults([], data); renderCondBoard(data); renderFacets(data); });
-    banner.appendChild(back);
-    grid.appendChild(banner);
-    rows.forEach((it, idx) => grid.appendChild(buildCard(it, { rank: idx + 1 })));
-    revealCards(grid.querySelectorAll(".card"), false);
-    _seenObserve(grid);   // 放宽预览的卡片同样进曝光追踪
-    // 放宽预览也是一次真实展示，同样发 imp + 绑卡级快照。tid 沿用当前轮
-    // （放宽是这轮内的动作）；policy 只能取原响应的 policy_id（预览不发新请求，后端没给就留空，绝不编）。
-    _emitImpression(rows, { tid: usageActiveTurnId(), policy: usagePolicyRef(data) });
-}
 
 /* ---------- 分面细化：结果上方按未固定维度一键收窄 ----------
    _facetFilters 是前端唯一真源（含 display/label 供面包屑显示），每次变更都带着它重跑同一查询。
@@ -739,7 +584,7 @@ export let _lenientDims = [];   // ["tissue","disease",...]
 
 /* 可变共享状态只允许属主模块写（迁移约定 §4）：模块之外对这四个数组的**重赋值**一律经 setFacetState
    （ESM live binding 对外只读，消费方经 import 拿到本函数）。patch 只给要换的键；
-   原地改（push/splice）不在此列——facets.js 等经 live binding 拿到的就是同一个数组。 */
+   消费方不得原地 push/splice；构造新数组后通过本写口提交。 */
 export function setFacetState(patch) {
     const p = patch || {};
     if (p.facetFilters !== undefined) _facetFilters = p.facetFilters;
@@ -831,8 +676,9 @@ function relaxDimFully(dim) {
     } else {
         return;   // 该维已被忽略（此时本不该再有它的 caveat）→ 不重复推帧
     }
-    cbLogPush("refine", "放宽：不按「" + (CB_DIM_LABEL[dim] || dim) + "」筛选");
-    runRecommend({ keepFacets: true });
+    const message = "放宽：不按「" + (CB_DIM_LABEL[dim] || dim) + "」筛选";
+    cbLogPush("refine", message);
+    runRecommend({ keepFacets: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
 }
 
 // 静默丢词诚实层回显：用户输入了**结构上无对应筛选维度**的实义描述词（性别/年龄/受试者/功能类，如
@@ -957,19 +803,29 @@ export async function loadFeasibility() {
     if (!panel) return { ok: false, error: "页面上没有可行性面板" };
     const query = ($("queryInput") && $("queryInput").value || "").trim();
     if (!query) { toast("请先输入检索需求"); return { ok: false, error: "还没有检索语句" }; }
+    const token = beginRequest(panel);
     if (!panel.hidden) { panel.hidden = true; panel.innerHTML = ""; return { ok: true, collapsed: true }; }   // 再点收起
     panel.hidden = false;
     panel.innerHTML = `<div class="files-hint">正在统计全部匹配结果…</div>`;
     try {
-        // 复用主检索同一口径的来源范围（此前误写 selectedSources() —— 该函数不存在，恒 undefined →
-        // 后端只统计 base(10x)，与结果头部「库中匹配 N 条」自相矛盾；真名是 getSelectedSources）。
-        const body = { query, sources: getSelectedSources(), auto_parse_sources: getSourceMode() === "auto" };
+        // 统计口径 = **主检索同一段提取**：此前只发 query/sources/auto_parse_sources，
+        // 漏了 facet_filters / suppressed_constraints / lenient_dims / date_from,to——界面上
+        // 生效的分面/时间/忽略条件对统计无效，报出的是另一个集合的计数与分布。
+        // searchParamSnapshot 是主检索请求体的同一段提取（唯一真源，不另拼第二份以免再漏字段）；
+        // query 同走 queryForRetrieval 归一（框里留的是原话，检索用的是归一句）。
+        const body = Object.assign({
+            query: queryForRetrieval(query),
+            sources: getSelectedSources(),
+            auto_parse_sources: getSourceMode() === "auto",
+        }, searchParamSnapshot(query));
         const res = await fetch(API.feasibility, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         const data = await res.json();
+        if (!token.isCurrent()) return { ok: false, stale: true };
         if (!res.ok || !data.ok || !data.report) throw new Error(data.detail || "服务未返回可行性概览");
         renderFeasibility(panel, data.report);
         return { ok: true, candidate_count: Number(data.report.candidate_count) || 0 };
     } catch (e) {
+        if (!token.isCurrent()) return { ok: false, stale: true };
         const msg = String(e && e.message || e);
         panel.innerHTML = `<div class="files-hint">暂时无法生成（${escapeHtml(msg)}）。</div>`;
         return { ok: false, error: msg };
@@ -988,7 +844,7 @@ function renderFeasibility(panel, r) {
         `<div class="feas-head">命中 <b>${Number(r.candidate_count)}</b> 条`
         + (r.truncated ? `（本报告统计前 ${Number(r.aggregated_count)} 条）` : "") + `</div>`
         + `<div class="feas-metrics">`
-        + `<span>总细胞量下限 <b>${Number(r.total_cells_lower_bound).toLocaleString()}</b>（${Number(r.datasets_with_cell_count)} 条有细胞数 / ${Number(r.datasets_without_cell_count)} 条未标注细胞数）</span>`
+        + `<span>Cells 数量合计 <b>${Number(r.total_cells_lower_bound).toLocaleString()}</b>（${Number(r.datasets_with_cell_count)} 条纳入 / ${Number(r.datasets_without_cell_count)} 条未纳入）</span>`
         + `<span>含 FASTQ <b>${Number(r.fastq_count)}</b> 条</span>`
         + `<span>有下载链接 <b>${Number(r.downloadable_count)}</b> 条</span>`
         + `</div>`
@@ -1004,6 +860,7 @@ export function toggleLenient(dim) {
     const strict = i >= 0;
     if (strict) _lenientDims.splice(i, 1);   // 再点＝撤销宽容、重新严格筛选
     else _lenientDims.push(dim);             // 宽容：后端把该维空字段视作通过
-    cbLogPush("refine", (strict ? "改回严格：" : "放宽：") + (CB_DIM_LABEL[dim] || dim));
-    runRecommend({ keepFacets: true });
+    const message = (strict ? "改回严格：" : "放宽：") + (CB_DIM_LABEL[dim] || dim);
+    cbLogPush("refine", message);
+    runRecommend({ keepFacets: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
 }

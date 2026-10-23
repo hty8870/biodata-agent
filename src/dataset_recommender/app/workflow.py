@@ -4,19 +4,33 @@ import json
 import re
 import time
 from dataclasses import asdict, dataclass, field
+from typing import Callable
 
 from ..llm.config import Settings, get_settings
 from ..corpus.corpus import known_source_values, load_normalized_corpus, raw_data_false_is_guess
 from ..corpus.downloads import all_real_urls, file_count, primary_url
-from ..llm.llm_client import LLMConfig, call_llm, is_auth_error, load_llm_config
+from ..llm.llm_client import (
+    ALLOWED_FINISH_REASONS, LLMConfig, call_llm, is_auth_error, is_complete_finish_reason,
+    load_llm_config, should_use_llm,
+)
 from ..retrieval.normalizer import DatasetRecord
 from ..llm.prompts import PROMPT_NAME, build_curator_prompt
 from ..corpus import reachability as _reachability
-from ..retrieval.query_parser import DIMENSIONS, QueryIntent, active_filters, detect_action_markers, parse_query
-from ..retrieval.retriever import (FACET_LABELS, DatasetRetriever, RetrievedCandidate, _FACET_CASEFOLD,
-                        _facet_source, passes_hard_filter)
+from ..retrieval.query_parser import QueryIntent, active_filters, detect_action_markers, parse_query
+from ..retrieval.retriever import (DatasetRetriever, RetrievedCandidate,
+                        _facet_casefold, _facet_labels, _facet_source, passes_hard_filter)
 from ..retrieval.units import UNIT_EXPLANATIONS, explain_unit, format_sample_size
 from ..content.labels import RAW_FASTQ_NO, raw_fastq_status
+from ..domain.registry import domain_dimensions
+
+
+def __getattr__(name: str):
+    """兼容 shim（PEP 562）：抑制白名单常量由活动领域维度集派生。biodata 默认逐位不变。"""
+    if name == "SUPPRESSIBLE_DIMS":
+        return _suppressible_dims()
+    if name == "SUPPRESSIBLE_FILTER_IDS":
+        return _suppressible_filter_ids()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 RAW_WARNING = (
@@ -25,7 +39,6 @@ RAW_WARNING = (
 TABLE_HEADER = "| 数据集名称 | 物种 | 组织 | 疾病 | 技术方案 | 样本量 | 原始数据状态 | 下载链接 |"
 TABLE_SEPARATOR = "|---|---|---|---|---|---|---|---|"
 LINK_PATTERN = re.compile(r"^\[点击下载\]\((https?://[^)\s]+)\)$")
-ALLOWED_FINISH_REASONS = {"stop", "normal", "null", ""}
 #: 喂给 curator LLM 的候选条数上限（50 条候选序列化
 #: ≈ 9.6 万字符，全量进 prompt 吃掉大半上下文）。只截 prompt 文本；结构化 payload 全量保留。
 _LLM_PROMPT_CANDIDATE_CAP = 20
@@ -62,10 +75,16 @@ class WorkflowResult:
     # 引导式放宽项（仅 no_match 空交集时非空）：[{key,label,count,retrieved_data:[...]}]，
     # 供前端在 0 结果时渲染「去掉某约束 → N 条」的一键放宽卡片。弃权时为空。
     relaxation_options: list[dict[str, object]] = field(default_factory=list)
-    # 未收录词降级选项（仅 unresolved_term 弃权、且忽略这些词后确实还剩得下条件时非 None）：
-    # {ignored_terms, query, count, results, active_filters}。语义是「先忽略这几个不认识的词能搜到什么」，
-    # **只算不应用**——见 build_degraded_search 里为什么不能自动降级。
+    # 未收录词自动降级的标注（2026-09-10 起）：unresolved_term 不再弃权——已忽略未收录词、
+    # 拿剩余条件继续检索（resolution_status == "degraded"），本字段携带
+    # {ignored_terms, query, active_filters}，前端据此渲染「这批结果忽略了 X」警示条
+    #（web/static/js/search/results.js 的 degraded 分支）。None = 未发生降级。
     degraded_search: dict[str, object] | None = None
+    # 向量语义兜底标注（2026-09-12 起）：解析弃权且自动降级救不回时不再沉默——
+    # 全库向量语义召回 top-N（resolution_status == "vector_fallback"），本字段携带
+    # {reason, note, ignored_terms}，前端据此渲染「条件未能执行，按语义相似度给出，
+    # 未经条件核验」警示条。None = 未走兜底。标识符直达/纯动作句不走兜底（无语义 grounding）。
+    vector_fallback: dict[str, object] | None = None
     # 分面细化：命中总数（未截断 top-k）+ 可细化维度分组 [{dim,label,values:[{value,display,count}]}]。
     # 仅有结果时非空，供前端在结果上方渲染「按物种/组织/… 收窄」的分面面板。评测不受影响。
     result_total: int = 0
@@ -337,17 +356,22 @@ def _build_search_trace(resolution, intent: QueryIntent, execution: dict, decisi
 
 # 「已命中」里可被用户忽略的命中维度（前端点掉某条命中 chip → 该 filter_id 进抑制表）。
 # 极性 filter_id 与 active_filters 回传的 `filter_id` 一一对应；裸 dim 向后兼容（=该维正负全抑制）。
-SUPPRESSIBLE_DIMS = frozenset(DIMENSIONS) | {"has_raw_data", "date"}
-SUPPRESSIBLE_FILTER_IDS = (
-    frozenset(f"include:{d}" for d in DIMENSIONS)
-    | frozenset(f"exclude:{d}" for d in DIMENSIONS)
-    | {"raw:required", "raw:forbidden", "date:range"}
-    # 软偏好也要可忽略。不加进白名单的话，前端照样会给 prefer chip 渲染「忽略」按钮
-    # （它只看 filter_id 存不存在），用户一点、后端 sanitize_suppressed 把它当非法值丢掉，
-    # 界面却显示「已忽略」——这正是本仓库反复吃亏的那类「失败长得像成功」。
-    | frozenset(f"prefer:{d}" for d in DIMENSIONS)
-    | {"prefer:raw", "prefer:source", "prefer:date"}
-)
+# 维度集由活动领域包供给（旧固定 DIMENSIONS 常量的数据化；biodata 默认逐位不变）。
+def _suppressible_dims() -> frozenset:
+    return frozenset(domain_dimensions()) | {"has_raw_data", "date"}
+
+
+def _suppressible_filter_ids() -> frozenset:
+    return (
+        frozenset(f"include:{d}" for d in domain_dimensions())
+        | frozenset(f"exclude:{d}" for d in domain_dimensions())
+        | {"raw:required", "raw:forbidden", "date:range"}
+        # 软偏好也要可忽略。不加进白名单的话，前端照样会给 prefer chip 渲染「忽略」按钮
+        # （它只看 filter_id 存不存在），用户一点、后端 sanitize_suppressed 把它当非法值丢掉，
+        # 界面却显示「已忽略」——这正是本仓库反复吃亏的那类「失败长得像成功」。
+        | frozenset(f"prefer:{d}" for d in domain_dimensions())
+        | {"prefer:raw", "prefer:source", "prefer:date"}
+    )
 
 
 # ── Web / MCP 共用的请求净化（单一真源）──────────────────────────────────────
@@ -355,13 +379,14 @@ SUPPRESSIBLE_FILTER_IDS = (
 # 与 MCP (`recommend_datasets`) 都要在进入检索前净化成白名单形状。此前逻辑只在 webapp.py 私有函数里，
 # MCP 无法复用 → 只能各写一份、易漂移。抽到这里成公共纯函数：两个消费面**同一套白名单、同一套净化**，
 # 彻底杜绝「Web 收了、MCP 漏了」的分叉（本轮「前端能力同步给 MCP」的核心诉求）。
-# 纯函数、不触 I/O；白名单取自 retriever.FACET_LABELS/_FACET_CASEFOLD 与本模块 SUPPRESSIBLE_*。
+# 纯函数、不触 I/O；白名单取自 retriever._facet_labels()/_facet_casefold()（活动领域包运行时供给）
+# 与本模块 SUPPRESSIBLE_*（同经领域维度派生）。
 def sanitize_facet_filters(raw: object) -> list[dict]:
     """把调用方传来的分面过滤项收敛为 [{dim,value}]：只保留合法维度 + 非空字符串值，去重、限量。
-    非法/越界一律丢弃（安全默认）；分面维度白名单取自 retriever.FACET_LABELS。
+    非法/越界一律丢弃（安全默认）；分面维度白名单取自 retriever._facet_labels()（活动领域包）。
 
-    自由文本维度（物种/组织/疾病）的 value 归一为小写——与 retriever.facet_value 的分面键完全对齐：
-    这样直连调用方即便传 'Homo sapiens'（原始大小写）也能命中、不至于静默 0 结果。"""
+    自由文本维度（biodata：物种/组织/疾病，由领域包描述符 casefold 声明）的 value 归一为小写——
+    与 retriever.facet_value 的分面键完全对齐：直连调用方即便传 'Homo sapiens'（原始大小写）也能命中。"""
     if not isinstance(raw, list):
         return []
     out: list[dict] = []
@@ -371,9 +396,9 @@ def sanitize_facet_filters(raw: object) -> list[dict]:
             continue
         dim = str(item.get("dim", "")).strip()
         value = str(item.get("value", "")).strip()
-        if dim in _FACET_CASEFOLD:
+        if dim in _facet_casefold():
             value = value.lower()
-        if dim in FACET_LABELS and value and (dim, value) not in seen:
+        if dim in _facet_labels() and value and (dim, value) not in seen:
             seen.add((dim, value))
             out.append({"dim": dim, "value": value})
         if len(out) >= 12:   # 上限：正常至多 8 维，留冗余、防滥用
@@ -385,7 +410,7 @@ def sanitize_suppressed(raw: object) -> list[str]:
     """把调用方传来的「被忽略的命中筛选项」收敛为白名单：接受**极性 filter_id**
     （include:<dim>/exclude:<dim>/raw:required/raw:forbidden/date:range）与**裸 dim**（旧调用兼容），
     与 active_filters()[].filter_id 对齐。非法/越界一律丢弃（安全默认）；缺省/空 → [] → 整段 no-op。"""
-    allowed = SUPPRESSIBLE_DIMS | SUPPRESSIBLE_FILTER_IDS
+    allowed = _suppressible_dims() | _suppressible_filter_ids()
     if not isinstance(raw, list):
         return []
     out: list[str] = []
@@ -405,7 +430,7 @@ def sanitize_lenient_dims(raw: object) -> set[str]:
     非法/未知维度一律丢弃（安全默认）；缺省/空 → 空集 → passes_hard_filter 逐位 no-op（官方评测不传）。"""
     if not isinstance(raw, (list, tuple, set)):
         return set()
-    return {d for d in (str(x).strip() for x in raw) if d in DIMENSIONS}
+    return {d for d in (str(x).strip() for x in raw) if d in domain_dimensions()}
 
 
 def apply_explicit_date_range(intent: QueryIntent, date_from: str, date_to: str) -> None:
@@ -450,7 +475,7 @@ def apply_suppressed_constraints(intent: QueryIntent, dims: "list[str] | None") 
             elif dim == "date":
                 intent.preferred_date_from = ""
                 intent.preferred_date_to = ""
-            elif dim in DIMENSIONS:
+            elif dim in domain_dimensions():
                 intent.preferred_constraints.pop(dim, None)
                 intent.preferred_display.pop(dim, None)
             continue
@@ -464,7 +489,7 @@ def apply_suppressed_constraints(intent: QueryIntent, dims: "list[str] | None") 
             intent.date_to = ""
             continue
         # 结构化维度（含极性）
-        if dim in DIMENSIONS:
+        if dim in domain_dimensions():
             if pol in ("include", "both"):
                 intent.constraints.pop(dim, None)
                 intent.display_map.pop(dim, None)
@@ -694,6 +719,11 @@ def _serialize_retrieved_data(candidates: list[RetrievedCandidate]) -> tuple[str
             # 「查看全部文件」入口：uid 供 /api/files 按需拉全部直链，n_files 决定是否显示入口。
             "dataset_uid": candidate.record.raw.get("dataset_uid") or "",
             "n_files": file_count(candidate.record.raw.get("dataset_uid")),
+            # collection_doi（collection 级编号：同一论文下的 core/extended 等条目共用它）——取记录原字段，
+            # 与展示层真源 `content.item_view.build_item` 同源。前端结果卡据它给「同系列」多条数据加一枚小标
+            # （标题逐字相近却实为不同数据集，2026-09-29）。**不能**改 import item_view：本模块在冻结
+            # 评测闭包上，item_view→introduction→summary_genre→provenance 那条稿件产物链不许接进来。
+            "collection_doi": (candidate.record.raw.get("collection_doi") or "") if isinstance(candidate.record.raw, dict) else "",
             "description": candidate.record.description,
             "preservation_method": candidate.record.raw.get("preservation_method", "") if isinstance(candidate.record.raw, dict) else "",
             "analysis_software": candidate.record.raw.get("analysis_software", "") if isinstance(candidate.record.raw, dict) else "",
@@ -782,8 +812,7 @@ def validate_llm_answer(
 ) -> tuple[bool, str | None]:
     if not answer or not answer.strip():
         return False, "LLM returned empty response"
-    normalized_finish_reason = (finish_reason or "").strip().lower()
-    if normalized_finish_reason not in ALLOWED_FINISH_REASONS:
+    if not is_complete_finish_reason(finish_reason):
         return False, f"invalid finish_reason: {finish_reason}"
 
     if TABLE_HEADER not in answer:
@@ -851,71 +880,6 @@ def strip_terms(query: str, terms: "list[str]") -> str:
     return re.sub(pattern, " ", query, flags=re.IGNORECASE)
 
 
-def build_degraded_search(
-    intent: QueryIntent,
-    prepare,
-) -> "dict[str, object] | None":
-    """`unresolved_term` 弃权时，确定性算出「先忽略这几个不认识的词，能搜到什么」。
-
-    **`prepare(degraded_query)` 由调用方注入**，返回 `(relaxed_intent, candidates, total)`
-    或 `None`（去词后仍看不懂）。为什么是注入而不是自己 parse + retrieve：
-    这个函数对用户宣称三件事——「还有 N 条」「预览是这几条」「忽略后真正在筛的是这些条件」。
-    只要它自己**另跑一次**检索，就必然和用户点下去之后真跑的那次分叉。实测到的
-    就是这个：旧写法自己 `parse_query` + `retrieve`，于是用户在界面上设的
-    **时间范围 / 分面 / 已忽略条件 / 宽容维度全部丢失**——设了 2020–2021 的时间窗时，
-    芯片写「3473 条」而真实执行是 807 条（虚高 4.3 倍），预览的 5 张卡一张都不在窗内。
-    数字骗人是这一层唯一不能犯的错，所以「算给你看的那次」和「你点下去的那次」必须是同一段代码。
-
-    **为什么是「算给用户看」而不是「自动降级」**——实测数据（全库 5665 条）：
-
-        「2022 年之后发表」去掉「发表」   →   3 条心衰数据          救回，很好
-        「斑马鱼心脏再生」去掉「再生」     →   5 条斑马鱼心脏数据      救回，很好
-        「人类膀胱癌 snATAC」去掉「膀胱」  →  11 条，没有一条是膀胱    无关
-        「小鼠耳蜗毛细胞」去掉「耳蜗毛」   → 769 条小鼠单细胞         噪声
-        「翼龙的单细胞数据」去掉「翼龙」   → 3473 条                 灾难
-        「霍格沃茨综合征的人类数据」去掉   → 3623 条                 灾难
-
-    后三行正是冻结评测 nr01–nr04 / adv01 / adv02 / adv09 用来钉死的产品底线：
-    查无此物就如实说没有，不拿别的数据凑数。**自动降级会把这条底线直接推翻**，
-    所以这里只产出一个可点的选项，由用户决定；命中条数与「忽略后实际生效的条件」
-    一并回传——看见「只剩 模态=单细胞、3473 条」，用户自然不会点。这比任何阈值都诚实。
-
-    唯一的硬闸：忽略之后**一个条件都不剩**时不给选项。那已经不是检索，是把整个库倒出来。
-
-    只读：不改入参 intent，不写盘，不调 LLM。官方评测走 retriever.retrieve、不经编排层 →
-    与 relaxation_options / coverage_caveats 同为结构性隔离，确定性零影响。
-    """
-    if not (intent.abstain and intent.abstain_reason == "unresolved_term"):
-        return None
-    terms = [t for t in intent.unresolved_terms if t and t.strip()]
-    if not terms:
-        return None
-    degraded_query = strip_terms(intent.original_query, terms).strip()
-    if not degraded_query:
-        return None
-    prepared = prepare(degraded_query)
-    if not prepared:
-        return None      # 去词之后还是看不懂 → 没有可给的选项，别硬凑
-    relaxed, candidates, survivors = prepared
-    has_condition = (any(relaxed.constraints.get(d) for d in DIMENSIONS)
-                     or any(relaxed.excluded_constraints.get(d) for d in DIMENSIONS)
-                     or relaxed.has_raw_data_required is not None
-                     or bool(relaxed.date_from or relaxed.date_to))
-    if not has_condition:
-        return None      # 硬闸：一个条件都不剩 = 把整个库倒出来，不是检索
-    if not survivors:
-        return None      # 忽略了也搜不到 → 给个 0 条的按钮只是浪费一次点击
-    return {
-        "ignored_terms": list(terms),
-        "query": degraded_query,
-        "count": survivors,
-        "results": _serialize_retrieved_data(candidates)[1],
-        # 让用户看清代价：忽略之后**真正**在筛的是哪几条。只有条数、没有条件，
-        # 用户没法判断这 3473 条是不是垃圾。
-        "active_filters": active_filters(relaxed),
-    }
-
-
 def _collect_candidate_debug(candidates: list[RetrievedCandidate]) -> tuple[list[str], list[str]]:
     names = [candidate.record.dataset_name for candidate in candidates]
     urls = [candidate.record.url for candidate in candidates if candidate.record.url]
@@ -926,6 +890,13 @@ def _collect_candidate_debug(candidates: list[RetrievedCandidate]) -> tuple[list
 # 的真源在 `app/recommend_rows.py`：它们必须调 content.introduction，而
 # introduction → summary_genre → provenance 是稿件产物链——本文件是冻结 767 评测路径
 # 入口，闭包不许碰这条链（tests/test_provenance.py / test_summary_genre.py 的传递闭包钉）。
+
+
+def _llm_call_would_happen(config: "LLMConfig | None") -> bool:
+    """「这一次会真实发出 LLM 请求」的判据（与 llm_client 调用闸 `should_use_llm` 同源）：
+    mock / 未启用 / 无 key 一律为否——这些情况下调用方内部直接回退、零 provider 请求，
+    因此不构成任何计费/准入事件。只读判定、无副作用、不读取环境。"""
+    return bool(config is not None and should_use_llm(config)[0])
 
 
 # ---------------------------------------------------------------- 检索参数对象
@@ -1002,6 +973,10 @@ class DatasetRecommendationWorkflow:
             config.provider = provider.strip().lower()
         return config
 
+    #: 不走向量语义兜底的弃权原因：标识符直达走 identifiers.lookup 诚实反查通道；
+    #: 纯动作句没有可嵌入的语义内容。两者维持诚实弃权。
+    _VECTOR_FALLBACK_EXCLUDED = frozenset({"identifier_direct", "identifier_fragment", "action_only"})
+
     def _prepare_context(
         self,
         query: str,
@@ -1022,7 +997,9 @@ class DatasetRecommendationWorkflow:
         recall_available: bool = False,
         llm_available: bool = False,
         preferred_recall: str = "cross_encoder",
+        before_llm: "Callable[[LLMConfig], None] | None" = None,
     ) -> tuple:
+        # before_llm：run_with_meta 的 run 级准入接缝（见其说明）；缺省 None → 本函数行为逐位不变。
         # sources=None（官方评测/CLI 默认）→ 只装基础语料 → 确定性与历史逐位一致。
         from ..retrieval.search_request import resolve_search_request
         resolution = resolve_search_request(
@@ -1035,12 +1012,8 @@ class DatasetRecommendationWorkflow:
         # 默认检索池只有基础库（唯一来源 10x Genomics），若不把偏好来源并进装载范围，
         # 「优先 CELLxGENE」会变成结构性恒 no-op：池里一条这种数据都没有，界面却挂着
         # 「让符合的排在前面」的 chip，排序与不写「优先」时逐条相同。那是骗人。
-        # 只在自动识别来源时并入；手动勾选来源是用户的显式范围，不越权替他扩。
-        load_sources = resolution.sources
-        if auto_parse_sources and resolution.preferred_sources:
-            load_sources = sorted(set(load_sources or [])
-                                  | set(resolution.preferred_sources)
-                                  | ({"10x Genomics"} if load_sources is None else set()))
+        # 是否并入由 `_load_sources_for` 单一判据决定。
+        load_sources = _load_sources_for(resolution, auto_parse_sources=auto_parse_sources)
         normalized = load_normalized_corpus(
             self.settings.data_dir, self.settings.project_root, load_sources
         )
@@ -1066,6 +1039,7 @@ class DatasetRecommendationWorkflow:
         eff_recall_backend = recall_backend
         eff_rerank_backend = rerank_backend
         ranking_records = normalized
+        survivor_records: list[DatasetRecord] | None = None
         if str(strategy or "fixed").strip().lower() == "auto":
             from ..retrieval.strategy import classify_strategy
             # post-facet 存活集：与 retrieve 第 1 步同源（matched_survivors）。一次扫描三用——
@@ -1100,6 +1074,20 @@ class DatasetRecommendationWorkflow:
         # facet_filters 缺省 None → 不传给 retrieve（保持其默认）→ 官方评测路径 no-op。
         if facet_filters:
             retrieve_kwargs["facet_filters"] = facet_filters
+        # LLM 重排的真实调用就在下一步 retrieve 内（rerank 默认通道）。准入必须在
+        # 「确定将真实发出请求」时触发，而不是「能力可用」时：backend 取分类器**实际派生**的
+        # eff_rerank_backend（不是 auto_llm_available 之类的旗标）；mock/未启用/无 key →
+        # rerank 内部直接回退、零请求；零存活集 → retrieve 第 1 步即返回、rerank 块整体不执行。
+        # 三者都不构成准入事件，不得计费或占额度。
+        if (before_llm is not None
+                and str(eff_rerank_backend or "").strip().lower() == "llm"
+                and _llm_call_would_happen(rerank_llm_config)):
+            # auto 分支的存活集已算好、直接复用；fixed 分支此刻才按与 retrieve 第 1 步同源的
+            # 判据扫一次（只发生在「将真实调用」的窄路上，不改变无 hook 路径）。
+            _rerank_survivors = (survivor_records if survivor_records is not None
+                                 else self.retriever.matched_survivors(normalized, intent, facet_filters))
+            if _rerank_survivors:
+                before_llm(rerank_llm_config)
         # fixed 模式 ranking_records is normalized（逐位不变）；auto 模式复用已过滤存活集（见上）。
         candidates = self.retriever.retrieve(ranking_records, intent, **retrieve_kwargs)
         retrieved_dataset_names, retrieved_urls = _collect_candidate_debug(candidates)
@@ -1154,16 +1142,39 @@ class DatasetRecommendationWorkflow:
             preferred_recall=preferred_recall,
         ).answer
 
-    def run_with_meta(self, p: "RecommendParams | None" = None, **kwargs) -> WorkflowResult:
+    def run_with_meta(
+        self,
+        p: "RecommendParams | None" = None,
+        *,
+        before_llm: "Callable[[LLMConfig], None] | None" = None,
+        **kwargs,
+    ) -> WorkflowResult:
         # 主入口收参数对象（见 RecommendParams docstring）。`**kwargs`
         # 是存量调用的兼容通道——仓内 13 个生产调用点（webapp/mcp/cli/agent/turn/smoke）已全部
         # 迁移到显式 RecommendParams；测试里约 80 处历史调用经本通道自动构造，行为逐位一致。
         # **新增调用一律用参数对象**：字段与默认值的单一真源只在 RecommendParams 上，
         # kwargs 通道传未知字段会直接 TypeError（dataclass 构造 fail-closed）。
+        #
+        # `before_llm`（可选，additive）：真实 LLM 请求的准入接缝——在**确定将发出服务端真实
+        # 请求**的前一刻触发（rerank / polish 先到者；同一轮至多一次，rerank+polish 两 stage
+        # 合算一次准入）。状态是本次调用的 local closure，同一 workflow 实例并发跑不同请求时
+        # 互不串扰。回调抛异常 = 中断本次调用（如配额 429）。刻意不进 RecommendParams：参数
+        # 对象会进日志/JSON 序列化，函数值不可序列化。缺省 None（CLI/MCP/评测与全部存量调用）
+        # → 逐位沿用旧行为。
         if p is None:
             p = RecommendParams(**kwargs)
         elif kwargs:
             raise TypeError("run_with_meta: 已传 RecommendParams 时不要再传 kwargs")
+        before_llm_fired = False
+
+        def _before_llm_once(config: LLMConfig) -> None:
+            nonlocal before_llm_fired
+            if before_llm is None or before_llm_fired:
+                return
+            before_llm_fired = True
+            before_llm(config)
+
+        _before_llm_hook = _before_llm_once if before_llm is not None else None
         query = p.query
         top_k = p.top_k
         use_llm = p.use_llm
@@ -1190,14 +1201,15 @@ class DatasetRecommendationWorkflow:
         # 只有 backend=="llm"（或 strategy=auto 可能选出 llm）时才构造带 key 的配置；缺 key → rerank 内部回退原序（不报错）。
         auto = str(strategy or "fixed").strip().lower() == "auto"
         rerank_llm_config: LLMConfig | None = None
-        # 并发分流：llm_available 显式为 False 时短路**不构造**——pre-loop
-        # 确定性管线（rule_match_summary 恒 llm_available=False、rerank 恒 off）的 flight
-        # 线程从此不读 os.environ；llm_available=True/None 路径行为逐位不变。
+        # `llm_available` 只授权 **auto 策略**能否使用 LLM；显式 rerank_backend="llm"
+        # 是调用方的直接选择，不因该旗标被压掉（MCP 固定策略此前把自动能力旗标 False 当成了
+        # 所有 LLM 的总闸，显式开关静默失效）。pre-loop 确定性管线的 rerank 恒 off → 本条件
+        # 仍为假、不读 env，「llm_available=False 即不构造」的并发护栏逐位保留。
         # base_llm_config：webapp 在 ENV_LOCK 内已按请求级覆盖物化一份基准
         # 配置传入，锁外构造的派生配置不再读 env（不把 60s LLM 请求关在锁里）。缺省 None
         # → 逐位沿用旧行为（读 env 自解析）。
-        if (llm_available is not False
-                and (auto or (rerank_backend and rerank_backend != "off"))):
+        want_rerank_llm = bool(rerank_backend and rerank_backend != "off")
+        if want_rerank_llm or (auto and llm_available is not False):
             rerank_llm_config = self._effective_llm_config(
                 use_llm=True, mock_llm=False, provider=provider, base=base_llm_config,
             )
@@ -1236,8 +1248,64 @@ class DatasetRecommendationWorkflow:
         )
         (intent, candidates, normalized, retrieved_dataset_names,
          retrieved_urls, decision, resolution, execution) = self._prepare_context(
-            query=query, **ctx_kwargs
+            query=query, before_llm=_before_llm_hook, **ctx_kwargs
         )
+
+        # 未收录词不替用户弃权（2026-09-10 产品哲学修正：用户是有判断力的科研人员，
+        # 可能的错误结果远大于什么结果都不给）：unresolved_term 弃权 → 自动降级——
+        # 忽略未收录词、拿剩余可解析条件重搜，与「用户点降级芯片」同一段 _prepare_context
+        # 路径（同一入口 ⇒ 时间窗/分面/宽容维度/重排设置自动继承）。被忽略的词与降级后
+        # 实际生效的条件随 degraded_search 显著回传（resolution_status="degraded"）。
+        # 降级仍不可执行/零候选时才真正弃权。硬闸保留：忽略之后一个条件都不剩时不降级——
+        # 那已经不是检索，是把整个库倒出来（与旧降级选项同一道闸，用户要的「可能错的结果」
+        # 是「按剩余条件搜出来的结果」，不是无筛选目录）。
+        auto_degraded: dict[str, object] | None = None
+        if intent.abstain and intent.abstain_reason == "unresolved_term":
+            _dq = strip_terms(
+                intent.original_query, [t for t in intent.unresolved_terms if t.strip()]
+            ).strip()
+            _dq = " ".join(_dq.split())
+            if _dq and _dq != intent.original_query.strip():
+                (_r_intent, _r_cands, _r_norm, _r_names, _r_urls,
+                 _r_decision, _r_resolution, _r_execution) = self._prepare_context(
+                    query=_dq, before_llm=_before_llm_hook, **ctx_kwargs
+                )
+                _has_condition = (
+                    any(_r_intent.constraints.get(d) for d in domain_dimensions())
+                    or any(_r_intent.excluded_constraints.get(d) for d in domain_dimensions())
+                    or _r_intent.has_raw_data_required is not None
+                    or bool(_r_intent.date_from or _r_intent.date_to)
+                )
+                if (_r_intent.parse_status == "executable" and not _r_intent.abstain
+                        and _r_cands and _has_condition):
+                    auto_degraded = {
+                        "ignored_terms": [t for t in intent.unresolved_terms if t.strip()],
+                        "query": _dq,
+                        "active_filters": active_filters(_r_intent),
+                    }
+                    (intent, candidates, normalized, retrieved_dataset_names,
+                     retrieved_urls, decision, resolution, execution) = (
+                        _r_intent, _r_cands, _r_norm, _r_names, _r_urls,
+                        _r_decision, _r_resolution, _r_execution)
+
+        # 向量语义兜底（2026-09-12 用户裁定：解析层的失败弃权需慎之又慎——可能的错误结果
+        # 远大于什么结果都不给，但必须显著标注）：解析弃权且自动降级救不回（硬闸/重搜仍空）时，
+        # 不再沉默——全库向量语义召回 top-N，标注「条件未能执行、未经条件核验」。
+        # 标识符直达/纯动作句无检索语义，维持诚实弃权（不走兜底）；嵌入器/索引不可用 →
+        # 回退旧沉默行为（语义兜底是增强，绝不变成新的失败面）。解析成功的查询到不了这里。
+        vector_fallback: dict[str, object] | None = None
+        if (not candidates and intent.abstain
+                and intent.abstain_reason not in self._VECTOR_FALLBACK_EXCLUDED):
+            from ..retrieval.vector_recall import semantic_fallback_recall
+            _fb = semantic_fallback_recall(normalized, query, intent=intent,
+                                           top_k=top_k or self.settings.top_k)
+            if _fb:
+                candidates = _fb
+                vector_fallback = {
+                    "reason": intent.abstain_reason,
+                    "note": "条件未能执行，以下按语义相似度给出，未经条件核验",
+                    "ignored_terms": list(intent.unresolved_terms or []),
+                }
 
         # 结构化候选一次算好，挂到每条返回路径上（含无候选=空列表）。
         _, retrieved_data_payload = _serialize_retrieved_data(candidates)
@@ -1255,14 +1323,21 @@ class DatasetRecommendationWorkflow:
                 "detail": intent.clarification_detail,
                 "options": intent.clarification_options,
             }
+        elif vector_fallback:
+            res_status, clar = "vector_fallback", None
         elif intent.abstain:
             res_status, clar = "abstained", None
         elif candidates:
-            res_status, clar = "results", None
+            # 自动降级来路：结果必须如实标注（前端据此渲染「忽略了 X」警示条），不与正常命中混同。
+            res_status, clar = ("degraded" if auto_degraded else "results"), None
         else:
             res_status, clar = "no_match", None
         interpretation = resolution.as_dict()
-        interpretation["effective_sources"] = list(resolution.sources or ["10x Genomics"])
+        # 回显**实际装载范围**（并池后的装载池），而非解析层的收窄结果——
+        # 「解释称已限定到 10x、结果却来自外部库」正是两者分叉造成的。未并池时两者逐位一致。
+        interpretation["effective_sources"] = list(
+            _load_sources_for(resolution, auto_parse_sources=auto_parse_sources)
+            or resolution.sources or ["10x Genomics"])
         interpretation["intent"] = intent_projection(intent)
         search_trace = _build_search_trace(resolution, intent, execution, decision, int(fac["total"]))
         # 执行侧动作只做确定性标记；自然语言动作理解统一交给 turn/agent，检索 workflow
@@ -1279,6 +1354,10 @@ class DatasetRecommendationWorkflow:
             # 执行类说法（打包/下载脚本/导出引文…）：只指路、不代劳。空列表=用户没提。
             "action_markers": rule_action_markers,
             "resolution_status": res_status, "clarification": clar,
+            # 向量语义兜底来路（None = 正常路径）：与 res_status="vector_fallback" 配套。
+            "vector_fallback": vector_fallback,
+            # 自动降级来路（None = 正常路径）：挂到每条返回路径，与 res_status="degraded" 配套。
+            "degraded_search": auto_degraded,
             # 分类器决策（仅 strategy="auto" 非 None）——挂进每条返回路径供观测，不影响检索。
             "strategy": decision.as_dict() if decision is not None else None,
             "interpretation": interpretation,
@@ -1297,29 +1376,6 @@ class DatasetRecommendationWorkflow:
             # 引导式放宽：仅空交集（非弃权）时算「去掉某约束能救回多少 + 预览」，序列化挂给前端。
             # 分面过滤把结果收窄到 0 时不提「放宽 query 约束」（那会误导——空是分面所致，
             # 应移除某个分面而非放宽查询）；前端据自己的分面状态提示「移除一个筛选」。
-            # 未收录词降级选项：与 relaxation_options 互斥（那条只在**能执行但空交集**时非空，
-            # 这条只在 unresolved_term 弃权时非空），但同样是「只算、不自动应用」。
-            # `prepare` 走 `_prepare_context`——与正常检索**同一个入口**，于是用户在界面上设的
-            # 时间范围 / 分面 / 已忽略条件 / 宽容维度全部自动带上，不需要在这里再手抄一遍
-            #（手抄过一次——回归验证抓到的「条数虚高 4.3 倍、预览卡全在时间窗外」）。
-            # 唯一刻意的差别：预览不跑 LLM 重排（strategy=fixed / rerank=off）——预览阶段静默联网
-            # 是另一种不诚实。条数与「实际在筛的条件」这两个诚实性要害与真跑逐位同源；
-            # 只有预览卡片的**排序**可能与最终一致重排后不同。
-            _preview_kwargs = dict(ctx_kwargs)
-            _preview_kwargs.update(strategy="fixed", rerank_backend="off",
-                                   rerank_llm_config=None, recall_backend="off")
-
-            def _prepare_degraded(dq: str, _kw=_preview_kwargs):
-                ctx = self._prepare_context(query=dq, **_kw)
-                r_intent, r_cands, r_records = ctx[0], ctx[1], ctx[2]
-                if r_intent.abstain or r_intent.parse_status != "executable":
-                    return None
-                # 条数用 facets(...)["total"]：这正是正常检索回给前端的 result_total 的同一个算法
-                #（含 facet_filters），而不是另写一遍 passes_hard_filter 求和。
-                total = self.retriever.facets(r_records, r_intent, facet_filters)["total"]
-                return r_intent, r_cands, total
-
-            degraded_search = build_degraded_search(intent, _prepare_degraded)
             relaxation_options: list[dict[str, object]] = []
             if not facet_filters:
                 relax_raw = self.retriever.relaxation_options(normalized, intent, top_k=top_k)
@@ -1328,9 +1384,11 @@ class DatasetRecommendationWorkflow:
                         "key": opt["key"],
                         "label": opt["label"],
                         # "drop"＝去掉一个条件（保守档）/ "only"＝只按一个条件搜（激进档）。
-                        # 前端据它分组展示，让用户自己挑放宽策略而不是只能接受一个。
                         "kind": opt.get("kind", "drop"),
                         "count": opt["count"],
+                        # 本项放松量的 filter_id 清单（真源翻译随预演携带）——零命中放松卡
+                        # 点选后零 LLM 重搜直接下发为 suppressed_constraints。
+                        "suppress": list(opt.get("suppress") or []),
                         "retrieved_data": _serialize_retrieved_data(opt["candidates"])[1],
                     }
                     for opt in relax_raw
@@ -1350,16 +1408,36 @@ class DatasetRecommendationWorkflow:
                 retrieved_urls=retrieved_urls,
                 retrieved_data=retrieved_data_payload,
                 relaxation_options=relaxation_options,
-                degraded_search=degraded_search,
                 **fac_fields,
             )
 
-        # 并发分流：llm_available 显式为 False 时短路——pre-loop 确定性
-        # 管线（rule_match_summary 恒 llm_available=False）的 flight 线程从此不读
-        # os.environ；llm_available=True/None 路径行为逐位不变。短路 → llm_config None
-        # → 直接落下方 disabled 分支（与旧版「enable_llm=False 时同样不调 LLM」逐位同效）。
+        # 语义兜底结果不交给 LLM 润色（未经条件核验的候选不能被模型措辞包装成条件匹配），
+        # 直接走规则排版分支；answer 前置兜底标注，纯文本消费方（CLI/MCP）也拿到同一句话。
+        if vector_fallback:
+            _update_trace_step(search_trace, "llm_polish", "skipped", "语义兜底结果不做 AI 润色。")
+            _finalize_search_trace(search_trace, workflow_started_at)
+            return WorkflowResult(
+                answer=str(vector_fallback["note"]) + "。\n\n" + format_candidates_markdown(candidates),
+                pipeline=FALLBACK_PIPELINE,
+                llm_mode="disabled",
+                llm_attempted=False,
+                llm_succeeded=False,
+                llm_response_used=False,
+                llm_called=False,
+                fallback="rule-based formatting",
+                fallback_reason="vector semantic fallback (parse abstain)",
+                retrieved_dataset_names=retrieved_dataset_names,
+                retrieved_urls=retrieved_urls,
+                retrieved_data=retrieved_data_payload,
+                **fac_fields,
+            )
+
+        # `llm_available is False` 只表示「**自动策略**不得使用 LLM」，不再当作所有
+        # LLM 的总闸——显式 use_llm=True（用户/调用方点开润色）照常构造配置；只有
+        # 「旗标为 False 且本次也没显式开」才短路（pre-loop 确定性管线仍不读 os.environ）。
+        # 短路 → llm_config None → 直接落下方 disabled 分支（旧行为逐位保留）。
         llm_config: LLMConfig | None = None
-        if llm_available is not False:
+        if llm_available is not False or use_llm:
             llm_config = self._effective_llm_config(
                 use_llm=use_llm,
                 mock_llm=mock_llm,
@@ -1402,6 +1480,10 @@ class DatasetRecommendationWorkflow:
             n_total=len(retrieved_data_payload),
         )
 
+        # 润色 stage 的同一轮准入——只有确定将真实发请求（非 mock、启用、有 key）才触发；
+        # 同一轮 rerank 已触发过则不再触发（fire-once，两 stage 合算一次准入）。
+        if _before_llm_hook is not None and _llm_call_would_happen(llm_config):
+            _before_llm_hook(llm_config)
         llm_result = call_llm(prompt=prompt, config=llm_config, retrieved_records=retrieved_data_payload)
 
         if not llm_result.attempted:
@@ -1511,3 +1593,20 @@ class DatasetRecommendationWorkflow:
             retrieved_data=retrieved_data_payload,
             **fac_fields,
         )
+
+
+def _load_sources_for(resolution, *, auto_parse_sources: bool):
+    """偏好来源并入装载池的**唯一判据**。
+
+    只在 `default` 模式（调用方既没显式限定来源、查询也没被来源专名收窄）并入「优先 <来源>」：
+    此时池子只有基础库，不并入偏好来源偏好就是结构性 no-op。用户显式限定（手动勾选）或查询
+    已点名的来源范围必须尊重——范围外偏好由调用方走既有「未生效」回显，绝不偷偷扩容检索池
+    （此前无条件并池：结果可能来自范围外来源，解释却仍回显收窄后的范围）。
+    """
+    sources = resolution.sources
+    if (auto_parse_sources and resolution.preferred_sources
+            and resolution.source_mode == "default"):
+        return sorted(set(sources or [])
+                      | set(resolution.preferred_sources)
+                      | ({"10x Genomics"} if sources is None else set()))
+    return sources

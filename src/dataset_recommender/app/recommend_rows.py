@@ -57,6 +57,10 @@ def rows_from_retrieved(payload: "list[dict[str, object]]") -> "list[dict[str, o
                 # 「查看全部文件」入口：uid 供 /api/files 按需拉全部直链，n_files 决定是否显示入口。
                 "dataset_uid": item.get("dataset_uid", ""),
                 "n_files": item.get("n_files", 0),
+                # collection 级编号（同一论文下 core/extended 等条目共用它）：前端结果卡据此给
+                # 「本响应里同系列的其它条」加一枚小标——标题逐字相近但实为不同数据集，不是重复。
+                # 值随检索载荷透传（真源见 content.item_view.build_item，本层不重算）。
+                "collection_doi": item.get("collection_doi", "") or "",
                 "reason": item.get("reason", ""),
                 "matched_fields": item.get("matched_fields", []),
                 "score": item.get("score"),
@@ -81,30 +85,32 @@ def recommend_payload(meta: "WorkflowResult", *, provider: str = "") -> dict:
 
     键集与 webapp /api/recommend 响应的核心子集逐位对齐：前端「替换结果屏」只需这些键。
     warnings 口径同 /api/recommend：fallback_reason 非空即留痕一条。"""
+    rows = rows_from_retrieved(getattr(meta, "retrieved_data", []))
+    fallback_reason = getattr(meta, "fallback_reason", None)
     warnings: list[str] = []
-    if meta.fallback_reason:
-        warnings.append(meta.fallback_reason)
+    if fallback_reason:
+        warnings.append(fallback_reason)
     return {
         "ok": True,
-        "markdown": meta.answer,
-        "pipeline": meta.pipeline,
-        "llm_attempted": meta.llm_attempted,
-        "llm_succeeded": meta.llm_succeeded,
-        "llm_response_used": meta.llm_response_used,
-        "provider": meta.llm_provider or provider,
-        "llm_mode": meta.llm_mode,
-        "fallback": meta.fallback,
-        "fallback_reason": meta.fallback_reason,
-        "results": rows_from_retrieved(meta.retrieved_data),
-        "result_total": meta.result_total,
-        "facets": meta.facets,
-        "resolution_status": meta.resolution_status,
-        "clarification": meta.clarification,
-        "coverage_caveats": meta.coverage_caveats,
-        "unused_query_terms": meta.unused_query_terms,
-        "or_handling": meta.or_handling or {},
-        "query_constraints": meta.active_filters,
-        "interpretation": meta.interpretation,
-        "search_trace": meta.search_trace,
+        "markdown": getattr(meta, "answer", ""),
+        "pipeline": getattr(meta, "pipeline", ""),
+        "llm_attempted": getattr(meta, "llm_attempted", False),
+        "llm_succeeded": getattr(meta, "llm_succeeded", False),
+        "llm_response_used": getattr(meta, "llm_response_used", False),
+        "provider": getattr(meta, "llm_provider", None) or provider,
+        "llm_mode": getattr(meta, "llm_mode", ""),
+        "fallback": getattr(meta, "fallback", None),
+        "fallback_reason": fallback_reason,
+        "results": rows,
+        "result_total": getattr(meta, "result_total", len(rows)),
+        "facets": getattr(meta, "facets", []),
+        "resolution_status": getattr(meta, "resolution_status", "results"),
+        "clarification": getattr(meta, "clarification", None),
+        "coverage_caveats": getattr(meta, "coverage_caveats", []),
+        "unused_query_terms": getattr(meta, "unused_query_terms", []),
+        "or_handling": getattr(meta, "or_handling", None) or {},
+        "query_constraints": getattr(meta, "active_filters", []),
+        "interpretation": getattr(meta, "interpretation", {}),
+        "search_trace": getattr(meta, "search_trace", {}),
         "warnings": warnings,
     }

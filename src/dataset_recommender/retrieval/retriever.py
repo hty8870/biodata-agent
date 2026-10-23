@@ -16,10 +16,14 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
 
-from .normalizer import DatasetRecord, is_missing_value
-from .query_parser import DIMENSIONS, QueryIntent
+from .normalizer import DatasetRecord, effective_has_raw_data, is_missing_value
+from .query_parser import QueryIntent, relax_key_to_suppressed
 from .synonyms import expand_term
-from . import vocabulary as V
+from ..domain.descriptors import MATCH_EXACT
+from ..domain.registry import domain_dimensions, get_domain
+
+# 注：历史兼容别名 FACET_ORDER / FACET_LABELS / _FACET_CASEFOLD 已退役——骨架内部一律调
+# _facet_order()/_facet_labels()/_facet_casefold() 真函数（活动领域包运行时供给），不再留 shim。
 
 
 @dataclass(slots=True)
@@ -51,33 +55,34 @@ def _field_contains(field_text: str, terms: list[str]) -> bool:
     return any(term in t for term in terms if term)
 
 
-def _technology_text(record: DatasetRecord) -> str:
-    # assay 类术语在 assay 字段可能因归类顺序漏标，故并入 chemistry 兜底（与评测裁判一致）
-    return f"{record.assay} {record.chemistry}".lower()
-
-
 def _dim_field_text(record: DatasetRecord, dim: str) -> str:
-    """某硬约束维度对应的原始字段文本（供「是否已标注」判定 + 诚实降级用）。"""
-    if dim == "species":
-        return record.species or ""
-    if dim == "tissue":
-        return record.tissue or ""
-    if dim == "disease":
-        return record.disease or ""
-    if dim == "platform":
-        return record.platform_family or ""
-    if dim == "assay":
-        return _technology_text(record)
-    if dim == "modality":
-        return record.modality or ""
-    return ""
+    """某硬约束维度对应的原始字段文本（供「是否已标注」判定 + 诚实降级用）。
+
+    维度 → 字段文本的映射由活动领域包的 DimensionDescriptor 声明（旧写死 if 链的
+    数据化）；未知维度返回 ""（与旧 if 链末尾行为一致）。
+    """
+    desc = get_domain().descriptor_for(dim)
+    if desc is None:
+        return ""
+    return desc.text_of(record)
+
+
+def _partial_capable_dims() -> frozenset:
+    """声明了「取值集合可能不完整」的维度名（领域包描述符驱动）。"""
+    return frozenset(d.name for d in get_domain().dimensions if d.partial_capable)
+
+
+def _completeness_text(record: DatasetRecord, name: str) -> str:
+    """完整性 tie-breaker 的计分文本：维度名走领域包描述符访问器，否则按记录字段名取。"""
+    desc = get_domain().descriptor_for(name)
+    if desc is not None:
+        return desc.text_of(record)
+    return getattr(record, name, "") or ""
 
 
 # 值集可能不完整的维度：适配器若声明该维取值取自**抽样**，则「字段有值但不含 X」**不构成**「不是 X」的
-# 证据 → 该维仍属「无法核验」。仅这两维会被适配器打 provenance；其余维度恒视作完整。
-_PARTIAL_CAPABLE_DIMS = frozenset({"tissue", "disease"})
-
-
+# 证据 → 该维仍属「无法核验」。哪些维度可能有此属性由领域包描述符的 `partial_capable` 声明
+# （biodata 仅 tissue/disease）；其余维度恒视作完整。
 def _dim_value_set_complete(record: DatasetRecord, dim: str) -> bool:
     """该维的取值集合是否**穷尽**。
 
@@ -88,7 +93,7 @@ def _dim_value_set_complete(record: DatasetRecord, dim: str) -> bool:
     → 判定逐位不变。只有显式 `complete is False` 才算不完整（缺键/None/异常形状一律保守视作完整，
     避免因 provenance 形状漂移把全库降级成「无法核验」）。
     """
-    if dim not in _PARTIAL_CAPABLE_DIMS:
+    if dim not in _partial_capable_dims():
         return True
     raw = record.raw if isinstance(record.raw, dict) else {}
     prov = raw.get("metadata_provenance")
@@ -129,21 +134,15 @@ def constraint_satisfied(record: DatasetRecord, dim: str, terms: list[str], leni
     # 已知不同值仍走下方判定被排除。lenient 默认 False → 默认/评测路径此分支从不进入、行为逐位不变。
     if lenient and not _dim_field_present(record, dim):
         return True
-    if dim == "species":
-        return _field_contains(record.species, terms)
-    if dim == "tissue":
-        return _field_contains(record.tissue, terms)
-    if dim == "disease":
-        return _field_contains(record.disease, terms)
-    if dim == "platform":
-        return (record.platform_family or "").lower() in terms
-    if dim == "assay":
-        return _field_contains(_technology_text(record), terms)
-    if dim == "modality":
-        # 门级：modality 是新维，若无此分支则 constraint_satisfied 末尾 return True 使硬过滤恒真=静默 no-op，
-        # spatial 记录会漏进单细胞结果、违反裁判 → 冻结门当场 FAIL（评审实测 Top1 97.6→92.7）。精确等值匹配存字段。
-        return (record.modality or "").lower() in terms
-    return True
+    desc = get_domain().descriptor_for(dim)
+    if desc is None:
+        # 旧 if 链末尾行为：未知维度恒真（调用方只遍历领域声明的维度，不会走到这里）。
+        return True
+    text = desc.text_of(record)
+    if desc.match == MATCH_EXACT:
+        # 精确等值维（biodata 的 platform/modality）：归一值小写后须等值于 targets 之一。
+        return text.lower() in terms
+    return _field_contains(text, terms)
 
 
 def passes_hard_filter(record: DatasetRecord, intent: QueryIntent) -> bool:
@@ -151,8 +150,8 @@ def passes_hard_filter(record: DatasetRecord, intent: QueryIntent) -> bool:
     if getattr(intent, "parse_status", "executable") != "executable":
         return False
     lenient_dims = getattr(intent, "lenient_dims", None) or set()
-    for dim in DIMENSIONS:
-        # 正向：须含任一 target；负向：命中任一 forbidden target 即淘汰。始终遍历固定 DIMENSIONS，
+    for dim in domain_dimensions():
+        # 正向：须含任一 target；负向：命中任一 forbidden target 即淘汰。始终遍历领域包声明的维度集，
         # 不遍历 intent.excluded_constraints.items()（未知维度会让 constraint_satisfied 恒真而误淘汰全部）。
         inc = intent.constraints.get(dim)
         # 诚实降级：仅**正向**约束支持宽容（负向「须不含」对空字段本就放行——空不算命中 forbidden——无需宽容）。
@@ -162,13 +161,15 @@ def passes_hard_filter(record: DatasetRecord, intent: QueryIntent) -> bool:
         if exc and constraint_satisfied(record, dim, exc):
             return False
     # raw 三态精确：required is True→只留 True；is False→只留 False（None 两态都排，fail-closed：
-    # None 既不能证明"有"也不能证明"没有"）。
-    if intent.has_raw_data_required is not None and record.has_raw_data is not intent.has_raw_data_required:
+    # None 既不能证明"有"也不能证明"没有"）。**猜测性 False 先归一为 None**——
+    # 抓取占位不许被当成「已确认没有 FASTQ」。
+    if (intent.has_raw_data_required is not None
+            and effective_has_raw_data(record) is not intent.has_raw_data_required):
         return False
     # 发表时间范围硬过滤（用户在前端限定；published_date 为 ISO YYYY-MM-DD，可字面比较）。
     # date_from/date_to 默认空串 → 官方评测/CLI 路径不传时整段为 no-op，确定性门不受影响。
     if intent.date_from or intent.date_to:
-        pub = str(record.raw.get("published_date", "")) if isinstance(record.raw, dict) else ""
+        pub = str(record.raw.get("published_date", "")).strip()[:10] if isinstance(record.raw, dict) else ""
         if not pub:
             return False
         if intent.date_from and pub < intent.date_from:
@@ -185,17 +186,27 @@ def passes_hard_filter(record: DatasetRecord, intent: QueryIntent) -> bool:
 # - facet_filters 缺省 None → retrieve/facets 整段 no-op → 官方评测（不传此参）逐位一致、确定性零影响。
 # - 分面过滤与 query 硬约束正交：同维度多值 OR、跨维度 AND；只收窄存活集、绝不引入违规
 #   （retrieve 第 4 步终检仍对每条重核硬约束）。
-FACET_ORDER = ["source", "species", "tissue", "disease", "modality", "platform", "assay", "has_raw_data", "year"]
-FACET_LABELS = {
-    **V.DIM_LABELS_CN,  # 维度中文名锚点在 vocabulary，勿再抄一份
-    "source": "数据来源", "has_raw_data": "原始数据", "year": "发表年份",
-}
+# 分面维度展示顺序与中文标签由活动领域包声明（biodata 顺序与旧常量逐位一致）；
+# source/has_raw_data/year 是骨架记录特典（任何知识库记录都有来源/原始文件/发表年的概念）。
+def _facet_order() -> list[str]:
+    return list(get_domain().facet_order)
+
+
+def _facet_labels() -> dict:
+    return {
+        **get_domain().dim_labels_zh,  # 维度中文名锚点在领域包，勿再抄一份
+        "source": "数据来源", "has_raw_data": "原始数据", "year": "发表年份",
+    }
+
+
+def _facet_casefold() -> set:
+    """按小写归并分面键的维度集合（领域包描述符 `casefold` 驱动；biodata = species/tissue/disease）。"""
+    return {d.name for d in get_domain().dimensions if d.casefold}
 # 缺失哨兵判定走 normalizer 的单一真源（此前这里另有一套、与 introduction 的那套互不相同，
 # 而 _dim_field_present 干脆一套都不用 → 诚实层在 base 的 disease 维上恒失效）。
 # 收敛是实测 no-op：两套的差集（`-` / not provided / not specified / null）在 5667 条 × 6 维里零出现。
 # 自由文本维度：不同大小写（Blood/blood）本是同一取值，按小写归并成一个分面键，
 # 避免分面面板出现重复项；显示名另取该键下**出现最多**的原始写法（保留 COVID-19 / Homo sapiens 的正确大小写）。
-_FACET_CASEFOLD = {"species", "tissue", "disease"}
 
 
 def _facet_source(record: DatasetRecord) -> str:
@@ -217,24 +228,17 @@ def _facet_raw(dim: str, record: DatasetRecord) -> str:
     """记录在某维度上的**原始**取值（未归一大小写）。空/占位返回 ""。"""
     if dim == "source":
         v = _facet_source(record)
-    elif dim == "species":
-        v = (record.species or "").strip()
-    elif dim == "tissue":
-        v = (record.tissue or "").strip()
-    elif dim == "disease":
-        v = (record.disease or "").strip()
-    elif dim == "modality":
-        v = (record.modality or "").strip()
-    elif dim == "platform":
-        v = (record.platform_family or "").strip()
-    elif dim == "assay":
-        v = (record.assay or "").strip()
     elif dim == "has_raw_data":
-        v = {True: "有 FASTQ", False: "无 FASTQ"}.get(record.has_raw_data, "")
+        _raw_yes, _raw_no = get_domain().raw_data_labels
+        # 猜测性 False → 不进「无 FASTQ」分面（unknown 不落任一桶）
+        v = {True: _raw_yes, False: _raw_no}.get(effective_has_raw_data(record), "")
     elif dim == "year":
         v = _facet_year(record)
     else:
-        return ""
+        desc = get_domain().descriptor_for(dim)
+        if desc is None:
+            return ""
+        v = desc.facet_of(record)
     return "" if is_missing_value(v) else v
 
 
@@ -243,7 +247,7 @@ def facet_value(dim: str, record: DatasetRecord) -> str:
     自由文本维度按小写归并；空/占位返回 ""（不作为分面）。
     计数与过滤都走此键 → 「点了 N 条就正好剩 N 条」的一致性由此保证。"""
     v = _facet_raw(dim, record)
-    if v and dim in _FACET_CASEFOLD:
+    if v and dim in _facet_casefold():
         return v.lower()
     return v
 
@@ -257,7 +261,7 @@ def record_passes_facets(record: DatasetRecord, facet_filters: list[dict] | None
         if not isinstance(f, dict):
             continue
         dim, val = f.get("dim"), f.get("value")
-        if dim in FACET_LABELS and isinstance(val, str) and val.strip():
+        if dim in _facet_labels() and isinstance(val, str) and val.strip():
             by_dim.setdefault(dim, set()).add(val)
     for dim, vals in by_dim.items():
         if facet_value(dim, record) not in vals:
@@ -365,7 +369,7 @@ class DatasetRetriever:
             elif hit_desc:
                 score += 0.3
         # 约束 display 词命中标题（更贴题的排前）
-        for dim in DIMENSIONS:
+        for dim in domain_dimensions():
             for term in intent.constraints.get(dim, []):
                 if term and term in name:
                     score += 0.5
@@ -373,6 +377,8 @@ class DatasetRetriever:
         # is_missing_value（模块单一真源）：本函数在冻结评测热路径上，is_missing_value 多认的
         # 哨兵（n/a / not provided / - / 未说明…）会改变 filled 计数 → 动 score 与并列序 → 可能动
         # Top1/Top5 基线。差集在 base 上实测零出现，无功能差异；若日后做受控重基线再收敛。
+        # 计分字段由活动领域包声明（`completeness_fields`；biodata = species/tissue/disease/chemistry，
+        # 与旧写死四元组逐位一致；维度名走描述符访问器、记录字段名走 getattr）。
         # 抽样维不计（xdc1 追加发现，2026-07-19）：SCEA 的 tissue/disease 可能取自 0.1%~2.5%
         # 抽样（`metadata_provenance.complete=False`）——「抽样碰巧看到值」不等于「字段填得全」，
         # 与整读确认有值的记录拿同样的 +0.15 会让抽样记录系统性地排在真未标注之前。改为：
@@ -380,10 +386,10 @@ class DatasetRetriever:
         # 无 provenance → 恒完整 → 计数逐位不变（冻结 767 结构性不受影响；实测改动前完整分布
         # SCEA complete=False 198/384，其中 190 条 tissue/disease 有值）。
         filled = sum(
-            1 for dim, f in (("species", record.species), ("tissue", record.tissue),
-                             ("disease", record.disease), ("chemistry", record.chemistry))
-            if f and f.strip().lower() not in ("", "unknown")
-            and _dim_value_set_complete(record, dim)
+            1 for name in get_domain().completeness_fields
+            if (lambda v: bool(v) and v.strip().lower() not in ("", "unknown"))(
+                _completeness_text(record, name))
+            and _dim_value_set_complete(record, name)
         )
         score += 0.15 * filled
         # tie-breaker：新鲜度
@@ -393,7 +399,8 @@ class DatasetRetriever:
         try:
             n = int(str(record.count).replace(",", ""))
             if n > 0:
-                score += min(0.5, n / 100000.0)
+                # 先在整数域截到评分上限，避免巨大整数转 float 溢出。
+                score += 0.5 if n >= 50000 else n / 100000.0
         except (ValueError, TypeError):
             pass
         return score
@@ -401,24 +408,24 @@ class DatasetRetriever:
     def _explain(self, record: DatasetRecord, intent: QueryIntent) -> tuple[list[str], list[str], str]:
         matched: list[str] = []
         missing: list[str] = []
-        for dim in DIMENSIONS:
+        for dim in domain_dimensions():
             terms = intent.constraints.get(dim)
             if not terms:
                 continue
             (matched if constraint_satisfied(record, dim, terms) else missing).append(dim)
         if intent.has_raw_data_required is not None:
-            ok = record.has_raw_data is intent.has_raw_data_required
+            ok = effective_has_raw_data(record) is intent.has_raw_data_required
             (matched if ok else missing).append("has_raw_data")
         # reason：用 display 名拼可读理由
         parts: list[str] = []
         disp = intent.display_map
-        for dim in ("species", "tissue", "disease", "modality", "platform", "assay"):
+        for dim in get_domain().explain_order:
             if dim in matched and disp.get(dim):
                 parts.append("/".join(disp[dim]))
         reason = "匹配 " + "、".join(parts) if parts else "满足基本检索条件"
         # 负向：拼「排除 X」（存活集已保证不含，故只作解释）
         ex_parts: list[str] = []
-        for dim in ("species", "tissue", "disease", "modality", "platform", "assay"):
+        for dim in get_domain().explain_order:
             ed = intent.excluded_display.get(dim)
             if ed:
                 ex_parts.append("/".join(ed))
@@ -465,8 +472,9 @@ class DatasetRetriever:
         官方评测不传 → 整段 no-op、确定性零影响。
 
         recall_fusion（缺省 None → 按后端取默认）：dense/vector 召回的融合法（"linear"=min-max+α /
-        "rrf"=名次融合 k=60）；dense 缺省 "linear"（历史行为字节等价）、vector 缺省 "rrf"。
-        官方评测不传 → 历史行为字节等价。"""
+        "rrf"=名次融合 k=60 / "ltr"=学习排序融合）；dense/vector 缺省 "ltr"（工件缺失时
+        fail-soft 回退 dense→linear、vector→rrf，与旧默认逐位一致）。
+        官方评测不传（recall off）→ 召回块整体跳过、确定性零影响。"""
         limit = max(1, top_k if top_k is not None else self.top_k)
         # 弃权 → 无结果（由 workflow 渲染诊断）
         if intent.abstain:
@@ -497,9 +505,11 @@ class DatasetRetriever:
         # 2.4) 可选向量召回（默认关）：本地稠密嵌入对存活集按语义相关性重排（可与词面分融合）。
         #      顺序遵循既定方向「规则过滤 → 向量召回 → llm 重排」。同样只作用于存活集、
         #      输出恒为其排列 → 不引入违规记录；第 4 步终检再兜底一次。
-        # recall_fusion 解析（唯一默认在此）：缺省按后端取（dense=linear 历史默认逐位不变；
-        # vector=rrf）；显式值原样下传。off 后端记录 "linear"（与历史遥测同值，无行为差）。
-        eff_recall_fusion = str(recall_fusion or "").strip().lower() or ("rrf" if recall_backend == "vector" else "linear")
+        # recall_fusion 解析（唯一默认在此）：dense/vector 缺省 "ltr"（学习排序融合；
+        # 工件缺失/约束解析不可用时由 recall_rerank 内 fail-soft 回退原默认 dense→linear、
+        # vector→rrf，行为与旧默认逐位一致）；显式值原样下传。off 后端记录 "linear"
+        # （与历史遥测同值，无行为差）。
+        eff_recall_fusion = str(recall_fusion or "").strip().lower() or ("ltr" if recall_backend in ("dense", "vector") else "linear")
         if recall_backend and recall_backend != "off":
             from .vector_recall import recall_rerank  # 惰性导入：避免循环依赖 + 不装可选依赖也能导入本模块
 
@@ -591,13 +601,13 @@ class DatasetRetriever:
             )
         # 逐个单约束支持数：定位是哪个/哪些约束导致空集
         support: dict[str, int] = {}
-        active: dict[str, list[str]] = {d: intent.constraints[d] for d in DIMENSIONS if intent.constraints.get(d)}
+        active: dict[str, list[str]] = {d: intent.constraints[d] for d in domain_dimensions() if intent.constraints.get(d)}
         for dim, terms in active.items():
             support[dim] = sum(1 for r in records if constraint_satisfied(r, dim, terms))
         if intent.has_raw_data_required is not None:
             want = intent.has_raw_data_required
-            support["has_raw_data"] = sum(1 for r in records if r.has_raw_data is want)
-        for dim in DIMENSIONS:
+            support["has_raw_data"] = sum(1 for r in records if effective_has_raw_data(r) is want)
+        for dim in domain_dimensions():
             exc = intent.excluded_constraints.get(dim)
             if exc:
                 support[f"exclude:{dim}"] = sum(1 for r in records if not constraint_satisfied(r, dim, exc))
@@ -633,6 +643,7 @@ class DatasetRetriever:
         intent: QueryIntent,
         top_k: int | None = None,
         max_options: int = 8,
+        include_dead: bool = False,
     ) -> list[dict]:
         """空交集（no_match）时试算「若放宽某处能救回多少 + top-k 预览」，回传多种放宽策略供用户自选。
 
@@ -640,6 +651,10 @@ class DatasetRetriever:
 
         - `kind="drop"` **去掉一个条件**：逐个丢掉**一个**硬约束（各约束维度 + FASTQ 要求 +
           排除项 + 发表时间范围）。保守档——你说的其余条件全都还在。
+
+        include_dead=True 时放松后仍零存活的维度也保留（count=0、candidates=[]）——
+        「放松也无救」对环内 rerank 的探测报告是信息量；缺省 False 维持既有 no_match
+        行为逐位不变。
         - `kind="only"` **只按一个条件搜**：只保留**一个**维度的正向约束，其余（含 FASTQ /
           时间范围 / 排除项）全放开。激进档，但它是第一档**全军覆没**时唯一还救得回来的一档——
           条件互相叠加得太死时，去掉任何单独一个仍然是 0 条，用户就会看到「无结果且无任何建议」。
@@ -649,6 +664,8 @@ class DatasetRetriever:
 
         - **弃权（abstain）不在此列**：弃权是"查询无法安全解析"，不是"约束太严"，返回空（前端只提示原因）。
         - 每个放宽项都用确定性 retrieve（rerank/recall 默认关）出预览 → 不引入违规、可复现。
+        - 每项带 `suppress`：本项放松量的 filter_id 清单（`relax_key_to_suppressed` 单锚点），
+          供放松卡零 LLM 重搜直接下发为 suppressed_constraints（装配侧负责与既有忽略合并）。
         - 只读，不改 intent（用 dataclasses.replace 克隆）；官方评测/CLI 不调用此方法，确定性零影响。
         """
         if intent.abstain:
@@ -656,7 +673,7 @@ class DatasetRetriever:
         limit = max(1, top_k if top_k is not None else self.top_k)
 
         targets: list[tuple[str, str, QueryIntent]] = []
-        for dim in DIMENSIONS:
+        for dim in domain_dimensions():
             if intent.constraints.get(dim):
                 label = "/".join(intent.display_map.get(dim, [dim])) or dim
                 relaxed = replace(intent, constraints={d: v for d, v in intent.constraints.items() if d != dim})
@@ -664,7 +681,7 @@ class DatasetRetriever:
         if intent.has_raw_data_required is not None:
             lbl = "FASTQ 原始数据" if intent.has_raw_data_required else "『不要 FASTQ』条件"
             targets.append(("raw", lbl, replace(intent, has_raw_data_required=None)))
-        for dim in DIMENSIONS:
+        for dim in domain_dimensions():
             if intent.excluded_constraints.get(dim):
                 lbl = "排除 " + ("/".join(intent.excluded_display.get(dim, [dim])) or dim)
                 relaxed = replace(intent, excluded_constraints={d: v for d, v in intent.excluded_constraints.items() if d != dim})
@@ -676,12 +693,15 @@ class DatasetRetriever:
 
         def measure(key: str, label: str, kind: str, relaxed: QueryIntent) -> dict | None:
             survivors = sum(1 for r in records if passes_hard_filter(r, relaxed))
-            if not survivors:
+            if not survivors and not include_dead:
                 return None
-            cands = self.retrieve(records, relaxed, top_k=limit)
-            if not cands:
+            cands = self.retrieve(records, relaxed, top_k=limit) if survivors else []
+            if survivors and not cands:
                 return None
-            return {"key": key, "label": label, "kind": kind, "count": survivors, "candidates": cands}
+            # suppress＝本项放松量的 filter_id 清单（单锚点翻译，key 与本函数 targets 同源恒合法）；
+            # 网页零命中放松卡与环内 ask.relax 共用此真源，不再各自翻译。
+            return {"key": key, "label": label, "kind": kind, "count": survivors,
+                    "candidates": cands, "suppress": relax_key_to_suppressed(intent, key)}
 
         drops = [o for o in (measure(k, lb, "drop", rx) for k, lb, rx in targets) if o]
         drops.sort(key=lambda o: -o["count"])
@@ -690,7 +710,7 @@ class DatasetRetriever:
         # ≥3 个放宽目标才生成——恰好 2 个时「只按 A 搜」丢的正好也只有 B，与第一档某项逐字同义。
         onlys: list[dict] = []
         if len(targets) >= 3:
-            for dim in DIMENSIONS:
+            for dim in domain_dimensions():
                 if not intent.constraints.get(dim):
                     continue
                 label = "/".join(intent.display_map.get(dim, [dim])) or dim
@@ -735,7 +755,7 @@ class DatasetRetriever:
             return []
         lenient_dims = getattr(intent, "lenient_dims", None) or set()
         caveats: list[dict] = []
-        for dim in DIMENSIONS:
+        for dim in domain_dimensions():
             terms = intent.constraints.get(dim)
             if not terms or dim in lenient_dims:
                 continue
@@ -759,7 +779,7 @@ class DatasetRetriever:
             caveats.append({
                 "dim": dim,
                 # 缺口在于**该维度未标注**（不是某个值不匹配），故 label 用维度名（组织/疾病…）而非查询值（Lung）。
-                "label": FACET_LABELS.get(dim, dim),
+                "label": _facet_labels().get(dim, dim),
                 "count": len(unknown),
                 "by_source": [{"source": s, "count": c} for s, c in by_source.most_common()],
             })
@@ -801,7 +821,7 @@ class DatasetRetriever:
         total = len(survivors)
         if total < 2:
             return {"total": total, "groups": []}
-        pinned = {d for d in DIMENSIONS if intent.constraints.get(d)}
+        pinned = {d for d in domain_dimensions() if intent.constraints.get(d)}
         # raw 任一硬约束（True/False）都固定 has_raw_data 分面；结构化 exclusion **不**固定该维
         # （存活集里仍可能有其它取值，允许用户继续按该维收窄）。
         if intent.has_raw_data_required is not None:
@@ -810,7 +830,7 @@ class DatasetRetriever:
             pinned.add("year")
         active = {f.get("dim") for f in (facet_filters or []) if isinstance(f, dict)}
         groups: list[dict] = []
-        for dim in FACET_ORDER:
+        for dim in _facet_order():
             if dim in pinned or dim in active:
                 continue
             counter: dict[str, int] = {}
@@ -834,7 +854,7 @@ class DatasetRetriever:
             for v, n in top:
                 display = max(disp[v].items(), key=lambda kv: (kv[1], kv[0]))[0] if disp.get(v) else v
                 values.append({"value": v, "display": display, "count": n})
-            groups.append({"dim": dim, "label": FACET_LABELS[dim], "values": values})
+            groups.append({"dim": dim, "label": _facet_labels()[dim], "values": values})
             if len(groups) >= max_groups:
                 break
         return {"total": total, "groups": groups}

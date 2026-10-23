@@ -5,18 +5,23 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_module():
-    spec = importlib.util.spec_from_file_location("build_telemetry_benchmark", ROOT / "scripts/build_telemetry_benchmark.py")
+def _load_module_of(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+def _load_module():
+    return _load_module_of("build_telemetry_benchmark", ROOT / "scripts/build_telemetry_benchmark.py")
 
 
 freeze = _load_module()
@@ -130,6 +135,68 @@ def test_evaluation_can_use_non_training_consent_but_training_cannot(tmp_path):
     manifest = json.loads((evaluation / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["authorization"]["evaluation_may_include_without_training_consent"] is True
     assert eval_rows[0]["training_consent"] is False
+
+
+def test_truncated_payload_preserved_useful_uid_grades_positive_not_zero(tmp_path):
+    """截断载荷端到端：生产候选构造（telemetry_export._candidate，含 _preserved_idx 还原）
+    → 冻结器。截断点之外的明确正例必须是 grade 2，未标注条目仍是 0。"""
+    export = _load_module_of("telemetry_export", ROOT / "scripts/telemetry_export.py")
+    ts = int(datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    results = [{"dataset_uid": f"d{i:02d}", "pos": i} for i in range(1, 21)]
+    results.append({"dataset_uid": "d23", "pos": 23, "_preserved_idx": 23})
+    rec = {
+        "id": "trunc", "tid": "t-trunc", "kind": "search", "t": ts, "q": "截断查询",
+        "truncated": True,
+        "search": {"res": {"results": results}},
+        "rating": {"stars": 4, "useful_idx": [2, 23], "comment": "第 23 条也有用"},
+    }
+    cand = export._candidate(rec, install_id="install-trunc", packet_id="pkt-trunc",
+                             packet_context={"training_consent": True})
+    assert cand["rating"]["useful_uids"] == ["d02", "d23"]
+    source = tmp_path / "candidates.jsonl"
+    _write_jsonl(source, [cand])
+    target = freeze.build_benchmark(source, tmp_path / "frozen", run_id="trunc", purpose="training",
+                                    created_at="2026-02-01T00:00:00Z", time_bucket_days=1,
+                                    ratios=(1, 0, 0))
+    only = [row for values in _all_split_rows(target).values() for row in values]
+    graded = {item["uid"]: item["grade"] for item in only[0]["graded_relevance"]}
+    assert graded["d02"] == 2 and graded["d23"] == 2     # 明确正例（含截断点外的保留条目）
+    assert graded["d01"] == 0 and graded["d20"] == 0     # 未标注条目仍是 0，不是把全体当正例
+
+
+def test_freeze_prefers_higher_label_revision_on_same_query_topk(tmp_path):
+    """同 (query, topk) 的两次修订：高 rev 行胜出，已有 qid 不把改口判 skip。"""
+    source = tmp_path / "candidates.jsonl"
+    _write_jsonl(source, [
+        _candidate("old-rev", install="install-a", query="同题", day=1,
+                   rating={"stars": 1}, rating_rev=1),
+        _candidate("new-rev", install="install-b", query="同题", day=1,
+                   rating={"stars": 3}, rating_rev=2),
+    ])
+    target = freeze.build_benchmark(source, tmp_path / "frozen", run_id="rev", purpose="training",
+                                    created_at="2026-02-01T00:00:00Z", time_bucket_days=1,
+                                    ratios=(1, 0, 0))
+    manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["exclusions"] == {"duplicate_query_topk": 1}
+    rows = [row for values in _all_split_rows(target).values() for row in values]
+    assert [row["record_id"] for row in rows] == ["new-rev"]
+    assert rows[0]["rating"]["stars"] == 3 and rows[0]["rating_rev"] == 2
+
+
+def test_unlabelled_candidate_is_excluded_not_graded_zero(tmp_path):
+    """未评分（或被高 rev 清空评分）的候选按 no_human_label 排除，绝不当作全负例进训练集。"""
+    source = tmp_path / "candidates.jsonl"
+    _write_jsonl(source, [
+        _candidate("unrated", install="install-a", query="未评分查询", day=1, rating={}),
+        _candidate("rated", install="install-b", query="已评分查询", day=1),
+    ])
+    target = freeze.build_benchmark(source, tmp_path / "frozen", run_id="unlabelled", purpose="training",
+                                    created_at="2026-02-01T00:00:00Z", time_bucket_days=1,
+                                    ratios=(1, 0, 0))
+    manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["exclusions"]["no_human_label"] == 1
+    rows = [row for values in _all_split_rows(target).values() for row in values]
+    assert [row["record_id"] for row in rows] == ["rated"]
 
 
 def test_explicit_grades_bad_json_base_rejection_and_small_data_are_fail_closed(tmp_path):

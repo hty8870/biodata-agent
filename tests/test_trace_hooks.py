@@ -279,6 +279,139 @@ def test_write_verb_snapshot_and_rollback_roundtrip(monkeypatch, _tmp_root):
     assert victim.read_text(encoding="utf-8") == "v2", "无 preimage 拒动——宁可少退不毁数据"
 
 
+# -------------------------------------------------- 补丁作用域快照 + 回滚
+
+def _patch_scope_execute(monkeypatch, root, account_id, payload_records, *,
+                         before_ingest=None, after_ingest=None):
+    """在绑定账户作用域下跑一次真实 execute：替身 search_online **真调 ingest_dataset**
+    （写漏斗 → 本人补丁包），返回 (out, sid)。"""
+    from dataset_recommender.corpus import uploads
+    from dataset_recommender.corpus.patch_package import bind_patch_scope
+
+    def run(slots, r):
+        if before_ingest:
+            before_ingest()
+        raw = json.dumps(payload_records, ensure_ascii=False).encode("utf-8")
+        safe = uploads.new_upload_name("x.json", "20260715_010203_000004")
+        res = uploads.ingest_dataset(raw_bytes=raw, safe_name=safe, project_root=r,
+                                     form_source="trace-test")
+        if after_ingest:
+            after_ingest()
+        return dict(SEARCH_OK, record_count=res.record_count, filename=res.filename,
+                    warnings=list(res.warnings))
+
+    monkeypatch.setattr(agent_exec, "LOOP_TOOLS", {
+        "curate.search_online": {"run": run, "label_zh": "联网搜索入库",
+                                 "card_kind": "search_online", "readonly": False},
+    })
+    rec = TraceRecorder(root, "test", "p1", enabled=True)
+    state = {"utterance": "联网搜人类肺数据入库",
+             "plan": {"verb": "curate.search_online",
+                      "slots": {"quoted": "联网搜人类肺数据入库", "keywords": "人类肺"}},
+             "loop_plan": None, "steps": [], "pending_reask_write": False}
+    with bind_recorder(rec), bind_patch_scope(account_id):
+        out = agent_exec.execute(state, runtime=_runtime())
+    return out, out["steps"][0]["snapshot_id"]
+
+
+def test_patch_scope_snapshot_rollback_restores_own_patch(monkeypatch, _tmp_root):
+    """真实 execute 链（绑定账户 ingest）→ 快照记补丁文件 → 回滚恢复
+    本人补丁到写前状态；其他账户补丁与共享 external 零变动。"""
+    from dataset_recommender.corpus import patch_package as pp
+    from dataset_recommender.corpus.patch_package import load_patch
+
+    pp.ingest_records_to_patch(payload={}, project_root=_tmp_root, account_id="acct_a",
+                               records=[{"dataset_uid": "P-1", "dataset_name": "P1",
+                                         "species": "Human"}])
+    pp.ingest_records_to_patch(payload={}, project_root=_tmp_root, account_id="acct_b",
+                               records=[{"dataset_uid": "B-1", "dataset_name": "B1",
+                                         "species": "Human"}])
+    before_a = pp.patch_path_for(_tmp_root, "acct_a").read_bytes()
+
+    out, sid = _patch_scope_execute(monkeypatch, _tmp_root, "acct_a",
+                                    [{"dataset_uid": "P-2", "dataset_name": "P2",
+                                      "species": "Human"}])
+    assert out["steps"][0]["ok"] is True
+    assert sid, "写步必须留快照锚"
+    patch_a = load_patch(_tmp_root, "acct_a")
+    assert sorted(pp.record_uid(r) for r in patch_a["adds"]) == ["P-1", "P-2"], \
+        "真实 ingest 落本人补丁包"
+
+    plan = trace_rollback.plan_rollback(_tmp_root, sid)
+    assert plan.get("mode") == "patch"
+    assert plan["restore_bytes"] == ["acct_a.json"] and plan["recycle_created"] == []
+    res = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert [e["name"] for e in res["applied"]["restored"]] == ["acct_a.json"]
+    assert pp.patch_path_for(_tmp_root, "acct_a").read_bytes() == before_a, \
+        "本人补丁字节恢复到写前"
+    assert [pp.record_uid(r) for r in load_patch(_tmp_root, "acct_b")["adds"]] == ["B-1"], \
+        "其他账户补丁零变动"
+    ext = _tmp_root / "database" / "external"
+    assert not ext.exists() or list(ext.glob("*.json")) == [], "共享 external 零变动"
+    # 幂等：复跑拒动（现状已与快照「写后」不一致）
+    res2 = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert res2["applied"]["restored"] == []
+    assert any(e.get("code") == "state_conflict" for e in res2["skipped"])
+
+
+def test_patch_scope_snapshot_rollback_removes_first_write(monkeypatch, _tmp_root):
+    """验收（created 档）：写前补丁文件不存在 → 回滚恢复「不存在」，
+    现状字节先归档进回收站（可逆保险）。"""
+    from dataset_recommender.corpus import patch_package as pp
+
+    out, sid = _patch_scope_execute(monkeypatch, _tmp_root, "acct_fresh",
+                                    [{"dataset_uid": "P-9", "dataset_name": "P9",
+                                      "species": "Human"}])
+    assert out["steps"][0]["ok"] is True
+    target = pp.patch_path_for(_tmp_root, "acct_fresh")
+    assert target.is_file()
+    plan = trace_rollback.plan_rollback(_tmp_root, sid)
+    assert plan["recycle_created"] == ["acct_fresh.json"] and plan["restore_bytes"] == []
+    res = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert [e["name"] for e in res["applied"]["recycled"]] == ["acct_fresh.json"]
+    assert not target.exists(), "写前不存在 → 回滚恢复「不存在」"
+    recycle = _tmp_root / ".userdata" / "recycle"
+    assert any(p.name.endswith("acct_fresh.json") for p in recycle.iterdir()), "字节归档可逆"
+
+
+def test_patch_rollback_conflicts_on_same_account_later_write(monkeypatch, _tmp_root):
+    """同一 principal 的**后续会话写入**绝不被旧快照覆盖——旧快照回滚
+    在全量 preflight CAS 处明确 conflict、整体零修改（补丁含后续新条目，一个字节不动）。"""
+    from dataset_recommender.corpus import patch_package as pp
+    from dataset_recommender.corpus.patch_package import load_patch
+
+    pp.ingest_records_to_patch(payload={}, project_root=_tmp_root, account_id="acct_a",
+                               records=[{"dataset_uid": "P-1", "dataset_name": "P1",
+                                         "species": "Human"}])
+    out, sid = _patch_scope_execute(monkeypatch, _tmp_root, "acct_a",
+                                    [{"dataset_uid": "P-2", "dataset_name": "P2",
+                                      "species": "Human"}])
+    assert out["steps"][0]["ok"] is True
+
+    # 后续会话（同账户）：又写入 P-3 —— 快照 after-state 自此过时
+    pp.ingest_records_to_patch(payload={}, project_root=_tmp_root, account_id="acct_a",
+                               records=[{"dataset_uid": "P-3", "dataset_name": "P3",
+                                         "species": "Human"}])
+    snapshot_bytes = pp.patch_path_for(_tmp_root, "acct_a").read_bytes()
+
+    plan = trace_rollback.plan_rollback(_tmp_root, sid)
+    assert [c["code"] for c in plan["conflicts"]] == ["state_conflict"]
+    assert plan["restore_bytes"] == [] and plan["recycle_created"] == []
+    res = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert res["conflict"] is True and res["applied"] == {"recycled": [], "restored": []}
+    assert pp.patch_path_for(_tmp_root, "acct_a").read_bytes() == snapshot_bytes, \
+        "同一账户后续写入不得被覆盖"
+    assert sorted(pp.record_uid(r) for r in load_patch(_tmp_root, "acct_a")["adds"]) == \
+        ["P-1", "P-2", "P-3"]
+
+    # 后续删除（同账户 trash）同样构成 conflict
+    pp.trash_adds(_tmp_root, "acct_a", ["P-1"])
+    res2 = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert res2["conflict"] is True and res2["applied"] == {"recycled": [], "restored": []}
+    assert [pp.record_uid(r) for r in load_patch(_tmp_root, "acct_a")["trash"]] == ["P-1"], \
+        "后续删除保持原样（不被旧快照的写回「复活」）"
+
+
 # ---------------------------------------------------------------- webapp additive 回显
 
 def test_utterance_response_body_echoes_trace_turn_id_only_when_present():
@@ -328,3 +461,338 @@ def test_scoped_route_consensus_votes_fully_traced(monkeypatch, tmp_path):
                 if e["kind"] == "llm_call" and e["payload"]["node"] == "route_consensus"]
     assert len(rc_calls) == 2
     assert all(e["payload"]["channel"] == "consensus_vote" for e in rc_calls)
+
+
+def _bound_upload(root, account, uid):
+    from dataset_recommender.corpus import uploads
+    from dataset_recommender.corpus.patch_package import bind_patch_scope
+
+    with bind_patch_scope(account):
+        return uploads.ingest_dataset(
+            raw_bytes=json.dumps([{"dataset_uid": uid, "dataset_name": uid,
+                                   "species": "Human"}]).encode("utf-8"),
+            safe_name=uploads.new_upload_name("concurrent.json"), project_root=root)
+
+
+def _upload_in_other_thread(root, account, uid):
+    import threading
+
+    errors = []
+    def write():
+        try:
+            _bound_upload(root, account, uid)
+        except Exception as exc:
+            errors.append(exc)
+    thread = threading.Thread(target=write)
+    thread.start()
+    thread.join(10)
+    assert not thread.is_alive() and not errors
+
+
+@pytest.mark.parametrize("outcome", ["write", "zero", "failure"])
+@pytest.mark.parametrize("initial", [False, True])
+def test_execute_patch_concurrent_before_rmw_is_not_owned(monkeypatch, _tmp_root,
+                                                        outcome, initial):
+    from dataset_recommender.corpus import patch_package as pp
+    from dataset_recommender.corpus.uploads import UploadError
+
+    account = "acct_overlap"
+    if initial:
+        _bound_upload(_tmp_root, account, "seed")
+    target = pp.patch_path_for(_tmp_root, account)
+    actual_preimage = []
+    def concurrent_write():
+        _upload_in_other_thread(_tmp_root, account, "theirs")
+        actual_preimage.append(target.read_bytes())
+        if outcome == "failure":
+            raise UploadError("unavailable", "模拟采集失败，尚未写入")
+    uid = "mine" if outcome == "write" else "theirs"
+    out, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": uid, "dataset_name": uid, "species": "Human"}],
+        before_ingest=concurrent_write)
+    assert out["steps"][0]["ok"] is (outcome != "failure")
+    store = snapshot_store(_tmp_root)
+    diff = store.load(sid)["diff"]
+    if outcome == "write":
+        assert diff["created"] == []
+        assert [e["name"] for e in diff["modified"]] == [target.name]
+        assert store.preimage_path(sid, target.name).read_bytes() == actual_preimage[0]
+    else:
+        assert all(not diff[k] for k in ("created", "modified", "deleted"))
+    result = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert result["conflict"] is False
+    assert target.read_bytes() == actual_preimage[0]
+    assert "theirs" in {pp.record_uid(r) for r in pp.load_patch(_tmp_root, account)["adds"]}
+
+
+def test_execute_patch_after_rmw_before_finalize_uses_real_after(monkeypatch, _tmp_root):
+    import hashlib
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_after"
+    _bound_upload(_tmp_root, account, "seed")
+    target = pp.patch_path_for(_tmp_root, account)
+    after_mine = []
+    def write_after():
+        after_mine.append(target.read_bytes())
+        _upload_in_other_thread(_tmp_root, account, "theirs")
+    _, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine", "dataset_name": "mine", "species": "Human"}],
+        after_ingest=write_after)
+    current = target.read_bytes()
+    entry = snapshot_store(_tmp_root).load(sid)["diff"]["modified"][0]
+    assert entry["after"]["sha256"] == hashlib.sha256(after_mine[0]).hexdigest()
+    result = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert result["conflict"] is True
+    assert result["applied"] == {"recycled": [], "restored": []}
+    assert target.read_bytes() == current
+
+
+def test_patch_legacy_snapshot_without_rmw_receipt_conflicts(monkeypatch, _tmp_root):
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_legacy"
+    _, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine", "dataset_name": "mine", "species": "Human"}])
+    store = snapshot_store(_tmp_root)
+    meta = store.load(sid)
+    meta.pop("patch_receipt", None)
+    store.save_meta(sid, meta)
+    target = pp.patch_path_for(_tmp_root, account)
+    before = target.read_bytes()
+    plan = trace_rollback.plan_rollback(_tmp_root, sid)
+    assert [c["code"] for c in plan["conflicts"]] == ["missing_mutation_receipt"]
+    result = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert result["conflict"] and not result["applied"]["recycled"]
+    consumer = agent_exec._loop_curate_rollback({}, _tmp_root, {"steps": [
+        {"verb": "curate.search_online", "snapshot_id": sid, "ok": True}]})
+    assert not consumer["rolled_back"] and consumer["reason"] == "rollback_incomplete"
+    assert consumer["skipped"][0]["code"] == "missing_mutation_receipt"
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("initial", [False, True])
+def test_patch_rollback_cas_restore_blocks_real_bound_upload_thread(
+        monkeypatch, _tmp_root, initial):
+    import threading
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_barrier"
+    if initial:
+        _bound_upload(_tmp_root, account, "seed")
+    _, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine", "dataset_name": "mine", "species": "Human"}])
+    ready, done = threading.Event(), threading.Event()
+    errors, overlap = [], []
+    def upload():
+        ready.set()
+        try:
+            _bound_upload(_tmp_root, account, "theirs")
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+    thread = threading.Thread(target=upload)
+    real_plan = trace_rollback._plan
+    def preflight(*args):
+        plan = real_plan(*args)
+        thread.start()
+        assert ready.wait(10)
+        overlap.append(done.wait(0.3))
+        return plan
+    monkeypatch.setattr(trace_rollback, "_plan", preflight)
+    result = trace_rollback.apply_rollback(_tmp_root, sid)
+    thread.join(10)
+    assert not thread.is_alive() and not errors
+    assert overlap == [False], "preflight 到 restore 之间实际写锁必须一直持有"
+    assert not result["conflict"] and result["rolled_back"]
+    assert {pp.record_uid(r) for r in pp.load_patch(_tmp_root, account)["adds"]} == (
+        {"seed", "theirs"} if initial else {"theirs"})
+
+
+@pytest.mark.parametrize("initial", [False, True])
+def test_patch_rollback_cas_restore_blocks_real_bound_upload_process(
+        monkeypatch, _tmp_root, initial):
+    import os
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_process"
+    if initial:
+        _bound_upload(_tmp_root, account, "seed")
+    _, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine", "dataset_name": "mine", "species": "Human"}])
+    repo = Path(__file__).resolve().parents[1]
+    ready = _tmp_root / "child-ready"
+    processes, overlap = [], []
+    child = r'''
+import json, os, sys
+from pathlib import Path
+root, repo = Path(sys.argv[1]).resolve(), Path.cwd().resolve()
+def audit(event, args):
+    if event in {"socket.connect", "socket.getaddrinfo", "socket.gethostbyname"}:
+        raise AssertionError("offline child forbids network")
+    if event == "open" and isinstance(args[0], (str, bytes, os.PathLike)):
+        raw = os.fsdecode(args[0])
+        if raw in {os.devnull, "nul", "NUL", "/dev/null"}:
+            return
+        p = Path(raw).resolve()
+        if p.name.startswith(".env") or p.suffix == ".env" or p.is_relative_to(repo / ".userdata"):
+            raise AssertionError("offline child forbids private files")
+        mode, flags = args[1:3]
+        writing = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (
+            isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
+        if writing and not p.is_relative_to(root):
+            raise AssertionError("offline child only writes synthetic root")
+sys.addaudithook(audit)
+from dataset_recommender.corpus.patch_package import bind_patch_scope
+from dataset_recommender.corpus.uploads import ingest_dataset, new_upload_name
+Path(sys.argv[3]).write_text("ready", encoding="utf-8")
+with bind_patch_scope(sys.argv[2]):
+    res = ingest_dataset(raw_bytes=json.dumps([{"dataset_uid":"theirs",
+        "dataset_name":"theirs", "species":"Human"}]).encode(),
+        safe_name=new_upload_name("child.json"), project_root=root)
+assert res.record_count == 1
+print("BOUND_UPLOAD_COMMITTED", os.getpid())
+'''
+    real_plan = trace_rollback._plan
+    def preflight(*args):
+        plan = real_plan(*args)
+        proc = subprocess.Popen([sys.executable, "-B", "-c", child,
+                                 str(_tmp_root), account, str(ready)],
+                                cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        processes.append(proc)
+        deadline = time.monotonic() + 15
+        while not ready.exists() and proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert ready.exists(), "独立进程必须到达真实 upload 调用"
+        try:
+            proc.wait(timeout=0.3)
+            overlap.append(True)
+        except subprocess.TimeoutExpired:
+            overlap.append(False)
+        return plan
+    monkeypatch.setattr(trace_rollback, "_plan", preflight)
+    try:
+        result = trace_rollback.apply_rollback(_tmp_root, sid)
+    finally:
+        for proc in processes:
+            stdout, stderr = proc.communicate(timeout=20)
+            assert proc.returncode == 0, stderr
+            assert "BOUND_UPLOAD_COMMITTED" in stdout
+            print(stdout.strip(), "ROLLBACK_PID=", os.getpid(),
+                  "CAS_WINDOW_BLOCKED=", not overlap[-1])
+    assert overlap == [False], "OS 事务锁必须阻止另一个进程在 CAS 后插队"
+    assert not result["conflict"] and result["rolled_back"]
+    assert {pp.record_uid(r) for r in pp.load_patch(_tmp_root, account)["adds"]} == (
+        {"seed", "theirs"} if initial else {"theirs"})
+
+
+def test_execute_patch_failure_after_commit_keeps_real_receipt(monkeypatch, _tmp_root):
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_partial"
+    _bound_upload(_tmp_root, account, "seed")
+    target = pp.patch_path_for(_tmp_root, account)
+    before = target.read_bytes()
+    def fail_after_write():
+        raise RuntimeError("模拟结果构造失败，实际写入已提交")
+    out, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine", "dataset_name": "mine", "species": "Human"}],
+        after_ingest=fail_after_write)
+    assert not out["steps"][0]["ok"]
+    result = trace_rollback.apply_rollback(_tmp_root, sid)
+    assert result["rolled_back"] and not result["conflict"]
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("interleaved", [False, True])
+def test_execute_patch_multiple_rmw_requires_continuous_receipts(monkeypatch, _tmp_root, interleaved):
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_chain"
+    _bound_upload(_tmp_root, account, "seed")
+    target = pp.patch_path_for(_tmp_root, account)
+    before = target.read_bytes()
+    def second_write():
+        if interleaved:
+            _upload_in_other_thread(_tmp_root, account, "theirs")
+        _bound_upload(_tmp_root, account, "mine2")
+    out, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine1", "dataset_name": "mine1", "species": "Human"}],
+        after_ingest=second_write)
+    assert out["steps"][0]["ok"]
+    current = target.read_bytes()
+    result = trace_rollback.apply_rollback(_tmp_root, sid)
+    if interleaved:
+        assert result["conflict"] and result["applied"] == {"recycled": [], "restored": []}
+        assert result["conflicts"][0]["code"] == "untrusted_mutation_receipt"
+        assert target.read_bytes() == current
+    else:
+        assert not result["conflict"] and result["rolled_back"]
+        assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["block", "unblock", "trash", "restore", "delete_file"])
+def test_patch_non_ingest_receipts_preserve_true_preimages(tmp_path, operation):
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_operations"
+    _bound_upload(tmp_path, account, "seed")
+    pp.block_uids(tmp_path, account, ["shared"])
+    if operation == "restore":
+        pp.trash_adds(tmp_path, account, ["seed"])
+    target = pp.patch_path_for(tmp_path, account)
+    before = target.read_bytes()
+    store = snapshot_store(tmp_path)
+    with pp.bind_patch_scope(account):
+        sid = store.capture("curate.remove")
+        with pp.collect_patch_mutations() as receipts:
+            if operation == "block":
+                pp.block_uids(tmp_path, account, ["other"])
+            elif operation == "unblock":
+                pp.unblock_uids(tmp_path, account, ["shared"])
+            elif operation == "trash":
+                pp.trash_adds(tmp_path, account, ["seed"])
+            elif operation == "restore":
+                pp.restore_adds(tmp_path, account, ["seed"])
+            else:
+                pp.restore_patch_file(tmp_path, account, existed=False)
+        store.finalize(sid, mutation={"patch": receipts})
+    result = trace_rollback.apply_rollback(tmp_path, sid)
+    assert result["rolled_back"] and not result["conflict"]
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("damage", ["after", "preimage"])
+def test_patch_rmw_fingerprint_damage_is_conflict_not_overwrite(monkeypatch, _tmp_root, damage, capsys):
+    from dataset_recommender.corpus import patch_package as pp
+
+    account = "acct_damage"
+    _bound_upload(_tmp_root, account, "seed")
+    _, sid = _patch_scope_execute(
+        monkeypatch, _tmp_root, account,
+        [{"dataset_uid": "mine", "dataset_name": "mine", "species": "Human"}])
+    store = snapshot_store(_tmp_root)
+    if damage == "after":
+        meta = store.load(sid)
+        meta["diff"]["modified"][0]["after"].pop("sha256")
+        store.save_meta(sid, meta)
+    else:
+        store.preimage_path(sid, f"{account}.json").write_bytes(b"damaged")
+    target = pp.patch_path_for(_tmp_root, account)
+    before = target.read_bytes()
+    assert trace_rollback.main(["--root", str(_tmp_root), "--snapshot", sid, "--apply"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["conflict"] and not result["rolled_back"]
+    assert target.read_bytes() == before

@@ -58,9 +58,14 @@ def test_suites_and_faces():
     """四套件常驻装配（rank/rerank 同在注册表）。
     2026-08-18 四工具批：结果处理四工具（compare/cite/compat/fair）同时入 search 与
     action 套件——检索后追问（「对比前两条」「找兼容的」「FAIR 自检」）实测分流到两条线
-    都可能，只有一条线装它们会让另一线的追问无工具可选而误跑 rank。"""
+    都可能，只有一条线装它们会让另一线的追问无工具可选而误跑 rank。
+    2026-09-13 rerank 处置批：results.show（屏态唯一出口）入 search 套件（general 全集
+    自带）；rescue 刻意不装——救回采纳走 search.rerun 自己的自动上屏，不经 show。
+    understand 首步面**不装** results.show：首步没有环内试跑实录现场，无句柄可指。
+    2026-09-14 YOLO 批刻意更新：ask.relax（问用户放松哪个条件）紧随 results.show
+    入 search 套件；understand 首步面同样不装（首步没有屏面现场可判 degenerate）。"""
     assert AX._SUITE_LOOP_VERBS["search"] == (
-        "rank", "rerank", "search.rerun", "curate.db_status",
+        "rank", "rerank", "results.show", "ask.relax", "search.rerun", "curate.db_status",
         "compare.datasets", "cite.export", "compat.find", "fair.check")
     assert AX._SUITE_LOOP_VERBS["action"] == (
         "curate.check_updates", "curate.search_online", "curate.sync_updates",
@@ -122,12 +127,14 @@ def test_suites_and_faces():
         assert f"- {off_face}（" not in rescue_tools, off_face
     # 联网归类显式钉：纯本地 = db_status / search.rerun / rank / rerank / route.request /
     # curate.rollback（rb1 2026-08-17 回滚是本地文件操作，不触网）；2026-08-18 四工具批
-    # 的 compare/cite/compat/fair 全本地（结果处理不触网）。
+    # 的 compare/cite/compat/fair 全本地（结果处理不触网）；2026-09-13 rerank 处置批的
+    # results.show 全本地（重放确定性管线+指纹复核，不触网）；2026-09-14 YOLO 批的
+    # ask.relax 全本地（零 LLM 确定性预演生成选择卡，不触网）。
     assert AX._NETWORK_LOOP_TOOLS == frozenset(
         set(AX.LOOP_TOOLS) - {"curate.db_status", "search.rerun", "rank", "rerank",
-                              "route.request", "curate.rollback",
+                              "route.request", "curate.rollback", "results.show",
                               "compare.datasets", "cite.export",
-                              "compat.find", "fair.check"})
+                              "compat.find", "fair.check", "ask.relax"})
 
 
 # ---------------------------------------------------------------- 分流共识（共识帽 + 机械兜底）

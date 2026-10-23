@@ -2,7 +2,7 @@
 
 钉四件事：
 1. 正常请求落一条 INFO 请求日志（method + 路径 + 状态码 + 耗时），响应行为不变；
-2. route_turn 兜底（非流式）触发时必有 ERROR 日志且带完整堆栈，响应文案逐位不变；
+2. route_turn 兜底（非流式）触发时必有 ERROR 日志且带完整堆栈，并如实提示可能已完成部分操作；
 3. route_turn 兜底（流式 worker）同上——SSE 仍只发 error 帧通用文案；
 4. 脱敏口径：body 里的 api_key 与 URL query string 绝不出现在任何日志行。
 """
@@ -19,10 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import dataset_recommender.app.webapp as webapp  # noqa: E402
 from dataset_recommender.agent import turn  # noqa: E402
+from dataset_recommender.app import conversation_runs  # noqa: E402
 
 client = TestClient(webapp.app, base_url="http://127.0.0.1")
 
 _LOGGER_NAME = webapp.logger.name
+_EXECUTION_LOGGER_NAME = conversation_runs.LOGGER.name
 
 #: 规则直达档（agent=false）：不碰 LLM 分流、纯离线（与 test_corner_backend 同一组参数）。
 _AGENT_OFF = {"agent": False, "provider": "mock", "use_llm": False}
@@ -35,7 +37,9 @@ def _boom(*_args, **_kwargs):
 
 
 def _error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
-    return [r for r in caplog.records if r.name == _LOGGER_NAME and r.levelno >= logging.ERROR]
+    # Every HTTP transport executes through the same bounded runtime. Request
+    # access logs remain in webapp; execution tracebacks belong to its worker.
+    return [r for r in caplog.records if r.name == _EXECUTION_LOGGER_NAME and r.levelno >= logging.ERROR]
 
 
 def test_normal_request_logs_method_path_status(caplog: pytest.LogCaptureFixture):
@@ -56,10 +60,10 @@ def test_route_turn_fallback_logs_full_traceback_non_stream(
 ):
     """非流式分支：route_turn 抛异常 → 响应文案不变，服务端必须有带完整堆栈的 ERROR 日志。"""
     monkeypatch.setattr(turn, "route_turn", _boom)
-    with caplog.at_level(logging.INFO, logger=_LOGGER_NAME):
+    with caplog.at_level(logging.INFO, logger=_EXECUTION_LOGGER_NAME):
         res = client.post("/api/utterance", json={"utterance": "你好", **_AGENT_OFF})
     assert res.status_code == 200
-    assert res.json() == {"ok": False, "detail": _FALLBACK_DETAIL}
+    assert res.json() == {"ok": False, "detail": _FALLBACK_DETAIL, "may_have_side_effects": True}
     errors = _error_records(caplog)
     assert errors, "route_turn 兜底触发必须落 ERROR 日志（此前零日志零堆栈）"
     rec = errors[-1]
@@ -73,7 +77,7 @@ def test_route_turn_fallback_logs_full_traceback_stream(
 ):
     """流式分支：worker 线程里的兜底同样落带堆栈的 ERROR 日志；SSE 只发 error 帧通用文案。"""
     monkeypatch.setattr(turn, "route_turn", _boom)
-    with caplog.at_level(logging.INFO, logger=_LOGGER_NAME):
+    with caplog.at_level(logging.INFO, logger=_EXECUTION_LOGGER_NAME):
         res = client.post("/api/utterance", json={"utterance": "你好", "stream": True, **_AGENT_OFF})
     assert res.status_code == 200
     assert '"event": "error"' in res.text, "流式兜底应发 error 帧"
@@ -89,7 +93,7 @@ def test_route_turn_fallback_logs_full_traceback_stream(
 def test_request_log_never_contains_api_key_or_query_string(caplog: pytest.LogCaptureFixture):
     """脱敏钉：请求体 api_key 与 URL query string 绝不出现在任何日志行（含请求日志与异常日志）。"""
     secret = "-webobs-SECRET-9f8e7d6c"
-    with caplog.at_level(logging.INFO, logger=_LOGGER_NAME):
+    with caplog.at_level(logging.INFO, logger="dataset_recommender.app"):
         res = client.post("/api/utterance", json={"utterance": "你好", "api_key": secret, **_AGENT_OFF})
         res2 = client.get(f"/api/health?probe={secret}")
     assert res.status_code == 200 and res2.status_code == 200

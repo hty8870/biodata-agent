@@ -35,7 +35,7 @@ from ..retrieval.model_runtime import (
     runtime_root,
     worker_script,
 )
-from ..retrieval.model_worker import EMBED_MODEL_ID, MODEL_ID, model_file_manifest, model_files_ready
+from ..retrieval.model_worker import EMBED_MODEL_ID, MODEL_ID, completed_model_manifest
 
 STATUS_SCHEMA = "biodata-model-install-status/v1"
 PYTHON_VERSION = "3.12.13"
@@ -206,54 +206,60 @@ def model_install_status(paths: "AppPaths | None" = None) -> dict:
     return _public_status(value)
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        if os.name == "nt":
-            import ctypes
-            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-            if handle:
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return True
-            return False
-        os.kill(pid, 0)
-        return True
-    except Exception:
-        return False
+def _lock_fd(fd: int) -> None:
+    """对已打开的锁文件做**非阻塞排他**锁（Windows: msvcrt；POSIX: flock）。"""
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_fd(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    else:
+        import fcntl
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
 
 
 @contextlib.contextmanager
 def _install_lock(paths: AppPaths) -> Iterator[None]:
+    """安装互斥：**持有整个任务的 OS 文件锁**（进程退出/崩溃自动释放）。
+
+    旧实现按「陈旧 PID」直接 unlink 锁路径——两个安装者同读同一陈旧 PID 时，
+    后到者会删掉先到者刚建的新锁后并发进入。OS 锁没有这个窗口，也不再需要 PID 存活判断；
+    锁文件保留在磁盘上（删文件＝把互斥让给第三个进程），内容只作诊断线索。"""
     root = runtime_root(paths)
     root.mkdir(parents=True, exist_ok=True)
     lock = root / "install.lock"
-    for _ in range(2):
-        try:
-            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode("ascii"))
-            os.close(fd)
-            break
-        except FileExistsError:
-            try:
-                owner = int(lock.read_text(encoding="ascii").strip())
-            except (OSError, ValueError):
-                owner = 0
-            if _pid_alive(owner):
-                raise ModelInstallError("busy", "本地模型正在安装，请等待当前任务完成。")
-            try:
-                lock.unlink()
-            except OSError as exc:
-                raise ModelInstallError("busy", "本地模型安装锁暂时不可用。") from exc
-    else:
-        raise ModelInstallError("busy", "本地模型安装锁暂时不可用。")
+    fd = os.open(lock, os.O_CREAT | os.O_RDWR)
     try:
+        try:
+            _lock_fd(fd)
+        except OSError as exc:
+            raise ModelInstallError("busy", "本地模型正在安装，请等待当前任务完成。") from exc
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, str(os.getpid()).encode("ascii"))
+        except OSError:
+            pass
         yield
     finally:
         try:
-            lock.unlink()
-        except OSError:
-            pass
+            _unlock_fd(fd)
+        finally:
+            os.close(fd)
 
 
 def _run_command(command: "list[str]", *, env: dict[str, str], log, cancel: threading.Event) -> None:
@@ -291,6 +297,10 @@ def _run_command(command: "list[str]", *, env: dict[str, str], log, cancel: thre
 
 
 def _ready_manifest(paths: AppPaths, lock: Path, *, runtime_bytes: int, model_bytes: int) -> dict:
+    files = completed_model_manifest(model_dir(paths))
+    embed_files = completed_model_manifest(embed_model_dir(paths))
+    if not files or not embed_files:
+        raise ModelInstallError("model_incomplete", "模型下载完成证据缺失或文件已变化。")
     return {
         "schema": READY_SCHEMA,
         "model_id": MODEL_ID,
@@ -299,39 +309,52 @@ def _ready_manifest(paths: AppPaths, lock: Path, *, runtime_bytes: int, model_by
         "installed_at": datetime.now(timezone.utc).isoformat(),
         "runtime_bytes": runtime_bytes,
         "model_bytes": model_bytes,
-        "model_files": model_file_manifest(model_dir(paths)),
+        "model_files": files,
         "embed_model_id": EMBED_MODEL_ID,
-        "embed_files": model_file_manifest(embed_model_dir(paths)),
+        "embed_files": embed_files,
     }
+
+
+def _weights_trusted(target: Path, manifest: dict, key: str) -> bool:
+    """只接受逐文件 SHA256 完成证据；旧尺寸清单明确未就绪，需要显式重装。"""
+    from ..retrieval.model_worker import verify_model_manifest
+    return verify_model_manifest(target, manifest.get(key))
+
+
+def _discard_untrusted_weights(target: Path, manifest: dict, key: str) -> None:
+    """只撤销不可信完成标记；保留原文件，由 worker staging 原子换入新下载。"""
+    from ..retrieval.model_worker import COMPLETION_MARKER
+    if not _weights_trusted(target, manifest, key):
+        (target / COMPLETION_MARKER).unlink(missing_ok=True)
 
 
 def install_local_model(paths: "AppPaths | None" = None, *, cancel: "threading.Event | None" = None) -> dict:
     resolved = paths or get_app_paths()
-    cancel_event = cancel or threading.Event()
-    if external_runtime_ready(resolved) and external_embed_ready(resolved):
-        return model_install_status(resolved)
-    uv = uv_path(resolved)
-    lock = model_lock_path(resolved)
-    worker = worker_script(resolved)
-    if uv is None or not uv.is_file():
-        raise ModelInstallError("uv_missing", "安装组件缺少 uv，基础程序仍可正常使用。")
-    if not lock.is_file() or not worker.is_file():
-        raise ModelInstallError("bundle_incomplete", "安装组件文件不完整，基础程序仍可正常使用。")
+    try:
+        cancel_event = cancel or threading.Event()
+        if external_runtime_ready(resolved) and external_embed_ready(resolved):
+            return model_install_status(resolved)
+        uv = uv_path(resolved)
+        lock = model_lock_path(resolved)
+        worker = worker_script(resolved)
+        if uv is None or not uv.is_file():
+            raise ModelInstallError("uv_missing", "安装组件缺少 uv，基础程序仍可正常使用。")
+        if not lock.is_file() or not worker.is_file():
+            raise ModelInstallError("bundle_incomplete", "安装组件文件不完整，基础程序仍可正常使用。")
 
-    root = runtime_root(resolved)
-    root.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env.update({
-        "UV_PYTHON_INSTALL_DIR": str(root / "python"),
-        "UV_CACHE_DIR": str(root / "cache"),
-        "UV_LINK_MODE": "copy",
-        "UV_NO_CONFIG": "1",
-        "PYTHONUTF8": "1",
-    })
-    log_path = install_log_path(resolved)
-    _rotate_install_log(log_path)
-    with _install_lock(resolved), open(log_path, "wb", buffering=0) as log:
-        try:
+        root = runtime_root(resolved)
+        root.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env.update({
+            "UV_PYTHON_INSTALL_DIR": str(root / "python"),
+            "UV_CACHE_DIR": str(root / "cache"),
+            "UV_LINK_MODE": "copy",
+            "UV_NO_CONFIG": "1",
+            "PYTHONUTF8": "1",
+        })
+        log_path = install_log_path(resolved)
+        _rotate_install_log(log_path)
+        with _install_lock(resolved), open(log_path, "wb", buffering=0) as log:
             _ensure_free_space(resolved)
             _write_status(resolved, state="running", stage="python", message="正在准备独立的本地模型运行环境…", can_cancel=True)
             if not runtime_python(resolved).is_file():
@@ -348,41 +371,50 @@ def install_local_model(paths: "AppPaths | None" = None, *, cancel: "threading.E
                 "--torch-backend", "cpu",
             ], env=env, log=log, cancel=cancel_event)
 
+            existing_manifest = read_ready_manifest(resolved)
             _write_status(resolved, state="running", stage="model", message="正在下载并核验约 2.2 GB 重排模型权重…", can_cancel=True)
+            _discard_untrusted_weights(model_dir(resolved), existing_manifest, "model_files")
             _run_command([
                 str(runtime_python(resolved)), str(worker), "--download", str(model_dir(resolved)),
             ], env=env, log=log, cancel=cancel_event)
-            if not model_files_ready(model_dir(resolved)):
+            if not completed_model_manifest(model_dir(resolved)):
                 raise ModelInstallError("model_incomplete", "模型下载完成但文件不完整。")
 
             _write_status(resolved, state="running", stage="model", message="正在下载并核验约 0.5 GB 嵌入模型权重…", can_cancel=True)
+            _discard_untrusted_weights(embed_model_dir(resolved), existing_manifest, "embed_files")
             _run_command([
                 str(runtime_python(resolved)), str(worker), "--download", str(embed_model_dir(resolved)), "--embed",
             ], env=env, log=log, cancel=cancel_event)
-            if not model_files_ready(embed_model_dir(resolved)):
+            if not completed_model_manifest(embed_model_dir(resolved)):
                 raise ModelInstallError("model_incomplete", "模型下载完成但文件不完整。")
 
             # 安装完成时一次性计算字节数，写进 READY manifest 与 status 缓存；
             # 之后 READY 状态查询直接读缓存，不再每次遍历 5 GB 目录。
             runtime_bytes = _dir_bytes(root / "venv")
             model_bytes = _dir_bytes(model_dir(resolved)) + _dir_bytes(embed_model_dir(resolved))
-            manifest = ready_manifest_path(resolved)
-            temporary = manifest.with_suffix(".tmp")
-            temporary.write_text(json.dumps(
+            manifest_path = ready_manifest_path(resolved)
+            temporary = manifest_path.with_suffix(".tmp")
+            payload = json.dumps(
                 _ready_manifest(resolved, lock, runtime_bytes=runtime_bytes, model_bytes=model_bytes),
-                ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(temporary, manifest)
-            return _write_status(
-                resolved, state="ready", stage="ready", message="本地精准重排已经就绪。",
-                runtime_bytes=runtime_bytes, model_bytes=model_bytes,
-            )
-        except ModelInstallError as exc:
-            state = "cancelled" if exc.code == "cancelled" else "error"
-            _write_status(resolved, state=state, stage="stopped", message=exc.message)
-            raise
-        except Exception as exc:  # noqa: BLE001
-            _write_status(resolved, state="error", stage="stopped", message="本地模型安装失败，可稍后重试；基础检索不受影响。")
-            raise ModelInstallError("unexpected", f"本地模型安装失败（{type(exc).__name__}）。") from exc
+                ensure_ascii=False, indent=1)
+            # READY 提交与取消置位共用同一把短临界区（cancel_model_install 在同一把
+            # _STATE_LOCK 里 set 事件）——取消先到就绝不发布 READY，按取消终态收尾。
+            with _STATE_LOCK:
+                if cancel_event.is_set():
+                    raise ModelInstallError("cancelled", "已取消本地模型安装。")
+                temporary.write_text(payload, encoding="utf-8")
+                os.replace(temporary, manifest_path)
+                return _write_status(
+                    resolved, state="ready", stage="ready", message="本地精准重排已经就绪。",
+                    runtime_bytes=runtime_bytes, model_bytes=model_bytes,
+                )
+    except ModelInstallError as exc:
+        state = "cancelled" if exc.code == "cancelled" else "error"
+        _write_status(resolved, state=state, stage="stopped", message=exc.message)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _write_status(resolved, state="error", stage="stopped", message="本地模型安装失败，可稍后重试；基础检索不受影响。")
+        raise ModelInstallError("unexpected", f"本地模型安装失败（{type(exc).__name__}）。") from exc
 
 
 def start_model_install(paths: "AppPaths | None" = None) -> dict:
@@ -407,8 +439,10 @@ def start_model_install(paths: "AppPaths | None" = None) -> dict:
 
 def cancel_model_install(paths: "AppPaths | None" = None) -> dict:
     resolved = paths or get_app_paths()
-    _CANCEL.set()
     with _STATE_LOCK:
+        # 与 install_local_model 的 READY 提交共用同一把锁：取消一旦置位，READY 提交前必看到
+        # （同一短临界区；两张锁序固定 STATE → STATUS，无反转）。
+        _CANCEL.set()
         process = _ACTIVE_PROCESS
     if process is not None and process.poll() is None:
         try:

@@ -6,14 +6,13 @@
 - 会话是浏览器登录态（30 天 TTL、可再生）；本模块是**长期 API 令牌**（无 TTL，
   用户手动吊销才失效），发给用户自己的 MCP 客户端（Kimi Code / Claude 等）做
   `Authorization: Bearer` 鉴权。
-- 落盘只存 **sha256 摘要**（会话库存的是原始 token——那里的 token 本身就是会话
-  句柄；这里是长期凭证，按 API key 惯例摘要化，泄库不泄可用凭证）。
+- 会话和长期令牌均只持久化 **sha256 摘要**；原始句柄只交付给客户端，摘要不能用作凭据。
 - 令牌**可再生**（丢了 = 用户到设置里重新生成，不丢任何账户数据），故加载策略与
   会话库一致：缺失/损坏 → 空库（绝不阻断应用），与账户库的 fail-closed 相反。
 
 单一真源：webapp 的令牌管理 API 与 mcp_server 的 TokenVerifier 都走本模块，
-两端各自缓存进程内副本、写时落盘（同一台进程内共享；多进程部署以盘为准、
-进程内缓存 `_hydrate` 一次性载入——与本项目会话库同款先例）。
+磁盘是配置持久化时的真源；每次在跨进程文件锁内重读并更新快照，撤销不依赖缓存 TTL，
+旧进程不得把已经撤销的凭据写回。
 
 路径：默认实例 userdata 层 `.userdata/mcp_tokens.json`（runtime_paths 单一真源），
 `BIODATA_MCP_TOKENS_FILE` 显式覆盖；绝不许落进仓库 `database/`（同 accounts 裁决）。
@@ -29,6 +28,8 @@ import secrets
 import threading
 from pathlib import Path
 from typing import Any
+from contextlib import contextmanager, nullcontext
+from ..corpus.fs_utils import file_critical_section
 
 from .runtime_paths import (
     assert_runtime_path,
@@ -125,11 +126,21 @@ def _save_tokens(path: Path) -> None:
     atomic_write_json(path, {"schema_version": 1, "tokens": _TOKENS})
 
 
+@contextmanager
+def _transaction(store_path):
+    with _LOCK:
+        try:
+            with file_critical_section(Path(str(store_path) + '.lock'), timeout=15) if store_path is not None else nullcontext():
+                yield
+        except (OSError, RuntimeError) as exc:
+            raise McpTokenError('token_store_unavailable', '接入凭据状态暂时不可读写，请稍后重试。') from exc
+
+
 def _hydrate(store_path: Path | None) -> None:
-    """调用方须持 `_LOCK`。进程内缓存非空不重读：内存是运行期真源，盘上只是快照。"""
-    if store_path is None or _TOKENS:
-        return
-    _TOKENS.update(_load_tokens(store_path))
+    """调用方持跨进程事务；每次从磁盘替换快照，吊销不能被旧内存复活。"""
+    if store_path is not None:
+        _TOKENS.clear()
+        _TOKENS.update(_load_tokens(store_path))
 
 
 def _public(rec: dict[str, Any]) -> dict[str, Any]:
@@ -148,7 +159,7 @@ def mint_token(account_id: str, username: str, label: str = "", *,
     label = (label or "").strip()[:_MAX_LABEL_CHARS]
     if not account_id:
         raise McpTokenError("bad_account", "账户信息缺失，无法生成令牌。")
-    with _LOCK:
+    with _transaction(store_path):
         _hydrate(store_path)
         owned = [d for d, r in _TOKENS.items() if r["account_id"] == account_id]
         if len(owned) >= _MAX_TOKENS_PER_ACCOUNT:
@@ -172,14 +183,14 @@ def mint_token(account_id: str, username: str, label: str = "", *,
 
 def list_tokens(account_id: str, *, store_path: Path | None = None) -> list[dict[str, Any]]:
     """该账户的令牌公开记录（按创建时间升序）。绝不包含明文/摘要。"""
-    with _LOCK:
+    with _transaction(store_path):
         _hydrate(store_path)
         return [_public(r) for r in _TOKENS.values() if r["account_id"] == account_id]
 
 
 def revoke_token(account_id: str, token_id: str, *, store_path: Path | None = None) -> bool:
     """吊销令牌（仅属主可吊销——按 account_id 归属过滤）。返回是否真删到。"""
-    with _LOCK:
+    with _transaction(store_path):
         _hydrate(store_path)
         for digest, rec in list(_TOKENS.items()):
             if rec["token_id"] == token_id and rec["account_id"] == account_id:
@@ -195,7 +206,7 @@ def resolve_token(raw_token: str | None, *, store_path: Path | None = None) -> d
     dict 按摘要直接命中 = 天然常数时间比对（不逐条 hmac 也比逐条扫强）。"""
     if not raw_token or not raw_token.startswith(_TOKEN_PREFIX):
         return None
-    with _LOCK:
+    with _transaction(store_path):
         _hydrate(store_path)
         rec = _TOKENS.get(_digest(raw_token))
         if rec is None:

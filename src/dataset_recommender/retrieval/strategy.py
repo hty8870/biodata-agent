@@ -20,8 +20,9 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from .normalizer import DatasetRecord
-from .query_parser import DIMENSIONS, PS_EXECUTABLE, QueryIntent
+from .query_parser import PS_EXECUTABLE, QueryIntent
 from .retriever import passes_hard_filter
+from ..domain.registry import domain_dimensions
 
 STRATEGY_MODES = ("fixed", "auto")
 
@@ -79,7 +80,7 @@ def classify_strategy(
       preferred_recall   —— 首选语义重排后端（默认 cross_encoder；可选 dense/vector）。
       top_k / n_survivors—— top_k 参与 precise 上界；n_survivors 可外部注入（避免重复扫描）。
     """
-    n_pos = sum(1 for d in DIMENSIONS if intent.constraints.get(d))
+    n_pos = sum(1 for d in domain_dimensions() if intent.constraints.get(d))
     semantic_terms = sorted({str(t).strip().lower() for t in intent.free_text_terms if str(t).strip()})
     if n_survivors is None:
         n_survivors = count_survivors(records, intent)

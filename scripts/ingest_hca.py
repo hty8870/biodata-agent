@@ -12,16 +12,21 @@
   `map_species` 映射成词表通用名（Human/Mouse…），否则 species 约束会静默把它们全滤掉。
 
 设计约束（与 ingest_cellxgene.py 一致）：
-- **不动 `database/base/`**：官方 54 题评测冻结在原始 767 条 10x 语料；外部库默认关（sources=None 只装基础语料）→
+- **不动 `database/base/`**：官方 54 题评测冻结在 784 条 base 语料；外部库默认关（sources=None 只装基础语料）→
   确定性二元门不受影响。
 - **运行时不联网**：一次性抓快照落地，查询期只读本地 JSON。
 - 零第三方依赖（纯标准库 urllib）。复用 `ingest_cellxgene` 的物种/平台/清洗助手，保持单一真源。
 
 数据许可：HCA DCP 数据面向开放科研；Azul 索引为公开、面向程序化访问的官方 REST 接口，仅抓元数据 + 门户直链。
 
+快照写入安全（助手来自 ingest_cellxgene，四个 ingest 脚本同口径）：完整默认运行才写
+`database/external/hca.json`；`--limit` 快速自测必须显式 `--out`；`--dry-run` 不写任何文件；
+抓取/分页失败或零记录时非零退出且原快照字节不变。
+
 用法：
-    py -3 scripts/ingest_hca.py            # 抓全量 → database/external/hca.json
-    py -3 scripts/ingest_hca.py --limit 50 # 只取前 N 条（快速自测）
+    py -3 scripts/ingest_hca.py                          # 抓全量 → database/external/hca.json
+    py -3 scripts/ingest_hca.py --dry-run                # 只抓取/打印，不写任何文件
+    py -3 scripts/ingest_hca.py --limit 50 --out /tmp/hca.json   # 快速自测（不得覆写正式快照）
 """
 from __future__ import annotations
 
@@ -40,6 +45,7 @@ API_BASE = "https://service.azul.data.humancellatlas.org/index/projects"
 SOURCE_LABEL = "Human Cell Atlas"
 EXPLORE_TMPL = "https://data.humancellatlas.org/explore/projects/{pid}"
 OUT_PATH = REPO_ROOT / "database" / "external" / "hca.json"
+MAX_PAGES = 50  # 安全上限：50 页（每页 75）远超 ~532；到顶仍有 next 视为不完整（不落盘）
 
 # 健康态标签（normal/healthy/control）＝ 源库**显式声明健康** → 统一写入规范值 `"normal"`。
 # 口径：与 CELLxGENE / EBI SCEA / ArrayExpress 一致——「健康」
@@ -156,14 +162,26 @@ def fetch(url: str) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="只取前 N 条（0=全量）")
+    ap.add_argument("--out", type=str, default=None,
+                    help=f"输出路径（默认 {OUT_PATH}）；--limit 快速自测必须显式指定")
+    ap.add_argument("--dry-run", action="store_true", help="只抓取/打印，不写任何文件")
     args = ap.parse_args()
+
+    # --limit 自测不得覆写正式快照；--dry-run 不写盘，故不进入 partial 判定（允许二者组合）。
+    partial = bool(args.limit) and not args.dry_run
+    try:
+        out_path = cxg.resolve_out_path(args.out, OUT_PATH, partial=partial,
+                                        script_name="ingest_hca.py")
+    except cxg.SnapshotTargetError as exc:
+        print(f"REFUSED: {exc}")
+        return 2
 
     url = f"{API_BASE}?size=75"   # Azul 上限 size<=75
     records: list[dict] = []
     seen: set[str] = set()
     page = 0
     print(f"fetching {API_BASE} ...")
-    while url and page < 50:  # 安全上限：50 页（每页 75）远超 ~532
+    while url and page < MAX_PAGES:
         page += 1
         try:
             payload = fetch(url)
@@ -192,7 +210,13 @@ def main() -> int:
             url = (payload.get("pagination") or {}).get("next")
         print(f"  page {page}: {len(records)} records so far")
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if url:  # 页数上限后仍有 next → 集合不完整，不得落盘（部分快照会静默丢记录）
+        print(f"INCOMPLETE: 已取 {page} 页（上限 {MAX_PAGES}）但仍有下一页，不写快照。")
+        return 2
+    if not records:
+        print("没有取到任何记录，不写快照。")
+        return 1
+
     payload_out = {
         "source": SOURCE_LABEL,
         "source_url": API_BASE,
@@ -200,8 +224,11 @@ def main() -> int:
         "record_count": len(records),
         "records": records,
     }
-    OUT_PATH.write_text(json.dumps(payload_out, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"wrote {len(records)} records -> {OUT_PATH}")
+    if args.dry_run:
+        print(f"--dry-run：不写任何文件（{out_path} 未动）。")
+        return 0
+    cxg.write_snapshot(out_path, payload_out, indent=2)
+    print(f"wrote {len(records)} records -> {out_path}")
 
     n_fastq = sum(1 for r in records if r["has_raw_data"])
     specs: dict[str, int] = {}

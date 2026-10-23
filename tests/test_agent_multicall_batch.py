@@ -315,7 +315,7 @@ def test_write_cite_export_without_placeholder_truncates():
     在批中照旧截断整尾（其后 db_status 也可能写给后状态，回炉重判），与的 search_online
     写动词同口径；**矩阵内有占位**才放行（见下一条）。"""
     calls = [
-        {"name": "rank", "args": {"query": "人类肺", "display": True}},
+        {"name": "rank", "args": {"query": "人类肺"}},
         {"name": "cite_export", "args": {"quoted": "导出第一条引文"}},
         {"name": "curate_db_status", "args": {"quoted": "完了看看库里多少条"}},
     ]
@@ -338,7 +338,7 @@ def test_placeholder_grounded_cite_export_enters_batch(monkeypatch):
     }
     monkeypatch.setattr(agent_exec, "LOOP_TOOLS", table)
     calls = [
-        {"name": "rank", "args": {"query": "人类肺", "display": True}},
+        {"name": "rank", "args": {"query": "人类肺"}},
         {"name": "cite_export",
          "args": {"quoted": "导出第一条引文", "uids": ["$1.top[0].dataset_uid"]}},
     ]

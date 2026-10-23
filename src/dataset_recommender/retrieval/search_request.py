@@ -14,7 +14,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from . import vocabulary as V
+from . import query_lexicon as V
+from ..domain.registry import domain_catalog
 
 
 # alias 顺序有语义：`resolve_search_request` 与 `source_alias_spans` 都只认**声明顺序里第一个命中的**
@@ -97,22 +98,26 @@ def _prefer_prefix_re() -> "re.Pattern[str]":
 SOURCE_PREFER_PREFIX_RE = _prefer_prefix_re()
 
 
-#: 「10x/tenx」裸简称专属的 assay 前瞻护栏词表缓存（见 _token_pattern）
+#: 「10x/tenx」裸简称专属的 assay 前瞻护栏词表缓存（见 _token_pattern）；
+#: 按活动领域 catalog 对象身份键控——换域自动重建，不串词表（与 domain.vocab_tools 同纪律）。
 _ASSAY_GUARD_WORDS: frozenset[str] | None = None
+_ASSAY_GUARD_WORDS_CATALOG_ID: int | None = None
 
 
 def _assay_guard_words() -> frozenset[str]:
-    """「10X Multiome / 10X ATAC」这类**试剂盒名**的尾巴词：vocabulary CATALOG assay 维的
+    """「10X Multiome / 10X ATAC」这类**试剂盒名**的尾巴词：活动领域 catalog assay 维的
     ASCII 别名/target（单一真源，词表扩了自动跟随）。CJK 别名刻意不收——「10x 的多组学数据」
     里的「10x」仍按来源读（歧义句往「不静默改检索池」的保守方向倒）。"""
-    global _ASSAY_GUARD_WORDS
-    if _ASSAY_GUARD_WORDS is None:
+    global _ASSAY_GUARD_WORDS, _ASSAY_GUARD_WORDS_CATALOG_ID
+    catalog = domain_catalog()
+    if _ASSAY_GUARD_WORDS is None or _ASSAY_GUARD_WORDS_CATALOG_ID != id(catalog):
         _ASSAY_GUARD_WORDS = frozenset(
             str(alias).lower().strip()
-            for entry in V.CATALOG.get("assay", [])
+            for entry in catalog.get("assay", [])
             for alias in list(entry.get("aliases", [])) + list(entry.get("targets", []))
             if re.fullmatch(r"[a-z0-9][a-z0-9-]{2,}", str(alias).lower().strip())
         )
+        _ASSAY_GUARD_WORDS_CATALOG_ID = id(catalog)
     return _ASSAY_GUARD_WORDS
 
 

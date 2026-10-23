@@ -12,8 +12,9 @@
 请在我这台机器上代我完成 BioData Agent 的本地 stdio MCP 接入与验收。你全程只做我明确授权的最小动作；
 涉及写用户配置、下载/解压文件、重启客户端时，先说明你要做什么再执行，不要使用任何关闭安全审批的旁路参数。
 
-【背景】BioData Agent 是公开单细胞数据集目录的中文检索/推荐软件，本地跑，MCP 服务器暴露 19 个工具
-（16 只读 + 3 写盘）。要接入的是它的 **MCP 服务器**，不是网页端。
+【背景】BioData Agent 是公开单细胞数据集目录的中文检索/推荐软件，本地跑，MCP 服务器暴露 25 个工具
+（19 个基础：16 只读 + 3 写盘，另有 6 个高层 Agent 工具用于持久会话、项目、复盘与经授权的独立学习（agent_learning默认关闭，候选批准/替代须网页真人逐条确认））。要接入的是它的
+**MCP 服务器**，不是网页端。
 
 【硬约束】
 1. 项目/安装目录只读：不改源码、不删改数据、不在项目里建虚拟环境或缓存。写盘只允许发生在
@@ -27,11 +28,11 @@
   「BioData Agent」的目标路径即可查到安装目录；exe 就在安装目录根下】。
 - 源码版（从源码包跑）：定位包含 `mcp_server.py` 的目录【请自行探测确认】，用该项目的虚拟环境
   Python【请自行探测确认】按 `python mcp_server.py` 方式运行（详见 MCP_安装教程.md 路线 B）。
-先跑一次 `--version` 确认产物：安装版 exe 或源码版 python 都应打印 `biodata-mcp 1.34.0 | MCP SDK …`。
+先跑一次 `--version` 确认产物：安装版 exe 或源码版 python 都应打印 `biodata-mcp 1.38.0 | MCP SDK …`。
 
 【步骤 2 · 真协议自检（--selfcheck）】
 运行 `BioDataAgentMCP.exe --selfcheck`（安装版）或 `<venv-python> mcp_server.py --selfcheck`（源码版）。
-通过标准：退出码 0 且末行含 `SELFCHECK_OK tools=19 ... download_index_ready=true`。
+通过标准：退出码 0 且末行含 `SELFCHECK_OK tools=25 ... download_index_ready=true`。
 不通过就把输出原样给我，按 MCP_安装教程.md「7. 排错」定位，不要绕过。
 
 【步骤 3 · 注册到客户端（stdio，command/args/env 三要素）】
@@ -39,6 +40,9 @@
 - `command`：安装版 = BioDataAgentMCP.exe 的绝对路径（args 为空，exe 本身就是服务器）；
   源码版 = venv Python 绝对路径（args = [mcp_server.py 绝对路径]）。
 - `env`：至少 `PYTHONUTF8=1`（源码版建议加 `PYTHONDONTWRITEBYTECODE=1`；安装版 exe 不需要）。
+  可选 `BIODATA_MCP_ACCESS_TOKEN=<本实例签发的在线接入令牌>`：不设 = 高层工具以本机身份运行、与同一
+  实例的网页版「本机」同一范围；设了就必须是本实例「接入 AI 助手」里生成且未吊销的那一枚，
+  否则启动即失败（不要用线上服务器的令牌，也不要硬编账户 ID）。
 - 服务器名统一用 `biodata`。
 按你的客户端对应方式登记，并先查重（同名已存在且路径一致就跳过）：
 - Codex：`codex mcp get biodata` → `codex mcp add biodata --env ... -- <command> [args...]`。
@@ -70,7 +74,7 @@ Kimi Code / Codex 按各自文档【请自行探测确认】）。放好后告�
 【步骤 6 · 重启与验收】
 1. 让我重启客户端（或你说明重启方法由我执行）。
 2. 重启后调一次 `biodata_status`：要求 ok=true、corpus_total>0、download_index_ready=true，
-   并列出全部 19 个工具名。不要用 shell 或网页代替 MCP 调用。
+   并列出全部 25 个工具名。不要用 shell 或网页代替 MCP 调用。
 3. 若配了 LLM，再调 `biodata_llm_status`（check_connection=false），只汇报 configured/provider/model，
    不回显路径或秘密。
 

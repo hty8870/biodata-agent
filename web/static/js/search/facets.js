@@ -5,7 +5,7 @@
    cbLogPush/swSync、search 的 runRecommend 经 import 取（facets↔board / facets↔search 成环，
    绑定都只在函数体内使用，ESM 允许）。
    search/board/results/shell 经 import 取本文件导出（绞杀桥已全退役）。 */
-import { MOTION, $, escapeHtml, prettyFacetValue, toast } from "#core";
+import { $, escapeHtml, prettyFacetValue, toast } from "#core";
 import { cbLabelForFilterId } from "#board_core";
 import { _facetFilters, _queryHits, _suppressed, setFacetState } from "#results";
 import { USAGE_KINDS } from "#usage_core";
@@ -16,14 +16,15 @@ import { runRecommend } from "#search";
 function _facetIdx(dim, value) { return _facetFilters.findIndex((f) => f.dim === dim && f.value === value); }
 
 /* ============ 数据细化「提交」暂存（用户 2026-07-24 反馈）============
-   在侧栏「数据细化」面板里，勾选分面取值不再逐点立即重搜，而是先攒进草稿 _facetStage，点「提交」才一次性应用，
+   在筛选抽屉里（rp2 起 #facetBar 恒住右侧抽屉），勾选分面取值不再逐点立即重搜，而是先攒进草稿 _facetStage，点「提交」才一次性应用，
    并把这批改动拼成一条「加入：X；去掉：Y」的消息进对话（如手绘图 2）。
    **单一 choke point**：_facetStage 的清空只发生在 renderFacets 顶部——任何真检索/回放都会走到 renderFacets，
    于是「攒了草稿又点了别的动作（撤销/忽略/新查询…）」时草稿被丢弃、grid 高亮回退（可见反馈），
    不会散在各按钮里各自漏一处。renderFacets 只读 _facetStage 渲染 grid 高亮 + 提交条，不写。 */
 let _facetStage = null;   // null=未暂存（已应用集即真相）；数组=待提交草稿（_facetFilters 的一份副本再编辑）
-// 暂存态仅在分面 grid 落在侧栏「数据细化」面板时启用（那儿才有「提交」按钮）；结果区/移动端无提交入口 → 保持立即应用。
-function facetStageActive() { const g = $("facetGroups"); return !!(g && g.closest("#sideFacetBody")); }
+// 暂存态在分面 grid 落在筛选抽屉里时启用（那儿才有「提交」按钮）。rp2 起 #facetBar 恒住抽屉，
+// 故本判定在查询页恒真；无抽屉的页面（dataset.html 无 #facetGroups）恒假、保持逐点立即应用兜底。
+function facetStageActive() { const g = $("facetGroups"); return !!(g && g.closest("#facetDrawer")); }
 function facetSameValue(a, b) { return a.dim === b.dim && a.value === b.value; }
 function facetSameSet(a, b) {
     if (a.length !== b.length) return false;
@@ -71,19 +72,21 @@ export function facetStageSubmit() {
     const parts = [];
     if (diff.added.length) parts.push("加入：" + diff.added.map(label).join("、"));
     if (diff.removed.length) parts.push("去掉：" + diff.removed.map(label).join("、"));
-    cbLogPush("refine", parts.join("；"));   // 一整批改动＝对话里的一条用户消息
-    swShowBoard();   // 提交即落到「继续对话」页签：回复（进度泡→完成摘要）在那里上演，别让用户切过去找
-    // 侧栏「数据细化」模式下 toggleFacet 会在顶部提前 return（走草稿），所以那一处的打点
+    const message = parts.join("；");
+    cbLogPush("refine", message);   // 一整批改动＝对话里的一条用户消息
+    facetDrawerSet(false);   // 提交即关抽屉（_facetStage 已清空，不会再 toast）；回复在「对话」页签上演
+    swShowBoard();   // 提交即落到「对话」页签：回复（进度泡→完成摘要）在那里上演，别让用户切过去找
+    // 抽屉暂存模式下 toggleFacet 会在顶部提前 return（走草稿），所以那一处的打点
     // 覆盖不到这条路径 —— 必须在**提交**这里补记（也更准：草稿阶段的勾选可能被取消掉）。
     diff.added.concat(diff.removed).forEach(function (f) {
         usageLog(USAGE_KINDS.facet, { d: String(f.label || f.dim || ""), dim: String(f.dim || ""), v: String(f.display || f.value || "") });
     });
-    runRecommend({ keepFacets: true });
+    runRecommend({ keepFacets: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
 }
 export function facetStageCancel() { _facetStage = null; renderFacetStage(); }
 /* 草稿**将被丢弃**时的统一出口：核心承诺是「未提交的改动不静默丢失」。有几条会绕过提交、
-   又把草稿静默清掉的路径——① 攒着草稿时收起侧栏/缩窗 → placeFacetBar 把分面条搬出侧栏，facetStageActive() 翻假，
-   下一次点击落进「立即应用」分支绕开草稿；② 提交在途时又攒了一份新草稿，这次检索回来时被 choke point 清掉。
+   又把草稿静默清掉的路径——① 攒着草稿时关掉筛选抽屉（× 钮 / Esc）→ facetDrawerSet(false) 走这里；
+   ② 提交在途时又攒了一份新草稿，这次检索回来时被 renderFacets 顶部 choke point 清掉。
    两处都改成走这里：脏就 toast 一声再清，UI 同步。 */
 function facetStageDiscardIfDirty() {
     if (_facetStage !== null && !facetSameSet(_facetStage, _facetFilters)) toast("未提交的筛选选择已放弃");
@@ -92,26 +95,28 @@ function facetStageDiscardIfDirty() {
 }
 
 function toggleFacet(dim, value, display, label) {
-    if (facetStageActive()) { facetStageToggle(dim, value, display, label); return; }   // 侧栏数据细化：攒进草稿，等「提交」
-    // 结果区 / 移动端（没有「提交」按钮的场合）：保持逐点立即应用（旧行为）。
+    if (facetStageActive()) { facetStageToggle(dim, value, display, label); return; }   // 筛选抽屉：攒进草稿，等「提交」
+    // 无抽屉的页面（dataset.html 没有 #facetDrawer，facetStageActive 恒假）：保持逐点立即应用（旧行为）。
     const i = _facetIdx(dim, value);
     const removing = i >= 0;
-    if (removing) _facetFilters.splice(i, 1);                     // 再点已选＝取消
+    if (removing) setFacetState({ facetFilters: _facetFilters.filter((_, index) => index !== i) });                     // 再点已选＝取消
     else {
         setFacetState({ facetFilters: _facetFilters.filter((f) => f.dim !== dim) });   // 同维度单选：换值（重赋值经属主 setter）
-        _facetFilters.push({ dim, value, display, label });
+        setFacetState({ facetFilters: _facetFilters.concat({ dim, value, display, label }) });
     }
-    cbLogPush("refine", (removing ? "去掉：" : "加：") + (label || dim) + " = " + prettyFacetValue(display || value));
+    const message = (removing ? "去掉：" : "加：") + (label || dim) + " = " + prettyFacetValue(display || value);
+    cbLogPush("refine", message);
     usageLog(USAGE_KINDS.facet, { d: String(label || dim || ""), dim: String(dim || ""), v: String(display || value || "") });
-    runRecommend({ keepFacets: true });
+    runRecommend({ keepFacets: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
 }
-function removeFacet(dim, value) {
+export function removeFacet(dim, value) {
     const i = _facetIdx(dim, value);
     if (i >= 0) {
         const f = _facetFilters[i];
-        cbLogPush("refine", "去掉：" + ((f && (f.label || f.dim)) || dim) + " = " + prettyFacetValue((f && (f.display || f.value)) || value));
-        _facetFilters.splice(i, 1);
-        runRecommend({ keepFacets: true });
+        const message = "去掉：" + ((f && (f.label || f.dim)) || dim) + " = " + prettyFacetValue((f && (f.display || f.value)) || value);
+        cbLogPush("refine", message);
+        setFacetState({ facetFilters: _facetFilters.filter((_, index) => index !== i) });
+        runRecommend({ keepFacets: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
     }
 }
 /* 就地切换一条**原始命中**（查询语句解析出的硬约束）的生效状态：
@@ -123,17 +128,16 @@ export function toggleQueryHit(filterId) {
     if (!filterId) return;
     const i = _suppressed.indexOf(filterId);
     const restoring = i >= 0;
-    if (restoring) _suppressed.splice(i, 1);   // 恢复：该命中重新参与检索
-    else _suppressed.push(filterId);           // 忽略：后端检索前放宽该命中（按极性 filter_id，include/exclude 同维不连坐）
-    cbLogPush("refine", (restoring ? "恢复条件：" : "忽略条件：") + cbLabelForFilterId(filterId));
-    runRecommend({ keepFacets: true });
+    if (restoring) setFacetState({ suppressed: _suppressed.filter((value) => value !== filterId) });   // 恢复：该命中重新参与检索
+    else setFacetState({ suppressed: _suppressed.concat(filterId) });           // 忽略：后端检索前放宽该命中（按极性 filter_id，include/exclude 同维不连坐）
+    const message = (restoring ? "恢复条件：" : "忽略条件：") + cbLabelForFilterId(filterId);
+    cbLogPush("refine", message);
+    runRecommend({ keepFacets: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
 }
 
-/* 「查询条件」chips 行（#facetActive）的唯一渲染口。两处调用：
-   ① renderFacets：真检索落地，hits = _queryHits 去掉被忽略（_suppressed）的原始命中；
-   ② results.js applyRelaxation：放宽预览，hits = 预览**实际生效**的条件（原 query_constraints
-     去掉被放宽项；未收录词降级预览用后端 active_filters）。两处共用同一渲染，chip 结构/
-   「忽略」按钮行为不漂移。hits 为空且无细化筛选时整条收起（栏里不再放恢复入口；
+/* 「查询条件」chips 行（#facetActive）的唯一渲染口。唯一调用方 renderFacets：
+   真检索落地，hits = _queryHits 去掉被忽略（_suppressed）的原始命中。
+   hits 为空且无细化筛选时整条收起（栏里不再放恢复入口；
    还原走 condBoard「已忽略」分区 / 对话「回退至此」/ 撤销步进条「恢复全部条件」）。
    2026-08-04 起：后加的细化筛选与原始命中**同款待遇**——同一 accent 底、同一「忽略」按钮，
    不再用 ❝ 标记/× 按钮/中性底区分来源；只剩 ⊘（排除）/ ↑（软偏好）两枚**行为**标记保留。 */
@@ -208,7 +212,7 @@ export function renderFacets(data) {
     // 当前命中的关键词」）：只显示当前真正在筛的条件（原始命中 + 后加的细化筛选），被忽略
     // （_suppressed）的原始命中**整条不渲染**（不再灰显残留），增删历史交给对话记录/「回退至此」。
     // _queryHits 快照仍保留被忽略的维度（撤销帧/条件板还原要用），只是渲染层过滤掉它们。
-    // 渲染走 renderActiveChips（唯一渲染口；放宽预览也用它，见 results.js applyRelaxation）。
+    // 渲染走 renderActiveChips（唯一渲染口）。
     renderActiveChips(_queryHits.filter((g) => !_suppressed.includes(g.filter_id || g.dim)));
 
     // 可细化维度分组
@@ -228,83 +232,42 @@ export function renderFacets(data) {
     // 整条：有查询命中约束 / 已细化筛选 / 可细化维度，任一即显示
     bar.hidden = !(qc.length || _facetFilters.length || facets.length || _suppressed.length);
     renderFacetStage();   // grid 刚重建 → 同步暂存高亮 + 提交条（此刻 _facetStage 已在顶部清空，故为干净态）
-    placeFacetBar();   // 有活跃筛选 → 分面条移入左侧栏下半；否则留在结果区上方
+    placeFacetBar();   // 同步结果头行「筛选」入口钮显隐 + 收口 swSync（分面条本体恒住抽屉，不搬家）
 }
-/* 分面条的落位：有活跃筛选且侧栏展开 → 移入左侧栏「数据细化」面板（侧栏纵向二分）；
-   否则（无筛选 / 侧栏收起）→ 回到结果区上方原位。侧栏收起时回退到上方，保证任何情况下都能看到并移除筛选。
-   同一个 #facetBar DOM 节点在两处间搬家（appendChild 保留其已绑定的点击监听），不重复渲染。 */
-export function placeFacetBar(animateNav = true, animateFade = animateNav) {
+/* 分面条的落位（2026-10-11 rp2 起）：#facetBar 恒住右侧筛选抽屉 #facetDrawerBody，**不再搬家**
+   （单通道：桌面 / 移动 / 交换态同一抽屉；旧版「侧栏面板 ↔ 结果区上方」双宿主退役）。
+   本函数只剩两件事：① 结果头行「筛选」入口钮显隐——唯一判据 = renderFacets 的 bar.hidden
+   （有查询命中 / 已细化 / 可细化维度 / 被忽略项任一即有内容）；② 收口 swSync——
+   shell.js 收展侧栏/切视图、results.js/search.js 重置等调用方都指望这条链刷新侧栏工作卡。
+   刻意不加 typeof 守卫：board.js 在 boot.js 之前加载，运行期必定已定义；
+   加守卫只会把「函数名打错」变成永久静默短路。 */
+export function placeFacetBar() {
     const bar = $("facetBar"); if (!bar) return;
-    // 有分面内容（!bar.hidden）且侧栏展开且非移动端 → 分面条常驻左侧栏「数据细化」卡（不再要求在查询视图：离开查询页时卡还在、只淡出、导航保持两列）。
-    // 否则（无分面 / 侧栏收起 / 移动端）→ 回到结果区上方原位。移动端排除（innerWidth>780）：透明抽屉两卡间缝会透出深色遮罩成暗带。
-    const useSidebar = !bar.hidden && !document.body.classList.contains("side-closed") && window.innerWidth > 780;
-    // 分面条**将被搬出**侧栏（收起侧栏 / 缩到移动端断点 / 无分面）→ 暂存模式随之失效（facetStageActive 靠 grid 是否在
-    // #sideFacetBody 判定）。若此时还攒着未提交草稿，就地丢弃并提示——否则草稿留着，下一次点击落进「立即应用」分支静默绕过它
-    // renderFacets 末尾也会调 placeFacetBar，但那时草稿已被 choke point 清空，这里不误报。
-    if (!useSidebar) facetStageDiscardIfDirty();
-    if (useSidebar) {
-        const host = $("sideFacetBody");
-        if (host && bar.parentElement !== host) host.appendChild(bar);
-        setFacetsActive(true, animateNav);
-    } else {
-        const wrap = $("resultsWrap"), grid = $("resultsGrid");
-        // 回到 grid 之前的原位。2026-08-16 起：视图交换态 grid 整节点搬在侧栏 #sideBoardScroll，
-        // 不是 wrap 的子节点——insertBefore 锚点非子节点会抛 NotFoundError，把本函数末尾的 swSync
-        // 整条落位链炸断（交换态收起侧栏/过断点时真实踩到）。锚点不在就退化为 append（末尾）。
-        if (wrap && grid && bar.parentElement !== wrap) {
-            if (grid.parentElement === wrap) wrap.insertBefore(bar, grid);
-            else wrap.appendChild(bar);
-        }
-        setFacetsActive(false, animateNav);
-    }
-    syncFacetsCard(animateFade);   // 数据细化卡可见性：仅查询视图可见，离开淡出、回来淡入（导航卡不受影响）
-    // 侧栏工作卡（数据细化 / 对话记录 双模式）：可用性一变就重新对齐开关与整卡可见性。
-    // **必须挂在这里，不能挂在 syncFacetsCard 末尾**——那个函数有两个提前 return
-    //（无 gsap / reduced-motion·隐藏页·animate=false），收展侧栏走的正是第二个，
-    // 挂在末尾的调用永远执行不到：卡片一直 hidden、页签一直 disabled，看起来像功能没做。
-    // 这就是本项目反复栽的「守卫把代码变成不可达」那一类，真机第一次验证就抓到了。
-    // 刻意不加 typeof 守卫：board.js 在 boot.js 之前加载，运行期必定已定义；
-    // 加守卫只会把「函数名打错」变成永久静默短路。
+    const btn = $("facetOpenBtn");
+    if (btn) btn.hidden = bar.hidden;
     swSync();
 }
-/* 切换侧栏双卡片布局：导航卡在「填满 ↔ 内容高（收拢）」间切换，用 GSAP FLIP 给高度变化播平滑动画（导航向上收缩），
-   数据细化卡淡入下滑登场。仅在状态真正变化时播；reduced-motion / 无 GSAP 时直接切类（隐藏页 rAF 暂停也只是不播动画、状态照切）。 */
-let _facetsSplit = false;
-function setFacetsActive(active, animate = true) {
-    const changed = active !== _facetsSplit;
-    _facetsSplit = active;
-    const card = $("sideNavCard"), navEl = $("nav");
-    // 直接切类不播动画（瞬时、布局正确）的情形：状态没变 / reduced-motion / 无 GSAP / 隐藏页 rAF 暂停 / animate=false（切视图·收展侧栏，非「出结果」）
-    if (!changed || !MOTION || !card || document.hidden || !animate) { document.body.classList.toggle("facets-active", active); return; }
-    // 仅正向（出结果→两列）给导航项做位移 FLIP：目标态是 grid（flex:0 0 auto + align-content:start → 卡高动画期间各项位置恒定、端点稳）。
-    // 反向目标是单列 flex（「设置」margin-top:auto 钉在随卡高变动的底部、端点不稳），只播卡高、项直接归位（反向多发生在切视图/无结果/收侧栏，导航重排非焦点）。
-    const items = (active && navEl) ? [...navEl.children] : [];
-    const firsts = items.map((el) => el.getBoundingClientRect());   // FLIP First：切布局前各项位置
-    const h0 = card.getBoundingClientRect().height;                 // 变前卡高（含在跑动画的中间值，作 FLIP 起点）
-    document.body.classList.toggle("facets-active", active);        // 应用新布局：导航 单列↔两列 + 卡 填满↔内容高
-    gsap.killTweensOf(card); card.style.height = "";                // 杀掉上一段未收尾的卡高 tween/inline，量准新自然高（否则收尾跳变）
-    const h1 = card.getBoundingClientRect().height;                 // 变后自然卡高
-    const lasts = items.map((el) => el.getBoundingClientRect());    // FLIP Last：新布局下各项的最终位（top-aligned、稳）
-    if (Math.abs(h0 - h1) > 1) gsap.fromTo(card, { height: h0 }, { height: h1, duration: 0.5, ease: "power3.inOut", clearProps: "height", overwrite: true });
-    // 导航项 FLIP：按中心点算位移（窄项落在原宽槽中心再滑向新格），项从原位平滑滑到新格 → 不再硬跳、「设置」不再从卡底瞬移
-    items.forEach((el, i) => {
-        const dx = (firsts[i].left + firsts[i].width / 2) - (lasts[i].left + lasts[i].width / 2);
-        const dy = (firsts[i].top + firsts[i].height / 2) - (lasts[i].top + lasts[i].height / 2);
-        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
-        gsap.fromTo(el, { x: dx, y: dy }, { x: 0, y: 0, duration: 0.5, ease: "power3.inOut", overwrite: true, clearProps: "transform" });
-    });
-}
-/* 数据细化卡的「可见性」：仅在查询视图(on-query)且有分面(facets-active)时可见；离开查询页淡出、回到查询页淡入。
-   与导航卡布局解耦——导航卡两列只看 facets-active（跨视图保持）；非查询视图由 app.css 的
-   `body:not(.on-query)` 规则把导航卡压回单列填满，所以离开查询页 = 本卡淡出 + 导航卡恢复单列。 */
-function syncFacetsCard(animate) {
-    const facets = $("sideFacets");
-    if (!facets) return;
-    const show = document.body.classList.contains("facets-active") && document.body.classList.contains("on-query");
-    if (typeof gsap === "undefined") { facets.style.visibility = show ? "visible" : "hidden"; facets.style.opacity = show ? "1" : "0"; return; }
-    // gsap.set 也带 overwrite（2026-08-03）：否则上一次 show 分支留下的 delay:0.1 延迟
-    // tween 会在 set(0) 之后照样开跑，把内联 autoAlpha 写回 1——与真实状态相反的样式残留。
-    if (!MOTION || document.hidden || !animate) { gsap.set(facets, { autoAlpha: show ? 1 : 0, y: 0, overwrite: true }); return; }
-    if (show) gsap.to(facets, { autoAlpha: 1, y: 0, duration: 0.42, ease: "power2.out", delay: 0.1, overwrite: true });
-    else gsap.to(facets, { autoAlpha: 0, y: -6, duration: 0.3, ease: "power2.in", overwrite: true });
+
+/* ============ 筛选抽屉（2026-10-11 rp2）============
+   「筛选」自侧栏页签摘出：唯一入口在结果头行 #facetOpenBtn，面板从屏幕右侧推入。
+   复用设置抽屉的 .drawer 范式（fixed 右贴、translateX 滑入、inert/aria-hidden 配对），
+   但**非模态**：不加遮罩、不进 trapDialogFocus——旧侧栏面板本与结果同屏并存，边看结果边挑条件。
+   关闭路径（× 钮 / Esc / 提交）都收口到 facetDrawerSet(false)：有未提交草稿先 toast 丢弃（不静默丢失）。 */
+export function facetDrawerIsOpen() { const d = $("facetDrawer"); return !!(d && d.classList.contains("open")); }
+export function facetDrawerSet(open) {
+    const d = $("facetDrawer");
+    if (!d || open === facetDrawerIsOpen()) return;
+    if (open) {
+        d.removeAttribute("inert");
+        d.setAttribute("aria-hidden", "false");
+        d.classList.add("open");
+        requestAnimationFrame(() => { const c = $("facetDrawerClose"); if (c) c.focus(); });
+    } else {
+        facetStageDiscardIfDirty();   // 旧版在「搬出侧栏」分支丢弃草稿，现收口到关抽屉
+        d.classList.remove("open");
+        d.setAttribute("aria-hidden", "true");
+        d.setAttribute("inert", "");
+        const btn = $("facetOpenBtn");
+        if (btn && !btn.hidden) btn.focus();
+    }
 }

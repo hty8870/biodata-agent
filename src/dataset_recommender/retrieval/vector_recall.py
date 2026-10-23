@@ -25,13 +25,13 @@
 from __future__ import annotations
 
 import math
-import sys
 import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Callable, Sequence
 
+from .ltr_features import ltr_feature_rows
 from .retriever import RetrievedCandidate
 from ..app.runtime_paths import get_app_paths
 
@@ -42,7 +42,13 @@ DEFAULT_RECALL_ALPHA = 0.5
 #: "rrf" = Reciprocal Rank Fusion——只用两路**名次**、不看分值尺度（余弦 ∈[0,1]、词面分
 #: 无上界，min-max 跨分布不稳定是被文献点名的那类；RRF 尺度无关、零调参，k=60 自
 #: Cormack 2009 至今是生产默认）。确定性可复现，仍只排存活集（0% 违规不变量不碰）。
-RECALL_FUSIONS = ("linear", "rrf")
+#: "ltr" = 学习排序融合（2026-09-10 LTR 实验批）：本地 RankNet MLP 对存活集逐条
+#: 打 9 维特征分（lex/vec/位置/逐维约束命中/raw 标志），模型契约见 models/ltr/ltr_spec.json，
+#: 特征构造单源 `ltr_features.ltr_feature_rows`（生产/离线共用，2026-09-30 队列② R1 抽离）；
+#: dense/vector 后端的缺省融合。模型缺失/依赖未装/任何异常 → 回退原默认（dense→linear、
+#: vector→rrf），与「未启用 ltr」逐位一致。
+RECALL_FUSIONS = ("linear", "rrf", "ltr")
+#: 安全默认/最终回退值，亦作 off 后端的遥测同值记录；dense/vector 的缺省融合见 recall_rerank 内解析。
 DEFAULT_RECALL_FUSION = "linear"
 RRF_K = 60
 DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
@@ -57,10 +63,13 @@ CrossScorer = Callable[["Sequence[tuple[str, str]]"], "list[float]"]
 # 已加载模型缓存：键=解析后的本地模型目录字符串。避免每次请求/每条查询重复加载。
 # 纪律（2026-08-15 触发点只缓存**成功**加载的模型（正缓存）；加载失败
 # （缺目录/缺依赖/异常）**不入缓存**——负缓存会把一次瞬时故障永久化成"必须重启进程才
-# 能恢复"。失败路径每次调用都重试，代价仅是一次目录存在性检查/导入探测，可忽略。
+# 能恢复"。暖路径核对完成标记及模型文件 stat，换代才重载；失败路径每次重试。
 _EMBEDDER_CACHE: "dict[str, Embedder]" = {}
 _CROSS_CACHE: "dict[str, CrossScorer]" = {}
-_WARNED: "set[str]" = set()
+# _WARNED 集合与 warn_once 判定 2026-10-01 起收敛到 retrieval/warn_once.py（家族共享同一
+# 集合对象）；此处保留私有别名兼容本模块与测试复位（_WARNED.clear()）的既有引用。
+from .warn_once import WARNED as _WARNED  # noqa: E402
+from .warn_once import warn_once_prefixed as _warn_once_prefixed  # noqa: E402
 _DETERMINISM_DONE = False
 #:（并发分流 r3 /）：模块级单飞锁——`_setup_determinism`（写全局
 #: os.environ）与两个模型缓存的 check-then-load 全程持锁。该竞态今天多请求并发即存在
@@ -73,9 +82,8 @@ _MODEL_LOCK = threading.Lock()
 # - **只缓存默认加载路径**（embedder 参数为 None、经 load_embedder 取得编码器）：注入
 #   embedder 是单测/评测的隔离接缝（同一文本在不同测试里对应不同 mock 向量），且其合同
 #   是「单批 enc([query, *texts])」——过缓存既污染测试隔离又改注入路径调用形状，故逐位不动。
-# - **键含模型目录**：不同模型对同一文本产出不同向量，缺目录键换模型即静默串味；解析口径
-#   与 load_embedder 的 `cache_key = str(resolved)` 同源（None → default_model_dir()），
-#   双处修改须同步。
+# - **键含模型目录及实际编码器代际**：同路径重装后的文档向量不能与旧编码器串味；
+#   代际由 model_worker.model_generation 单源提供，注入的无代际假体保持隔离接缝语义。
 # - **上限 2048**：基础语料 784 条 + 外部库扩展余量；每条 ~384 维 float 的 list（约 3KB），
 #   满载 ~6MB，有界不膨胀。
 # - **查询向量不缓存**（每次现编）：与查询强相关，缓存无意义且会跨查询污染。
@@ -96,6 +104,88 @@ def default_model_dir(model_name: str = DEFAULT_EMBEDDING_MODEL) -> Path:
 def default_cross_encoder_dir(model_name: str = DEFAULT_CROSS_ENCODER_MODEL) -> Path:
     """cross-encoder 重排模型目录 = model_root/cross_encoders/<name>（语义同上）。"""
     return get_app_paths().model_root / "cross_encoders" / model_name
+
+
+def default_ltr_dir() -> Path:
+    """LTR 融合模型目录 = model_root/ltr（含 ltr_mlp.pt 与 ltr_spec.json 特征契约）。"""
+    return get_app_paths().model_root / "ltr"
+
+
+#: LTR 打分器正缓存（与嵌入器同款纪律：只缓存成功加载，失败每次重试）。
+_LTR_SCORER_CACHE: "OrderedDict[str, Callable[[Sequence[Sequence[float]]], list[float]]]" = OrderedDict()
+
+
+def load_ltr_scorer(model_dir: "str | Path | None" = None):
+    """惰性加载 LTR 融合打分器（torch 仅在此刻才导入）。返回 callable(batch_features)->scores。
+
+    契约：目录须含 ltr_spec.json（feature_order/feature_mean/feature_std/model 结构）与
+    ltr_mlp.pt（nn.Sequential state_dict，Linear/ReLU 交替）。任何缺失/异常 → None（调用方回退）。
+    """
+    root = Path(model_dir) if model_dir else default_ltr_dir()
+    key = str(root)
+    if key in _LTR_SCORER_CACHE:
+        return _LTR_SCORER_CACHE[key]
+    spec_path = root / "ltr_spec.json"
+    weights_path = root / "ltr_mlp.pt"
+    if not spec_path.is_file() or not weights_path.is_file():
+        return None
+    try:
+        import json as _json
+
+        import torch  # 惰性导入：不启用 ltr 时零依赖代价
+
+        spec = _json.loads(spec_path.read_text(encoding="utf-8"))
+        model_spec = spec["model"]
+        layers: list = []
+        last = int(model_spec["input_dim"])
+        for width in model_spec["hidden_layers"]:
+            layers += [torch.nn.Linear(last, int(width)), torch.nn.ReLU()]
+            last = int(width)
+        layers.append(torch.nn.Linear(last, int(model_spec["output_dim"])))
+        net = torch.nn.Sequential(*layers)
+        net.load_state_dict(torch.load(weights_path, map_location="cpu", weights_only=True))
+        net.eval()
+        mean = torch.tensor(spec["feature_mean"], dtype=torch.float32)
+        std = torch.tensor(spec["feature_std"], dtype=torch.float32)
+        order = list(spec["feature_order"])
+
+        def _score(batch: "Sequence[Sequence[float]]") -> "list[float]":
+            with torch.no_grad():
+                x = torch.tensor([list(map(float, row)) for row in batch], dtype=torch.float32)
+                x = (x - mean) / std
+                return [float(v) for v in net(x).squeeze(-1).tolist()]
+
+        _score.ltr_feature_order = order  # 供调用方按契约名组特征向量
+        _LTR_SCORER_CACHE[key] = _score
+        return _score
+    except Exception as exc:  # noqa: BLE001（模型/依赖/契约损坏一律回退，不阻塞主路）
+        _warn_once(f"ltr_load::{key}", f"LTR 融合模型加载失败，回退默认融合：{exc!r}")
+        return None
+
+
+def _ltr_fused_order(
+    items: "list[RetrievedCandidate]",
+    dense: "list[float]",
+    intent: object,
+    trace: "dict | None",
+) -> "list[int] | None":
+    """LTR 融合排序：9 维推理期特征 → MLP 分 → 稳定降序。任何一步不可用 → None（调用方回退）。
+
+    特征构造本体已单源化到 `ltr_features.ltr_feature_rows`（2026-09-30 队列② R1：
+    生产/离线同一函数，语义与 scripts/train_ltr.py 的训练侧逐一对齐，契约名见
+    spec.feature_order）——本函数只保留打分器加载、回退语义与畸形分守卫。
+    """
+    if intent is None:
+        return None  # 无解析约束时特征处于训练分布外，按不可用回退
+    scorer = load_ltr_scorer()
+    if scorer is None:
+        return None
+    rows = ltr_feature_rows(items, dense, intent, scorer.ltr_feature_order)
+    scores = scorer(rows)
+    if not scores or len(scores) != len(items) or not all(math.isfinite(s) for s in scores):
+        _warn_once("ltr_bad_scores", "LTR 融合打分畸形（长度不符或含 NaN/Inf）—— 回退默认融合。")
+        return None
+    return sorted(range(len(items)), key=lambda i: (-scores[i], i))
 
 
 def _setup_determinism() -> None:
@@ -122,14 +212,6 @@ def _setup_determinism() -> None:
         _DETERMINISM_DONE = True
 
 
-def _warn_once_prefixed(prefix: str, key: str, message: str) -> None:
-    """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求。
-    本模块 / rerank / recall_api 三处共享上方 _WARNED 集合与这套判定，prefix 区分来源。"""
-    if key not in _WARNED:
-        _WARNED.add(key)
-        print(f"{prefix} {message}", file=sys.stderr)
-
-
 def _warn_once(key: str, message: str) -> None:
     """同一原因只在 stderr 提示一次；绝不抛异常、绝不打断请求。"""
     _warn_once_prefixed("[vector_recall]", key, message)
@@ -139,34 +221,27 @@ def load_embedder(
     model_dir: "str | Path | None" = None,
     model_name: str = DEFAULT_EMBEDDING_MODEL,
 ) -> "Embedder | None":
-    """惰性加载本地稠密嵌入器；不可用时返回 None（触发回退，绝不下载、绝不抛错）。
-
-    不可用的情形（都返回 None + 提示一次）：
-    - 本地模型目录不存在（需先跑 scripts/fetch_embedding_model.py 一次性下载）。
-    - 未安装 sentence-transformers（可选依赖）。
-    - 加载过程任何异常。
-
-    失败**不缓存**：本次返回 None 后，下次调用会重新尝试加载——故障消除（补装模型/
-    装上依赖）后同进程即可恢复，无需重启。
-    """
+    """惰性单飞正缓存；同路径模型换代即重载，失败及加载中换代不入缓存。"""
+    from .model_worker import model_generation
     resolved = Path(model_dir) if model_dir is not None else default_model_dir(model_name)
     cache_key = str(resolved)
-    if cache_key in _EMBEDDER_CACHE:
-        return _EMBEDDER_CACHE[cache_key]
+    try:
+        generation = model_generation(resolved)
+    except (OSError, RuntimeError):
+        return None
+    cached = _EMBEDDER_CACHE.get(cache_key)
+    if cached is not None and getattr(cached, "model_generation", generation) == generation:
+        return cached
 
-    #（r3 /）：check-then-load 全程持模块级单飞锁——并发请求/线程
-    # 首次加载模型时只有第一个线程真加载，其余等待后命中缓存（避免重复加载与
-    # _setup_determinism 的 os.environ 写入竞态）。
-    #修复（2026-08-19 死锁）：`_setup_determinism` **先无锁调用**（它自带模块级
-    # 单飞锁、check-then-set 全程持锁）再持 `_MODEL_LOCK`——修复前若锁内再调它，会对
-    # 不可重入的 `threading.Lock` 二次 acquire 自锁死锁（run_web.py 冷启动 warm 路径
-    # 实测：CPU 0、>8 分钟无响应）。单飞语义逐位不变：并发首载仍只有一个线程真加载。
     _setup_determinism()
     with _MODEL_LOCK:
-        if cache_key in _EMBEDDER_CACHE:
-            return _EMBEDDER_CACHE[cache_key]
         embedder: "Embedder | None" = None
         try:
+            generation = model_generation(resolved)
+            cached = _EMBEDDER_CACHE.get(cache_key)
+            if cached is not None and getattr(cached, "model_generation", generation) == generation:
+                return cached
+            _EMBEDDER_CACHE.pop(cache_key, None)
             if not resolved.exists():
                 _warn_once(
                     cache_key,
@@ -175,7 +250,6 @@ def load_embedder(
                 )
             else:
                 try:
-                    # 惰性导入：仅当 dense 且模型目录存在时才碰 sentence-transformers/torch。
                     from sentence_transformers import SentenceTransformer
                 except Exception:
                     _warn_once(
@@ -186,24 +260,31 @@ def load_embedder(
                     SentenceTransformer = None  # type: ignore[assignment]
 
                 if SentenceTransformer is not None:
-                    model = SentenceTransformer(str(resolved))
+                    try:
+                        model = SentenceTransformer(str(resolved), local_files_only=True)
+                    except TypeError:
+                        model = SentenceTransformer(str(resolved))
+                    if generation != model_generation(resolved):
+                        return None
 
                     def _encode(texts: "Sequence[str]") -> "list[list[float]]":
+                        if generation != model_generation(resolved):
+                            raise RuntimeError("encoder_generation_changed")
                         vecs = model.encode(
-                            list(texts),
-                            normalize_embeddings=True,   # 归一化 → 余弦即点积
-                            convert_to_numpy=True,
-                            show_progress_bar=False,
+                            list(texts), normalize_embeddings=True,
+                            convert_to_numpy=True, show_progress_bar=False,
                         )
+                        if generation != model_generation(resolved):
+                            raise RuntimeError("encoder_generation_changed")
                         return [[float(x) for x in v] for v in vecs]
 
+                    _encode.model_generation = generation
                     embedder = _encode
-        except Exception as exc:  # 任何意外都不外泄，一律降级
+        except Exception as exc:
             _warn_once(cache_key, f"加载嵌入模型失败（{exc}）—— 向量召回回退为规则顺序。")
             embedder = None
 
         if embedder is not None:
-            # 失败不缓存（D-06）：None 落缓存 = 负向永久缓存，一次瞬时故障就须重启才恢复。
             _EMBEDDER_CACHE[cache_key] = embedder
         return embedder
 
@@ -212,26 +293,30 @@ def load_cross_encoder(
     model_dir: "str | Path | None" = None,
     model_name: str = DEFAULT_CROSS_ENCODER_MODEL,
 ) -> "CrossScorer | None":
-    """惰性加载本地 cross-encoder 重排器；不可用时返回 None（触发回退，绝不下载、绝不抛错）。
-
-    返回一个打分器 (pairs)->list[float]。缺依赖/缺模型/异常 → None（提示一次）。
-    失败**不缓存**：下次调用会重试加载，故障消除后同进程即恢复，无需重启。
-    """
+    """惰性单飞正缓存；与嵌入器共用模型代际合同，缺模型或依赖时诚实降级。"""
+    from .model_worker import model_generation
     resolved = Path(model_dir) if model_dir is not None else default_cross_encoder_dir(model_name)
     cache_key = "ce::" + str(resolved)
-    if cache_key in _CROSS_CACHE:
-        return _CROSS_CACHE[cache_key]
+    try:
+        generation = model_generation(resolved)
+    except (OSError, RuntimeError):
+        return None
+    cached = _CROSS_CACHE.get(cache_key)
+    if cached is not None and getattr(cached, "model_generation", generation) == generation:
+        return cached
 
-    #（r3 /）：同 load_embedder，check-then-load 全程持单飞锁。
-    #修复（2026-08-19 死锁）：`_setup_determinism` 先无锁调用（自带单飞锁），
-    # 再持 `_MODEL_LOCK` 做 check-then-load——锁内不再有对 `_MODEL_LOCK` 的二次 acquire
-    # （threading.Lock 不可重入，修复前此处锁内调 `_setup_determinism` 必自锁死锁）。
     _setup_determinism()
     with _MODEL_LOCK:
-        if cache_key in _CROSS_CACHE:
-            return _CROSS_CACHE[cache_key]
         scorer: "CrossScorer | None" = None
         try:
+            generation = model_generation(resolved)
+            cached = _CROSS_CACHE.get(cache_key)
+            if cached is not None and getattr(cached, "model_generation", generation) == generation:
+                return cached
+            _CROSS_CACHE.pop(cache_key, None)
+            close = getattr(cached, "close", None)
+            if callable(close):
+                close()
             if not resolved.exists():
                 _warn_once(
                     cache_key,
@@ -240,32 +325,32 @@ def load_cross_encoder(
                 )
             else:
                 try:
-                    from sentence_transformers import CrossEncoder  # 惰性
+                    from sentence_transformers import CrossEncoder
                 except Exception:
                     CrossEncoder = None  # type: ignore[assignment]
 
                 if CrossEncoder is not None:
-                    # local_files_only=True：即便模型目录不完整也**绝不联网**（对抗审计加固点，
-                    # 杜绝加载期网络等待）；老版本无此参数则回退（外层 try 仍兜底）。
                     try:
                         model = CrossEncoder(str(resolved), max_length=512, local_files_only=True)
                     except TypeError:
-                        model = CrossEncoder(str(resolved), max_length=512)  # 默认 fp32、eval：可复现
+                        model = CrossEncoder(str(resolved), max_length=512)
+                    if generation != model_generation(resolved):
+                        return None
 
                     def _score(pairs: "Sequence[tuple[str, str]]") -> "list[float]":
+                        if generation != model_generation(resolved):
+                            raise RuntimeError("encoder_generation_changed")
                         scores = model.predict(list(pairs), batch_size=32, show_progress_bar=False)
+                        if generation != model_generation(resolved):
+                            raise RuntimeError("encoder_generation_changed")
                         return [float(x) for x in scores]
 
+                    _score.model_generation = generation
                     scorer = _score
                 else:
-                    # frozen 在线组件住独立 venv，绝不把 torch/transformers 注入主进程；
-                    # 通过常驻 JSONL worker 打分。source/portable 仍优先走上面的进程内路径。
-                    try:
-                        from .model_runtime import external_cross_scorer, external_runtime_ready
-                        if external_runtime_ready():
-                            scorer = external_cross_scorer()
-                    except Exception:
-                        scorer = None
+                    from .model_runtime import external_cross_scorer, external_runtime_ready
+                    if external_runtime_ready():
+                        scorer = external_cross_scorer()
                     if scorer is None:
                         _warn_once(cache_key, "未安装可用的本地模型运行组件—— cross_encoder 回退为规则顺序。")
         except Exception as exc:
@@ -273,9 +358,70 @@ def load_cross_encoder(
             scorer = None
 
         if scorer is not None:
-            # 失败不缓存（D-06）：同 _EMBEDDER_CACHE 纪律，见上。
             _CROSS_CACHE[cache_key] = scorer
         return scorer
+
+
+def semantic_fallback_recall(
+    records,
+    query: str,
+    intent: object = None,
+    top_k: int = 12,
+    model_dir: "str | Path | None" = None,
+) -> "list | None":
+    """解析失败场景的语义兜底召回：全库向量相似度 top_k（不经任何条件硬过滤）。
+
+    供 workflow 在「解析弃权且自动降级救不回」时调用（产品裁定 2026-09-12：
+    失败路径从沉默改为「向量语义兜底 + 诚实标注」）。与 recall_rerank 的区别：
+    本函数没有候选集可重排，直接在语料级向量索引上按查询余弦排序产出候选。
+    输出不宣称满足任何条件——标注与展示口径由调用方（workflow/前端）负责。
+
+    嵌入器/索引不可用、语料为空、任何异常 → None（调用方回退旧的诚实弃权，绝不抛错）。
+    """
+    try:
+        from . import vector_index  # 惰性导入：索引首用构建有重 IO，且避免模块环
+        enc = load_embedder(model_dir)
+        if enc is None and model_dir is None:
+            # 主进程没有本地模型（冻结包排除 sentence_transformers）时走统一入口——
+            # 本地优先 → 隔离运行时兜底 → 进程内单例（含单飞）；显式 model_dir 保持
+            # 原「只认该目录」语义（测试/高级用法注入不变）。
+            enc = vector_index.get_embedder()
+        if enc is None:
+            return None
+        # records 是本函数的子范围视图——子集不是 prune 依据，索引维护范围是全库。
+        store = vector_index.ensure_index(records, embedder=enc, scope="view")
+        if not store:
+            return None
+        by_uid = {}
+        for r in records:
+            raw = getattr(r, "raw", None)
+            uid = str(raw.get("dataset_uid") or "") if isinstance(raw, dict) else ""
+            if uid:
+                by_uid[uid] = r
+        q_text = expand_query_bilingual(query, intent) if intent is not None else query
+        fresh = enc([q_text])
+        dims = vector_index.EMBED_DIMENSIONS
+        if not fresh or len(fresh[0]) != dims:
+            return None
+        qv = [float(x) for x in fresh[0]]
+        if not valid_vector(qv, dims):
+            return None
+        from .retriever import RetrievedCandidate  # 惰性：避免循环依赖
+        pairs = [(entry.get("v"), by_uid[uid]) for uid, entry in store.items()
+                 if uid in by_uid and hasattr(entry, "get") and valid_vector(entry.get("v"), dims)]
+        values = batch_cosine(qv, [vector for vector, _ in pairs], failsoft=True)
+        scored = [(score, record) for score, (_, record) in zip(values, pairs) if score is not None]
+        if not scored:
+            return None
+        scored.sort(key=lambda t: (-t[0], getattr(t[1], "family_id", ""), getattr(t[1], "dataset_name", "")))
+        return [
+            RetrievedCandidate(record=rec, score=round(score, 6),
+                               matched_fields=[], missing_fields=[], reason="vector_fallback")
+            for score, rec in scored[: max(1, int(top_k or 12))]
+        ]
+    except Exception as exc:
+        _warn_once(f"semantic_fallback::{type(exc).__name__}", f"语义兜底召回异常（{exc!r}）—— 回退诚实弃权。")
+        return None
 
 
 def recall_backend_ready(backend: str) -> bool:
@@ -374,12 +520,26 @@ def resolve_auto_recall_preference() -> "tuple[str, bool]":
 def warm_recall_backend(backend: str) -> bool:
     """在**主线程、启动期**预热指定 recall 后端的本地模型（加载进缓存），返回是否就绪。
     'off' / 未知 → True（无需预热）。必须在事件循环 / 请求处理**之外**调用
-    （piped-stdio 下唯一不死锁的加载时机）。"""
+    （piped-stdio 下唯一不死锁的加载时机；Web 后台预热线程同语义——它只是一条
+    非事件循环的普通线程）。"""
     b = (backend or "off").strip().lower()
     if b == "cross_encoder":
         return load_cross_encoder() is not None
     if b == "dense":
         return load_embedder() is not None
+    if b == "vector":
+        # vector = dense 嵌入器 + 全语料索引 + LTR 缺省融合打分器三层全暖（2026-09-14
+        # 冷启动治理）：只暖嵌入器会把「首查建索引」（全语料逐条编码、全程持
+        # `_INDEX_LOCK` 单飞）留在第一条搜索的请求路径上。任一层失败 → False
+        # （调用方如实记未就绪；请求路径的惰性加载仍是兜底，预热失败不掀翻启动）。
+        if load_embedder() is None:
+            return False
+        from . import vector_index  # 惰性导入：不启用 vector 时零代价
+        if vector_index.ensure_index() is None:
+            return False
+        # LTR 制品缺席/损坏是合法回退（默认融合），不翻转就绪判定。
+        load_ltr_scorer()
+        return True
     return True
 
 
@@ -397,27 +557,82 @@ def expand_query_bilingual(query: str, intent: object) -> str:
     return f"{query} ({', '.join(terms)})" if terms else query
 
 
-def _candidate_text(cand: RetrievedCandidate) -> str:
-    """候选序列化为打分文本：题名 + **带标签**的结构化字段 + 截断描述（≤400）。
-    该序列化格式经消融确认（带标签 + desc≤400 明显优于裸串 + desc≤240），是基准选型胜出的输入形态。"""
-    r = cand.record
-    desc = (r.description or "").strip().replace("\n", " ")
-    if len(desc) > 400:
-        desc = desc[:400]
-    return (f"{r.dataset_name} | 物种 {r.species} | 组织 {r.tissue} | 疾病 {r.disease} "
-            f"| 平台 {r.platform_family} | 实验 {r.assay} | {desc}")
+from .candidate_text import candidate_text as _candidate_text  # noqa: E402 —— 真源 2026-10-01 抽离，行为逐位不变
+
+
+def valid_vector(vector: object, dimensions: int | None = None) -> bool:
+    """索引与打分共用的形状/有限性守卫；零向量可用，畸形值不可用。"""
+    if not isinstance(vector, (list, tuple)) or not vector:
+        return False
+    if dimensions is not None and len(vector) != dimensions:
+        return False
+    try:
+        return all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                   and math.isfinite(x) for x in vector)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+from functools import lru_cache
+
+
+@lru_cache(maxsize=8192)
+def _snapshot_norm(values):
+    return math.sqrt(sum(x * x for x in values))
+
+
+class VectorSnapshot(tuple):
+    __slots__ = ()
+
+    def __new__(cls, values):
+        if not valid_vector(values):
+            raise ValueError("invalid_vector")
+        instance = super().__new__(cls, values)
+        _snapshot_norm(instance)
+        return instance
+
+    @property
+    def norm(self):
+        return _snapshot_norm(self)
+
+    def __setattr__(self, name, value):
+        raise AttributeError("immutable_vector_snapshot")
+
+    def __eq__(self, other):
+        return tuple.__eq__(self, tuple(other)) if isinstance(other, (list, tuple)) else NotImplemented
+
+    __hash__ = tuple.__hash__
+
+
+def batch_cosine(query, documents, *, failsoft=False) -> list:
+    if not valid_vector(query):
+        raise ValueError("invalid_vector")
+    na = math.sqrt(sum(x * x for x in query))
+    scores = []
+    for document in documents:
+        try:
+            if type(document) is VectorSnapshot:
+                if len(document) != len(query):
+                    raise ValueError("invalid_vector")
+                nb = document.norm
+            else:
+                if not valid_vector(document, len(query)):
+                    raise ValueError("invalid_vector")
+                nb = math.sqrt(sum(y * y for y in document))
+            dot = sum(x * y for x, y in zip(query, document))
+            score = 0.0 if na <= 0.0 or nb <= 0.0 else dot / (na * nb)
+            if not math.isfinite(score):
+                raise ValueError("nonfinite_cosine")
+        except ValueError:
+            if not failsoft:
+                raise
+            score = None
+        scores.append(score)
+    return scores
 
 
 def _cosine(a: "list[float]", b: "list[float]") -> float:
-    """余弦相似度；对未归一化/退化向量稳健（归一化输入时等价点积）。"""
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    if na <= 0.0 or nb <= 0.0:
-        return 0.0
-    return dot / (na * nb)
+    return batch_cosine(a, [b])[0]
 
 
 def _minmax_norm(values: "list[float]") -> "list[float]":
@@ -465,8 +680,9 @@ def _dense_vectors_cached(
     # 查询向量每次现编（见 _DOC_VECTOR_CACHE 声明处注释）。空返回会让下面 qvecs[0] 抛
     # IndexError，由外层 except 回退——刻意不在函数内自行吞掉（外层才有留痕语义）。
     qvecs = enc([query])
-    # 键的模型目录口径与 load_embedder 同源（cache_key = str(resolved)，None → 默认目录）。
     cache_key_model = str(Path(model_dir) if model_dir is not None else default_model_dir())
+    if hasattr(enc, "model_generation"):
+        cache_key_model = (cache_key_model, enc.model_generation)
     doc_vecs: "list[list[float] | None]" = []
     missing: "list[int]" = []
     with _DOC_VECTOR_LOCK:
@@ -508,11 +724,13 @@ def recall_rerank(
     """可选向量召回（存活集内语义重排）。四种后端，输出恒为输入 candidates 的**排列/截断**。
 
     backend="off"（默认）    → 原样返回（截断到 top_k，如未传则不截）。
-    backend="dense"          → 本地稠密嵌入余弦 × 词面分融合排序：`fusion="linear"`（缺省默认）
-                               为 min-max 归一化 + alpha 线性融合（历史行为字节等价）；
+    backend="dense"          → 本地稠密嵌入余弦 × 词面分融合排序：缺省 `fusion="ltr"`（学习排序融合；
+                               工件缺失时 fail-soft 回退 `linear`）；`fusion="linear"` 为 min-max
+                               归一化 + alpha 线性融合（历史行为字节等价）；
                                `fusion="rrf"` 为 RRF 名次融合（k=60，尺度无关、零调参）。
     backend="vector"         → 语料级向量索引召回：候选向量命中本地语料索引 / API 向量文件
-                               （未覆盖条目现场补嵌），余弦 × 词面分融合；缺省 `fusion="rrf"`。
+                               （未覆盖条目现场补嵌），余弦 × 词面分融合；缺省 `fusion="ltr"`
+                               （fail-soft 回退 `rrf`）。
     backend="cross_encoder"  → 本地 cross-encoder 对全存活集逐对打分，按**纯分**排序（词面原序仅同分 tie-break）；
                                中文 query 附英文别名（双语扩展）以对齐英文文档。**基准选型胜出的默认路径**。
 
@@ -521,9 +739,10 @@ def recall_rerank(
     """
     items = list(candidates)
     started_at = time.perf_counter()
-    # fusion 解析（唯一默认在此）：缺省按后端取（dense=linear 历史默认逐位不变；vector=rrf
-    # 名次融合）；显式值小写归一后原样生效（未知值不当 rrf —— 安全默认与历史一致）。
-    resolved_fusion = str(fusion or "").strip().lower() or ("rrf" if backend == "vector" else "linear")
+    # fusion 解析（唯一默认在此）：dense/vector 缺省 "ltr"（学习排序融合；模型/特征/解析约束
+    # 任一不可用时 ltr 分支内 fail-soft 回退原默认 dense→linear、vector→rrf，行为与旧默认
+    # 逐位一致）；显式值小写归一后原样生效（未知值不当 ltr/rrf —— 安全默认与历史一致）。
+    resolved_fusion = str(fusion or "").strip().lower() or ("ltr" if backend in ("dense", "vector") else "linear")
 
     def _duration_ms() -> int:
         return max(0, int(round((time.perf_counter() - started_at) * 1000)))
@@ -542,6 +761,8 @@ def recall_rerank(
     def _mark(status: str, reason: str) -> None:
         if trace is not None:
             trace.update({"status": status, "reason": reason, "duration_ms": _duration_ms()})
+            if status == "fallback" and backend in ("dense", "vector"):
+                trace["fusion"] = "rule-order"  # 返回输入顺序时，不宣称执行过融合。
 
     def _cut(seq: "list[RetrievedCandidate]") -> "list[RetrievedCandidate]":
         return seq[:top_k] if top_k is not None else seq
@@ -643,11 +864,30 @@ def recall_rerank(
             _mark("fallback", "invalid_vectors")
             return _cut(items)
         qv = vectors[0]
-        dense = [_cosine(qv, v) for v in vectors[1:]]
+        try:
+            dense = batch_cosine(qv, vectors[1:])
+        except ValueError:
+            _warn_once("dense_bad_vectors", "dense 向量维度不一致或含非有限值 —— 回退规则序。")
+            _mark("fallback", "invalid_vectors")
+            return _cut(items)
         if not all(math.isfinite(d) for d in dense):               # NaN/Inf 稠密分 → 回退
             _warn_once("dense_bad_scores", "dense 稠密分含 NaN/Inf —— 回退规则序。")
             _mark("fallback", "invalid_scores")
             return _cut(items)
+        if resolved_fusion == "ltr":
+            # 学习排序融合（opt-in）：模型/特征/解析约束任一不可用 → 回退该后端默认融合，
+            # 回退路径与「未传 ltr」逐位一致（dense→linear、vector→rrf）。
+            ltr_order = _ltr_fused_order(items, dense, intent, trace)
+            if ltr_order is not None:
+                if trace is not None:
+                    trace["fusion"] = "ltr"
+                _mark("used", "completed")
+                return _cut([items[i] for i in ltr_order])
+            resolved_fusion = "rrf" if backend == "vector" else "linear"
+            use_rrf = resolved_fusion == "rrf"
+            if trace is not None:
+                trace["fusion"] = resolved_fusion
+                trace["ltr_status"] = "fallback"
         if use_rrf:
             # RRF 名次融合：只吃两路原始分（词面分不归一化——RRF 不看分值尺度）。
             lex_raw = [float(getattr(c, "score", 0.0) or 0.0) for c in items]
@@ -673,4 +913,6 @@ def recall_rerank(
         # 抛错时，向量召回会每请求静默变 no-op，运行期无从察觉（宽 except 亦会吞掉真 bug）。
         _warn_once(f"recall_exc::{backend}", f"向量召回({backend})运行期异常，回退规则序：{exc!r}")
         _mark("fallback", "runtime_error")
+        if trace is not None and resolved_fusion == "ltr":
+            trace["ltr_status"] = "fallback"
         return _cut(items)

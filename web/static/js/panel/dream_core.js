@@ -21,16 +21,21 @@ export function dreamNormalize(value) {
 }
 
 /* 历史快照 → 对话素材。
-   hist 每行存「到该轮为止的**累计** chat」（core.js pushHist）——同一 convId 的**最后一行**
-   携带该段最完整对话。按 convId 取最后一行、新→旧、限 maxConv 段；
-   每段 {query, chat:[{k,t,n}]}，只带白名单字段（发给 LLM 的素材最小化）。 */
+   hist 每行存「到该轮为止的**累计** chat」（core.js pushHist）——同一 convId 的**最新那一行**
+   携带该段最完整对话。按 convId 取最新一行、新→旧、限 maxConv 段；
+   每段 {query, chat:[{k,t,n}]}，只带白名单字段（发给 LLM 的素材最小化）。
+
+   hist 是**新→旧**（core.pushHist 用 unshift），所以「最新一行」不能靠逐行覆盖得到
+   （那会留下最旧一行，多轮检索后整理漏掉后续纠正/偏好/回复）；按每行自己的 at 取最大者。
+   at 缺失或并列时先到者胜（新→旧顺序下即最新）。 */
 export function dreamCollectConversations(hist, maxConv) {
     const rows = Array.isArray(hist) ? hist : [];
     const lastByConv = new Map();
     rows.forEach(function (row, i) {
         if (!row || typeof row !== "object") return;
         const cid = String(row.convId || ("row-" + i));
-        lastByConv.set(cid, row);   // 同 convId 后出现的覆盖：留下的即最后一轮
+        const prev = lastByConv.get(cid);
+        if (!prev || (Number(row.at) || 0) > (Number(prev.at) || 0)) lastByConv.set(cid, row);
     });
     const convs = [];
     lastByConv.forEach(function (row) {
@@ -124,6 +129,23 @@ export function dreamFilterNew(candidates, existingItems) {
         out.push(c);
     });
     return out;
+}
+
+/* 来源选择（2026-10-09 统一记忆空间批）：对话素材按项目分组。
+   convs = dreamCollectConversations 的产物（{query, chat, at} 白名单形状）；
+   projectOf(conv) 由调用方注入（本核不 import workspaces，保持零依赖）；
+   未知/空项目归入 ""（全局）组。返回 [{projectId, convs}]，新→旧保持组内顺序。 */
+export function dreamGroupByProject(convs, projectOf) {
+    const rows = Array.isArray(convs) ? convs : [];
+    const resolve = (typeof projectOf === "function") ? projectOf : (() => "");
+    const groups = new Map();
+    rows.forEach((conv) => {
+        let pid = "";
+        try { pid = String(resolve(conv) || ""); } catch (_e) { pid = ""; }
+        if (!groups.has(pid)) groups.set(pid, []);
+        groups.get(pid).push(conv);
+    });
+    return Array.from(groups.entries()).map(([projectId, list]) => ({ projectId, convs: list }));
 }
 
 /* 无绞杀桥：唯一消费方 dream.js 本就是 ESM、经 import 调用；node 规格（tests/js/dream_core_spec.mjs）直接 import。 */

@@ -16,9 +16,11 @@
 --------------------------------------
 RQ worker 跑在**独立进程**：worker 里调 `invalidate_external_cache()` /
 `recall_api.invalidate_vectors()` 只能清掉 worker 自己的内存，对 web 进程无效。唯一通道是
-worker 在状态 hash 里置 `needs_web_invalidate="1"`；web 进程每次读状态时调
-`consume_web_invalidate_flag()`，读到旗标才在 **web 进程内**执行一次失效并清旗。
-失效动作本身留在 webapp（它才持有那些缓存），本模块只负责如实记账旗标。
+worker 在状态 hash 里保存稳定 `corpus_generation`；每个 web consumer 记录自己的
+last-generation，普通 API 请求即调用 `consume_web_invalidate_flag()` 检查，不依赖状态轮询。
+通知不清零；失效复用 webapp 的既有语料/向量缓存入口，成功后才推进本进程游标。
+Queue、Worker 与 Job.fetch 共用 JSONSerializer；旧 pickle 作业不提供反序列化兜底。
+补偿结果持久保留，业务终态已确认且 RQ 已 finished 后才安全回收。
 
 错误契约
 --------
@@ -39,11 +41,15 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import os
+import threading
 import time
+import uuid
 from typing import Any
 
 from . import redis_store
+from .limits import CORPUS_SYNC_JOB_TIMEOUT_SECONDS
 
 #: 状态 hash（字段名与内存快照五键同名，另加两个 RQ 侧运维字段）。
 _STATUS_KEY = "biodata:job:corpus_sync"
@@ -57,10 +63,14 @@ _BACKEND_VALUE = "rq"
 #: worker 侧执行体路径（RQ 用字符串引用跨进程导入；写成常量避免 web/worker 两侧各写一份）。
 _ENTRY_PATH = "dataset_recommender.app.rq_jobs.corpus_sync_entry"
 
-#: worker 置位、web 进程消费后清零的跨进程失效旗标。
 _FLAG_FIELD = "needs_web_invalidate"
+_GENERATION_FIELD = "corpus_generation"
+RQ_SERIALIZER = "rq.serializers.JSONSerializer"
+_RESULT_TTL = -1
 #: RQ job id（运维线索，不对外暴露，不进快照形状）。
 _JOB_ID_FIELD = "rq_job_id"
+_CLAIMED_AT_FIELD = "claimed_at"
+_ENQUEUE_GRACE_SECONDS = 30  # 占位至入队的短窗口，不能误判尚未创建的队列记录为孤儿。
 
 _STORE_UNAVAILABLE_MSG = "任务状态存储暂时不可用，请稍后重试。"
 
@@ -143,14 +153,25 @@ def _write_hash(mapping: "dict[str, str]") -> None:
         raise JobBackendError("job_store_unavailable", _STORE_UNAVAILABLE_MSG) from exc
 
 
-def _write_hash_quiet(mapping: "dict[str, str]") -> None:
-    """尽力记账：失败静默吞掉。只用于「已经发生了更重要的错误」的路径（入队失败后的终态、
-    以及 worker 进程内的状态写入）——在那些地方再抛一次只会掩盖原始故障，或让 RQ 把一个
-    已经如实记账的 job 又标成 failed。"""
+def _compare_hash(expected: dict[str, str], mapping: dict[str, str]) -> bool:
+    """Redis WATCH 比较并更新同一任务快照；抢占与终态对账共用，无 Lua/额外依赖。"""
+    import redis
     try:
-        _client().hset(_STATUS_KEY, mapping=mapping)
-    except (redis_store.RedisUnavailable, *redis_store.redis_error_types()):
-        pass
+        for _ in range(5):
+            with _client().pipeline() as pipe:
+                try:
+                    pipe.watch(_STATUS_KEY)
+                    if any(_as_text(pipe.hget(_STATUS_KEY, k)) != v for k, v in expected.items()):
+                        return False
+                    pipe.multi()
+                    pipe.hset(_STATUS_KEY, mapping=mapping)
+                    pipe.execute()
+                    return True
+                except redis.WatchError:
+                    continue
+    except redis.RedisError as exc:
+        raise JobBackendError("job_store_unavailable", _STORE_UNAVAILABLE_MSG) from exc
+    raise JobBackendError("job_store_unavailable", _STORE_UNAVAILABLE_MSG)
 
 
 def _parse_result(raw: str) -> "Any":
@@ -164,6 +185,93 @@ def _parse_result(raw: str) -> "Any":
         return None
 
 
+def _write_current(job_id: str | None, mapping: dict[str, str], *, quiet: bool = False) -> bool:
+    """旧 worker 不能改写新一轮；终态写失败可由 RQ 返回值在读侧补偿。"""
+    try:
+        if job_id:
+            return _compare_hash({_JOB_ID_FIELD: job_id, "status": "running"}, mapping)
+        _write_hash(mapping)  # 无 RQ 上下文的直接调用（测试/兼容入口）。
+        return True
+    except (JobBackendError, redis_store.RedisUnavailable, *redis_store.redis_error_types()):
+        if not quiet:
+            raise
+        return False
+
+
+def _reconcile_running(data: dict[str, str]) -> dict[str, str]:
+    """只对 running 查真实 RQ 生命周期；不自动重跑可能已发生的写入。"""
+    if data.get("status") != "running":
+        return data
+    job_id = data.get(_JOB_ID_FIELD, "")
+    terminal = {"status": "failed", "finished_at": _now(), "result": "",
+                "error": "队列任务已中断或缺失，请核对已导入的数据后重试。", _FLAG_FIELD: "1",
+                _GENERATION_FIELD: job_id or uuid.uuid4().hex}
+    try:
+        from rq.job import Job
+        from rq.exceptions import NoSuchJobError
+        try:
+            job = Job.fetch(job_id, connection=_rq_client(), serializer=RQ_SERIALIZER) if job_id else None
+        except NoSuchJobError:
+            job = None
+        if job is None:
+            try:
+                age = time.time() - float(data.get(_CLAIMED_AT_FIELD, "0"))
+            except ValueError:
+                age = _ENQUEUE_GRACE_SECONDS
+            if job_id and age < _ENQUEUE_GRACE_SECONDS:
+                return data
+        else:
+            status = job.get_status(refresh=True)
+            status = getattr(status, "value", status)
+            if status == "started":
+                heartbeat = job.last_heartbeat or job.started_at
+                timeout = job.timeout or 0
+                age = ((datetime.datetime.now(datetime.timezone.utc) - heartbeat).total_seconds()
+                       if heartbeat is not None else 0)
+                # 不依赖另一台 worker 的维护扫描；超过完整执行预算仍无心跳才判中断。
+                if timeout <= 0 or age <= timeout + 60:
+                    return data
+            elif status in {"created", "queued", "deferred", "scheduled"}:
+                return data
+            if status == "finished":
+                outcome = job.return_value(refresh=True)
+                if isinstance(outcome, dict) and outcome.get("status") in {"done", "failed"}:
+                    terminal.update({k: outcome[k] for k in terminal if k in outcome})
+                else:
+                    terminal["error"] = "队列任务已结束，但结果记录缺失；请核对已导入的数据后重试。"
+        if _compare_hash({"status": "running", _JOB_ID_FIELD: job_id}, terminal):
+            return {**data, **terminal}
+        return _read_hash()
+    except ImportError as exc:
+        raise JobBackendError("job_backend_unavailable", "队列依赖不可用，暂时无法核对任务状态。") from exc
+    except redis_store.redis_error_types() as exc:
+        raise JobBackendError("job_store_unavailable", _STORE_UNAVAILABLE_MSG) from exc
+    except JobBackendError:
+        raise
+    except Exception as exc:
+        raise JobBackendError("job_payload_unavailable",
+            "队列记录无法按 JSON 读取；请核对旧作业，不会自动迁移或重复执行。") from exc
+
+
+def _cleanup_acknowledged_job(data: dict[str, str]) -> None:
+    if data.get("status") not in {"done", "failed"} or not data.get(_JOB_ID_FIELD):
+        return
+    try:
+        from rq.job import Job
+        from rq.exceptions import NoSuchJobError
+    except ImportError:
+        return
+    try:
+        job = Job.fetch(data[_JOB_ID_FIELD], connection=_rq_client(), serializer=RQ_SERIALIZER)
+        status = job.get_status(refresh=True)
+        if getattr(status, "value", status) == "finished":
+            job.delete(remove_from_queue=False)
+    except NoSuchJobError:
+        pass
+    except Exception as exc:
+        logging.getLogger(__name__).warning("RQ compensation cleanup deferred (%s)", type(exc).__name__)
+
+
 def snapshot() -> dict:
     """读状态快照，形状与 `webapp._corpus_sync_job_snapshot()` 逐键一致。
 
@@ -171,7 +279,8 @@ def snapshot() -> dict:
     读失败 → `JobBackendError("job_store_unavailable")`：RQ 路径下状态真源就在 Redis，
     读不到只能如实报错，伪造 idle 会让用户以为任务不存在。
     """
-    data = _read_hash()
+    data = _reconcile_running(_read_hash())
+    _cleanup_acknowledged_job(data)
     if not data.get("status"):
         return {"status": "idle", "started_at": None, "finished_at": None,
                 "result": None, "error": None}
@@ -192,9 +301,9 @@ def start(sources: "list[str] | None") -> dict:
     入队顺序：**先落 running 再 enqueue**。反过来写会把竞态变成 bug——worker 可能瞬间取走
     任务并写终态，随后 web 的 running 写入会把 done 覆盖成 running，状态永远停在 running。
     """
-    snap = snapshot()
-    if snap["status"] == "running":
-        return snap
+    observed = _reconcile_running(_read_hash())
+    if observed.get("status") == "running":
+        return snapshot()
 
     try:
         import rq  # 惰性：顶层不加 rq 依赖边（最小安装没有 rq 包）
@@ -206,55 +315,59 @@ def start(sources: "list[str] | None") -> dict:
             f"或去掉 {_BACKEND_ENV} 环境变量以回到默认形态。",
         ) from exc
 
-    job_id = f"corpus-sync-{int(time.time())}"
-    _write_hash({
+    # 连接/依赖解析先完成；失败不得留下无人执行的占位。
+    client = _rq_client()
+    queue = rq.Queue(_QUEUE_NAME, connection=client, serializer=RQ_SERIALIZER)
+    _cleanup_acknowledged_job(observed)
+    job_id = f"corpus-sync-{uuid.uuid4().hex}"
+    claimed = _compare_hash({k: observed.get(k, "") for k in ("status", _JOB_ID_FIELD)}, {
         "status": "running",
         "started_at": _now(),
         "finished_at": "",
         "result": "",
         "error": "",
         _FLAG_FIELD: "0",
-        _JOB_ID_FIELD: "",
+        _JOB_ID_FIELD: job_id,
+        _CLAIMED_AT_FIELD: str(time.time()),
     })
-    # bytes 客户端在 try 外解析：缺包/建连失败要保留更精确的 code（redis_package_missing 等），
-    # 不能被下面的入队兜底统一改写成 job_enqueue_failed。
-    client = _rq_client()
+    if not claimed:
+        return snapshot()
     try:
-        queue = rq.Queue(_QUEUE_NAME, connection=client)
-        job = queue.enqueue(_ENTRY_PATH, sources, job_id=job_id)
-    except Exception as exc:  # 入队失败：如实落 failed，别留一个永远 running 的幽灵状态
-        hint = getattr(exc, "hint", "") or str(exc) or type(exc).__name__
-        _write_hash_quiet({
-            "status": "failed",
-            "finished_at": _now(),
-            "error": hint,
-            _FLAG_FIELD: "1",
-        })
-        raise JobBackendError("job_enqueue_failed", f"任务入队失败：{hint}") from exc
-    # rq_job_id 只是运维线索：写不进去不该让已经入队的任务报错给调用方。
-    _write_hash_quiet({_JOB_ID_FIELD: job.id})
+        queue.enqueue(_ENTRY_PATH, sources, job_id=job_id, job_timeout=CORPUS_SYNC_JOB_TIMEOUT_SECONDS,
+                      result_ttl=_RESULT_TTL)
+    except Exception as exc:
+        try:
+            _reconcile_running(_read_hash())
+        except JobBackendError:
+            pass
+        raise JobBackendError("job_enqueue_failed",
+            "任务入队确认失败，可能已经提交；请核对任务状态，不会自动重复执行。") from exc
     return snapshot()
 
 
-def corpus_sync_entry(sources: "list[str] | None") -> None:
-    """worker 进程侧执行体：sync →（有新增）向量重建 → 写终态 + 置跨进程失效旗标。
+def corpus_sync_entry(sources: "list[str] | None") -> dict | None:
+    """worker 进程侧执行体：sync →（有新增）向量重建 → 写终态与共享代际。
 
-    为什么 worker 不自己调 `invalidate_external_cache()`：那是 **web 进程**的内存缓存，
-    worker 里调只清 worker 自己那份，等于没清。真正的失效由 web 进程读到
-    `needs_web_invalidate="1"` 后在本进程内完成（见模块 docstring）。
+    worker 清不了 Web 的内存缓存；每个 Web 进程按自己的代际游标调用既有失效口。
+    遗留旗标保留只读兼容，新任务的代际不在启动或首消费者读取时清零。
 
-    异常一律收口为 failed 状态，绝不漏出 worker：RQ 会把抛出的异常记进 failed registry，
-    但用户看的是我们的状态端点——两处都标 failed 只会让「哪个才是真因」变模糊。
+    业务异常收口为 failed；返回同一终态给 RQ 持久化，以补偿业务 hash 写失败。
+    已过时的排队任务零执行返回 None，不允许覆盖新一轮状态。
     """
-    _write_hash_quiet({
+    from rq import get_current_job
+    job = get_current_job()
+    job_id = job.id if job is not None else None
+    if not _write_current(job_id, {
         "status": "running",
         "started_at": _now(),
         "finished_at": "",
         "result": "",
         "error": "",
         _FLAG_FIELD: "0",
-    })
+    }):
+        return None
     result: "Any" = None
+    error = None
     try:
         from . import webapp  # 惰性：worker 进程首次执行任务时才拉起 webapp 模块
 
@@ -262,47 +375,58 @@ def corpus_sync_entry(sources: "list[str] | None") -> None:
         vec_err = None
         if int(result.get("imported_total") or 0) > 0:
             vec_err = webapp._corpus_sync_rebuild_vectors()
-        _write_hash_quiet({
-            "status": "failed" if vec_err else "done",
-            "finished_at": _now(),
-            "result": "" if result is None else json.dumps(
-                result, ensure_ascii=False, separators=(",", ":")),
-            "error": vec_err or "",
-            _FLAG_FIELD: "1",
-        })
+        error = vec_err
     except Exception as exc:  # 含 CurateError：如实把 hint 落进 error，供状态端点呈现
-        hint = getattr(exc, "hint", "") or str(exc) or type(exc).__name__
-        _write_hash_quiet({
-            "status": "failed",
-            "finished_at": _now(),
-            "result": "" if result is None else json.dumps(
-                result, ensure_ascii=False, separators=(",", ":")),
-            "error": hint,
-            _FLAG_FIELD: "1",
-        })
-    return None
+        error = getattr(exc, "hint", "") or str(exc) or type(exc).__name__
+    terminal = {
+        "status": "failed" if error else "done", "finished_at": _now(),
+        "result": "" if result is None else json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+        "error": error or "", _FLAG_FIELD: "1",
+        _GENERATION_FIELD: job_id or uuid.uuid4().hex,
+    }
+    acknowledged = _write_current(job_id, terminal, quiet=True)
+    if acknowledged and job is not None:
+        job.result_ttl = 0
+    return terminal
 
 
-def consume_web_invalidate_flag() -> bool:
-    """读并清 `needs_web_invalidate` 旗标：为 "1" → 写 "0" 并返回 True，否则 False。
+class InvalidationConsumer:
+    def __init__(self):
+        self.last_generation = None
+        self._lock = threading.Lock()
 
-    调用方（web 进程）据此在本进程内执行一次外部库缓存失效 + 向量缓存失效。**读取失败
-    fail-open 返回 False**：失效旗标是「锦上添花」的一次机会，读不到就留到下次轮询重试，
-    不该让状态端点因为清旗失败再 503 一次（快照本身已经如实反映了存储状况）。
-    """
-    try:
-        client = _client()
-        flag = _as_text(client.hget(_STATUS_KEY, _FLAG_FIELD))
-        if flag != "1":
-            return False   # 无旗标时不做无谓写入，也不凭空创建 hash
-        client.hset(_STATUS_KEY, _FLAG_FIELD, "0")
-    except (redis_store.RedisUnavailable, *redis_store.redis_error_types()):
-        return False
-    return True
+    def consume(self, invalidate=None) -> bool:
+        with self._lock:
+            try:
+                data = _reconcile_running(_read_hash())
+            except (JobBackendError, redis_store.RedisUnavailable, *redis_store.redis_error_types()):
+                logging.getLogger(__name__).warning("RQ generation unavailable; local caches are not trusted")
+                if invalidate is not None:
+                    invalidate()
+                return False
+            generation = data.get(_GENERATION_FIELD)
+            if not generation and data.get(_FLAG_FIELD) == "1":
+                generation = "legacy:" + data.get(_JOB_ID_FIELD, "") + ":" + data.get("finished_at", "")
+            if not generation or generation == self.last_generation:
+                return False
+            if invalidate is not None:
+                invalidate()
+            self.last_generation = generation
+            return True
+
+
+_WEB_INVALIDATION_CONSUMER = InvalidationConsumer()
+
+
+def consume_web_invalidate_flag(invalidate=None, *, consumer=None) -> bool:
+    """兼容旧入口名；代际只读，每个 consumer 在成功失效后记录自己的游标。"""
+    return (consumer or _WEB_INVALIDATION_CONSUMER).consume(invalidate)
 
 
 __all__ = [
     "JobBackendError",
+    "RQ_SERIALIZER",
+    "InvalidationConsumer",
     "backend_active",
     "snapshot",
     "start",

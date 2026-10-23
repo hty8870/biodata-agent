@@ -72,7 +72,7 @@ $McpPython = Join-Path $env:LOCALAPPDATA 'BioDataAgent\mcp-venv\Scripts\python.e
   data_loader.py / normalizer.py / corpus.py / downloads.py
             ↓
 查询理解
-  search_request.py / query_parser.py / vocabulary.py
+  search_request.py / query_parser.py / query_lexicon.py（语言级词法；领域词表在 domains/biodata/vocabulary.py）
             ↓
 过滤与排序
   retriever.py / strategy.py / vector_recall.py / rerank.py
@@ -149,7 +149,7 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 
 ## 6. HTTP API
 
-当前 Web API 版本为 `3.0.0`。FastAPI 会在 `/docs` 生成当前版本的请求和响应模型。以下表格用于快速定位（**与 `webapp.py` 的路由装饰器一一对应，共 64 个**；改路由时同步这张表）：
+当前 Web API 版本为 `3.7.0`。FastAPI 会在 `/docs` 生成当前版本的请求和响应模型。以下表格用于快速定位（**与 `webapp.py` 及接口适配模块的路由装饰器一一对应，共 108 个**；改路由时同步这张表）：
 
 | 方法 | 路径 | 作用 | 是否写数据 |
 |---|---|---|---|
@@ -157,6 +157,7 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 | GET, HEAD | `/dataset` | 返回数据集详情独立页 | 否 |
 | GET | `/favicon.ico` | 返回站点图标（内联 SVG） | 否 |
 | GET | `/api/health` | 服务健康状态 | 否 |
+| GET | `/api/domain/manifest` | 活动领域清单（品牌/维度/基础来源；骨肉分离架构的前端品牌真源，additive 只读） | 否 |
 | GET | `/api/local-model/status` | 可选本地语义模型的安装/就绪状态（只回状态、阶段、体积，不暴露本机路径/uv 输出/下载源原始错误） | 否 |
 | POST | `/api/local-model/install` | 显式启动可选本地语义模型后台在线安装（独立 venv + 固定模型，单飞，失败不影响规则排序） | 是（写本机数据目录） |
 | POST | `/api/local-model/cancel` | 取消进行中的本地模型安装（失败/取消不写 READY） | 是（写本机数据目录） |
@@ -195,8 +196,27 @@ Web 设置页可以把 API Key 随单次 `/api/recommend` 请求发送到本地�
 | GET | `/api/curate-examples/pending` | 成功操作样例候选池清单（用户挑选入库；只读本分区——会话账户+端点指纹双键全等） | 否 |
 | POST | `/api/curate-examples/approve` | 候选勾选迁入正式库（注入侧只读正式库；库内去重计 duplicated） | 是 |
 | POST | `/api/curate-examples/dismiss` | 候选忽略（只清池不进库） | 是 |
+| GET | `/api/rules/list` | 协作规则卡清单（用户逐条确认过的「助手行为约束」；统一知识条目的只读投影——会话账户+端点指纹双键全等，active+retracted 都返回） | 否 |
+| POST | `/api/rules/approve` | 规则候选逐条确认：**只产生统一知识草稿提案**（提案→服务端评估→真人确认才生效；返回 approved/duplicated/rejected 诚实计数 + proposed_count/change_id，approved 恒 0，draft 不生效不进 prompt） | 是 |
+| POST | `/api/rules/revoke` | 规则撤回：经独立依赖检查产生撤回提案（`stage=pending` + `assessment_id`），须再经 `/api/knowledge/commit` 真人确认才打 tombstone（不物理删、不再进 prompt、留痕可回溯） | 是 |
+| GET | `/api/learning/status` | 当前学习授权、任务状态与实际 trace；配置只在内存，重启等待授权恢复 | 否 |
+| GET | `/api/learning/sources` | 本人有效学习来源清单（保留原项目归属与 fresh/consumed 状态；`offset`/`limit` 分页） | 否 |
+| GET | `/api/learning/candidates` | 同账户端点项目的候选/审核记录分页；候选与现役规则差异 | 否 |
+| POST | `/api/learning/control` | 默认关闭的作用域学习授权/暂停；新回合间隔 1–20，独立调用预算 | 是 |
+| POST | `/api/learning/trigger` | 显式整理新回合或稳定编号的反馈；AI关、trial、无配置不调用模型 | 是 |
+| POST | `/api/learning/review` | 网页真人逐条确认/替代/驳回或CAS撤回；反馈留痕，临时与条件不明不得激活 | 是 |
 | POST | `/api/act/summary` | 执行结果的 LLM 中文总结（只总结不执行，事实行由调用方上报，ok=False 绝不说「已」，fail-open） | 否 |
 | POST | `/api/search/reply` | 检索回执的 LLM 中文改写（确定性事实句先行上屏、本端点只改写不检索，建议只许从 can_suggest 白名单挑，fail-open） | 否 |
+| GET | `/api/replay/status` | 复盘角标轮询（轻量）：{n_turns, has_digest, unseen, drawing, skip_reason…}；conv 未落痕回空态，key 不符 404（2026-09-28 复盘批） | 否 |
+| GET | `/api/replay/points` | 复盘窗口全量载荷：{digest, threads, snapshots, unseen…}（决策因果图 + 标注 + 快照） | 否 |
+| GET | `/api/replay/snapshots` | 标注快照清单（pill 找回用） | 否 |
+| POST | `/api/replay/digest` | 手动「重新整理」（用户显式触发，同步执行；LLM 日配额计数；mock/无 key 如实 skipped） | 否 |
+| POST | `/api/replay/annotate` | 图上标注一条（只记录，不发 LLM） | 是（复盘库） |
+| POST | `/api/replay/snapshot` | 「添加到对话」：打包全部用户标注为快照并清空图上标注 | 是（复盘库） |
+| POST | `/api/replay/snapshot/{snap_id}/annotate` | 往已打包的快照里追加标注（pill 找回后的继续编辑） | 是（复盘库） |
+| POST | `/api/replay/seen` | 开窗即已读（清角标） | 是（复盘库） |
+| POST | `/api/replay/chat` | sidechat 复盘对话一轮：全上下文（digest + 浓缩痕迹 + 标注 + 复盘史）→ LLM 回复（LLM 日配额计数） | 是（复盘库） |
+| POST | `/api/replay/backfill` | 本机历史补建 session log（用户显式触发才上传，仅服务端无记录时生效；对齐 /api/dream 先例） | 是（session log） |
 | GET | `/spec/upload` | 返回上传规范 | 否 |
 | POST | `/api/diagnose` | 用 JSON 请求体诊断 LLM 配置和网络 | 否 |
 | GET | `/api/sources` | 返回来源及记录数 | 否 |
@@ -250,16 +270,66 @@ Invoke-RestMethod `
     -Body $DiagnoseBody
 ```
 
+统一知识接口（三类知识 memory/skill/example 的唯一真源，共享会话 SQLite；原 `.userdata/collab_rules.jsonl`、`curate_examples.jsonl`、`curate_example_candidates.jsonl` 为永久保留的迁移原档，切换后不再写入；提案→服务端独立评估→真人确认提交，草稿不生效不进 prompt）：
+
+| 方法 | 路径 | 作用 | 是否写数据 |
+|---|---|---|---|
+| GET | `/api/knowledge/status` | 知识状态：身份、目录代际、系统摘要、迁移状态、配置代际与能力清单 | 否 |
+| GET | `/api/knowledge/entries` | 生效/撤回条目分页（scope_level/kind/status/include_inherited/offset/limit 严格过滤） | 否 |
+| GET | `/api/knowledge/entries/{id}` | 单条知识详情（含系统内置只读条目） | 否 |
+| GET | `/api/knowledge/changes` | 提案清单分页（draft/pending/stale/committed/rejected；含已保存评估与过期视图） | 否 |
+| POST | `/api/knowledge/propose` | 提交知识提案（1–32 个 create/update/retract/move 操作 + 明确出处；只建草稿，幂等 `request_id`） | 是 |
+| POST | `/api/knowledge/assess` | 服务端独立评估：完整影响集关系判定（超单批容量完整分批、不截断）+ 来源/权限/目录/配置代际 CAS 绑定；评估未通过仍是草稿 | 是 |
+| POST | `/api/knowledge/commit` | 真人确认提交（`confirm:true` + 评估 id/版本/目录代际 CAS；模型不能代批） | 是 |
+| POST | `/api/knowledge/reject` | 驳回提案（CAS 审计留痕，不改目录） | 是 |
+
 所有 HTTP 请求都只接受 loopback Host；解释、推荐、上传、诊断四个浏览器 POST 携带 `Origin` 时还必须同源。不带 `Origin` 的本机 CLI/MCP 客户端保持兼容，但同样不能伪造非 loopback Host。该入口约束阻断“恶意域名重绑定到 127.0.0.1 后让 Host/Origin 同为恶意域名”的入站绕过。自定义公网端点只允许 HTTPS；明文 HTTP 只允许显式 loopback（`localhost`、`127.0.0.1`、`::1`）。端点不得含凭据、查询串或 fragment；私有、链路本地、保留、多播和未指定的字面 IP，以及常见内部域名后缀会被拒绝。出站 endpoint 域名这里只做语法校验、不会预解析 DNS，因此公开部署还必须在网络层限制出站目标并防范出站 DNS rebinding。调用方指定的自定义端点不会继承服务端共享 Key；如需临时 Key，应只放在本次 JSON 请求的 `api_key` 字段，不写入源码、日志或命令历史。服务端禁止 LLM HTTP 重定向，把供应商成功响应限制为 8 MiB，并对外清理/截断错误文本；mock 和 CI offline 诊断不会触发 DNS/TCP/HTTP。但这些校验不能把当前本地服务变成可安全公开的多用户服务，边界见 [SECURITY.md](SECURITY.md)。
 
 集成时应以 `/docs` 中的当前 schema 为准。前端会读取 `interpretation` 和 `search_trace` 显示实际解析条件、执行步骤和回退信息；不要根据请求参数推测某个增强排序一定执行成功。
 
+### 对话项目与持久任务接口
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/conversation-projects` | 本账户项目与对话归属 |
+| POST | `/api/conversation-projects` | 新建项目 |
+| POST | `/api/conversation-projects/reorder` | 保存本账户项目顺序 |
+| PATCH | `/api/conversation-projects/{id}` | 编辑项目名称与颜色 |
+| POST | `/api/conversation-projects/{id}/archive` | 归档或恢复项目 |
+| PUT | `/api/conversations/{id}/project` | 移入或移出项目 |
+| GET | `/api/runs/{id}` | 任务状态与结果 |
+| GET | `/api/runs/{id}/events` | 游标之后的执行进度 |
+| POST | `/api/runs/resolve` | 按原请求编号核对任务 |
+| POST | `/api/runs/{id}/cancel` | 在安全边界停止后续执行 |
+
+### 共享会话与复盘接口（Web 与高层 MCP 工具同一现场）
+
+同一份持久现场同时服务网页端与 MCP 高层 Agent 五工具：同 `data_root` + 同身份即同 scope（普通 MCP 客户端不复制图谱界面）。
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/conversations` | 会话清单（`offset`/`limit`/`include_archived` 游标；每项带上项目归属与 `scope`） |
+| GET | `/api/conversations/{id}` | 单会话详情（`after_message`/`after_frame` 增量游标） |
+| POST | `/api/conversations/actions` | 新建或**逐条预览确认后**导入一条旧史（`import_id` 幂等；绝不自动扫描本机历史） |
+| POST | `/api/conversations/{id}/actions` | 会话动作：rename/archive/restore/delete/select_frame/branch（携 `expected_revision` 防旧客户端覆盖；`branch` 需真实 `frame_id`） |
+| GET | `/api/conversations/{id}/replay` | 只读复盘载荷（`action=status`/`points`/`snapshots`） |
+| POST | `/api/conversations/{id}/replay/{action}` | 写侧复盘动作：annotate/snapshot/annotate_snapshot/seen/chat/digest；strict `{data, provider, use_llm, …}` 信封，`chat`/`digest` 过同一额度闸 |
+
+三种对话传输方式共用有界持久执行器。浏览器使用 `background: true` 并持有恢复编号，
+旧 JSON/SSE 消费者保持响应格式。范围与数据兼容规则见 [Conversation projects](docs/CONVERSATION_PROJECTS.md)。
+
 ## 7. MCP 接口
 
-MCP 服务提供 19 个工具（与网页端能力对齐；16 个只读 + 3 个写盘：`upload_dataset` 写外部库、`provision_dataset` 写调用方指定目录、`curate_datasets` 管护外部库 upload_* 与回收站）：
+MCP 服务提供 25 个工具（与网页端能力对齐；19 个基础：16 个只读 + 3 个写盘——`upload_dataset` 写外部库、`provision_dataset` 写调用方指定目录、`curate_datasets` 管护外部库 upload_* 与回收站；另有 6 个高层 Agent 工具：持久会话、项目、复盘与经授权的独立学习，会消耗模型额度）：
 
 | 工具 | 用途 |
 |---|---|
+| `agent_chat` | 直接对知识库 Agent 说一句话，不必自己拼装底层工具：一次调用走完整轮并保存消息、结果帧与检索现场。同 `request_id` 重试即幂等；后台未跑完返回 `run_id` + `pending=true`，用 `agent_task` 续读（不要另起请求重跑）。`state_patch` 只接受 query/sources/search_params、`ask_choice` 只取当前选择卡真实 key |
+| `agent_conversations` | 会话 list/get/create/archive/restore/rename/delete/select_frame/branch/import（改动用 `expected_revision` 防覆盖；`branch` 需真实 frame_id；`import` 只收用户逐条预览确认的一条旧史，绝不自动扫描本机历史） |
+| `agent_projects` | 共享项目 list/create/update/archive/restore/reorder/assign，与网页端项目机制、学习作用域同源（归档保留会话，不上传记忆） |
+| `agent_task` | 已有后台任务的 status/events/cancel/resolve（`events` 带 `seq` 游标；取消只在安全边界停止，已完成操作不会撤销，`interrupted` 不自动重演） |
+| `agent_replay` | 复盘 status/points/annotate/snapshot/annotate_snapshot/seen/chat/digest（`points` 出结构化图与出处；`snapshot` 打包标注；`chat`/`digest` 使用可用模型与同一额度；仅本人共享会话可复盘） |
+| `agent_learning` | 独立学习 status/control/release/trigger/candidates/review + 来源读面 sources + 统一知识 entries/changes/propose/assess；trigger 支持固定选择（selection/source_ids/local_materials）与 manual 一次性授权；默认scope授权、每次调用独立额度，候选/审核分页与真实trace；批准/替代/知识 commit 仅网页真人逐条确认，MCP 不能代批；跨项目用户层汇总授权只在 Web 同源入口确认 |
 | `recommend_datasets` | 解析查询并返回推荐结果（可选 `facet_filters` / `suppressed_constraints` / `date_from` / `date_to`，对齐网页「数据细化 / 忽略已命中 / 发表时间范围」） |
 | `get_file_manifest` | 按 `dataset_uid` 获取文件清单 |
 | `parse_constraints` | 只解析查询约束，不执行推荐 |
@@ -279,6 +349,8 @@ MCP 服务提供 19 个工具（与网页端能力对齐；16 个只读 + 3 个�
 | `upload_dataset` | **上传数据集 JSON**（`records` 结构化数组/对象 **或** `path` 本地 .json 二选一）进 `database/external/`（对齐 `/api/upload`；**写工具 ①**，只落外部库、绝不碰冻结基准 `database/base/`，摄取核心与 Web 共用 `uploads.ingest_dataset`） |
 | `biodata_status` | 返回语料、下载索引和服务状态 |
 | `biodata_llm_status` | 返回脱敏的 LLM 配置与可选连通性状态 |
+
+高层 Agent 六工具的身份由传输层注入，**不接受裸 account_id**。本地 stdio 不设 `BIODATA_MCP_ACCESS_TOKEN` 时身份为本机 `local`，显式设了就必须是同一实例未撤销令牌，否则 fail-closed。在线高层工具按同一身份计模型额度，旧 19 基础工具的 `force_llm_off` 安全档不放松。在线下发 23 工具，本地 stdio 下发 25；两个本机文件系统工具在线不下发。独立学习另需 scope 授权，每次模型调用独立过闸，不共享主回合 Admission；默认关闭、trial/AI关不后台调用，凭据只在内存，重启等待授权配置。模型自主决定工具顺序，pending候选不能替代真人批准；临时/条件不明不得激活，网页逐条确认或替代须内容与现役快照CAS、同scope原子落盘。MCP批准/替代仅指向网页，驳回反馈留痕；保存会话不等于训练授权。
 
 直接运行 `mcp_server.py` 会进入 stdio 协议循环，不会显示普通交互提示。开发和排错时优先使用：
 
@@ -314,7 +386,7 @@ Web smoke 主要检查资源和接口契约，不能代替真实浏览器交互�
 
 ### 增加查询别名
 
-物种、组织、疾病、平台和实验技术别名集中在 `vocabulary.py`。新增别名时应同时添加解析与否定语义测试，避免短词造成子串误命中。
+物种、组织、疾病、平台和实验技术别名集中在 `domains/biodata/vocabulary.py`（biodata 领域包词表；查询词法在 `retrieval/query_lexicon.py`）。新增别名时应同时添加解析与否定语义测试，避免短词造成子串误命中。
 
 ### 修改排序策略
 

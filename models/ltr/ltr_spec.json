@@ -1,0 +1,58 @@
+{
+  "feature_order": [
+    "lex_norm",
+    "vec_norm",
+    "has_vec",
+    "inv_pos",
+    "matched_species",
+    "matched_tissue",
+    "matched_disease",
+    "matched_has_raw_data",
+    "raw_required"
+  ],
+  "label_mode": "mix",
+  "seed": 20260910,
+  "feature_mean": [
+    0.7046434879302979,
+    0.4440651535987854,
+    1.0,
+    0.2754895091056824,
+    0.28868359327316284,
+    0.24058066308498383,
+    0.6665127277374268,
+    0.19788847863674164,
+    0.19788847863674164
+  ],
+  "feature_std": [
+    0.25373220443725586,
+    0.14272496104240417,
+    1.0,
+    0.26053017377853394,
+    0.45315051078796387,
+    0.42743608355522156,
+    0.47145891189575195,
+    0.39840760827064514,
+    0.39840760827064514
+  ],
+  "trained_at": "2026-09-14T00:23:54+08:00",
+  "train_counts": {
+    "queries": 1361,
+    "pairs": 39117
+  },
+  "heldout_metrics": {
+    "nDCG@5": 0.9706,
+    "nDCG@10": 0.9808,
+    "MRR": 1.0
+  },
+  "model": {
+    "type": "ranknet_mlp",
+    "input_dim": 9,
+    "hidden_layers": [
+      32,
+      16
+    ],
+    "activation": "relu",
+    "output_dim": 1,
+    "loss": "pairwise_logistic"
+  }
+}

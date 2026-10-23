@@ -21,6 +21,36 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 from dataset_recommender.content import item_view  # noqa: E402
+import pytest
+
+
+@pytest.mark.parametrize("source,uid,evidence", [
+    ("ArrayExpress", "ae:E-MTAB-123", {"complete": True, "fields": {
+        "files": {"complete": True}, "has_raw_data": {"complete": True}}}),
+    ("ENCODE", "encode:ENCSR000ABC", {"complete": True, "files": {"complete": True}}),
+    ("EBI Single Cell Expression Atlas", "ebi:E-MTAB-123", {"cross_source_enrichment": {
+        "file_evidence": {"complete": True}, "biostudies_document": {"retrieved_at": "2026-01-01"}}}),
+])
+@pytest.mark.parametrize("has_raw", [True, False])
+def test_item_preserves_record_evidence_through_reuse_pack(source, uid, evidence, has_raw):
+    from dataset_recommender.corpus import provenance
+    from dataset_recommender.content import reuse_pack
+    from dataset_recommender.retrieval.normalizer import normalize_dataset_record
+
+    raw = {"dataset_uid": uid, "dataset_name": "Evidence sample", "source": source,
+           "species": "Human", "has_raw_data": has_raw, "url": "https://example.org/data",
+           "metadata_provenance": evidence, "ena_study_accessions": ["ERP123456"]}
+    record = normalize_dataset_record(raw, "example.json")
+    item = item_view.build_item(record, include_introduction=True)
+    expected = provenance.raw_data_provenance(raw)
+    assert provenance.raw_data_provenance(item) == expected
+    pack = reuse_pack.build_pack_for_uids([uid], [record], today="2026-01-02")
+    assert pack["table"][0]["raw_state"] == expected["state"]
+    assert pack["table"][0]["raw_basis"] == expected["basis"]
+    item["metadata_provenance"].clear()
+    item["ena_study_accessions"].append("ERP999999")
+    assert record.raw["metadata_provenance"] == evidence
+    assert record.raw["ena_study_accessions"] == ["ERP123456"]
 
 
 def test_web_and_mcp_share_one_implementation() -> None:

@@ -229,6 +229,8 @@ def main() -> int:
         "dataset_name", "dataset_uid", "url", "download_url", "source",
         "species", "tissue", "disease", "platform", "sample_size",
         "published_date", "raw_data_status", "reason", "n_files",
+        # collection_doi（3.1.1）：cards.js 的「同系列 ×N」小标读它（同 collection 的多条数据）。
+        "collection_doi",
     }
     for idx, item in enumerate(results):
         missing = customer_item_fields - set(item.keys())
@@ -248,17 +250,26 @@ def main() -> int:
     if not recall_data.get("ok") or not recall_data.get("results"):
         fail("recall=dense should degrade gracefully to a non-empty rule-ordered result")
 
-    # 5a) 跨维歧义否定 → 仍弃权（0 结果 + fallback_reason；fail-closed 未被削弱）
+    # 5a) 跨维歧义否定 → 解析仍弃权，但 2026-09-12 起不再沉默：向量语义兜底 +
+    #     「未经条件核验」标注（resolution_status="vector_fallback"）。
+    #     嵌入器不可用的环境回退为诚实弃权（abstained + 0 结果）。
     abstain = client.post(
         "/api/recommend",
         json={"query": "不要小鼠的原始数据", "provider": "mock", "use_llm": True, "mock_llm": True},
     ).json()
-    if abstain.get("results"):
-        fail("cross-dim negation should abstain (0 results)")
-    if abstain.get("resolution_status") != "abstained":
-        fail(f"expected resolution_status=abstained, got {abstain.get('resolution_status')}")
-    if not str(abstain.get("fallback_reason", "")):
-        fail("abstain path missing fallback_reason")
+    status = abstain.get("resolution_status")
+    if status == "vector_fallback":
+        if not abstain.get("results"):
+            fail("vector_fallback should carry semantic results")
+        if not abstain.get("vector_fallback") or "未经条件核验" not in str(abstain["vector_fallback"].get("note", "")):
+            fail("vector_fallback missing honest note")
+    elif status == "abstained":
+        if abstain.get("results"):
+            fail("abstained (embedder unavailable) should have 0 results")
+        if not str(abstain.get("fallback_reason", "")):
+            fail("abstain path missing fallback_reason")
+    else:
+        fail(f"expected vector_fallback/abstained, got {status}")
 
     # 5b) 可执行否定 → include human + exclude mouse：有结果、resolution_status=results、无 mouse 违规
     neg = client.post(

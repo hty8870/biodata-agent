@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from ..corpus.data_loader import RawRecord
 from ..corpus.downloads import has_fastq as _fastq_actual
 from ..corpus.sample_supplement import count_fill as _supp_count_fill, gene_count as _supp_gene_count
-from .vocabulary import derive_assay, derive_modality, derive_platform_family
+from ..domain.registry import get_domain as _get_domain
+
+
+def _derive_vocab():
+    """领域词表句柄（派生规则随活动领域包；biodata = `domains/biodata/vocabulary.py`）。
+
+    缺对应函数的领域包优雅降级为空串——biodata 包三个函数齐全，行为逐位不变。
+    """
+    return _get_domain().vocab
 
 # ---------------------------------------------------------------- 缺失哨兵（单一真源）
 
@@ -71,6 +80,9 @@ class DatasetRecord:
     modality: str = ""          # single-cell / spatial / "" —— 由 platform_family(+外部 chemistry) 派生
     family_id: str = ""         # 同一数据集家族的稳定标识（仅由标题根派生，与查询无关）
     gene_count: str = ""        # 检测基因数（10x 平台信息补充旁挂表；仅展示，不进检索/评分）
+    # 通用分面容器（骨肉分离 additive）：非 biodata 领域包的维度取值放这里，
+    # 领域包的 DimensionDescriptor 访问器按 key 读取；biodata 路径恒为空 dict、逐位不变。
+    facets: dict[str, str] = field(default_factory=dict)
 
     @property
     def searchable_text(self) -> str:
@@ -221,7 +233,7 @@ def _parse_count_from_name(name: str) -> str:
     if not match:
         return ""
     number = float(match.group(1)) * 1000
-    return str(int(number))
+    return str(int(number)) if math.isfinite(number) else ""
 
 
 def _normalize_count(value: Any, dataset_name: str) -> str:
@@ -262,10 +274,15 @@ def normalize_dataset_record(raw_record: dict[str, Any], source_file: str) -> Da
     description = _stringify(_extract_value(raw_record, "description"))
 
     platform_raw = _stringify(raw_record.get("platform")) if isinstance(raw_record, dict) else ""
-    platform_family = derive_platform_family(platform_raw)
-    assay = derive_assay(chemistry)
-    modality = derive_modality(platform_family, chemistry)
+    _v = _derive_vocab()
+    platform_family = getattr(_v, "derive_platform_family", lambda _x: "")(platform_raw)
+    assay = getattr(_v, "derive_assay", lambda _x: "")(chemistry)
+    modality = getattr(_v, "derive_modality", lambda _p, _c: "")(platform_family, chemistry)
     family_id = derive_family_id(dataset_name)
+    # additive（骨肉分离）：透传原始记录自带的 facets 字典（非 biodata 领域包的维度取值容器；
+    # 形状非法一律保守为空 dict——biodata 语料无此键，行为逐位不变）。
+    _raw_facets = raw_record.get("facets") if isinstance(raw_record, dict) else None
+    facets = {str(k): str(v) for k, v in _raw_facets.items()} if isinstance(_raw_facets, dict) else {}
 
     return DatasetRecord(
         dataset_name=dataset_name,
@@ -285,6 +302,7 @@ def normalize_dataset_record(raw_record: dict[str, Any], source_file: str) -> Da
         modality=modality,
         family_id=family_id,
         gene_count=gene_count,
+        facets=facets,
     )
 
 
@@ -296,3 +314,17 @@ def normalize_records(raw_records: Iterable[RawRecord]) -> list[DatasetRecord]:
         normalized.append(normalize_dataset_record(raw.record, raw.source_file))
     return normalized
 
+
+def effective_has_raw_data(record: DatasetRecord) -> "bool | None":
+    """记录的有效 raw 三态：**猜测性 False → None**（unknown ≠ 已确认没有）。
+
+    判据真源 = `corpus.corpus.raw_data_false_is_guess`（展示层 `workflow._raw_false_is_guess`
+    同一真源、同一档：仅有 ArrayExpress 抓取占位的 False 算猜，逐条核验过的 AE 记录不算）。
+    只影响猜测档：有据 False（10x 台账 / CELLxGENE / SCEA / HCA 库级事实）原样保留——
+    冻结 base 口径逐位不变。惰性 import 避免 normalizer ↔ corpus.corpus 的模块环。"""
+    if record.has_raw_data is not False:
+        return record.has_raw_data
+    from ..corpus.corpus import raw_data_false_is_guess
+    if raw_data_false_is_guess({**record.raw, "has_raw_data": False}):
+        return None
+    return False

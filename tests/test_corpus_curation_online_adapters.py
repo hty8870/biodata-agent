@@ -510,6 +510,35 @@ def test_scp_species_filter_after_backfill(tmp_path, monkeypatch):
     assert {r["dataset_uid"] for r in plan["candidates"]} == {"scp:SCP100", "scp:SCP105"}
 
 
+def test_scp_species_budget_applies_to_qualified_results(tmp_path, monkeypatch):
+    """limit 是**最终合格结果**预算——`lung+Human+limit=1` 必须返回 Human 的
+    SCP101（旧实现先富化前 1 条 Mouse SCP100 再过滤，误报 no_candidates）。"""
+    calls: list = []
+    monkeypatch.setattr(cc, "_fetch", _scp_fetch(calls))
+    plan = cc.plan_search_online("lung", "single_cell_portal", species="Human", limit=1,
+                                 project_root=tmp_path)
+    assert [r["dataset_uid"] for r in plan["candidates"]] == ["scp:SCP101"]
+    details = [c for c in calls[1:]]
+    assert details == [f"{cc.SCP_LIST_API}/SCP100", f"{cc.SCP_LIST_API}/SCP101"], \
+        "逐条富化到预算为止：Mouse 不计入 limit，Human 命中即停"
+
+
+def test_tenx_slug_direct_lookup_respects_species(tmp_path, monkeypatch):
+    """slug 直查与关键词路径共用物种政策——物种对立拒绝（no_candidates 带原因），
+    一致放行，缺省照旧。"""
+    monkeypatch.setattr(cc, "_fetch", _tenx_fetch([]))
+    ok = cc.plan_search_online("visium-hd-rat-liver", "10x", species="Rat",
+                               project_root=tmp_path)
+    assert [r["dataset_uid"] for r in ok["candidates"]] == ["10x:visium-hd-rat-liver"]
+    with pytest.raises(CurateError) as ei:
+        cc.plan_search_online("visium-hd-rat-liver", "10x", species="Human",
+                              project_root=tmp_path)
+    assert ei.value.code == "no_candidates" and "Rat" in ei.value.hint, \
+        "物种冲突必须如实说明，不许静默返回别的物种"
+    plan = cc.plan_search_online("visium-hd-rat-liver", "10x", project_root=tmp_path)
+    assert plan["record_count"] == 1
+
+
 def test_scp_no_candidates(tmp_path, monkeypatch):
     monkeypatch.setattr(cc, "_fetch", _scp_fetch([]))
     with pytest.raises(CurateError) as ei:
@@ -755,6 +784,58 @@ def test_hca_plan_apply_token_chain(tmp_path, monkeypatch):
     assert "curate_hca" in res["filename"]
     disk = json.loads((tmp_path / res["saved_to"]).read_text(encoding="utf-8"))
     assert disk["records"][0]["dataset_uid"] == "hca:74b6d569-3b11-42ef-b6b1-a0454522b4a0"
+
+
+def test_hca_both_entrypoints_reach_the_same_ninth_page(tmp_path, monkeypatch):
+    from dataset_recommender.corpus import corpus_net as cn
+    calls = {"net": [], "curate": []}
+
+    def fetch(lane):
+        def run(url, **kwargs):
+            calls[lane].append(url)
+            n = len(calls[lane])
+            return _azul_payload(
+                [_AZUL_HIT_HUMAN] if n == 9 else [],
+                next_url=cn.AZUL_PROJECTS_API + f"?page={n+1}" if n < 9 else None), 200
+        return run
+
+    monkeypatch.setattr(cn, "fetch_json", fetch("net"))
+    monkeypatch.setattr(cc, "_fetch", fetch("curate"))
+    light = cn.search_hca("brain", limit=1, project_root=tmp_path)
+    full, warnings = cc._search_hca("brain", limit=1, project_root=tmp_path)
+    assert light["ok"] and not warnings
+    assert full[0]["dataset_uid"] == "hca:" + light["items"][0]["accession"]
+    assert calls["net"] == calls["curate"] and len(calls["net"]) == 9
+
+
+@pytest.mark.parametrize("has_match", [False, True])
+def test_hca_budget_has_one_anchor_and_both_entrypoints_disclose_truncation(tmp_path, monkeypatch, has_match):
+    from dataset_recommender.corpus import corpus_net as cn
+    monkeypatch.setattr(cn, "_AZUL_MAX_PAGES", 2)
+    calls = {"net": 0, "curate": 0}
+
+    def fetch(lane):
+        def run(url, **kwargs):
+            calls[lane] += 1
+            return _azul_payload([_AZUL_HIT_HUMAN] if has_match else [],
+                                 next_url=cn.AZUL_PROJECTS_API + "?page=next"), 200
+        return run
+
+    monkeypatch.setattr(cn, "fetch_json", fetch("net"))
+    monkeypatch.setattr(cc, "_fetch", fetch("curate"))
+    light = cn.search_hca("brain", project_root=tmp_path)
+    if has_match:
+        full, warnings = cc._search_hca("brain", project_root=tmp_path)
+        assert len(full) == len(light["items"]) == 1  # 重复页不产生重复候选
+        assert warnings[0] in light["note_zh"]
+    else:
+        assert light["error"] == "coverage_limited"
+        with pytest.raises(CurateError) as exc:
+            cc._search_hca("brain", project_root=tmp_path)
+        assert exc.value.code == "coverage_limited"
+        assert exc.value.hint == light["note_zh"]
+    assert "覆盖不完整" in light["note_zh"]
+    assert calls == {"net": 2, "curate": 2}
 
 
 # ----------------------------------------------------------------------------------------------

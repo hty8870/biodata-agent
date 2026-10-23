@@ -21,7 +21,7 @@
 - 详情接口偶发失败时优雅降级：species 回退正则、tissue/disease 留空，不中断整体抓取。
 
 设计约束（与 ingest_cellxgene.py / ingest_hca.py 一致）：
-- **不动 `database/base/`**：官方 54 题评测冻结在原始 767 条 10x 语料；外部平台库默认关（sources=None 只装
+- **不动 `database/base/`**：官方 54 题评测冻结在 784 条 base 语料；外部平台库默认关（sources=None 只装
   基础语料）→ 确定性二元门不受影响。
 - **运行时不联网**：一次性抓快照落地，查询期只读本地 JSON。
 - 零第三方依赖（纯标准库 urllib）。复用 `ingest_cellxgene` 的物种/平台/清洗助手，保持单一真源。
@@ -29,10 +29,17 @@
 数据许可：ArrayExpress/BioStudies 数据面向开放科研；BioStudies REST 为公开、面向程序化访问的官方接口，
 仅抓元数据 + 门户直链。
 
+快照写入安全（助手来自 ingest_cellxgene，四个 ingest 脚本同口径）：完整默认运行才写
+`database/external/arrayexpress.json`；`--limit` / `--detail 0` 这类快速或降级模式必须显式 `--out`；
+`--dry-run` 不写任何文件；**搜索分页失败或命中集不完整时非零退出且原快照字节不变**（绝不落部分快照）。
+
 用法：
-    py -3 scripts/ingest_arrayexpress.py                # 抓全量 → database/external/arrayexpress.json
-    py -3 scripts/ingest_arrayexpress.py --limit 30     # 只取前 N 条（快速自测）
-    py -3 scripts/ingest_arrayexpress.py --detail 0     # 跳过详情富化，只用搜索命中 + content 正则（更快）
+    py -3 scripts/ingest_arrayexpress.py                          # 抓全量 → database/external/arrayexpress.json
+    py -3 scripts/ingest_arrayexpress.py --dry-run                # 只抓取/打印，不写任何文件
+    py -3 scripts/ingest_arrayexpress.py --limit 30 --out /tmp/ae.json
+                                                                  # 快速自测（不得覆写正式快照）
+    py -3 scripts/ingest_arrayexpress.py --detail 0 --out /tmp/ae-fast.json
+                                                                  # 跳过详情富化（同样不得覆写正式快照）
 """
 from __future__ import annotations
 
@@ -446,7 +453,7 @@ def enrich_existing_snapshot(limit: int = 0, sleep: float = 0.2) -> int:
     plat_after = sum(1 for r in records if str(r.get("platform") or "").strip())
     doi_after = sum(1 for r in records if str(r.get("collection_doi") or "").strip())
     snap["record_count"] = len(records)
-    OUT_PATH.write_text(json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
+    cxg.write_snapshot(OUT_PATH, snap, indent=2)   # 原子写：中断不留半截快照
     print(f"wrote {len(records)} records -> {OUT_PATH}")
     print(f"platform: {plat_before}/{total} ({plat_before/total:.1%}) -> "
           f"{plat_after}/{total} ({plat_after/total:.1%}); multi-family={multi_family}")
@@ -461,12 +468,25 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="只取前 N 条（0=全量）")
     ap.add_argument("--detail", type=int, default=1, choices=(0, 1),
                      help="1=逐条拉详情富化 species/tissue/disease/chemistry（默认）；0=只用搜索命中+content 正则，快速自测")
+    ap.add_argument("--out", type=str, default=None,
+                    help=f"输出路径（默认 {OUT_PATH}）；--limit / --detail 0 必须显式指定")
+    ap.add_argument("--dry-run", action="store_true", help="只抓取/打印，不写任何文件")
     ap.add_argument("--enrich-existing", action="store_true",
                      help="surgical 模式：只补 platform + collection_doi 进现有快照，不重抓其余字段")
     args = ap.parse_args()
     if args.enrich_existing:
         return enrich_existing_snapshot(limit=args.limit)
     detail_enabled = bool(args.detail)
+
+    # 快速（--limit）或降级（--detail 0，tissue/disease 恒空）运行不得覆写正式快照；
+    # --dry-run 不写盘，故不进入 partial 判定。
+    partial = (bool(args.limit) or not detail_enabled) and not args.dry_run
+    try:
+        out_path = cxg.resolve_out_path(args.out, OUT_PATH, partial=partial,
+                                        script_name="ingest_arrayexpress.py")
+    except cxg.SnapshotTargetError as exc:
+        print(f"REFUSED: {exc}")
+        return 2
 
     # ---- 阶段一：搜索分页，收集命中（按 accession 去重） ----
     print(f"searching {SEARCH_API} query={QUERY!r} ...")
@@ -479,8 +499,11 @@ def main() -> int:
         try:
             payload = fetch(url)
         except Exception as exc:  # noqa: BLE001
+            # 分页中断曾走 break：随后仍写「已收到的部分」并 exit 0。部分快照会静默丢记录，
+            # 必须按失败处理（不写盘、非零退出）。
             print(f"SEARCH_FAILED (page {page}): {type(exc).__name__}: {exc}")
-            break
+            print("SEARCH_FAILED：本次不写快照（原文件未动）。")
+            return 2
         if total_hits is None:
             total_hits = payload.get("totalHits")
             print(f"  totalHits={total_hits}")
@@ -500,6 +523,16 @@ def main() -> int:
         if total_hits and len(hits) >= total_hits:
             break
         page += 1
+
+    # 完整性闸：页数上限截断而 totalHits 未达 → 不完整集合，不得落盘。
+    if not args.limit:
+        try:
+            reached_total = total_hits is not None and len(hits) >= int(total_hits)
+        except (TypeError, ValueError):
+            reached_total = False
+        if not reached_total and page > MAX_PAGES:
+            print(f"INCOMPLETE: 收集 {len(hits)}/{total_hits} 条（页数上限 {MAX_PAGES}），不写快照。")
+            return 2
 
     # ---- 阶段二：逐条详情富化（可选）→ 归一成记录 schema ----
     records: list[dict] = []
@@ -532,7 +565,10 @@ def main() -> int:
         if args.limit and len(records) >= args.limit:
             break
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not records:
+        print("没有取到任何记录，不写快照。")
+        return 1
+
     payload_out = {
         "source": SOURCE_LABEL,
         "source_url": SEARCH_API,
@@ -541,8 +577,11 @@ def main() -> int:
         "record_count": len(records),
         "records": records,
     }
-    OUT_PATH.write_text(json.dumps(payload_out, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"wrote {len(records)} records -> {OUT_PATH}")
+    if args.dry_run:
+        print(f"--dry-run：不写任何文件（{out_path} 未动）。")
+        return 0
+    cxg.write_snapshot(out_path, payload_out, indent=2)
+    print(f"wrote {len(records)} records -> {out_path}")
 
     n_tissue = sum(1 for r in records if r["tissue"])
     specs: dict[str, int] = {}

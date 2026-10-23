@@ -9,9 +9,11 @@
 
 1. **纯逻辑核心零 DOM / 零网络 / 零 localStorage**：feedback_dialog_core.js 只做确定性计算
    （校验/摘要/条目构造/剪贴板正文），队列存储属 feedback_core.js、出网属 usage_upload.js。
-2. **不进静态图**：feedback_dialog_core.js 只相对 import feedback_core.js（零 `#` import）；
-   feedback.js 对 usage_upload.js 只**动态 import**（静态 import 会牵动两页 importmap 与
-   parity 门——usage_log.js 头部注释明令）；两模块都不得出现在 boot.js 的 import 里。
+2. **静态图通道**：feedback_dialog_core.js 只相对 import feedback_core.js（后者无 importmap 键，
+   只能相对取）；feedback.js 走 `#feedback_dialog_core`（有键模块须走 importmap 通道，2026-10-01
+   tidy1 起）；feedback.js 对 usage_upload.js 只**动态 import**（无键模块 + 该文件的既有红线：
+   静态 import 会牵动两页 importmap 与 parity 门——usage_log.js 头部注释明令）；
+   两模块都不得出现在 boot.js 的 import 里。
 3. **入口/骨架在场**：设置「使用反馈」卡片 #feedbackSendEntryBtn、对话框 #feedbackModal、
    #feedbackText（意见）、#feedbackDiagChk（附诊断信息，默认勾选语义由 JS 保证）、
    #feedbackSendBtn / #feedbackCopyBtn（有通道 → 发送；无通道 → 复制兜底）、失败态
@@ -139,15 +141,19 @@ def test_no_client_side_telemetry_for_feedback_text() -> None:
         assert "usageLog(" not in code, f"{path.name} 调用了 usageLog（埋点应只在接收端计数）"
 
 
-def test_importmap_registration_stays_on_index_page_only() -> None:
-    """本包 importmap 登记只在本页 + package.json（dataset.html 归另一并行改动，不碰）。"""
+def test_importmap_registration_covers_used_specifiers() -> None:
+    """本包 importmap 登记：index.html + package.json；纯核键另须 dataset.html 同登记
+    （2026-10-01 tidy1 起 #feedback_dialog_core 被 feedback.js 经 `#` 静态 import 引用，
+    import 图门的双页覆盖要求两页都在）；#feedback 是壳键，保持 index-only。"""
     pkg = (ROOT / "package.json").read_text(encoding="utf-8")
     for key in ('"#feedback_dialog_core"', '"#feedback"'):
         assert key in pkg, f"package.json 缺 {key}"
         assert key in INDEX.read_text(encoding="utf-8"), f"index.html importmap 缺 {key}"
     ds = DATASET.read_text(encoding="utf-8")
-    assert '"#feedback_dialog_core"' not in ds and '"#feedback"' not in ds, (
-        "dataset.html 出现本包键——该页归另一并行改动，本包不得碰")
+    assert '"#feedback_dialog_core"' in ds, (
+        "dataset.html importmap 缺 #feedback_dialog_core（被 # 静态 import 引用，须两页同登记）")
+    assert '"#feedback"' not in ds, "dataset.html 不应出现壳键 #feedback（只由 index.html script 标签进入）"
+    assert '<script type="module" src="/static/js/core/feedback.js?' not in ds
 
 
 # ---------------------------------------------------------------- node 规格驱动

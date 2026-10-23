@@ -23,7 +23,7 @@
 
 ### 安全性：写盘是例外，不是常态
 
-- 19 个 MCP 工具中只有 3 个能写盘，且全部**两步确认**：plan 阶段零写盘、返回预览与 `confirm_token`（动作参数+内容指纹的 sha256），token 不符一个字节都不写。
+- 25 个 MCP 工具里只有 3 个能写语料库，且全部**两步确认**：plan 阶段零写盘、返回预览与 `confirm_token`（动作参数+内容指纹的 sha256），token 不符一个字节都不写。另有 6 个高层 Agent 工具（会话/项目/复盘）会持久保存对话现场，但同样不写语料、不碰冻结基准。
 - 冻结评测基准库结构性只读：上传、下载、trace 全部锚定在外部库与用户数据目录，`database/base/` 无从触碰。
 - 下载通道 SSRF 全防线：https+域名白名单、每跳重定向重新校验、连接钉死已校验 IP（防 DNS rebinding）、拒绝回环/私网/云元数据地址（169.254.169.254 等）、限 3 跳、流式字节硬上限超限即断。
 - API Key 默认只活在本会话内存，落盘需双重显式勾选；自定义 LLM 端点过同样的 IP 校验，且不继承服务端共享 Key。
@@ -73,20 +73,20 @@ flowchart TD
     G -->|编号/直链 零 LLM| K[关键词检索<br/>零 LLM 硬过滤]
     G -->|闸关 规则直达| K
     G -->|闸关 + 操作意图| N[如实回音 / 降级气泡]
-    G -->|闸开 全量分流| R{LLM 统一路由<br/>规则匹配概览作输入<br/>只路由 不执行}
-    R -->|检索| K
-    R -->|改条件| B[条件板规划]
-    B --> K
-    R -->|工具调用| P[封闭动词表 plan<br/>langgraph 优先 内置规划器兜底]
-    R -->|无法归类| N
+    G -->|闸开| RM[规则匹配概览<br/>rule_match_summary]
+    RM --> PRE[初步检索 flight<br/>与分流并发预跑]
+    RM --> RC{route_consensus 一致意见<br/>并行 2 票 · 分歧加投<br/>平票兜底 general}
+    RC -->|search / action / general<br/>只决定装载哪些工具| S[路线套件<br/>工具表 + 系统提示]
+    S --> L{{同一 ReAct 环<br/>understand → execute → decide<br/>rank · rerank · results.show · ask.relax<br/>search.rerun · curate.* · 对比/引文/兼容/FAIR<br/>langgraph 编排 · 未装回退内置规划器}}
+    PRE -.->|判 search 复用<br/>判 action 丢弃| L
+    L -->|results.show 屏态唯一出口| C[可解释结果卡片]
+    L -->|写工具 confirm_token 闭环| A[(审计账本<br/>回执 可撤回)]
+    L -->|none 如实收尾| N
     K --> F[多层排序<br/>规则 / 本地语义 / AI 重排]
-    F --> C[可解释结果卡片]
-    P --> T[前端派发执行]
-    T --> CF{两步确认<br/>confirm_token}
-    CF --> L[(审计账本<br/>回执 可撤回)]
+    F --> C
 ```
 
-两条面共用同一套语料（冻结基准 + 外部库）与同一套确定性生成器；任一 AI 环节不可用都诚实回退。「AI 执行」开启且无动作标记的句子，在 LLM 分流的同时会并发预跑一轮初步检索：判为检索即复用该结果、判为工具调用则丢弃——路由不空等检索。
+两条面共用同一套语料（冻结基准 + 外部库）与同一套确定性生成器；任一 AI 环节不可用都诚实回退。「AI 执行」开启时，一句话先在环首做一致意见分流（多温度并行投票，平票机械兜底 general）——分流只决定本回合装载哪套工具与系统提示，随后永远进入同一个 ReAct 环自主多步执行；规则检索 flight 与分流并发预跑，判为检索即复用该结果、判为工具调用则丢弃，路由不空等检索。
 
 ## 快速开始
 
@@ -154,7 +154,7 @@ python -m venv .venv
 - **FAIR 复用就绪度检查**：13 项 F/A/I/R 检查 + 可入稿件的英文声明，确定性离线、不调 LLM。
 - **引文三格式导出**：RIS / BibTeX / GB/T 7714-2015 [DS/OL] 数据集著录，缺字段如实列 gaps 不编造。
 - **追踪与检查更新**：满意的检索现场一键「存为追踪」（只存本机浏览器）；「检查更新」用当初的条件确定性重跑，新数据集先进「待核验」，绝不自动纳入；导出中心可产出纳入排除表与研究材料包。
-- **账号与记忆**：注册/登录、会话 30 天、邀请码制（护栏部署）、账号级 LLM 日配额（BYOK 不计费）；「用户记忆」手动保存、可逐条删除，不会自动拼入查询；「整理记忆」由 LLM 在封闭护栏内产出、逐字出处核验、人工勾选才写入，产出恒标「AI 整理」。服务端另有可选的 Redis 会话后端与 RQ 任务队列后端（均默认关闭，见 deploy/web/README.md §10）。
+- **账号与记忆**：注册/登录、会话 30 天、邀请码制（护栏部署）、账号级 LLM 日配额（BYOK 不计费）；「用户记忆」手动保存、可逐条删除，不会自动拼入查询；「整理记忆」由 LLM 在封闭护栏内产出、逐字出处核验、人工勾选才写入，产出恒标「AI 整理」；记忆条目可逐条「转为协作规则」——写进服务端账本、AI 在执行下一步时会参考、可随时撤回（不点就永远只在浏览器里）。服务端另有可选的 Redis 会话后端与 RQ 任务队列后端（均默认关闭，见 deploy/web/README.md §10）。
 - **使用反馈**：本地采集默认开启（消息、结果、耗时、报错、评分），不采集 API Key、密码和账户名；只有部署方配置了安全遥测通道才会脱敏上传，默认空配置只存本地、可手动导出、可随时关闭或清空。
 
 ## 基本使用流程
@@ -247,10 +247,16 @@ $Python = '.\.venv\Scripts\python.exe'   # macOS/Linux 换成 ./.venv/bin/python
 
 ## MCP 接入
 
-项目提供 19 个 stdio MCP 工具（16 只读 + 3 写），可供 Codex、Claude Code 或其他兼容客户端调用：
+项目提供 25 个 stdio MCP 工具（19 个基础：16 只读 + 3 写语料库；6 个高层 Agent 工具：持久会话、项目与复盘，会消耗模型额度），可供 Codex、Claude Code 或其他兼容客户端调用：
 
 | 工具 | 作用 |
 |---|---|
+| `agent_chat` | 直接对知识库 Agent 说一句话，不必自己拼装底层工具：一次调用走完整轮，并保存消息、结果帧与检索现场。重试须复用同一个 `request_id`；后台没跑完时返回 `run_id` 与 `pending=true`，用 `agent_task` 续读，不要另起请求重跑 |
+| `agent_conversations` | 会话 list/get/create/archive/restore/rename/delete/select_frame/branch/import（改动用 `expected_revision` 防覆盖；`branch` 需真实 frame_id；`import` 只收用户逐条预览确认的一条旧史，绝不自动扫描本机历史） |
+| `agent_projects` | 共享项目 list/create/update/archive/restore/reorder/assign，与网页端项目机制、学习作用域同源（归档保留会话，不上传记忆） |
+| `agent_task` | 已有后台任务的 status/events/cancel/resolve（`events` 带 `seq` 游标；取消只在安全边界停止，已完成操作不会撤销） |
+| `agent_replay` | 复盘 status/points/annotate/snapshot/annotate_snapshot/seen/chat/digest（`points` 出结构化图与出处，`snapshot` 打包标注，`chat`/`digest` 使用可用模型与同一额度；仅本人共享会话可复盘） |
+| `agent_learning` | 独立学习 status/control/trigger/candidates/review：默认关闭，按当前作用域授权后整理新共享回合；候选与审核反馈可回查。批准或替代须网页真人逐条确认，MCP 不能代批 |
 | `recommend_datasets` | 按中文自然语言查询推荐数据集（可选分面细化、放宽约束、时间范围） |
 | `browse_datasets` | 按来源/物种/平台/年份浏览目录，不需要查询语句 |
 | `get_file_manifest` | 取某数据集的文件清单（文件名、大小、md5、下载直链） |
@@ -273,19 +279,27 @@ $Python = '.\.venv\Scripts\python.exe'   # macOS/Linux 换成 ./.venv/bin/python
 
 `recommend_datasets` 的每个候选都兼容性追加 `introduction`，内容与网页“数据集详情”页的介绍标签共用同一确定性生成器。
 
-网页版另提供**在线 MCP**：同一实例的 streamable-HTTP 形态挂 `/mcp`，Bearer 令牌闸（令牌只存 sha256 摘要、每账户上限 5 枚）+ 确定性成本闸（持令牌者无法消耗服务端 LLM 配额）。
+高层 Agent 六工具（`agent_chat` / `agent_conversations` / `agent_projects` / `agent_task` / `agent_replay` / `agent_learning`）与网页端共享**同一份持久现场**：同一实例、同一身份读到同一批会话与项目。本地 stdio 不设 `BIODATA_MCP_ACCESS_TOKEN` 时身份是本机 `local`，与网页版「本机」同 scope；显式设了该环境变量，就必须是**同一实例**「接入 AI 助手」里生成且未撤销的令牌（否则启动即失败，绝不降级冒用本机身份——也不要拿线上服务器的令牌去连另一套本地库）。这些工具会使用你已配置的模型并计入同一身份额度；没配模型时如实降级，不会假装成功。普通 MCP 客户端只读写数据与服务端现场，不复制网页版的图谱界面。
+
+网页版另提供**在线 MCP**：同一实例的 streamable-HTTP 形态挂 `/mcp`，Bearer 令牌只存 sha256 摘要。在线下发 23 个工具，本地 stdio 下发 25 个；`provision_dataset` 与 `verify_local_assets` 的本机文件系统能力不对服务器开放。旧基础工具维持确定性成本闸，高层工具按同一身份计模型额度。
+
+### 独立学习（默认关闭）
+
+在「用户记忆 → 协作规则」选择全局或项目，授权后由独立有界 ReAct 自主读取新共享回合、查规则、提炼、判断关系、保存候选或零提案结束。每个模型调用单独过额度闸；AI 关闭、trial、缺配置不会偷偷后台调用。凭据只在内存，重启需同账户、同端点授权配置恢复；浏览器旧历史不会自动上传，复制/分支历史不算新证据。
+
+候选、出处、新旧差异、审核反馈和真实执行记录可刷新查看。模型判断不等于批准：永久规则仍需网页真人逐条确认；替代需内容与现役快照 CAS，同项目不能撤回全局或其它项目规则。临时或条件不明不能长期生效。MCP `agent_learning` 可查看、控制、触发和驳回，批准/替代只返回网页确认路径；暂停与删除来源会阻止迟到结果保存。现有规则消费与确定性检索不变，这不等于模型已被训练或效果已验证。
 
 ### 对话式数据库管护（curate_datasets）
 
 `curate_datasets` 让你用一句话管护**自己上传的数据**：`action=list` 清点外部库与回收站、`import` 导入本地数据集 JSON（内容 hash 去重，撞重默认拒绝、`force=true` 覆盖）、`search_online` 联网搜索官方源（候选先预览、确认后才入库）、`remove` 移入回收站（可逆）、`restore` 移回、`check_updates` 检查官方源更新、`sync_updates` 同步进外部库（落盘返回 operation receipt，可整次撤回）。所有写动作都是**两步确认**：默认只返回预览和 `confirm_token`（不落盘），回传 token 才真执行；token 与内容指纹不符时一个字节都不写。管护对象仅限 `database/external/` 的 `upload_*` 文件，官方快照与冻结基准 `database/base/` 结构性不可达。网页端对应 `POST /api/curate/plan`、`/api/curate/apply`、`/api/curate/sync-updates`（另有只读 `/api/curate/sync-status` 与整次撤回 `/api/curate/recall`），命令行对应 `scripts/curate_datasets.py`，三处共用同一套逻辑。
 
-网页端另提供统一对话路由 `POST /api/utterance`：一切输入先过入口闸——贴编号/直链的句子零 LLM 直达检索；「AI 执行」关闭时所有输入按规则检索处理（规则检出操作意图的句子回降级气泡，不静默当检索）；开启时所有句子经 LLM 统一分流（规则匹配概览作为分流输入；langgraph 图优先、未装扩展或未配大模型时回退内置规划器），只路由、不执行——判为检索或改条件就产出改写后的检索句交给 `/api/recommend`，判为工具调用就只出封闭动词表 plan、交由前端确认后执行，无法归类则如实回音。
+网页端另提供统一对话路由 `POST /api/utterance`：一切输入先过入口闸——贴编号/直链的句子零 LLM 直达检索；「AI 执行」关闭时所有输入按规则检索处理（规则检出操作意图的句子回降级气泡，不静默当检索）；开启时所有句子经一致意见分流（规则匹配概览作为分流输入；初步检索与分流并发预跑、判为检索即复用），分流只装载路线套件，随后进入同一个 ReAct 环执行——检索类由环内 rank/rerank 等工具跑出结果（`results.show` 屏态唯一出口），工具调用类由环内封闭动词表真执行（写动作两步确认、审计账本可整次撤回），无法归类则如实回音。langgraph 图优先；未装扩展或未配大模型时回退内置规划器（单次分类 search/tool/none，功能一致）。
 
 每次 MCP 工具调用都会在本机追加一行脱敏 JSON 日志到 `.userdata/mcp_calls.jsonl`（不联网、不入库）；在 MCP 客户端的 env 里设 `BIODATA_MCP_CALL_LOG=off` 可关闭，统计用 `scripts/summarize_mcp_calls.py`。Windows 可使用 `scripts\setup_mcp.ps1` 完成独立环境、协议自检、API 配置、客户端注册和回读验证。完整步骤见[MCP 安装教程](使用教程/MCP安装/MCP_安装教程.md)。
 
 ## 可选：执行侧 Agent 扩展（langchain/langgraph）
 
-对话里的「工具调用/数据库管护」类指令默认由内置规划器处理，**不装任何扩展也能正常使用**。安装 langchain 扩展后，这部分规划改由 langgraph 编排的 Agent 接管（工具调用协议 + 自我修正 + 有界多步执行）：
+对话里的「工具调用/数据库管护」类指令默认由内置规划器处理，**不装任何扩展也能正常使用**。安装 langchain 扩展后，统一分流与后续执行改由 langgraph 编排的 Agent 接管——一致意见分流（多温度并行投票）→ 按路线装载工具套件 → 同一 ReAct 环有界多步执行（检索类 rank/rerank、管护类 curate.*、结果处理类对比/引文/兼容/FAIR 全部图内真跑，逐步审计）：
 
 ```bash
 pip install -r requirements/requirements-langchain.txt
@@ -295,7 +309,7 @@ pip install -r requirements/requirements-langchain.txt
 
 ## 开发与测试
 
-面向开发者的环境、架构、HTTP 端点、扩展方法和验证矩阵见[开发指南](DEVELOPMENT.md)。当前 Web API 版本为 `3.0.0`。开发和交付优先使用清单驱动的统一质量门：
+面向开发者的环境、架构、HTTP 端点、扩展方法和验证矩阵见[开发指南](DEVELOPMENT.md)。当前 Web API 版本为 `3.7.0`。开发和交付优先使用清单驱动的统一质量门：
 
 ```powershell
 $Python = '.\.venv\Scripts\python.exe'

@@ -462,7 +462,7 @@ def test_mcp_check_updates_action_readonly(mcp_tmp_root, monkeypatch):
 
 def test_mcp_sync_updates_action_executes(mcp_tmp_root, fake_sync_sources):
     """MCP curate_datasets(action=sync_updates)：真执行复合流，返回 receipt + write_boundary。"""
-    res = M.curate_datasets(action="sync_updates", source="arrayexpress")
+    res = M.curate_datasets(action="sync_updates", source="arrayexpress", dry_run=False)
     assert res["ok"] is True
     assert res["operation_id"].startswith("sync_")
     assert len(res["created_files"]) == 1
@@ -478,7 +478,7 @@ def test_mcp_sync_updates_lock_conflict_maps_sync_busy(mcp_tmp_root):
     assert fh is not None
     try:
         with pytest.raises(ToolError, match="sync_busy"):
-            M.curate_datasets(action="sync_updates")
+            M.curate_datasets(action="sync_updates", dry_run=False)
     finally:
         cc._release_os_sync_lock(fh)
 

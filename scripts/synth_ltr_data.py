@@ -53,7 +53,7 @@ from dataset_recommender.retrieval.query_parser import (  # noqa: E402
     active_filters,
     parse_query,
 )
-from dataset_recommender.retrieval.vocabulary import CATALOG  # noqa: E402
+from dataset_recommender.domains.biodata.vocabulary import CATALOG  # noqa: E402
 
 DEFAULT_SEED = 20260907
 DEFAULT_OUT_DIR = AGENT_ROOT / "research" / "ltr_data"

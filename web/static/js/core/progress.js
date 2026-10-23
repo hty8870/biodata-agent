@@ -122,10 +122,3 @@ export function resetSubmitButton() {
     b.removeAttribute("aria-busy");
     b.classList.remove("loading");
 }
-
-/* ---------- 查询结果缓存（会话内存，避免相同查询+设置重跑后端） ----------
-   键＝决定后端结果的**全部**入参（检索 query、sources、日期、LLM/重排/召回配置…），**排除 api_key**
-   （不影响结果、且不让密钥进键）。数组值排序、对象键排序 → 规范化，命中即秒出、不再走网络。
-   纯前端、仅本会话内存（刷新即清）；官方评测走 sources=None 的后端直连、**从不经过此路径**，故确定性不受影响。 */
-export const _queryCache = new Map();
-export const QCACHE_MAX = 60;

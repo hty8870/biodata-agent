@@ -27,6 +27,7 @@ DOI 句，MCP 永远印不出。
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from typing import Any
 
 from ..corpus import reachability
@@ -69,6 +70,9 @@ def build_item(record: Any, include_introduction: bool = False) -> dict[str, Any
         "assay": record.assay,
         "chemistry": record.chemistry,
         "has_raw_data": record.has_raw_data,
+        # 逐记录核验必须与结论一起投影；副本避免消费方改写缓存中的原记录。
+        "metadata_provenance": deepcopy(raw.get("metadata_provenance")),
+        "ena_study_accessions": deepcopy(raw.get("ena_study_accessions")),
         "count": record.count,
         "unit": record.unit,
         # 检测基因数（10x 平台信息补充旁挂表；additive 展示字段，无补充时为 ""）。
@@ -83,7 +87,7 @@ def build_item(record: Any, include_introduction: bool = False) -> dict[str, Any
         "reachability": reachability.classify(primary_url(uid) or str(raw.get("download_url") or "") or record.url),
         "family_id": record.family_id,
         "published_date": published_date,
-        # modality 是 query_parser.DIMENSIONS 的一等维度、由 vocabulary.derive_modality 单一真源算好、
+        # modality 是领域包声明的一等维度、由 domains/biodata/vocabulary.derive_modality 单一真源算好、
         # retriever 正常消费——**唯独展示层漏传**，于是 fair._tech_phrase 的 spatial/single-cell
         # 两条分支从上线至今一次没执行过：全库 5667/5667 的投稿声明都退化成泛泛的 "dataset"，
         # 一个单细胞数据集目录从没说过 "single-cell"。典型的「生产者有、消费者要、中间层丢了」。
@@ -92,6 +96,10 @@ def build_item(record: Any, include_introduction: bool = False) -> dict[str, Any
         # collection_doi 是 collection 级、指向论文（见 provenance.collection_doi 的粒度警告）；
         # filesize 在 2702 条上硬编码 0（把「未知」编码成「0 字节」）→ 必须过 provenance.size_bytes_or_none。
         "collection_doi": str(raw.get("collection_doi") or "").strip(),
+        # 类型化出口（与 collection_doi 一起投影，Web/MCP 同一份）：数据记录
+        # **自己的** DOI（Zenodo 的 conceptdoi/doi）。读数走 provenance.dataset_doi 单一入口，
+        # 它与「关联论文 DOI」粒度不同，展示/导出措辞不许混用。
+        "dataset_doi": str(raw.get("dataset_doi") or "").strip(),
         "filesize": raw.get("filesize"),
         # A2 单一真源：后端解析好 published_year(int|null) 随记录下发；前端**过滤与柱计数都消费
         # 该字段**，不再各自维护一份年份正则（producer 改了 consumer 没改 → 柱计数与过滤静默背离）。

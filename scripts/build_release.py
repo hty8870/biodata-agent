@@ -23,7 +23,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # reuse make_delivery's own definitions so the customer-delivery gate and this release gate
 # cannot drift apart (do NOT copy a second list here — DEVELOPMENT.md §11 / make_delivery.md).
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
-from make_delivery import FORBIDDEN_TOKENS, _CONTACT_EMAIL_RE, _TEXT_SUFFIXES  # noqa: E402
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from make_delivery import (FORBIDDEN_TOKENS, _CONTACT_EMAIL_RE,  # noqa: E402
+                           is_scannable_relative)
+from dataset_recommender.secret_patterns import find_secret_patterns  # noqa: E402
 
 MANIFEST_NAME = "release-manifest.json"
 DEFAULT_ARCHIVE_NAME = "biodata-agent-release-candidate.zip"
@@ -284,7 +287,8 @@ def _reject_release_forbidden_tokens_bytes(payload: bytes, relative: str) -> Non
     unchecked inside the release candidate. The token list is the single source imported from
     make_delivery.FORBIDDEN_TOKENS (do not duplicate it here).
 
-    Only text-suffixed files are scanned (same `_TEXT_SUFFIXES` as make_delivery), so control
+    Only scannable text files are scanned (shared `make_delivery.is_scannable_relative`,
+    suffix ∪ full-name), so control
     files that merely *name* internal material to exclude it — e.g. a personal-report HTML
     filename pattern in `.gitignore` — are not false-positived.
 
@@ -294,13 +298,14 @@ def _reject_release_forbidden_tokens_bytes(payload: bytes, relative: str) -> Non
     """
     if relative in RELEASE_EXCLUDED_TOOL_FILES:
         return
-    if PurePosixPath(relative).suffix.lower() not in _TEXT_SUFFIXES:
+    if not is_scannable_relative(relative):
         return
-    try:
-        text = payload.decode("utf-8")
-    except UnicodeDecodeError:
-        # Non-UTF-8 text-suffixed files are skipped, matching make_delivery's scan_forbidden.
-        return
+    text = _decoded_release_text(payload)
+    if text is None:
+        # 无后缀文本（.gitignore/.gitattributes…）与 UTF-16/NUL 一样曾被静默跳过：
+        # 扫不了就不许出包（与 make_delivery 的 unscannable fail-closed 同口径）。
+        raise ReleaseError(
+            f"release text file is not scannable (undecodable/UTF-16): {relative}")
     for lineno, line in enumerate(text.splitlines(), start=1):
         for token in FORBIDDEN_TOKENS:
             if token in line:
@@ -312,6 +317,40 @@ def _reject_release_forbidden_tokens_bytes(payload: bytes, relative: str) -> Non
 
 def _reject_release_forbidden_tokens_paths(path: Path, relative: str) -> None:
     _reject_release_forbidden_tokens_bytes(path.read_bytes(), relative)
+
+
+def _decoded_release_text(payload: bytes) -> "str | None":
+    """UTF-8 → GBK strict 两跳解码；NUL/UTF-16 BOM 或都失败 → None（不可扫）。"""
+    if b"\x00" in payload or payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return None
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            return payload.decode("gbk")
+        except UnicodeDecodeError:
+            return None
+
+
+def _reject_secret_value_bytes(payload: bytes, relative: str) -> None:
+    """归档/源码文本的 secret 值复验：源（build）与 zip 复验（verify）两处同一检测。
+
+    模式表唯一真源 = `dataset_recommender.secret_patterns`（值级脱敏/交付扫描共用）。
+    只扫文本后缀（与 forbidden token 同口径）；不可解码/NUL → fail-closed 拒绝（UTF-16
+    文本此前两类扫描器零命中照样出包）。报错只给位置与模式名，绝不回显命中的值。
+    """
+    if not is_scannable_relative(relative):
+        return
+    text = _decoded_release_text(payload)
+    if text is None:
+        raise ReleaseError(
+            f"release text file is not scannable for secret values (undecodable/UTF-16): {relative}")
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        ids = find_secret_patterns(line)
+        if ids:
+            raise ReleaseError(
+                "release text file contains a secret-like value at "
+                f"{relative}:{lineno} (pattern={'/'.join(sorted(ids))})")
 
 
 def _reject_metadata_contact_bytes(payload: bytes, relative: str) -> None:
@@ -333,6 +372,7 @@ def _validate_relative(relative: str) -> PurePosixPath:
     pure = PurePosixPath(relative)
     if (
         not relative
+        or not pure.parts
         or relative.endswith("/")
         or pure.is_absolute()
         or ".." in pure.parts
@@ -344,7 +384,7 @@ def _validate_relative(relative: str) -> PurePosixPath:
         raise ReleaseError(f"non-canonical archive path: {relative!r}")
     for part in pure.parts:
         if (
-            ":" in part
+            any(char in '<>:"|?*' for char in part)
             or part != part.strip(" ")
             or part.endswith(".")
             or any(ord(char) < 32 or ord(char) == 127 for char in part)
@@ -600,8 +640,10 @@ def build_release(
     # (真名 / 内部专名 / 本机路径). This runs BEFORE packaging so a leaky allowlist entry can never
     # reach the artifact. `make_delivery`-sourced FORBIDDEN_TOKENS is the single source.
     for item in files:
-        _reject_release_forbidden_tokens_paths(item.path, item.relative)
-        _reject_metadata_contact_bytes(item.path.read_bytes(), item.relative)
+        payload = item.path.read_bytes()
+        _reject_release_forbidden_tokens_bytes(payload, item.relative)
+        _reject_secret_value_bytes(payload, item.relative)
+        _reject_metadata_contact_bytes(payload, item.relative)
     manifest = make_manifest(root, files, resolved_product_version)
     manifest_bytes = (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     if len(manifest_bytes) > MAX_RELEASE_MANIFEST_BYTES:
@@ -789,6 +831,7 @@ def verify_release(archive: Path) -> dict[str, object]:
                 raise ReleaseError(f"release archive is missing manifest file: {relative}")
             _reject_private_home_bytes(payload, relative)
             _reject_release_forbidden_tokens_bytes(payload, relative)
+            _reject_secret_value_bytes(payload, relative)
             _reject_metadata_contact_bytes(payload, relative)
             size = raw.get("size")
             if type(size) is not int or size < 0:

@@ -124,7 +124,7 @@ def test_object_words_still_echo_even_though_they_do_not_route():
 
 def test_action_tables_are_a_partition_of_the_echo_table():
     """并集必须是程序并出来的，不能有第三份手抄。"""
-    from dataset_recommender.retrieval import vocabulary as V
+    from dataset_recommender.retrieval import query_lexicon as V
 
     assert set(V.ACTION_MARKERS) == set(V.ACTION_VERBS) | set(V.ACTION_NOUNS)
     assert not (set(V.ACTION_VERBS) & set(V.ACTION_NOUNS)), "同一个词不能既当动作又当对象"

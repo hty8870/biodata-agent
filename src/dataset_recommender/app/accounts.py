@@ -11,10 +11,12 @@
   重新登录」的根因）。会话是**可再生**的（丢了 = 重新登录，不丢账户数据），故会话库 fail-open
   （缺失/损坏 → 空库全体登出），与账户库的 fail-closed 相反。cookie 由接口层置 `HttpOnly` +
   `SameSite=Strict`（loopback http，无需 Secure）。
+- 会话持久化只保存 token 的 SHA-256 摘要；cookie 仍是不透明随机 token，摘要不能用作凭据。
+  文件旧格式只读兼容，下次写入统一升级为 schema_version=2。
 - 会话可选 **Redis 后端**（`BIODATA_SESSION_STORE=redis` + `BIODATA_REDIS_URL`，见
-  `app/redis_sessions.py`）：供多进程 / 多实例形态共享登录态；**默认不设这两个变量时，内存 +
-  JSON 快照路径逐字节不变**（Redis 侧模块也只在实际启用时才被 import）。Redis 后端的 fail 语义
-  与文件后端一致——会话可再生，故 resolve/destroy 失败 fail-open（登出/丢掉，绝不因存储抖动 500），
+  `app/redis_sessions.py`）：供多进程 / 多实例形态共享登录态；默认不设这两个变量时以 JSON
+  为真源，文件锁内重新加载并读改写（Redis 侧模块只在实际启用时 import）。Redis 后端的 fail 语义
+  中 resolve 失败按未登录处理，create/destroy 失败如实抛 AccountError（不伪报创建/撤销成功），
   create 失败如实抛 `AccountError`；`BIODATA_SESSION_STORE` 写成其他非空值则 fail-closed 报
   `bad_config`（配置笔误不许静默降级成内存后端，那会让会话悄悄不跨进程）。
 - 用户库 = 被 gitignore 的本地 JSON（默认 `.userdata/accounts.json`，`BIODATA_ACCOUNTS_FILE` 可覆盖）；
@@ -37,7 +39,9 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+from ..corpus.fs_utils import file_critical_section
 from typing import Any
 
 SESSION_COOKIE = "biodata_session"
@@ -61,7 +65,7 @@ _LOCK_WINDOW = 300                  # 失败计数滑动窗口（秒）
 _DUMMY_SALT = b"\x00" * _SALT_BYTES
 
 _LOCK = threading.RLock()
-_SESSIONS: dict[str, dict[str, Any]] = {}   # token -> {user_id, username, expires_at}
+_SESSIONS: dict[str, dict[str, Any]] = {}   # token SHA-256 -> {user_id, username, expires_at}
 _FAILS: dict[str, list[float]] = {}         # username -> 近期失败时间戳
 _REDIS_SESSION_STORE: "Any | None" = None   # Redis 会话后端惰性单例（None = 未启用或尚未建）
 
@@ -125,6 +129,10 @@ def _now() -> float:
     return time.time()
 
 
+def session_token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def _load_store(path: Path) -> dict[str, Any]:
     """读用户库。**fail-closed**：文件缺失/空 → 空库（首次运行）；但文件**存在且非空却解析失败**
     → 抛 `store_corrupt`（绝不返回空库，否则下一次 register 会覆盖、永久丢账户 + 允许用户名被接管）。"""
@@ -172,13 +180,21 @@ def _load_sessions(path: Path) -> dict[str, dict[str, Any]]:
         return {}
     if not isinstance(data, dict):
         return {}
+    hashed = "schema_version" in data
+    if hashed:
+        if data.get("schema_version") != 2 or not isinstance(data.get("sessions"), dict):
+            return {}
+        data = data["sessions"]
     out: dict[str, dict[str, Any]] = {}
     for token, sess in data.items():
+        if hashed and not re.fullmatch(r"[0-9a-f]{64}", token):
+            continue
         if (isinstance(sess, dict)
                 and isinstance(sess.get("user_id"), str)
                 and isinstance(sess.get("username"), str)
                 and isinstance(sess.get("expires_at"), (int, float))):
-            out[str(token)] = {
+            digest = token if hashed else session_token_digest(token)
+            out[digest] = {
                 "user_id": sess["user_id"],
                 "username": sess["username"],
                 "expires_at": float(sess["expires_at"]),
@@ -187,17 +203,27 @@ def _load_sessions(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _save_sessions(path: Path) -> None:
-    """调用方须持 `_LOCK`。原子写走 runtime_paths.atomic_write_json（紧凑格式，与历史字节一致）。"""
-    atomic_write_json(path, _SESSIONS, indent=None)
+    """调用方须持 `_LOCK`；旧快照只读兼容，下一次写统一升级为摘要格式。"""
+    atomic_write_json(path, {"schema_version": 2, "sessions": _SESSIONS}, indent=None)
+
+
+@contextmanager
+def _json_transaction(path):
+    with _LOCK:
+        try:
+            with file_critical_section(Path(str(path) + '.lock'), timeout=15) if path is not None else nullcontext():
+                yield
+        except OSError as exc:
+            raise AccountError('store_unavailable', '本地账户状态暂时不可读写，请稍后重试。') from exc
+        except RuntimeError as exc:
+            raise AccountError('store_unavailable', '本地账户状态正忙，请稍后重试。') from exc
 
 
 def _hydrate_sessions(sessions_path: Path | None) -> None:
-    """调用方须持 `_LOCK`。内存为空时把盘上活会话读回——进程重启（或测试清场）后首次触碰会话
-    即恢复登录态；服务重启不再全体掉登录（用户「每次开前端都要重新登录」的根因）。
-    `_SESSIONS` 非空不重读：内存是运行期真源，盘上只是它的快照。"""
-    if sessions_path is None or _SESSIONS:
-        return
-    _SESSIONS.update(_load_sessions(sessions_path))
+    """调用方持跨进程事务；磁盘为真源，每次替换快照，不能复活已撤销的会话。"""
+    if sessions_path is not None:
+        _SESSIONS.clear()
+        _SESSIONS.update(_load_sessions(sessions_path))
 
 
 def _hash_password(password: str, salt: bytes) -> bytes:
@@ -241,7 +267,7 @@ def _record_fail(username: str) -> None:
 def register(username: str, password: str, *, store_path: Path) -> PublicUser:
     uname = _normalize_username(username)
     _validate_new_credentials(uname, password)
-    with _LOCK:
+    with _json_transaction(store_path):
         store = _load_store(store_path)
         users = store["users"]
         if uname in users:
@@ -285,7 +311,7 @@ def authenticate(username: str, password: str, *, store_path: Path) -> PublicUse
 def _redis_store_if_enabled() -> "Any | None":
     """按 env 决定会话后端：`BIODATA_SESSION_STORE=redis` → 惰性建 `RedisSessionStore` 单例。
 
-    - 空 / 未设 → None（默认内存 + JSON 快照路径，行为逐字节不变）；
+    - 空 / 未设 → None（默认内存 + JSON 快照，cookie 与会话生命周期不变）；
     - `redis` → 建/复用单例（参数取本模块既有常量，保证两后端 TTL/熵同源）；
     - 其他非空值 → `AccountError("bad_config")`（配置笔误 fail-closed，绝不静默降级到内存后端——
       那会让会话悄悄不跨进程，是比直接报错更难查的故障）。
@@ -324,10 +350,10 @@ def create_session(user: PublicUser, *, sessions_path: Path | None = None) -> st
             raise AccountError(exc.code, exc.message) from exc
     token = secrets.token_urlsafe(_SESSION_BYTES)
     now = _now()
-    with _LOCK:
+    with _json_transaction(sessions_path):
         _hydrate_sessions(sessions_path)
         _sweep(now)
-        _SESSIONS[token] = {"user_id": user.id, "username": user.username, "expires_at": now + _SESSION_TTL}
+        _SESSIONS[session_token_digest(token)] = {"user_id": user.id, "username": user.username, "expires_at": now + _SESSION_TTL}
         if sessions_path is not None:
             _save_sessions(sessions_path)
     return token
@@ -342,13 +368,14 @@ def resolve_session(token: str | None, *, sessions_path: Path | None = None) -> 
         if sess is None:
             return None
         return PublicUser(sess["user_id"], sess["username"])
-    with _LOCK:
+    digest = session_token_digest(token)
+    with _json_transaction(sessions_path):
         _hydrate_sessions(sessions_path)
-        sess = _SESSIONS.get(token)
+        sess = _SESSIONS.get(digest)
         if not sess:
             return None
         if sess["expires_at"] < _now():
-            _SESSIONS.pop(token, None)
+            _SESSIONS.pop(digest, None)
             if sessions_path is not None:
                 _save_sessions(sessions_path)
             return None
@@ -360,11 +387,15 @@ def destroy_session(token: str | None, *, sessions_path: Path | None = None) -> 
         return
     store = _redis_store_if_enabled()
     if store is not None:
-        store.destroy(token)   # Redis 侧 fail-open：删除失败静默吞掉
+        from .redis_store import RedisUnavailable
+        try:
+            store.destroy(token)
+        except RedisUnavailable as exc:
+            raise AccountError(exc.code, exc.message) from exc
         return
-    with _LOCK:
+    with _json_transaction(sessions_path):
         _hydrate_sessions(sessions_path)
-        if _SESSIONS.pop(token, None) is not None and sessions_path is not None:
+        if _SESSIONS.pop(session_token_digest(token), None) is not None and sessions_path is not None:
             _save_sessions(sessions_path)
 
 

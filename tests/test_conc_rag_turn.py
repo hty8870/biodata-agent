@@ -40,6 +40,20 @@ _EXEC_PLAN = {
 }
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+def test_rag_flight_propagates_each_account_scope_without_leaking(monkeypatch, deferred):
+    from dataset_recommender.corpus.patch_package import bind_patch_scope, current_patch_scope
+    if deferred:
+        monkeypatch.setattr(turn, "_RAG_SEMAPHORE", threading.Semaphore(0))
+    monkeypatch.setattr(turn, "rule_match_summary", lambda *a, **kw: {"scope": current_patch_scope()})
+    for principal in ("account-a", "account-b", None):
+        with bind_patch_scope(principal):
+            flight = turn._RagFlight("查询")
+            flight.start()
+            assert flight.join() == {"scope": principal}
+        assert current_patch_scope() is None
+
+
 @pytest.fixture(autouse=True)
 def _fresh_pool(monkeypatch):
     """每测试干净准入信号量（不串槽）；rule_match_summary 默认替换为确定性验证
@@ -338,7 +352,7 @@ def test_route_extra_zh_only_with_markers(monkeypatch):
     from types import SimpleNamespace
     prompts: list = []
 
-    def spy(model, prompt, usage_sink=None):
+    def spy(model, prompt, usage_sink=None, **_kwargs):
         prompts.append(prompt)
         return "search", [{"ok": True, "route": "search"}, {"ok": True, "route": "search"}]
 
@@ -366,7 +380,7 @@ def test_route_consensus_calls_verdict_hook_but_emits_nothing(monkeypatch):
     from types import SimpleNamespace
     calls: list = []
 
-    def spy(model, prompt, usage_sink=None):
+    def spy(model, prompt, usage_sink=None, **_kwargs):
         return "action", [{"ok": True, "route": "action"}, {"ok": True, "route": "action"}]
 
     monkeypatch.setattr(agent_exec, "_run_route_consensus", spy)

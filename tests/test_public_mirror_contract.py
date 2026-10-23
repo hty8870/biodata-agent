@@ -21,6 +21,16 @@ def _require_public_tree() -> None:
         pytest.skip("private source tree: public-only manifest assertions run after generation")
 
 
+@pytest.mark.parametrize("consumer,producer", [
+    ("tests/test_agent_governance.py", "scripts/validate-agent-governance.ps1"),
+    ("tests/test_logrotate.py", "scripts/logrotate.py"),
+])
+def test_project_tool_tests_have_their_producer(consumer: str, producer: str) -> None:
+    assert not (ROOT / consumer).is_file() or (ROOT / producer).is_file(), (
+        f"Exported project-tool test requires its production tool: {consumer} -> {producer}"
+    )
+
+
 def test_public_mirror_manifest_is_current_for_this_public_tree() -> None:
     _require_public_tree()
     manifest = mirror.load_manifest(ROOT)

@@ -24,7 +24,7 @@ import importlib.util
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -338,8 +338,13 @@ def test_export_end_to_end(db, tmp_path):
     c1 = by_rid["r-search-1"]
     assert c1["query"] == "10x 空间转录组" and c1["route"] == "search"
     assert c1["system_topk_uids"] == ["d1001", "d1002", "d1003"]
-    assert c1["rating"]["stars"] == 4 and c1["rating"]["useful_uids"] == ["d1001", "d1002"]
-    assert c1["rating"]["completion"] is None and c1["rating"]["reasons"] == []
+    # 候选 rating = benchfb 内嵌兜底 ⊕ 最高 rev 的 label 事件：改口真正落盘，
+    # 但旧形状字段（stars，事件未带）由 benchfb 记录保留——字段级合并，不是整条替换。
+    assert c1["rating"]["stars"] == 4
+    assert c1["rating"]["useful_uids"] == ["d1002"] and c1["rating"]["useful_idx"] == [2]
+    assert c1["rating"]["completion"] == "partial" and c1["rating"]["reasons"] == ["源站无直链"]
+    assert c1["rating"]["comment"] == "改口后的评语"
+    assert c1["rating_rev"] == 2 and c1["rating_source"] == "event"
     assert c1["tid"] == "t-1" and c1["iid"] == "i-1"               # 仅 exact tid 的已有曝光可回填
     assert c1["record_id"] == "r-search-1" and c1["route"] == "search"
     assert c1["policy"] == "auto/llm/cross_encoder@20260820-01"      # route 不能再冒充 policy
@@ -457,6 +462,39 @@ def test_export_label_keys_dedup_and_old_data_degrade(db, tmp_path):
     assert rep["labels_total"] == 4
     assert rep["labels_from_events"] == 3 and rep["labels_from_benchfb"] == 1
     assert rep["labels_benchfb_deduped"] == 2
+
+
+def _truncated_benchfb_payload(ts: int) -> dict:
+    """截断降级载荷（与前端 _shrinkBenchfbRecord 同形）：top-20 + 第 23 名保留条目。"""
+    results = [{"dataset_uid": f"d{i:02d}", "pos": i} for i in range(1, 21)]
+    results.append({"dataset_uid": "d23", "pos": 23, "_preserved_idx": 23})
+    return {
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-truncated",
+        "install_id": "inst-truncated", "exported_at": "2026-08-20T08:00:00Z",
+        "usage_events": [],
+        "benchfb_records": [{
+            "id": "r-trunc", "tid": "t-trunc", "kind": "search", "t": ts, "q": "截断查询",
+            "truncated": True,
+            "search": {"res": {"results": results}},
+            "rating": {"stars": 4, "useful_idx": [2, 23], "comment": "第 23 条也有用"},
+        }],
+        "mcp_records": [],
+    }
+
+
+def test_export_resolves_preserved_useful_idx_beyond_truncation(db, tmp_path):
+    """截断点之外的用户标注（_preserved_idx=原名次）必须还原成 useful_uids：
+    按压缩下标解析会得空列表，冻结器随后把明确正例判成 grade 0。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _truncated_benchfb_payload(ts))
+    out = tmp_path / "truncated"
+    assert export.main(["--dsn", str(path), "--out", str(out)]) == 0
+    cand = next(c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-trunc")
+    assert cand["rating"]["useful_uids"] == ["d02", "d23"]
+    assert cand["rating"]["useful_idx"] == [2, 23]
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-trunc")
+    assert label["useful_uids"] == ["d02", "d23"]
 
 
 def test_export_candidate_policy_and_iid_are_exact_and_never_object_stringified(db, tmp_path):
@@ -674,6 +712,281 @@ def test_export_feedback_jsonl(db, tmp_path):
     assert len(_read_jsonl(out / "feedback.jsonl")) == 3
 
 
+def _imp_packet(packet_id: str, install_id: str, query: str, ts: int, *, label_event=None) -> dict:
+    """一个自描述 search 曝光包（可选附一条 label 事件），用于增量/窗口语义测试。"""
+    payload = {
+        "schema": "biodata-telemetry/1", "packet_id": packet_id, "install_id": install_id,
+        "exported_at": "2026-08-20T08:00:00Z",
+        "usage_events": [{"event_id": f"u-imp-{packet_id}", "t": ts, "k": "search", "sid": "s-i",
+                          "tid": f"t-{packet_id}", "iid": f"i-{packet_id}", "q": query,
+                          "items": [{"uid": "d1", "pos": 1}]}],
+        "benchfb_records": [], "mcp_records": [],
+    }
+    if label_event is not None:
+        payload["usage_events"].append(label_event)
+    return payload
+
+
+def test_export_incremental_retracts_rows_removed_from_db(db, tmp_path):
+    """保留期清理/显式删除过的包：全库增量重跑后其产物行真正退场。
+
+    旧行为对旧文件 keep_old 并整份重写（刷新 mtime），接收端按 mtime 清理永远不删这个
+    "活跃"文件——被清理的旧包查询/评语永久留存。
+    """
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _imp_packet("pkt-retract-a", "inst-retract-a", "已过期的查询", ts))
+    _insert(engine, _imp_packet("pkt-retract-b", "inst-retract-b", "仍在库的查询", ts + 1000))
+    out = tmp_path / "retract"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    assert {i["q"] for i in _read_jsonl(out / "impressions.jsonl")} == {"已过期的查询", "仍在库的查询"}
+
+    with engine.begin() as conn:                                  # 模拟保留期清理
+        conn.execute(ingest_packets.delete().where(ingest_packets.c.install_id == "inst-retract-a"))
+        conn.execute(packet_receipts.delete().where(packet_receipts.c.packet_id == "pkt-retract-a"))
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    imps = _read_jsonl(out / "impressions.jsonl")
+    assert {i["q"] for i in imps} == {"仍在库的查询"}
+    assert "已过期的查询" not in (out / "impressions.jsonl").read_text(encoding="utf-8")
+
+
+def test_export_incremental_backfills_late_label_and_revisions(db, tmp_path):
+    """自动上传先于评分 → label 后到 → 改口 → 高 rev 清空：候选 rating 每一步都真落盘。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, {
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-late-1", "install_id": "inst-late",
+        "exported_at": "2026-08-20T08:00:00Z", "usage_events": [], "mcp_records": [],
+        "benchfb_records": [{
+            "id": "r-late", "tid": "t-late", "kind": "search", "t": ts, "q": "晚到评分",
+            "search": {"res": {"results": [{"dataset_uid": "d1"}, {"dataset_uid": "d2"}]}},
+            "rating": {},
+        }],
+    })
+    out = tmp_path / "late-label"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+
+    def _cand() -> dict:
+        rows = [c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-late"]
+        assert len(rows) == 1
+        return rows[0]
+
+    assert _cand()["rating"]["useful_uids"] == []                 # 未评分先到：不伪造标签
+    assert _cand().get("rating_rev") is None
+
+    _insert(engine, {                                             # 评分 rev1 后到 → 回填候选
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-late-2", "install_id": "inst-late",
+        "exported_at": "2026-08-20T08:10:00Z", "usage_events": [
+            {"event_id": "u-late-r1", "t": ts + 600_000, "k": "label", "tid": "t-late",
+             "recId": "r-late", "rev": 1, "stars": 3, "useful_idx": [2], "useful_uids": ["d2"],
+             "comment": "不错"},
+        ], "benchfb_records": [], "mcp_records": [],
+    })
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    cand = _cand()
+    assert cand["rating"]["useful_uids"] == ["d2"] and cand["rating"]["stars"] == 3
+    assert cand["rating"]["comment"] == "不错" and cand["rating_rev"] == 1
+    assert cand["rating_source"] == "event"
+
+    _insert(engine, {                                             # 改口 rev2：清空评价
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-late-3", "install_id": "inst-late",
+        "exported_at": "2026-08-20T08:20:00Z", "usage_events": [
+            {"event_id": "u-late-r2", "t": ts + 1_200_000, "k": "label", "tid": "t-late",
+             "recId": "r-late", "rev": 2, "stars": None, "useful_idx": [], "useful_uids": [],
+             "comment": ""},
+        ], "benchfb_records": [], "mcp_records": [],
+    })
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    cleared = _cand()
+    assert cleared["rating"] == {"stars": None, "completion": None, "reasons": [],
+                                 "useful_uids": [], "useful_idx": [], "comment": ""}
+    assert cleared["rating_rev"] == 2                             # 清空是真落盘，冻结器按无标注排除
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-late")
+    assert label["rev"] == 2
+
+
+def test_merge_label_rating_respects_provided_fields():
+    """字段级合并按「是否提供」判定——provided 空值必须覆盖，缺键才继承（兼容 legacy stars）。
+
+    旧实现按值过滤空值：rev2 完整快照里的 useful_uids=[]/comment='' 被丢弃，旧 grade2 正例残留；
+    真 missing（如事件未带 stars）才继承，不能把所有空/False 当 missing。"""
+    base = {"stars": 3, "completion": "partial", "reasons": ["旧原因"],
+            "useful_uids": ["d2"], "useful_idx": [2], "comment": "旧评语"}
+    clear = {"completion": "done", "reasons": ["数据全"], "useful_uids": [], "useful_idx": [],
+             "comment": "", "rating_fields": ["completion", "reasons", "useful_uids", "useful_idx", "comment"]}
+    merged = export._merge_label_into_rating(base, clear)
+    assert merged["useful_uids"] == [] and merged["useful_idx"] == [] and merged["comment"] == ""
+    assert merged["completion"] == "done" and merged["reasons"] == ["数据全"]
+    assert merged["stars"] == 3                                    # 缺键才继承（事件未带旧形状字段）
+    none_stars = {**clear, "stars": None, "rating_fields": [*clear["rating_fields"], "stars"]}
+    assert export._merge_label_into_rating(base, none_stars)["stars"] is None   # provided None 覆盖
+    false_stars = {**clear, "stars": False, "rating_fields": [*clear["rating_fields"], "stars"]}
+    assert export._merge_label_into_rating(base, false_stars)["stars"] is False  # False 不是 missing
+    empty_stars = {**clear, "stars": "", "rating_fields": [*clear["rating_fields"], "stars"]}
+    assert export._merge_label_into_rating(base, empty_stars)["stars"] == ""     # 空串不是 missing
+    partial = {"completion": "failed", "rating_fields": ["completion"]}
+    kept = export._merge_label_into_rating(base, partial)          # 部分更新：只改提供的键
+    assert kept["completion"] == "failed" and kept["stars"] == 3
+    assert kept["useful_uids"] == ["d2"] and kept["comment"] == "旧评语"
+    assert export._merge_label_into_rating(base, {"rating_fields": []}) == export._merged_label_rating({})
+    legacy_empty = {"stars": None, "completion": None, "reasons": [], "useful_uids": [],
+                    "useful_idx": [], "comment": ""}
+    assert export._merge_label_into_rating(base, legacy_empty) == export._merged_label_rating({})
+    legacy_partial = {"completion": "done", "useful_uids": [], "comment": ""}   # 旧行无 rating_fields
+    legacy_merged = export._merge_label_into_rating(base, legacy_partial)
+    assert legacy_merged["completion"] == "done" and legacy_merged["useful_uids"] == ["d2"]
+
+
+def test_export_high_rev_snapshot_clears_old_positive_for_freezer(db, tmp_path):
+    """端到端：rev2 完整快照显式清空 useful/comment → 产物无旧 positive，冻结器不再给 grade2。
+
+    真链路：benchfb 旧评分（正例）→ 晚到 rev2 label 事件（completion=done + 空 useful/comment）
+    → export 产物 → scripts/build_telemetry_benchmark 冻结器判级。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, {
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-f061", "install_id": "inst-f061",
+        "exported_at": "2026-08-20T08:00:00Z", "usage_events": [], "mcp_records": [],
+        "benchfb_records": [{
+            "id": "r-f061", "tid": "t-f061", "kind": "search", "t": ts, "q": "清空正例",
+            "search": {"res": {"results": [{"dataset_uid": "d1"}, {"dataset_uid": "d2"}]}},
+            "rating": {"stars": 3, "useful_idx": [2], "comment": "旧评语"},
+        }],
+    })
+    out = tmp_path / "f061"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+
+    def _cand() -> dict:
+        return next(c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-f061")
+
+    assert _cand()["rating"]["useful_uids"] == ["d2"]              # rev 之前：旧正例在
+    _insert(engine, {                                              # rev2 完整快照：显式清空评价但保留 done
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-f061-2", "install_id": "inst-f061",
+        "exported_at": "2026-08-20T08:10:00Z", "benchfb_records": [], "mcp_records": [],
+        "usage_events": [
+            {"event_id": "u-f061-r2", "t": ts + 600_000, "k": "label", "tid": "t-f061",
+             "recId": "r-f061", "rev": 2, "completion": "done", "reasons": ["数据全"],
+             "useful_uids": [], "useful_idx": [], "comment": ""},
+        ],
+    })
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    cand = _cand()
+    assert cand["rating"]["useful_uids"] == [] and cand["rating"]["comment"] == ""
+    assert cand["rating"]["useful_idx"] == []
+    assert cand["rating"]["completion"] == "done" and cand["rating"]["reasons"] == ["数据全"]
+    assert cand["rating"]["stars"] == 3                            # 事件未带 stars → 继承（legacy 兼容）
+    assert cand["rating_rev"] == 2
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-f061")
+    assert set(label["rating_fields"]) == {"completion", "reasons", "useful_uids", "useful_idx", "comment"}
+
+    freezer = _load_script("build_telemetry_benchmark", "scripts/build_telemetry_benchmark.py")
+    prepared, exclusions = freezer._prepare_records([cand], purpose="eval", bucket_days=7)
+    assert exclusions["no_human_label"] == 0 and len(prepared) == 1
+    assert prepared[0]["graded_relevance"] == [{"uid": "d1", "grade": 0}, {"uid": "d2", "grade": 0}]
+
+
+def test_export_windowed_incremental_keeps_out_of_window_rows_and_prefers_high_rev(db, tmp_path):
+    """窗口增量：窗口外的既有行保留；窗口内的改口 label 仍要更新窗口外产生的候选行。"""
+    path, engine = db
+    t0 = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+    ts = int(t0.timestamp() * 1000)
+    first = _imp_packet("pkt-win-1", "inst-win", "窗口内历史查询", ts, label_event={
+        "event_id": "u-win-r1", "t": ts + 1000, "k": "label", "tid": "t-pkt-win-1",
+        "recId": "r-win", "rev": 1, "stars": 3, "useful_idx": [1], "useful_uids": ["d1"],
+        "comment": "第一版"})
+    first["benchfb_records"] = [{
+        "id": "r-win", "tid": "t-pkt-win-1", "kind": "search", "t": ts, "q": "窗口内历史查询",
+        "search": {"res": {"results": [{"dataset_uid": "d1"}]}}, "rating": {}}]
+    _insert(engine, first, received_at=t0)
+    out = tmp_path / "windowed"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    assert _read_jsonl(out / "benchmark_candidates.jsonl")[0]["rating_rev"] == 1
+
+    _insert(engine, {                                             # 窗口内新包：同键 rev2 改口
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-win-2", "install_id": "inst-win",
+        "exported_at": "2026-08-20T08:30:00Z", "benchfb_records": [], "mcp_records": [],
+        "usage_events": [{"event_id": "u-win-r2", "t": ts + 1_800_000, "k": "label",
+                          "tid": "t-pkt-win-1", "recId": "r-win", "rev": 2,
+                          "useful_idx": [], "useful_uids": [], "comment": "改口"}],
+    }, received_at=t0 + timedelta(minutes=30))
+    since = (t0 + timedelta(minutes=10)).isoformat()
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", "--since", since]) == 0
+    imps = _read_jsonl(out / "impressions.jsonl")
+    assert [i["q"] for i in imps] == ["窗口内历史查询"]              # 窗口外既有行保留（merge）
+    cand = next(c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-win")
+    assert cand["rating_rev"] == 2 and cand["rating"]["comment"] == "改口"
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-win")
+    assert label["rev"] == 2
+
+
+def test_export_full_scan_empty_retracts_all_products(db, tmp_path):
+    """合法的空源（最后一包过保留期/全库清空）是完整扫描的结果：既有产物必须原子退场。
+
+    不能因为"0 包"就把旧数据永久留住——那正是"被清理的旧包查询/评语长期残留"的子场景。
+    """
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _pkt_v3_imp(ts))
+    out = tmp_path / "retract-all"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    assert (out / "impressions.jsonl").read_text(encoding="utf-8").strip()
+
+    with engine.begin() as conn:                                  # 最后一包被清理 → 合法空库
+        conn.execute(ingest_packets.delete())
+        conn.execute(packet_receipts.delete())
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    for fname in ("impressions.jsonl", "interactions.jsonl", "turns.jsonl",
+                  "explicit_labels.jsonl", "benchmark_candidates.jsonl"):
+        assert _read_jsonl(out / fname) == [], f"{fname} 未退场"
+    for fname in ("quality_report.md", "review.html"):
+        text = (out / fname).read_text(encoding="utf-8")
+        assert "10x" not in text and "13800138000" not in text, f"{fname} 仍残留已退场数据"
+
+
+def test_export_missing_sqlite_source_fails_loud_and_preserves_products(db, tmp_path):
+    """源路径缺失/配置错：fail-loud（exit 2），既有产物零改动——绝不静默建空库再退场。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _pkt_v3_imp(ts))
+    out = tmp_path / "preserve"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    before = {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()}
+
+    missing = tmp_path / "no-such-db.sqlite"
+    assert export.main(["--dsn", str(missing), "--out", str(out), "--incremental"]) == 2
+    assert not missing.exists(), "导出不得因源缺失而静默新建空 SQLite 库"
+    after = {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()}
+    assert after == before, "源缺失时不得改动既有产物"
+
+    # 空 DSN 路径（sqlite://）同样是配置错，不是"合法空库"
+    assert export.main(["--dsn", "sqlite://", "--out", str(out), "--incremental"]) == 2
+    assert {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()} == before
+
+
+def test_export_windowed_incremental_never_retracts_unscanned_rows(db, tmp_path):
+    """窗口增量不把"未扫描"当"已删除"：窗口内被删的旧行保留，退场责任在定期全库扫描。"""
+    path, engine = db
+    t0 = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+    ts = int(t0.timestamp() * 1000)
+    _insert(engine, _imp_packet("pkt-out", "inst-out", "窗口外数据", ts), received_at=t0)
+    _insert(engine, _imp_packet("pkt-in", "inst-in", "窗口内数据", ts + 1000),
+            received_at=t0 + timedelta(minutes=30))
+    out = tmp_path / "windowed-retention"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    assert {i["q"] for i in _read_jsonl(out / "impressions.jsonl")} == {"窗口外数据", "窗口内数据"}
+
+    with engine.begin() as conn:                                  # 窗口内的包被清理
+        conn.execute(ingest_packets.delete().where(ingest_packets.c.install_id == "inst-in"))
+        conn.execute(packet_receipts.delete().where(packet_receipts.c.packet_id == "pkt-in"))
+    since = (t0 + timedelta(minutes=10)).isoformat()
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", "--since", since]) == 0
+    # 窗口扫描看不到窗口外数据，也无从判断窗口内数据是否被删除 → 一律保留（未扫描≠已删除）
+    assert {i["q"] for i in _read_jsonl(out / "impressions.jsonl")} == {"窗口外数据", "窗口内数据"}
+    # 全库扫描才是退场路径：同一次删除在全库扫描下原子生效
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    assert {i["q"] for i in _read_jsonl(out / "impressions.jsonl")} == {"窗口外数据"}
+
+
 def test_delete_dry_run_then_yes(db, tmp_path):
     path, engine = db
     ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
@@ -703,3 +1016,405 @@ def test_delete_dry_run_then_yes(db, tmp_path):
         assert conn.execute(select(ingest_packets.c.install_id)).scalars().all() == ["inst-keep"]
         assert conn.execute(select(event_receipts.c.event_key)).scalars().all() == ["ev-keep-1"]
         assert conn.execute(select(packet_receipts.c.packet_id)).scalars().all() == ["pkt-keep"]
+
+
+# ---------------------------------------------------------------------------
+# 连续部分评分修订的字段级累积（rev2 显式清空不被 rev3 部分修订丢掉）
+# ---------------------------------------------------------------------------
+
+def _pkt_fldrev_base(ts: int) -> dict:
+    """benchfb 旧评分：stars=3 + useful_idx=[2]（解析为 d2 正例）。"""
+    return {
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-fldrev-base", "install_id": "inst-fldrev",
+        "exported_at": "2026-08-20T08:00:00Z", "usage_events": [], "mcp_records": [],
+        "benchfb_records": [{
+            "id": "r-fldrev", "tid": "t-fldrev", "kind": "search", "t": ts, "q": "字段级修订",
+            "search": {"res": {"results": [{"dataset_uid": "d1"}, {"dataset_uid": "d2"}]}},
+            "rating": {"stars": 3, "useful_idx": [2], "comment": "旧评语"},
+        }],
+    }
+
+
+def _pkt_fldrev_rev(packet_id: str, rev: int, fields: dict, ts: int) -> dict:
+    """只带指定评分字段的 label 事件包（部分修订）。"""
+    return {
+        "schema": "biodata-telemetry/1", "packet_id": packet_id, "install_id": "inst-fldrev",
+        "exported_at": "2026-08-20T08:30:00Z",
+        "usage_events": [{"event_id": f"u-{packet_id}", "t": ts, "k": "label", "tid": "t-fldrev",
+                          "recId": "r-fldrev", "rev": rev, **fields}],
+        "benchfb_records": [], "mcp_records": [],
+    }
+
+
+def _fldrev_assert_final_state(out: Path, freezer) -> None:
+    """rev2 显式清空 useful + rev3 只改 comment 之后，产物与冻结器必须看到的终态。"""
+    cand = next(c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-fldrev")
+    assert cand["rating"]["useful_uids"] == [] and cand["rating"]["useful_idx"] == []
+    assert cand["rating"]["stars"] == 3                     # 事件从未提供 stars → benchfb 兜底保留
+    assert cand["rating"]["comment"] == "只改评语"           # rev3 部分修订生效
+    assert cand["rating_rev"] == 3
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-fldrev")
+    assert label["rev"] == 3
+    assert set(label["rating_fields"]) == {"useful_uids", "useful_idx", "comment"}
+    frevs = label["rating_field_revs"]
+    assert frevs["useful_uids"] == 2 and frevs["useful_idx"] == 2 and frevs["comment"] == 3
+    prepared, exclusions = freezer._prepare_records([cand], purpose="eval", bucket_days=7)
+    assert exclusions["no_human_label"] == 0 and len(prepared) == 1   # comment 仍是人工标注
+    # 撤销一直 grade 0：旧 d2 正例不得复活
+    assert prepared[0]["graded_relevance"] == [{"uid": "d1", "grade": 0}, {"uid": "d2", "grade": 0}]
+
+
+def test_export_partial_rev_field_accumulation_keeps_explicit_clear(db, tmp_path):
+    """连续部分修订端到端：rev2 显式清空 useful、rev3 只改 comment——两步都必须生效。
+
+    旧实现同键整行只留最高 rev（rev3 只有 comment）：rev2 的 useful=[] 被整条丢弃，
+    候选 rating 从 benchfb 记录复活旧 d2 正例，冻结器继续给 grade2。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _pkt_fldrev_base(ts))
+    _insert(engine, _pkt_fldrev_rev("pkt-fldrev-r2", 2, {"useful_uids": [], "useful_idx": []}, ts + 600_000))
+    _insert(engine, _pkt_fldrev_rev("pkt-fldrev-r3", 3, {"comment": "只改评语"}, ts + 1_200_000))
+    out = tmp_path / "fldrev"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    freezer = _load_script("build_telemetry_benchmark", "scripts/build_telemetry_benchmark.py")
+    _fldrev_assert_final_state(out, freezer)
+
+    # 重跑 bytes 幂等（产物 jsonl 逐字节一致；report/html/state 含时间戳不在此列）
+    for fname in ("explicit_labels.jsonl", "benchmark_candidates.jsonl"):
+        before = (out / fname).read_bytes()
+        assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+        assert (out / fname).read_bytes() == before, f"{fname} 重跑不幂等"
+
+
+def test_export_partial_rev_accumulation_is_order_independent(db, tmp_path):
+    """rev3 先接收、rev2 迟到（包序≠修订序）：每字段仍取各自最高 rev，低 rev 不复活。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _pkt_fldrev_base(ts))
+    _insert(engine, _pkt_fldrev_rev("pkt-fldrev-r3", 3, {"comment": "只改评语"}, ts + 1_200_000))
+    _insert(engine, _pkt_fldrev_rev("pkt-fldrev-r2", 2, {"useful_uids": [], "useful_idx": []}, ts + 600_000))
+    out = tmp_path / "fldrev-late"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    freezer = _load_script("build_telemetry_benchmark", "scripts/build_telemetry_benchmark.py")
+    _fldrev_assert_final_state(out, freezer)
+
+
+def test_export_windowed_partial_rev_converges_to_full_scan(db, tmp_path):
+    """分窗 + 重叠旧窗 + rev2 迟到：窗口增量与全库扫描终态一致。
+
+    旧实现同 highest rev 的 prefer_rev 整行取舍会吞掉新窗口累积出的字段（旧窗只有
+    comment@3，新窗扫到 rev2 后 useful@2 在 explicit_labels 里永远进不了产物）。"""
+    path, engine = db
+    t0 = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+    ts = int(t0.timestamp() * 1000)
+    _insert(engine, _pkt_fldrev_base(ts), received_at=t0)
+    out = tmp_path / "fldrev-win"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+
+    # rev3 先到（received t0+20）：窗口只扫到它 → 旧窗产物只有 comment@3
+    _insert(engine, _pkt_fldrev_rev("pkt-fldrev-r3", 3, {"comment": "只改评语"}, ts + 1_200_000),
+            received_at=t0 + timedelta(minutes=20))
+    since_a = (t0 + timedelta(minutes=15)).isoformat()
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", "--since", since_a]) == 0
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-fldrev")
+    assert label["rev"] == 3 and label["comment"] == "只改评语"
+
+    # rev2 迟到（received t0+25，事件 rev=2）：重叠旧窗扫描，旧产物行作种子
+    _insert(engine, _pkt_fldrev_rev("pkt-fldrev-r2", 2, {"useful_uids": [], "useful_idx": []}, ts + 600_000),
+            received_at=t0 + timedelta(minutes=25))
+    since_b = (t0 + timedelta(minutes=22)).isoformat()
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", "--since", since_b]) == 0
+
+    # 与全库扫描终态一致（候选与显式标签逐字节相等）
+    out_full = tmp_path / "fldrev-win-full"
+    assert export.main(["--dsn", str(path), "--out", str(out_full), "--incremental"]) == 0
+    freezer = _load_script("build_telemetry_benchmark", "scripts/build_telemetry_benchmark.py")
+    _fldrev_assert_final_state(out, freezer)
+    _fldrev_assert_final_state(out_full, freezer)
+    for fname in ("explicit_labels.jsonl", "benchmark_candidates.jsonl"):
+        assert (out / fname).read_bytes() == (out_full / fname).read_bytes(), f"{fname} 窗口与全库终态不一致"
+
+
+def test_accumulate_label_fields_revision_rules():
+    """字段级累积的纯函数口径：高 rev 胜、同 rev 先到先留、显式空覆盖、缺键继承。"""
+    benchfb = {"stars": 3, "useful_idx": [2], "useful_uids": ["d2"], "comment": "旧",
+               "completion": None, "reasons": [],
+               "rating_fields": ["stars", "useful_idx", "comment"], "rev": None}
+    acc = export._accumulate_label_fields(None, benchfb)
+    assert acc["rating_fields"] == ["stars", "useful_idx", "comment"]   # 纯 benchfb：保留提供集
+    acc = export._accumulate_label_fields(acc, {"comment": "新", "rating_fields": ["comment"], "rev": 3})
+    assert acc["stars"] == 3 and acc["comment"] == "新" and acc["rev"] == 3
+    assert acc["rating_fields"] == ["comment"]          # 有事件后 benchfb 不冒充事件 provided
+    # 低 rev 迟到不复活已被更高 rev 修订的字段；benchfb 未提供的字段可被任意事件 rev 提供
+    acc = export._accumulate_label_fields(acc, {"useful_uids": [], "useful_idx": [],
+                                                "rating_fields": ["useful_uids", "useful_idx"], "rev": 2})
+    assert acc["useful_uids"] == [] and acc["useful_idx"] == []
+    acc = export._accumulate_label_fields(acc, {"useful_uids": ["d9"], "rating_fields": ["useful_uids"], "rev": 1})
+    assert acc["useful_uids"] == []                     # rev1 < rev2：迟到低 rev 不复活
+    acc = export._accumulate_label_fields(acc, {"stars": 5, "rating_fields": ["stars"], "rev": 1})
+    assert acc["stars"] == 5                            # stars 仅 benchfb@-1：事件 rev1 正常提供
+
+    # 显式空快照（rating_fields=[]）：整体清空并以本 rev 钉住全部字段，低 rev 不得复活。
+    # 累积行以「全字段显式空」形式承载清空（下游 merge 与 rating_fields=[] 旧语义等价：
+    # base 一律被覆盖为空），清空后更高 rev 的字段正常提供。
+    cleared = export._accumulate_label_fields(None, {"rating_fields": [], "rev": 4})
+    assert cleared["useful_uids"] == [] and cleared["stars"] is None and cleared["comment"] == ""
+    assert all(cleared["rating_field_revs"][f] == 4 for f in (
+        "stars", "useful_idx", "useful_uids", "completion", "reasons", "comment"))
+    base = {"stars": 3, "completion": "partial", "reasons": ["旧原因"],
+            "useful_uids": ["d2"], "useful_idx": [2], "comment": "旧评语"}
+    assert export._merge_label_into_rating(base, cleared) == export._merged_label_rating({})
+    cleared = export._accumulate_label_fields(cleared, {"stars": 5, "rating_fields": ["stars"], "rev": 2})
+    assert cleared["stars"] is None                     # rev2 < 清空 rev4：不复活
+    cleared = export._accumulate_label_fields(cleared, {"stars": 5, "rating_fields": ["stars"], "rev": 5})
+    assert cleared["stars"] == 5                        # rev5 > 清空 rev4：正常提供
+
+    # legacy 行：有 rating_fields 无 field_revs → 提供字段按行 rev 保守累积，显式空不丢
+    legacy = export._accumulate_label_fields(None, {"stars": 3, "useful_idx": [],
+                                                    "rating_fields": ["stars", "useful_idx"], "rev": 2})
+    assert legacy["useful_idx"] == [] and legacy["rating_field_revs"]["useful_idx"] == 2
+    # 更老的行连 rating_fields 都没有：只按非空值保守判 provided（不猜丢历史）
+    older = export._accumulate_label_fields(None, {"stars": 3, "comment": "旧", "rev": 2})
+    assert older["stars"] == 3 and older["comment"] == "旧"
+    older = export._accumulate_label_fields(older, {"stars": 4, "rating_fields": ["stars"], "rev": 1})
+    assert older["stars"] == 3                          # legacy 字段 rev=2 > 迟到 rev1：不复活
+
+
+# ---------------------------------------------------------------------------
+# --accepted 未指定（None）与显式空名单（set()）必须分开
+# ---------------------------------------------------------------------------
+
+def test_export_accepted_unspecified_preserves_and_empty_list_clears_final(db, tmp_path):
+    """accepted=None（不创建/不改 final）与 set()（显式撤销全员、空 final）分开。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _pkt_v3_imp(ts))
+    ids = tmp_path / "accepted.txt"
+    ids.write_text("# 人工接受名单\nr-search-1\n", encoding="utf-8")
+    out = tmp_path / "n13"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--accepted", str(ids)]) == 0
+    final_path = out / "benchmark_candidates.final.jsonl"
+    assert [c["record_id"] for c in _read_jsonl(final_path)] == ["r-search-1"]
+    final_bytes = final_path.read_bytes()
+
+    # 未指定 --accepted：final 保持原样（不改写）
+    assert export.main(["--dsn", str(path), "--out", str(out)]) == 0
+    assert final_path.read_bytes() == final_bytes
+
+    # 显式空名单（只有注释/空行）：清空 final，不留旧人工接受项
+    empty = tmp_path / "accepted_empty.txt"
+    empty.write_text("# 全部撤销\n\n", encoding="utf-8")
+    assert export.main(["--dsn", str(path), "--out", str(out), "--accepted", str(empty)]) == 0
+    assert _read_jsonl(final_path) == []
+
+    # 缺 accepted 文件：exit 2，既有产物 bytes 不变
+    before = {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()}
+    assert export.main(["--dsn", str(path), "--out", str(out),
+                        "--accepted", str(tmp_path / "no-such-list.txt")]) == 2
+    assert {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()} == before
+
+
+def test_export_accepted_empty_list_with_legit_empty_source_leaves_no_stale_final(db, tmp_path):
+    """源全库合法空 + 显式空名单：final 退场为空，不残留旧人工接受项。"""
+    path, engine = db
+    ts = int(datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    _insert(engine, _pkt_v3_imp(ts))
+    ids = tmp_path / "accepted.txt"
+    ids.write_text("r-search-1\n", encoding="utf-8")
+    out = tmp_path / "n13-empty"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--accepted", str(ids),
+                        "--incremental"]) == 0
+    final_path = out / "benchmark_candidates.final.jsonl"
+    assert len(_read_jsonl(final_path)) == 1
+
+    with engine.begin() as conn:                                  # 最后一包被清理 → 合法空库
+        conn.execute(ingest_packets.delete())
+        conn.execute(packet_receipts.delete())
+    empty = tmp_path / "accepted_empty.txt"
+    empty.write_text("# 全部撤销\n", encoding="utf-8")
+    assert export.main(["--dsn", str(path), "--out", str(out), "--accepted", str(empty),
+                        "--incremental"]) == 0
+    assert _read_jsonl(out / "benchmark_candidates.jsonl") == []   # 全库扫描原子退场
+    assert _read_jsonl(final_path) == []                           # final 同样清空，不留旧项
+
+
+# ---------------------------------------------------------------------------
+# 同 rev 并列修订：以 DB 原始接收顺序 (packet 行 id, 包内位置) 决胜
+# ---------------------------------------------------------------------------
+
+def _pkt_samerev_label(packet_id: str, fields: dict, ts: int, *,
+                       extra_events: list | None = None) -> dict:
+    """同 key (t-samerev, r-samerev) rev2 的 label 事件包（不同 event_id）。"""
+    events = [{"event_id": f"u-{packet_id}-a", "t": ts, "k": "label", "tid": "t-samerev",
+               "recId": "r-samerev", "rev": 2, **fields}]
+    events.extend(extra_events or [])
+    return {
+        "schema": "biodata-telemetry/1", "packet_id": packet_id, "install_id": "inst-samerev",
+        "exported_at": "2026-08-20T09:00:00Z", "usage_events": events,
+        "benchfb_records": [], "mcp_records": [],
+    }
+
+
+def _samerev_setup(db, tmp_path, out: Path):
+    """空评分 base 候选（先做基线全库导出落候选）+ A(rev2 显式清空) DB 先收 / B(rev2 正例) DB 后收。"""
+    path, engine = db
+    t0 = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+    ts = int(t0.timestamp() * 1000)
+    _insert(engine, {
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-samerev-base", "install_id": "inst-samerev",
+        "exported_at": "2026-08-20T08:00:00Z", "usage_events": [], "mcp_records": [],
+        "benchfb_records": [{
+            "id": "r-samerev", "tid": "t-samerev", "kind": "search", "t": ts, "q": "同 rev 并列",
+            "search": {"res": {"results": [{"dataset_uid": "d1"}, {"dataset_uid": "d2"}]}},
+            "rating": {},
+        }],
+    }, received_at=t0)
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    _insert(engine, _pkt_samerev_label("pkt-samerev-a",
+                                       {"useful_uids": [], "useful_idx": [], "comment": "撤销正例"},
+                                       ts + 600_000),
+            received_at=t0 + timedelta(minutes=10))                      # A 先收（packet 行 id 小）
+    _insert(engine, _pkt_samerev_label("pkt-samerev-b",
+                                       {"useful_uids": ["d2"], "useful_idx": [2]},
+                                       ts + 1_200_000),
+            received_at=t0 + timedelta(minutes=20))                      # B 后收（packet 行 id 大）
+    return path, t0
+
+
+def _assert_samerev_clear(out: Path, freezer) -> None:
+    """终态：DB 先收的显式清空生效——d2 一直 grade 0，comment 仍是人工标注。"""
+    cand = next(c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-samerev")
+    assert cand["rating"]["useful_uids"] == [] and cand["rating"]["useful_idx"] == []
+    assert cand["rating"]["comment"] == "撤销正例"
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-samerev")
+    assert label["useful_uids"] == [] and label["comment"] == "撤销正例"
+    prepared, exclusions = freezer._prepare_records([cand], purpose="eval", bucket_days=7)
+    assert exclusions["no_human_label"] == 0 and len(prepared) == 1
+    assert prepared[0]["graded_relevance"] == [{"uid": "d1", "grade": 0}, {"uid": "d2", "grade": 0}]
+
+
+@pytest.mark.parametrize("seq", ["A>B", "AB>B", "B>A", "A>AB"])
+def test_export_same_rev_tie_uses_db_receipt_order_across_windows(db, tmp_path, seq):
+    """同 rev 并列（不同 event_id）：先到先留的「先」= DB 接收顺序，与导出窗口顺序无关。
+
+    旧实现同 rev 由累积顺序决胜：窗口先扫 B、种子 A 后并入时 B 留 → 窗口 grade2、
+    全库 grade0。正常分窗/重叠旧窗/反向窗口四种序列都必须与全库扫描逐字节一致。"""
+    out = tmp_path / ("samerev-" + seq.replace(">", "_"))
+    path, t0 = _samerev_setup(db, tmp_path, out)
+    win = {
+        "A": ["--since", (t0 + timedelta(minutes=5)).isoformat(),
+              "--until", (t0 + timedelta(minutes=15)).isoformat()],
+        "B": ["--since", (t0 + timedelta(minutes=15)).isoformat()],
+        "AB": ["--since", (t0 + timedelta(minutes=5)).isoformat()],
+    }
+    for step in seq.split(">"):
+        assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", *win[step]]) == 0
+    freezer = _load_script("build_telemetry_benchmark", "scripts/build_telemetry_benchmark.py")
+    _assert_samerev_clear(out, freezer)
+
+    out_full = tmp_path / ("samerev-" + seq.replace(">", "_") + "-full")
+    assert export.main(["--dsn", str(path), "--out", str(out_full), "--incremental"]) == 0
+    _assert_samerev_clear(out_full, freezer)
+    for fname in ("explicit_labels.jsonl", "benchmark_candidates.jsonl"):
+        assert (out / fname).read_bytes() == (out_full / fname).read_bytes(), \
+            f"{seq}: {fname} 窗口序列与全库终态不一致"
+        before = (out / fname).read_bytes()
+        assert export.main(["--dsn", str(path), "--out", str(out), "--incremental",
+                            *win[seq.split(">")[-1]]]) == 0
+        assert (out / fname).read_bytes() == before, f"{seq}: {fname} 重跑不幂等"
+
+
+def test_export_same_rev_within_packet_first_position_wins(db, tmp_path):
+    """同包内多个同 key 同 rev 事件：包内数组位置先到先留（位置即接收序）。"""
+    path, engine = db
+    t0 = datetime(2026, 8, 20, 8, 0, tzinfo=timezone.utc)
+    ts = int(t0.timestamp() * 1000)
+    _insert(engine, {
+        "schema": "biodata-telemetry/1", "packet_id": "pkt-samerev-base", "install_id": "inst-samerev",
+        "exported_at": "2026-08-20T08:00:00Z", "usage_events": [], "mcp_records": [],
+        "benchfb_records": [{
+            "id": "r-samerev", "tid": "t-samerev", "kind": "search", "t": ts, "q": "同 rev 并列",
+            "search": {"res": {"results": [{"dataset_uid": "d1"}, {"dataset_uid": "d2"}]}},
+            "rating": {},
+        }],
+    }, received_at=t0)
+    _insert(engine, _pkt_samerev_label(
+        "pkt-samerev-p1", {"useful_uids": [], "useful_idx": [], "comment": "撤销正例"}, ts + 600_000,
+        extra_events=[{"event_id": "u-pkt-samerev-p1-b", "t": ts + 601_000, "k": "label",
+                       "tid": "t-samerev", "recId": "r-samerev", "rev": 2,
+                       "useful_uids": ["d9"], "useful_idx": [1]}]),
+        received_at=t0 + timedelta(minutes=10))
+    out = tmp_path / "samerev-inpkt"
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental"]) == 0
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-samerev")
+    assert label["useful_uids"] == [] and label["comment"] == "撤销正例"
+    freezer = _load_script("build_telemetry_benchmark", "scripts/build_telemetry_benchmark.py")
+    _assert_samerev_clear(out, freezer)
+
+
+def test_export_same_rev_legacy_seed_without_source_keeps_old_clear(db, tmp_path):
+    """旧产物缺来源信息（legacy）：同 rev 并列保守保留已存清空，不被本轮正例反转。
+
+    未知来源没有反转权——只有严格更高 rev 或双方可信的更早来源才能改旧值；
+    legacy 无法推出全局接收序，只能保守保存已知（全库重扫才是确定性重建，
+    本测试不断言 legacy 窗口恢复了全库未知历史）。"""
+    out = tmp_path / "samerev-legacy"
+    path, t0 = _samerev_setup(db, tmp_path, out)
+    win_a = ["--since", (t0 + timedelta(minutes=5)).isoformat(),
+             "--until", (t0 + timedelta(minutes=15)).isoformat()]
+    win_b = ["--since", (t0 + timedelta(minutes=15)).isoformat()]
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", *win_a]) == 0
+    # 模拟更老版本写下的产物：有 rating_fields/rating_field_revs，但没有任何来源位置
+    legacy_rows = []
+    for row in _read_jsonl(out / "explicit_labels.jsonl"):
+        row.pop("rating_field_srcs", None)
+        row.pop("rev_src", None)
+        legacy_rows.append(row)
+    (out / "explicit_labels.jsonl").write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in legacy_rows), encoding="utf-8")
+    assert export.main(["--dsn", str(path), "--out", str(out), "--incremental", *win_b]) == 0
+    label = next(l for l in _read_jsonl(out / "explicit_labels.jsonl") if l["recId"] == "r-samerev")
+    assert label["useful_uids"] == [] and label["comment"] == "撤销正例"   # 已存清空不被同 rev 反转
+    cand = next(c for c in _read_jsonl(out / "benchmark_candidates.jsonl") if c["record_id"] == "r-samerev")
+    assert cand["rating"]["useful_uids"] == []
+
+
+def test_accumulate_label_fields_same_rev_prefers_earlier_receipt():
+    """同 rev 并列以 DB 接收序 (packet 行 id, 包内位置) 决胜，与并入顺序无关。"""
+    a = {"useful_uids": [], "useful_idx": [], "comment": "先收", "rev": 2,
+         "rating_fields": ["useful_uids", "useful_idx", "comment"], "rev_src": [2, 0]}
+    b = {"useful_uids": ["d9"], "useful_idx": [1], "rev": 2,
+         "rating_fields": ["useful_uids", "useful_idx"], "rev_src": [3, 0]}
+    ab = export._accumulate_label_fields(export._accumulate_label_fields(None, a), b)
+    ba = export._accumulate_label_fields(export._accumulate_label_fields(None, b), a)
+    assert ab == ba
+    assert ab["useful_uids"] == [] and ab["comment"] == "先收"
+    assert ab["rating_field_srcs"]["useful_uids"] == [2, 0]
+    # 来源未知的一侧没有反转权：legacy 现值（显式清空）在同 rev 并列时保留
+    cur = export._accumulate_label_fields(None, {"useful_uids": [], "rating_fields": ["useful_uids"], "rev": 2})
+    cur = export._accumulate_label_fields(cur, {"useful_uids": ["d9"], "rating_fields": ["useful_uids"],
+                                                "rev": 2, "rev_src": [3, 0]})
+    assert cur["useful_uids"] == []
+    # 反过来：现值来源已知、incoming 来源未知，同 rev 也不反转
+    known = export._accumulate_label_fields(None, b)
+    known = export._accumulate_label_fields(known, {"useful_uids": [], "rating_fields": ["useful_uids"], "rev": 2})
+    assert known["useful_uids"] == ["d9"]
+    # 严格更高 rev 不受来源限制
+    higher = export._accumulate_label_fields(cur, {"useful_uids": ["d7"], "rating_fields": ["useful_uids"], "rev": 3})
+    assert higher["useful_uids"] == ["d7"]
+
+
+def test_accumulate_label_fields_field_source_not_guessed_from_row_meta():
+    """逐字段来源 ≠ 行 meta 来源：useful 来自低 rev 事件，行 meta 来自高 rev 的另一字段事件。"""
+    e2 = {"useful_uids": [], "rating_fields": ["useful_uids"], "rev": 2, "rev_src": [1, 0],
+          "packet_id": "pkt-p1", "event_id": "u-p1-a", "ts": 100}
+    e3 = {"comment": "高 rev 评语", "rating_fields": ["comment"], "rev": 3, "rev_src": [3, 0],
+          "packet_id": "pkt-p3", "event_id": "u-p3-a", "ts": 300}
+    acc = export._accumulate_label_fields(export._accumulate_label_fields(None, e2), e3)
+    assert acc["rev_src"] == [3, 0] and acc["packet_id"] == "pkt-p3"       # 行 meta 来自最高 rev
+    assert acc["rating_field_srcs"]["useful_uids"] == [1, 0]               # 字段来源仍是低 rev 事件
+    assert acc["rating_field_srcs"]["comment"] == [3, 0]
+    # 第三事件 rev 与 e2 相同、来源在 e2 与 e3 之间——若按行 meta 猜 useful 来源会误判反转
+    late = {"useful_uids": ["d9"], "rating_fields": ["useful_uids"], "rev": 2, "rev_src": [2, 0]}
+    acc = export._accumulate_label_fields(acc, late)
+    assert acc["useful_uids"] == []                                        # e2 更早 → 不反转

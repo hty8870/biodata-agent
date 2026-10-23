@@ -602,6 +602,59 @@ def test_raw_get_attempts_out_param_counts_retries(monkeypatch):
     assert att[0] == 3, "实际请求次数必须带出给账本"
 
 
+def test_incomplete_read_retries_and_degrades(monkeypatch):
+    """分块响应中途断开（IncompleteRead，HTTPException 族、不是 OSError）——
+    前两次抛、第三次成功；耗尽后转 _NetError（由公开函数逐源降级），不再裸抛终止整份检查。"""
+    import http.client
+
+    calls = {"n": 0}
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            return b"{}"
+
+    class _Partial:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            raise http.client.IncompleteRead(b"{}", 100)
+
+    def flaky(req, timeout=None):
+        calls["n"] += 1
+        return _Partial() if calls["n"] < 3 else _Resp()
+
+    monkeypatch.setattr(cn.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(cn.time, "sleep", lambda s: None)
+    monkeypatch.setattr(cn, "_polite_wait", lambda host, interval: None)
+    att = [1]
+    body, status = cn._raw_request("https://example.org/x", timeout=1, min_interval=0,
+                                   headers={}, attempts=att)
+    assert body == b"{}" and status == 200 and att[0] == 3
+
+    calls["n"] = 0
+    monkeypatch.setattr(cn.urllib.request, "urlopen",
+                        lambda req, timeout=None: (calls.__setitem__("n", calls["n"] + 1)
+                                                   or _Partial()))
+    with pytest.raises(cn._NetError) as ei:
+        cn._raw_request("https://example.org/x", timeout=1, min_interval=0, headers={})
+    assert calls["n"] == 3 and "IncompleteRead" in str(ei.value), \
+        "三次尝试预算耗尽后必须归一为 _NetError（不再是裸 HTTPException）"
+
+
 def test_fetch_json_logged_writes_attempts_into_ledger(tmp_path, monkeypatch):
     """发生过重试的请求，账本条目带 attempts；一次就成的请求不污染条目形状。"""
     def fake_retried(url, **kw):

@@ -473,11 +473,14 @@ def test_docs_and_openapi_disabled(client):
     assert client.get("/openapi.json").status_code == 404
 
 
-def test_deployment_preserves_approved_public_receiver_and_feedback_key_injection():
+def test_deployment_template_binds_receiver_to_loopback_and_keeps_container_config():
+    """本地模板安全默认：宿主端口只绑回环，对外暴露由运维 TLS/网络代理决定；
+    容器内仍监听 0.0.0.0:8471（容器网络内可达，不是公网监听）。"""
     compose = (_RECEIVER_DIR / "docker-compose.yml").read_text(encoding="utf-8")
     dockerfile = (_RECEIVER_DIR / "Dockerfile").read_text(encoding="utf-8")
-    assert '"8471:8471"' in compose
-    assert '"127.0.0.1:8471:8471"' not in compose
+    assert '127.0.0.1:8471:8471' in compose
+    assert '"8471:8471"' not in compose
+    assert "--host 0.0.0.0 --port 8471" in compose
     assert "ALLOWED_ORIGINS" in compose and "PROFILE_RATE_LIMIT_MAX" in compose
     assert "FEEDBACK_DECRYPT_KEY: ${FEEDBACK_DECRYPT_KEY:-}" in compose
     assert "UVICORN_WORKERS: ${UVICORN_WORKERS:-1}" in compose
@@ -1206,7 +1209,7 @@ def test_ingest_sanitizes_secret_keys_and_base_url(client, app):
         "event_id": "u9", "t": 9, "k": "mcp",
         "api_key": FAKE_API_KEY,
         "nested": {"Password": "p@ss", "email": "zhang.san@example.com"},
-        "base_url": "https://proxy.internal:8443/v1/chat?token=abc",
+        "base_url": "https://proxy.example.com:8443/v1/chat?token=abc",
         "note": "证件 110101199003074321 备用",
     }]
     resp = client.post("/v1/ingest", json=body, headers={"X-Ingest-Token": TOKEN})
@@ -1217,11 +1220,68 @@ def test_ingest_sanitizes_secret_keys_and_base_url(client, app):
     stored = row["payload"]["usage_events"][0]
     assert "api_key" not in stored
     assert stored["nested"] == {}                       # Password 与 email 两键均剔除
-    assert stored["base_url"] == "proxy.internal:8443"  # host（含端口）保留，路径/查询整段不采
+    assert stored["base_url"] == "proxy.example.com:8443"  # host（含端口）保留，路径/查询整段不采
     assert stored["note"] == "证件 [证件号] 备用"
     # 响应/库存任何位置都不得出现原始秘密值
     assert FAKE_API_KEY not in resp.text
     assert "p@ss" not in json.dumps(row["payload"], ensure_ascii=False)
+
+
+def test_ingest_sanitizes_base_url_userinfo_and_ipv6(client, app):
+    """URL 内嵌凭据不落库：`user:pass@` 按 hostname+port 剥掉（与客户端 new URL().host 同形）、
+    IPv6 复原方括号且主机名小写、非法端口 fail-closed 为空串；原文不出现在库存/响应任何位置。"""
+    body = _valid_body()
+    body["usage_events"] = [
+        {"event_id": "u-cred", "t": 1, "k": "mcp",
+         "base_url": "https://alice:s3cr3t-pw@proxy.example.com:8443/v1/chat?token=abc#frag"},
+        {"event_id": "u-v6", "t": 2, "k": "mcp", "base_url": "http://[2001:DB8::1]:9000/x"},
+        {"event_id": "u-port", "t": 3, "k": "mcp", "base_url": "https://host:99999/x"},
+        {"event_id": "u-default", "t": 4, "k": "mcp", "base_url": "https://HOST:443/v1"},
+    ]
+    resp = client.post("/v1/ingest", json=body, headers={"X-Ingest-Token": TOKEN})
+    assert resp.status_code == 200
+    assert resp.json()["sanitized"] >= 3
+    with app.state.engine.connect() as conn:
+        row = conn.execute(ingest_packets.select()).mappings().fetchone()
+    stored = row["payload"]["usage_events"]
+    assert stored[0]["base_url"] == "proxy.example.com:8443"      # userinfo/路径/查询/锚点全丢
+    assert stored[1]["base_url"] == "[2001:db8::1]:9000"       # IPv6 方括号保留、主机名小写
+    assert stored[2]["base_url"] == ""                         # 端口越界 → 无法安全归约
+    # scheme 缺省端口与浏览器 `new URL().host` 一样省略（已与 node 逐例对表：:443/:80/无 scheme/越界）
+    assert stored[3]["base_url"] == "host"
+    blob = json.dumps(row["payload"], ensure_ascii=False)
+    assert "s3cr3t-pw" not in blob and "alice" not in blob
+    assert "s3cr3t-pw" not in resp.text
+
+
+def test_all_duplicate_events_new_packet_still_reserves_daily_bytes():
+    """新 packet_id 但事件全被重叠 batch 收过：不写空主包，但仍兑现日字节容量；
+    超限 → 429 且 receipt/配额与主事务一起回滚（防轮换 profile 无限产 receipt）。"""
+    s = Settings(
+        ingest_token=TOKEN, stats_token=STATS_TOKEN, database_url="sqlite:///:memory:",
+        daily_bytes_budget=600,
+    )
+    app2 = create_app(s)
+    first = _valid_body()                                     # u1/u2/r1，约 400 字节
+    first["packet_id"] = "pkt-all-dup-1"
+    dup = _valid_body()                                       # 同事件、新 packet id
+    dup["packet_id"] = "pkt-all-dup-2"
+    with TestClient(app2) as c:
+        assert c.post("/v1/ingest", json=first,
+                      headers={"X-Ingest-Token": TOKEN}).status_code == 200
+        resp = c.post("/v1/ingest", json=dup, headers={"X-Ingest-Token": TOKEN})
+        assert resp.status_code == 429
+        assert "byte budget" in resp.json()["detail"]
+        with app2.state.engine.connect() as conn:
+            packets = conn.execute(select(func.count()).select_from(ingest_packets)).scalar_one()
+            receipts = conn.execute(select(packet_receipts.c.packet_id)).scalars().all()
+            used = conn.execute(
+                select(receiver_app.daily_usage.c.raw_bytes).where(
+                    receiver_app.daily_usage.c.scope == "global")
+            ).scalar_one()
+    assert packets == 1                                       # 429 没落空主包
+    assert receipts == ["pkt-all-dup-1"]                      # 第二个包的 receipt 已回滚
+    assert used < 600                                         # 配额预留同样回滚，不是只加不减
 
 
 def test_ingest_clean_packet_reports_sanitized_zero(client):

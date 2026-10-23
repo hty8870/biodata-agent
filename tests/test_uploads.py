@@ -62,6 +62,59 @@ def test_ingest_writes_external_not_base(tmp_path):
     assert not (tmp_path / "database" / "base").exists()   # 绝不创建/写 base
 
 
+def test_ingest_refuses_external_linked_into_base(tmp_path):
+    """external 是符号链接/目录联接指向 base 时，摄取必须零写入、base 字节不变
+    （只拼路径挡不住链接；守卫在 fs_utils 单锚点）。"""
+    import os
+    import subprocess
+    import sys
+
+    base = tmp_path / "database" / "base"
+    base.mkdir(parents=True)
+    official = base / "official.json"
+    official.write_text('{"records": [{"dataset_uid": "B1"}]}', encoding="utf-8")
+    ext = tmp_path / "database" / "external"
+
+    def _make_link() -> bool:
+        try:
+            os.symlink(str(base), str(ext), target_is_directory=True)
+            return True
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+        if sys.platform == "win32":   # 目录联接（junction）不需要管理员权限
+            proc = subprocess.run(["cmd", "/c", "mklink", "/J", str(ext), str(base)],
+                                  capture_output=True, text=True)
+            return proc.returncode == 0 and ext.exists()
+        return False
+
+    if not _make_link():
+        pytest.skip("当前平台/权限不支持目录链接，跳过")
+
+    before = {p.name: p.read_bytes() for p in base.iterdir()}
+    with pytest.raises(UploadError) as ei:
+        _ingest(tmp_path, [{"dataset_name": "A", "species": "Human"}])
+    assert ei.value.code == "bad_store_path"
+    assert {p.name: p.read_bytes() for p in base.iterdir()} == before, "冻结基准零变化"
+    assert list(base.glob("upload_*")) == []
+
+
+def test_failed_ingest_does_not_publish_write_token(tmp_path, monkeypatch):
+    """摄取事务失败（流水账写不进去）→ 零文件、也**不发布**写入代际令牌
+    （否则独立 reader 会为一次没发生的变更空转重载）。"""
+    from dataset_recommender.corpus import corpus as C
+
+    def boom(*a, **k):
+        raise OSError("journal denied")
+
+    monkeypatch.setattr(uploads, "_append_upload_journal", boom)
+    with pytest.raises(UploadError) as ei:
+        _ingest(tmp_path, [{"dataset_name": "A", "species": "Human"}])
+    assert ei.value.code == "journal_failed"
+    ext = tmp_path / "database" / "external"
+    assert not ext.exists() or list(ext.glob("*.json")) == []
+    assert C.corpus_write_generation(tmp_path) == "", "失败事务不发布代际标记"
+
+
 def test_ingest_normalized_wrapper_and_note(tmp_path):
     res = _ingest(tmp_path, [{"dataset_name": "A"}], note="用户上传（本地 MCP upload_dataset 工具）。")
     disk = json.loads((tmp_path / res.saved_to).read_text(encoding="utf-8"))

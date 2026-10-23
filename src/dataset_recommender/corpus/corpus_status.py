@@ -31,6 +31,7 @@ from .corpus_curation import (
     _snapshot_local_info,
     list_curations,
 )
+from .net_ledger import ledger_visible
 
 #: 账本摘要的读取窗口（行）与回显条数——状态汇报只需要「近期」体感，不扛全量。
 _LEDGER_TAIL_LINES = 50
@@ -48,19 +49,25 @@ def _sources_status(root: Path) -> list[dict[str, Any]]:
     """各源条数/快照日期：注册表逐源读本地快照（离线；读不到就 0 条 + None 日期）。
 
     单源统计失败必须带 error 字段——失败与「真空快照」不同形，
-    不许把「库坏了」呈现成「库里没东西」。"""
+    不许把「库坏了」呈现成「库里没东西」。损坏快照经既有 `_err` 出参如实带出
+    （旧实现不传 `_err`，坏 JSON 与真 0 条同形）。"""
     out: list[dict[str, Any]] = []
     for key, spec in CHECK_UPDATE_SOURCES.items():
         entry: dict[str, Any] = {
             "source": key,
             "label": str(spec.get("label") or key),
         }
+        errs: list[str] = []
         try:
             # 官方快照是随包静态资源（只读）→ frozen 布局实例根从 resource 层读。
-            count, snap = _snapshot_local_info(resource_file_for(root, str(spec["file"])))
+            count, snap = _snapshot_local_info(
+                resource_file_for(root, str(spec["file"])), errs)
         except Exception as exc:  # 单源失败不掀翻整份汇报（边界 1），但失败要可见
             count, snap = 0, None
             entry["error"] = type(exc).__name__
+        else:
+            if errs:
+                entry["error"] = errs[0]
         entry["local_count"] = int(count)
         entry["snapshot_date"] = snap
         out.append(entry)
@@ -71,6 +78,8 @@ def _ledger_summary(root: Path) -> dict[str, Any]:
     """近期审计摘要：账本尾部窗口的总条数、按 endpoint 的计数、最近几条的紧凑回显。
 
     账本只记联网（`_fetch_logged`）——「近期没有条目」本身就是如实信息（最近没联过网）。
+    只汇总**当前主体**（登录账户；未绑定 = 本机匿名）的行——账户 B 看不到 A 的
+    最近查询与错误文本；历史无主体行同归匿名，未登录本机默认行为逐位不变。
     """
     path = instance_data_dir_for(root, USERDATA_DIR_NAME) / NET_LEDGER_NAME
     out: dict[str, Any] = {"entries": 0, "by_endpoint": {}, "recent": []}
@@ -86,7 +95,7 @@ def _ledger_summary(root: Path) -> dict[str, Any]:
             obj = json.loads(ln)
         except json.JSONDecodeError:
             continue
-        if isinstance(obj, dict):
+        if isinstance(obj, dict) and ledger_visible(obj):
             entries.append(obj)
     by_endpoint: dict[str, int] = {}
     for e in entries:
@@ -148,6 +157,10 @@ def db_status(*, project_root: Path | None = None) -> dict[str, Any]:
         "recycle": recycle,
         "ledger": _ledger_summary(root),
     }
+    if any("error" in s for s in sources):
+        # 有源快照读坏时，合计不含其条数（可能偏低）——如实标注，别让「不完整」
+        # 冒充「完整的总量」。
+        out["total_records_incomplete"] = True
     if curations_error:
         # 清单失败与「真空清单」不同形——带 error 字段如实区分。
         out["curations_error"] = curations_error

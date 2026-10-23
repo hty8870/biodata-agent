@@ -23,7 +23,7 @@ from typing import Callable, Sequence
 
 from ..llm.llm_client import LLMConfig, call_llm, is_auth_error
 from .retriever import RetrievedCandidate
-from .vector_recall import _WARNED, _warn_once_prefixed
+from .warn_once import WARNED as _WARNED, warn_once_prefixed as _warn_once_prefixed
 
 RERANK_BACKENDS = ("off", "llm")
 DEFAULT_RERANK_TOP_N = 12

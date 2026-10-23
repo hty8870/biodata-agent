@@ -38,6 +38,7 @@ from .llm_client import (
     LLMConfig,
     _sanitize_provider_error,
     call_llm,
+    is_complete_finish_reason,
     load_llm_config,
     should_use_llm as _should_use_llm,
 )
@@ -171,6 +172,9 @@ def _summarize_with_prompt(
         result["llm_status"] = f"error:{_sanitize_provider_error(exc, cfg.api_key)[:80]}"
         return result
 
+    if llm.succeeded and not is_complete_finish_reason(llm.finish_reason):
+        result["llm_status"] = "failed:incomplete_response"
+        return result
     if llm.succeeded and llm.text and llm.text.strip():
         result["summary_zh"] = llm.text.strip()
         result["summary_source"] = "llm"

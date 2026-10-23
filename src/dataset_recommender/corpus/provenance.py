@@ -231,7 +231,7 @@ def platform_id(dataset_uid: object, source: object = "") -> str | None:
 
 
 def collection_doi(item: dict[str, Any]) -> str | None:
-    """产出该数据集的那篇论文的 DOI；没有 → None。
+    """产出该数据集的那篇**论文**的 DOI；没有 → None。
 
     **粒度警告（决定了它的措辞）**：本库的 `collection_doi` 是 **collection 级**的，指向
     产出这批数据的**论文**，不是 dataset 级的数据引用。实测 2155 条有值、100% 来自 CELLxGENE
@@ -243,8 +243,29 @@ def collection_doi(item: dict[str, Any]) -> str | None:
 
     此前该字段是**零消费点的死字段**（`src/` 与 `web/` 全无引用）。这里给它接上消费者，
     但只用它承担它真正能承担的语义。
+
+    Zenodo 适配器把**数据记录自己的 DOI**（conceptdoi/doi/pids）写进该原始字段
+    （供编号直查/标识符匹配用）——它不是论文 DOI，本访问器对 Zenodo 来源一律回 None，
+    绝不把数据 DOI 谎称为「关联论文 DOI」；数据 DOI 经 `dataset_doi()` 按正确对象类型读取。
     """
+    if _text(item.get("source")) == SOURCE_ZENODO:
+        return None
     doi = _text(item.get("collection_doi"))
+    if not doi or doi.lower() in {"unknown", "n/a", "na", "none", "null", "-"}:
+        return None
+    return doi
+
+
+def dataset_doi(item: dict[str, Any]) -> str | None:
+    """**数据记录自己的 DOI**（dataset/collection-deposit 级）；不是论文 DOI。
+
+    数据 DOI 的类型化出口：Zenodo 的 conceptdoi/doi 指向数据记录（conceptdoi = 全部版本的
+    最新版，版本粒度更稳），存在原始记录的 `collection_doi` 字段与新增 `dataset_doi` 字段里。
+    消费侧要展示/导出时用本访问器，并如实标注为「数据集 DOI」；论文 DOI 走
+    `collection_doi()`——两者不允许再混用同一句话。"""
+    if _text(item.get("source")) != SOURCE_ZENODO:
+        return None
+    doi = _text(item.get("dataset_doi")) or _text(item.get("collection_doi"))
     if not doi or doi.lower() in {"unknown", "n/a", "na", "none", "null", "-"}:
         return None
     return doi

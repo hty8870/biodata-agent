@@ -37,11 +37,13 @@ def _bundle(paths: AppPaths) -> None:
 def _model_ready(paths: AppPaths) -> None:
     # 安装器同批下双模型：重排 + 嵌入两个目录都按完整文件就绪（fake_run 对两条
     # --download 命令都会调到本助手）。
+    from dataset_recommender.retrieval import model_worker
     for target in (mr.model_dir(paths), mr.embed_model_dir(paths)):
         target.mkdir(parents=True, exist_ok=True)
         (target / "config.json").write_text("{}", encoding="utf-8")
         (target / "tokenizer.json").write_text("{}", encoding="utf-8")
         (target / "model.safetensors").write_bytes(b"weights")
+        model_worker._write_completion_marker(target)
 
 
 def test_install_creates_isolated_runtime_and_ready_manifest(monkeypatch, tmp_path):
@@ -91,6 +93,24 @@ def test_install_failure_never_writes_ready_and_public_status_has_no_paths(monke
     assert str(tmp_path) not in raw and "exit=9" in raw
 
 
+@pytest.mark.parametrize("missing", ["uv", "lock", "worker"])
+def test_background_preflight_failure_records_terminal_status(monkeypatch, tmp_path, missing):
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    target = {"uv": mi.uv_path(paths), "lock": mi.model_lock_path(paths), "worker": mi.worker_script(paths)}[missing]
+    target.unlink()
+    monkeypatch.setattr(mi, "_JOB_THREAD", None)
+    monkeypatch.setattr(mi, "_run_command", lambda *a, **kw: pytest.fail("预检失败不得启动子进程"))
+    mi.start_model_install(paths)
+    mi._JOB_THREAD.join(3)
+    assert not mi._JOB_THREAD.is_alive()
+    status = mi.model_install_status(paths)
+    assert status["state"] == "error" and status["stage"] == "stopped"
+    assert not status["can_cancel"]
+    assert "缺少 uv" in status["message"] if missing == "uv" else "不完整" in status["message"]
+    assert not mi.ready_manifest_path(paths).exists()
+
+
 def test_cancel_terminates_active_process_and_keeps_base_usable(monkeypatch, tmp_path):
     paths = _paths(tmp_path)
 
@@ -113,18 +133,43 @@ def test_cancel_terminates_active_process_and_keeps_base_usable(monkeypatch, tmp
 
 
 def test_cross_process_lock_rejects_live_owner_and_recovers_stale_owner(monkeypatch, tmp_path):
+    """锁是「持有整个任务的 OS 文件锁」——磁盘上的陈旧 PID 残留不再参与判定，
+    也不会出现「按旧读数 unlink 别人的新锁」的窗口。"""
     paths = _paths(tmp_path)
     lock = mi.runtime_root(paths) / "install.lock"
     lock.parent.mkdir(parents=True)
-    lock.write_text("123", encoding="ascii")
-    monkeypatch.setattr(mi, "_pid_alive", lambda pid: pid == 123)
-    with pytest.raises(mi.ModelInstallError, match="正在安装"):
-        with mi._install_lock(paths):
-            pass
-    monkeypatch.setattr(mi, "_pid_alive", lambda _pid: False)
+    lock.write_text("123", encoding="ascii")   # 陈旧残留（无 OS 锁持有者）：不阻挡新安装者
     with mi._install_lock(paths):
         assert lock.exists()
-    assert not lock.exists()
+    assert lock.exists()                        # 不再靠删锁文件表达状态（删＝把互斥让给别人）
+
+    entered = threading.Event()
+    release = threading.Event()
+    outcomes: list[str] = []
+
+    def holder():
+        with mi._install_lock(paths):
+            entered.set()
+            release.wait(3)
+
+    def contender():
+        entered.wait(3)
+        try:
+            with mi._install_lock(paths):
+                outcomes.append("acquired")
+        except mi.ModelInstallError as exc:
+            outcomes.append(exc.code)
+
+    t1 = threading.Thread(target=holder)
+    t2 = threading.Thread(target=contender)
+    t1.start()
+    t2.start()
+    t2.join(3)
+    release.set()
+    t1.join(3)
+    assert outcomes == ["busy"]
+    with mi._install_lock(paths):               # 释放后可再次获取
+        pass
 
 
 def test_start_is_single_flight(monkeypatch, tmp_path):
@@ -370,7 +415,6 @@ def test_worker_thread_can_restart_after_finishing(monkeypatch, tmp_path):
 def test_install_lock_is_mutually_exclusive_across_threads(monkeypatch, tmp_path):
     """风险 5：两个安装者竞争单飞锁，后到者拿到 busy，锁在退出后释放。"""
     paths = _paths(tmp_path)
-    monkeypatch.setattr(mi, "_pid_alive", lambda _pid: True)
     entered = threading.Event()
     release = threading.Event()
     outcomes: list[str] = []
@@ -422,12 +466,12 @@ def test_legacy_cross_only_install_gets_embed_top_up(monkeypatch, tmp_path):
     manifest_path = mi.ready_manifest_path(paths)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(legacy_manifest), encoding="utf-8")
-    assert mr.external_runtime_ready(paths)
+    assert not mr.external_runtime_ready(paths)  # legacy sizes are not trusted integrity evidence
     assert not mr.external_embed_ready(paths)
     assert mi.model_install_status(paths)["state"] != "ready"
 
     def fake_run(command, *, env, log, cancel):
-        if "--download" in command and "--embed" in command:
+        if "--download" in command:
             _model_ready(paths)
 
     monkeypatch.setattr(mi, "_run_command", fake_run)
@@ -445,3 +489,167 @@ def test_stale_ready_status_json_not_shown_when_models_incomplete(tmp_path):
     paths = _paths(tmp_path)
     mi._write_status(paths, state="ready", stage="ready", message="本地精准重排已经就绪。")
     assert mi.model_install_status(paths)["state"] == "idle"
+
+
+# ---------------------------------------------------------------- 权重完成证据与取消终态
+
+def _fake_worker(mi, mr, paths, *, skip_when_ready=True, redownloaded=None):
+    """仿真实 worker：目录「就绪」（config+tokenizer+非空权重）即跳过；否则写完整权重。"""
+
+    def fake_run(command, *, env, log, cancel):
+        if "venv" in command:
+            py = mi.runtime_python(paths)
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.write_bytes(b"python")
+            return
+        if "--download" not in command:
+            return
+        target = mr.embed_model_dir(paths) if "--embed" in command else mr.model_dir(paths)
+        from dataset_recommender.retrieval import model_worker
+        if skip_when_ready and model_worker._completion_valid(target):
+            return
+        if redownloaded is not None:
+            redownloaded.append(target.name)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "config.json").write_text("{}", encoding="utf-8")
+        (target / "tokenizer.json").write_text("{}", encoding="utf-8")
+        (target / "model.safetensors").write_bytes(b"weights")
+        model_worker._write_completion_marker(target)
+
+    return fake_run
+
+
+def test_reinstall_repairs_truncated_weights_instead_of_refreshing_sizes(monkeypatch, tmp_path):
+    """截断（非空）权重 + 旧 manifest 尺寸失配 → 重装必须重新下载修复，
+    而不是把损坏尺寸刷新进新 manifest 后判 READY。"""
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    py = mi.runtime_python(paths)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_bytes(b"python")
+    cross = mr.model_dir(paths)
+    cross.mkdir(parents=True, exist_ok=True)
+    (cross / "config.json").write_text("{}", encoding="utf-8")
+    (cross / "tokenizer.json").write_text("{}", encoding="utf-8")
+    (cross / "model.safetensors").write_bytes(b"x")            # 取消/中断留下的截断权重
+    manifest_path = mi.ready_manifest_path(paths)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps({
+        "schema": mr.READY_SCHEMA, "model_id": mi.MODEL_ID,
+        "installed_at": "2026-01-01T00:00:00+00:00",
+        "runtime_bytes": 1, "model_bytes": 11,
+        "model_files": {"config.json": 2, "tokenizer.json": 2, "model.safetensors": 7},
+    }), encoding="utf-8")
+    assert not mr.external_runtime_ready(paths)                # 与 manifest 尺寸失配 → 未就绪
+
+    redownloaded: list[str] = []
+    monkeypatch.setattr(mi, "_run_command",
+                        _fake_worker(mi, mr, paths, redownloaded=redownloaded))
+    result = mi.install_local_model(paths)
+
+    assert result["state"] == "ready"
+    assert cross.name in redownloaded                          # 先清不可信残留，再真下载
+    assert (cross / "model.safetensors").read_bytes() == b"weights"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["model_files"]["model.safetensors"]["size"] == 7
+    assert len(manifest["model_files"]["model.safetensors"]["sha256"]) == 64
+    assert mr.external_runtime_ready(paths)
+
+
+def test_reinstall_keeps_valid_weights_when_manifest_matches(monkeypatch, tmp_path):
+    """反向：manifest 与磁盘逐位一致的健康安装不得被清掉重下（修复不误伤）。"""
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    py = mi.runtime_python(paths)
+    py.parent.mkdir(parents=True, exist_ok=True)
+    py.write_bytes(b"python")
+
+    def first_run(command, *, env, log, cancel):
+        if "venv" in command:
+            py.parent.mkdir(parents=True, exist_ok=True)
+            py.write_bytes(b"python")
+        if "--download" in command:
+            _model_ready(paths)
+
+    monkeypatch.setattr(mi, "_run_command", first_run)
+    manifest_path = mi.ready_manifest_path(paths)
+    assert mi.install_local_model(paths)["state"] == "ready"
+    assert manifest_path.is_file()
+
+    def forbid_commands(*_a, **_k):
+        pytest.fail("健康安装不得重新下载（也不得进入下载步骤）")
+
+    monkeypatch.setattr(mi, "_run_command", forbid_commands)
+    assert mi.install_local_model(paths)["state"] == "ready"   # 双模型就绪 → 直接返回
+
+
+def test_cancel_during_final_ready_commit_never_publishes_ready(monkeypatch, tmp_path):
+    """最后一次下载完成后的取消不得再写 READY（提交与取消检查同一临界区）。"""
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    monkeypatch.setattr(mi, "_run_command", _fake_worker(mi, mr, paths))
+    cancel = threading.Event()
+    entered = threading.Event()
+    release = threading.Event()
+    real_ready_manifest = mi._ready_manifest
+
+    def gated(paths_arg, lock, *, runtime_bytes, model_bytes):
+        entered.set()
+        assert release.wait(3)
+        return real_ready_manifest(paths_arg, lock, runtime_bytes=runtime_bytes,
+                                   model_bytes=model_bytes)
+
+    monkeypatch.setattr(mi, "_ready_manifest", gated)
+    outcome: dict = {}
+
+    def run():
+        try:
+            mi.install_local_model(paths, cancel=cancel)
+            outcome["state"] = "returned"
+        except mi.ModelInstallError as exc:
+            outcome["code"] = exc.code
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert entered.wait(3)
+    cancel.set()                       # 界面取消：下载已完成、READY 尚未提交
+    release.set()
+    thread.join(3)
+    assert outcome.get("code") == "cancelled"
+    assert not mi.ready_manifest_path(paths).exists()
+    assert mi.model_install_status(paths)["state"] == "cancelled"
+
+
+def test_installer_refuses_to_certify_files_without_download_evidence(tmp_path, monkeypatch):
+    from dataset_recommender.retrieval import model_worker as mw
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    run = _fake_worker(mi, mr, paths)
+    def missing_completion(command, **kwargs):
+        run(command, **kwargs)
+        if "--download" in command:
+            target = Path(command[command.index("--download") + 1])
+            (target / mw.COMPLETION_MARKER).unlink(missing_ok=True)
+    monkeypatch.setattr(mi, "_run_command", missing_completion)
+    with pytest.raises(mi.ModelInstallError) as caught:
+        mi.install_local_model(paths)
+    assert caught.value.code == "model_incomplete"
+    assert not mi.ready_manifest_path(paths).exists()
+
+
+def test_installer_does_not_recertify_model_mutated_after_download(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    _bundle(paths)
+    monkeypatch.setattr(mi, "_run_command", _fake_worker(mi, mr, paths))
+    scan, changed = mi._dir_bytes, []
+    def mutate_before_manifest(root):
+        from dataset_recommender.retrieval.model_worker import COMPLETION_MARKER
+        if not changed and (mr.embed_model_dir(paths) / COMPLETION_MARKER).exists():
+            changed.append(True)
+            (mr.model_dir(paths) / "model.safetensors").write_bytes(b"damaged")
+        return scan(root)
+    monkeypatch.setattr(mi, "_dir_bytes", mutate_before_manifest)
+    with pytest.raises(mi.ModelInstallError) as caught:
+        mi.install_local_model(paths)
+    assert caught.value.code == "model_incomplete"
+    assert not mi.ready_manifest_path(paths).exists()

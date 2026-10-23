@@ -85,9 +85,9 @@ def test_sessions_lifecycle(store):
 def test_session_expiry_is_pruned(store):
     u = A.register("erin", "password12", store_path=store)
     token = A.create_session(u)
-    A._SESSIONS[token]["expires_at"] = 0.0  # force expiry
+    A._SESSIONS[A.session_token_digest(token)]["expires_at"] = 0.0  # force expiry
     assert A.resolve_session(token) is None
-    assert token not in A._SESSIONS
+    assert A.session_token_digest(token) not in A._SESSIONS
 
 
 def test_brute_force_lockout(store):
@@ -145,10 +145,11 @@ def test_sweep_prunes_expired_sessions_and_stale_fails(store):
     # Review #2: bounded in-memory growth.
     u = A.register("ivan", "password12", store_path=store)
     tok = A.create_session(u)
-    A._SESSIONS[tok]["expires_at"] = 0.0
+    digest = A.session_token_digest(tok)
+    A._SESSIONS[digest]["expires_at"] = 0.0
     A._FAILS["staleuser"] = [0.0]
     A._sweep(A._now())
-    assert tok not in A._SESSIONS
+    assert digest not in A._SESSIONS
     assert "staleuser" not in A._FAILS
 
 
@@ -201,11 +202,15 @@ def test_default_sessions_path_is_userdata(tmp_path):
 def test_expired_session_pruned_from_disk(store, sessions):
     u = A.register("expire", "password12", store_path=store)
     token = A.create_session(u, sessions_path=sessions)
-    A._SESSIONS[token]["expires_at"] = 0.0   # force expiry（内存真源）
+    persisted = json.loads(sessions.read_text(encoding="utf-8"))
+    persisted["sessions"][A.session_token_digest(token)]["expires_at"] = 0.0
+    sessions.write_text(json.dumps(persisted), encoding="utf-8")
     assert A.resolve_session(token, sessions_path=sessions) is None
     A._reset_state_for_tests()
     assert A.resolve_session(token, sessions_path=sessions) is None
-    assert token not in json.loads(sessions.read_text(encoding="utf-8"))
+    snapshot = json.loads(sessions.read_text(encoding="utf-8"))
+    assert snapshot["schema_version"] == 2
+    assert A.session_token_digest(token) not in snapshot["sessions"]
 
 
 def test_runtime_path_env_override_rejects_repo_database(monkeypatch, tmp_path):

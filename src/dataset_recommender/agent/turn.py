@@ -41,12 +41,14 @@ import threading
 import hashlib
 import json
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
 from . import action_plan as _ap
 from . import agent_exec as _agent
+from . import decider as _decider
 from .trace import bind_recorder as _bind_recorder
 from .trace import events as _te
 from .trace import recorder_for_turn as _recorder_for_turn
@@ -230,6 +232,8 @@ def rule_match_summary(text: str, *, sources: Any = None,
             # rerank 恒 off、llm_available 恒 False——确定性管线不付 LLM。
             run_kwargs.update({
                 "top_k": sp.get("top_k"),
+                "auto_parse_sources": bool(sp.get("auto_parse_sources", False)),
+                "rerank_top_n": sp.get("rerank_top_n"),
                 "rerank_backend": "off",
                 "recall_backend": str(sp.get("recall") or "off"),
                 "date_from": str(sp.get("date_from") or ""),
@@ -337,7 +341,7 @@ class _RagFlight:
             return
         self._started = True
         if _RAG_SEMAPHORE.acquire(blocking=False):
-            self._future = _rag_executor().submit(self._run)
+            self._future = _rag_executor().submit(copy_context().run, self._run)
         else:
             # 池满：标 deferred 不起线程（禁止内联跑，见模块注释）。
             self._deferred = True
@@ -411,8 +415,8 @@ class _RagFlight:
     def ensure_payload(self) -> dict | None:
         """recommend_payload 建一次存 flight（原则不重跑）。"""
         if self.payload is None and self.meta is not None:
-            from ..app.recommend_rows import recommend_payload
-            self.payload = recommend_payload(self.meta)
+            from ..app.conversation_results import complete_payload
+            self.payload = complete_payload(self.meta, query=self.text, params=self.search_params, sources=self.sources)
         return self.payload
 
     @property
@@ -439,7 +443,9 @@ def _warmup_rag_environment(search_params: dict | None) -> None:
         sp = search_params or {}
         if str(sp.get("strategy") or "").strip().lower() == "auto":
             backend = str(sp.get("recall") or "off").strip().lower()
-            if backend in ("cross_encoder", "dense") and _vr.recall_backend_local_available(backend):
+            # 2026-09-14 冷启动治理：白名单纳入 "vector"——warm_recall_backend 已补
+            # vector 分支（嵌入器+语料索引+LTR 三层全暖），此处放行自动生效。
+            if backend in ("cross_encoder", "dense", "vector") and _vr.recall_backend_local_available(backend):
                 _vr.warm_recall_backend(backend)
     except Exception:
         pass
@@ -482,16 +488,84 @@ def _make_route_verdict_hook(holder: dict) -> Callable[[str], None]:
             flight = holder.get("flight")
             if flight is not None:
                 flight.cancel()
-        elif holder.get("flight") is None and holder.get("markers"):
+            return
+        if holder.get("flight") is not None:
+            return
+        if holder.get("markers"):
             # lazy 补起（标记误伤被翻案为 search/general）：marker 分支未起 flight →
             # 重新入池（池满则 deferred，understand 入口 join 时同步补跑）。
-            _warmup_rag_environment(holder.get("search_params"))
-            new_flight = _RagFlight(
-                holder["text"], sources=holder.get("sources"),
-                search_params=holder.get("search_params"))
-            new_flight.start()
-            holder["flight"] = new_flight
+            _lazy_start_flight(holder)
+        elif holder.get("prelim_gated") and route == "search":
+            # 检索闸误放救援（2026-09-19 任务3）：闸判 skip 而 LLM 共识判 search →
+            # 信任 LLM 判决补跑 flight（understand 入口 join 汇合，正确性不受影响，
+            # 只损失预取提前量）。general 判决不补——闸与 LLM 双方都说「不是检索」，
+            # 信任闸（省下的正是这一笔）；环内真需要时模型可自行 rank。
+            _lazy_start_flight(holder)
     return hook
+
+
+def _lazy_start_flight(holder: dict) -> None:
+    """verdict hook 的 lazy 补起唯一出口：重新入池（池满则 deferred）。"""
+    _warmup_rag_environment(holder.get("search_params"))
+    new_flight = _RagFlight(
+        holder["text"], sources=holder.get("sources"),
+        search_params=holder.get("search_params"))
+    new_flight.start()
+    holder["flight"] = new_flight
+
+
+#: 初步检索执行闸（2026-09-19 分流三改批·任务3）：默认开——turn 入口由 L0 小模型
+#: （l0_prelim_gate：retrieve/skip，纯本地微秒级）预判「本回合是否需要检索预取」，
+#: P(retrieve) < τ 不起 _RagFlight（省 auto 全量检索的线程与嵌入成本：实测 flight
+#: 本体 p50≈111ms/p99≈500ms，闸评分 p50≈14µs；L0 级联把分流压到近零后 flight 就是
+#: 关键路径）。τ 默认取工件内嵌工作点（cal 上按 retrieve 召回 ≥99.5% 选，生产路径
+#: 全语料实测召回 1.0、误放 0/687），`BIODATA_PRELIM_GATE_TAU` 显式覆盖；
+#: `BIODATA_PRELIM_GATE=0/off` 显式关闭。fail-open：模型缺席 / 异常 → 照现状起跑；
+#: 混合诉求句不经闸（机械意图闸直放行）；闸误放由 verdict hook 的 search 判决
+#: lazy 补起兜底。
+#: 灰带仲裁（2026-09-20 真·小 Jev 批）：L0 的 P(retrieve) 落在灰带 [τ_lo, τ_hi) 时
+#: 升级 decider（Jev 复刻，RLCD 校准蒸馏）复核——灰带外 L0 微秒直放（高置信用不着
+#: 花 ~120ms 再判一次）；带内才付 decider 时延，摊销 ≈ 带覆盖率 × 单决策时延。
+#: decider 缺席（CPU 部署无 GPU/工件缺席）自动退化纯 L0（现状逐位不变）。
+#: 默认开，`BIODATA_PRELIM_GATE_BAND=0/off` 显式关闭；带沿默认取 decider spec 内嵌
+#: operating_points.prelim.band_lo/band_hi（spec 缺省回 1.1/1.1=空带=不仲裁——
+#: 旧工件行为逐位不变），`BIODATA_PRELIM_GATE_BAND_LO/HI` 显式覆盖。
+_PRELIM_GATE_ENV = "BIODATA_PRELIM_GATE"
+_PRELIM_GATE_TAU_ENV = "BIODATA_PRELIM_GATE_TAU"
+_PRELIM_GATE_BAND_ENV = "BIODATA_PRELIM_GATE_BAND"
+_PRELIM_GATE_BAND_LO_ENV = "BIODATA_PRELIM_GATE_BAND_LO"
+_PRELIM_GATE_BAND_HI_ENV = "BIODATA_PRELIM_GATE_BAND_HI"
+
+
+def _prelim_gate_skip(text: str) -> bool:
+    """闸判定：True = 不起 flight。任何不确定都回 False（现状行为，多跑不错跑）。
+    实现链：L0 一线（µs）→ 灰带内 decider 仲裁（有则用之）→ 全不确定回放行。"""
+    if not _agent._env_default_on(_PRELIM_GATE_ENV):
+        return False
+    try:
+        hit = _decider.score_with_fallback("prelim", text, prefer=("l0", "decider"))
+        if hit is None:
+            return False
+        tau = _decider.tau_with_fallback("prelim", _PRELIM_GATE_TAU_ENV, "tau_retrieve",
+                                         str(hit.get("impl") or ""), 0.0)
+        p_ret = float((hit["probs"] or {}).get("retrieve") or 0.0)
+        if str(hit.get("impl") or "") == "l0" and _agent._env_default_on(
+                _PRELIM_GATE_BAND_ENV):
+            # 灰带仲裁：带沿取 decider spec 内嵌工作点（spec 无此键 → 1.1/1.1 空带
+            # =不仲裁，旧工件行为与纯 L0 逐位一致）
+            lo = _decider.operating_tau("prelim", _PRELIM_GATE_BAND_LO_ENV,
+                                        "band_lo", 1.1)
+            hi = _decider.operating_tau("prelim", _PRELIM_GATE_BAND_HI_ENV,
+                                        "band_hi", 1.1)
+            if lo <= p_ret < hi and _decider._env() != "off":
+                d = _decider.score("prelim", text)
+                if d is not None:
+                    dtau = _decider.tau_with_fallback(
+                        "prelim", _PRELIM_GATE_TAU_ENV, "tau_retrieve", "decider", tau)
+                    return float((d["probs"] or {}).get("retrieve") or 0.0) < dtau
+        return p_ret < tau
+    except Exception:
+        return False
 
 
 def _make_retrieval_provider(holder: dict, *, agent_path: bool,
@@ -564,6 +638,11 @@ def _recipe_narrow_plan(plan: dict | None, recipe_verbs: "frozenset[str] | None"
         return plan
     verb = str(plan.get("verb") or "")
     if verb and verb not in recipe_verbs:
+        if plan.get("steps"):
+            # 已有执行回执（steps 非空 = 后端已真跑过）——事后收窄绝不能把
+            # 已发生的操作回答成「不执行」、更不能丢回执。图内执行闸（state.allowed_verbs）
+            # 已保证真跑的步骤都在允许集内，这里原样保留。
+            return plan
         narrowed = _ap._blank_plan(
             source=str(plan.get("source") or "llm"),
             llm_status=str(plan.get("llm_status") or "ok"),
@@ -590,6 +669,9 @@ def _route_turn_impl(
     search_params: dict | None = None,
     artifact_context: str = "",
     suggested_recipe: str = "",
+    ask_answer: dict | None = None,
+    conversation_history: list[dict] | None = None,
+    prefetched_out: list | None = None,
 ) -> dict[str, Any]:
     """一句话 → `{route, query, plan, echo_zh, retrieval, via, needs_agent, suggestions}`。永不执行、永不抛（除入参非法）。
 
@@ -647,6 +729,11 @@ def _route_turn_impl(
     回归的根因补偿；盲跑裁定追加式机械行格式有偏置，§5 记录）。
     """
     text = _ap.normalize_utterance(utterance)
+    # 放松卡作答续跑（2026-09-14 ask 暂停/重启批）：webapp 检出透传的
+    # {kind:"ask.relax", choice_key, label, message, suppress}。在场时本回合语义恒为
+    # 「按所选忽略条件重跑原查询」——编号快速道/「AI 执行」关的规则直达与其天然同构
+    # （都回 ROUTE_SEARCH），无需特判；agent 车道内另有免投票/强置首步的专门接线。
+    _ask_answer = ask_answer if isinstance(ask_answer, dict) else None
 
     # 编号快速道：贴编号/直链 → 直接按原话检索（编号优先于执行词，见模块 docstring）。
     # 「编号 + 管护操作」句（「把 GSE123456 从我上传的里删掉」）不走快速道——
@@ -703,6 +790,17 @@ def _route_turn_impl(
         if agent_cfg is not None and _ap.should_use_llm(agent_cfg)[0]:
             agent_path = True
 
+    if _ask_answer is not None and not agent_path:
+        # 作答续跑的 fail-soft（2026-09-14 ask 暂停/重启批）：agent/LLM 不在场时回退为
+        # 「原查询 + 前端已覆写的忽略清单」纯检索路由——等同旧 cbCommit 行为（零 LLM
+        # 重搜），前端随之走 /api/recommend；retrieval 恒 None（不付规则概览）。
+        return {
+            "route": ROUTE_SEARCH, "query": text, "plan": None,
+            "echo_zh": "", "retrieval": None, "via": "ask_answer_fallback",
+            "needs_agent": False, "suggestions": [],
+            "result_payload": None, "preliminary_final": False,
+        }
+
     markers = detect_action_markers(text)
     # 跨线程飞行状态盒：图线程（route_consensus hook / understand provider）读写，
     # 主线程（保底分支 / return 装配 / b 档）读取；发射状态 emit_state 由两处发射点
@@ -718,15 +816,22 @@ def _route_turn_impl(
     # 与进图之间；有标记分支 RAG 仍零起跑（320s 收益不变），计数只消费关键词段、
     # 不影响 auto 全量行为。
     route_extra_zh = ""
-    if agent_path:
+    if agent_path and _ask_answer is None:
         if not markers:
-            # 预热闭合（r3）：主线程先 ensure vector/env 初始化，flight 线程只读。
-            _warmup_rag_environment(search_params)
-            flight = _RagFlight(text, sources=sources, search_params=search_params)
-            flight.start()
-            holder["flight"] = flight
+            # 检索执行闸（任务3）：混合诉求句不经闸（检索半确定需要预取）；
+            # 闸判 skip → 不起 flight，verdict hook 对 search 判决 lazy 补起兜底。
+            if (not _agent._hybrid_intent_gate(text)) and _prelim_gate_skip(text):
+                holder["prelim_gated"] = True
+            else:
+                # 预热闭合（r3）：主线程先 ensure vector/env 初始化，flight 线程只读。
+                _warmup_rag_environment(search_params)
+                flight = _RagFlight(text, sources=sources, search_params=search_params)
+                flight.start()
+                holder["flight"] = flight
         route_extra_zh = _consensus_extra_zh(
             text, sources=sources, search_params=search_params)
+    # 作答续跑回合（_ask_answer 在场）：route_consensus 免投票、understand 零 LLM 强置
+    # 首步 rank——flight 预发射与共识上下文段都是重复通道，一律不起（设计档 A.9）。
 
     emit_state: dict[str, Any] = {"preliminary_sent": False, "prelim_payload": None}
     # suggested_recipe 收窄面——allowlist 校验在 action_plan 单一真源；
@@ -742,7 +847,7 @@ def _route_turn_impl(
         # 枚举成功统一注入图；前端动作只作为图后的 pending_frontend 接力，不绕过图。
         _intent_checklist: list[dict[str, Any]] | None = None
         _pending_frontend: list[dict[str, Any]] | None = None
-        if markers:
+        if markers and _ask_answer is None:
             try:
                 _intents = _ap.plan_action_intents(
                     text, has_results=has_results, result_total=result_total,
@@ -780,14 +885,30 @@ def _route_turn_impl(
                     "search_lenient_dims": _sp.get("lenient_dims"),
                     "search_date_from": str(_sp.get("date_from") or ""),
                     "search_date_to": str(_sp.get("date_to") or ""),
+                    # 排序杠杆下入（2026-09-17 三径合一）：环内 rank/rerank 试跑与
+                    # pre-loop 摘要、/api/recommend 吃同一份 recall/strategy/top_k——
+                    # 此前环内静默回默认（off/fixed/缺省），请求级开了向量召回时
+                    # 新旧屏面的健康对照口径不一。缺省 = 旧行为逐位不变。
+                    "search_top_k": _sp.get("top_k"),
+                    "search_recall": str(_sp.get("recall") or ""),
+                    "search_strategy": str(_sp.get("strategy") or ""),
                 }
+                if conversation_history is not None:
+                    _agent_search_kwargs["conversation_history"] = conversation_history
                 #三缝：retrieval_provider（understand 入口 join + 发射）
                 # on_route_verdict（route_consensus 只标记不发射）、route_extra_zh（有标记
                 # 分支的机械标记事实行）；provider 在场时图 initial state 的 retrieval=None
                 # （见 agent_exec，understand 用局部 resolved 汇合）。
-                _provider = _make_retrieval_provider(
-                    holder, agent_path=True, on_event=on_event, state=emit_state)
-                _verdict_hook = _make_route_verdict_hook(holder)
+                # 作答续跑（2026-09-14 ask 暂停/重启批）：rank 步自跑检索，预发射与
+                # auto-show 是重复通道——不起 flight（上方已闸）、不挂 provider/verdict hook，
+                # 并预置 route_scope="search" + ask_answer 下入图状态。
+                if _ask_answer is not None:
+                    _provider = None
+                    _verdict_hook = None
+                else:
+                    _provider = _make_retrieval_provider(
+                        holder, agent_path=True, on_event=on_event, state=emit_state)
+                    _verdict_hook = _make_route_verdict_hook(holder)
                 if on_event is not None:
                     plan, _trace = _agent.plan_with_agent_events(
                         text,
@@ -797,6 +918,11 @@ def _route_turn_impl(
                         on_event=on_event, principal=principal,
                         retrieval_provider=_provider, on_route_verdict=_verdict_hook,
                         route_extra_zh=route_extra_zh,
+                        route_scope=("search" if _ask_answer is not None else ""),
+                        ask_answer=_ask_answer,
+                        # 建议动作允许集进图——首步/续步/批量执行共用的执行前闸，
+                        # 不再等工具跑完才在 turn 层事后收窄。
+                        allowed_verbs=recipe_verbs,
                         # 课题上下文只进 agent prompt。
                         artifact_context=artifact_context,
                         intent_checklist=_intent_checklist,
@@ -813,6 +939,10 @@ def _route_turn_impl(
                         principal=principal,
                         retrieval_provider=_provider, on_route_verdict=_verdict_hook,
                         route_extra_zh=route_extra_zh,
+                        route_scope=("search" if _ask_answer is not None else ""),
+                        ask_answer=_ask_answer,
+                        # 与带回调路径同一份建议动作允许集。
+                        allowed_verbs=recipe_verbs,
                         # 课题上下文只进 agent prompt。
                         artifact_context=artifact_context,
                         intent_checklist=_intent_checklist,
@@ -873,6 +1003,7 @@ def _route_turn_impl(
                 retrieval=_retrieval_for_plan,
                 current_query=current_query, current_filters=current_filters,
                 allowed_verbs=recipe_verbs,   # suggested_recipe 收窄动词面
+                **({"conversation_history": conversation_history} if conversation_history is not None else {}),
             )
         if agent_fell_back:
             # 2026-08-15 agent 路径失败过这件事本身在 plan 上留痕（additive 字段，
@@ -894,6 +1025,7 @@ def _route_turn_impl(
     #return 装配（join 点）：search/general/none 路线必 join（图内已
     # 汇合或保底已 join，瞬时）；tool 路线不 join——retrieval 恒 None（breaking 契约，
     # §4.1 r3）+ additive retrieval_note（"skipped_action_marker"=marker 分支未起 /
+    # "skipped_gate"=检索闸判 skip 未起（任务3）/
     # "discarded_action_route"=起了被弃；已完成时瞬时 join 防 future 泄漏）。
     _flight = holder["flight"]
     is_tool_route = bool(plan is not None and str(plan.get("kind") or "") == _ap.EXEC)
@@ -901,19 +1033,23 @@ def _route_turn_impl(
     retrieval_note = ""
     if is_tool_route:
         if _flight is None:
-            retrieval_note = "skipped_action_marker"
+            retrieval_note = ("skipped_gate" if holder.get("prelim_gated")
+                              else "skipped_action_marker")
         else:
             retrieval_note = "discarded_action_route"
             if _flight.done():
                 _flight.join()  # 已完成：瞬时消耗 future；retrieval 仍 None
     elif _flight is not None:
         retrieval = _flight.join()
+        if prefetched_out is not None and _flight.meta is not None:
+            prefetched_out.append({"query": text, "payload": _flight.ensure_payload()})
     preliminary_sent = bool(emit_state["preliminary_sent"])
     prelim_payload = emit_state["prelim_payload"]
     trace_preliminary = (
         "emitted" if preliminary_sent
         else ("skipped_marker" if markers
-              else ("suppressed_action" if is_tool_route else "")))
+              else ("suppressed_action" if is_tool_route
+                    else ("suppressed_gate" if holder.get("prelim_gated") else ""))))
 
     #环内 search.rerun 采纳档的 recommend_payload（多个采纳步取
     # 最后一个）——数据本就在 plan.steps 实录里，扫出来挂 final 即可，不碰 state、不改图。
@@ -960,12 +1096,13 @@ def _route_turn_impl(
                 _rerun_batch["disclosure_zh"] = _rerun_disc
             batches.append(_rerun_batch)
         elif (isinstance(_res, dict) and _step.get("ok")
-                and str(_step.get("verb") or "") in ("rank", "rerank")
+                and str(_step.get("verb") or "") in ("rank", "rerank", "results.show")
                 and isinstance(_res.get("batch"), dict)
                 and isinstance(_res["batch"].get("payload"), dict)):
             loop_payload = _res["batch"]["payload"]
-            # rank/rerank 的 kind/label/query_raw/query_effective 由环内工具按 § 规则
-            # 生成（rank=rank.query、rerank=rewritten_query），这里原样透传不另造口径。
+            # rank/rerank/results.show 的 kind/label/query_raw/query_effective 由环内工具
+            # 按 § 规则生成（kind=内容来源：rank=rank.query、rerank=rewritten_query，
+            # results.show=试跑来源动词），这里原样透传不另造口径。
             batches.append({
                 "kind": str(_res["batch"].get("kind") or _step.get("verb")),
                 "label": str(_res["batch"].get("label") or "")[:20],
@@ -982,6 +1119,18 @@ def _route_turn_impl(
     if result_payload is None and batches:
         result_payload = batches[-1]["payload"]
     extra: dict[str, Any] = {}
+    # 2026-09-14 YOLO ask.relax（additive）：环内发起过放宽询问时，把选择卡载荷随响应
+    # 透传（`webapp._utterance_response_body` 透传 → 前端渲染选择卡）。取最近一次
+    # ok 且真发起（asked）的 ask.relax 步；拒绝档/未发起时键不出现，响应与现状逐位一致。
+    for _s in reversed(list(plan.get("steps") or [])):
+        if not (isinstance(_s, dict) and _s.get("ok")):
+            continue
+        if str(_s.get("verb") or "") != "ask.relax":
+            continue
+        _ar = _s.get("result") if isinstance(_s.get("result"), dict) else {}
+        if _ar.get("asked") and isinstance(_ar.get("ask_relax"), dict):
+            extra["ask_relax"] = _ar["ask_relax"]
+        break
     if batches:
         _turn_id = uuid4().hex
         _now = datetime.now(timezone.utc).isoformat()
@@ -993,7 +1142,9 @@ def _route_turn_impl(
             # 每批补规范化检索范围指纹（契约级身份键）。
             _b["scope_fingerprint"] = _batch_scope_fingerprint(
                 str(_b.get("query_effective") or ""), sources, search_params)
-        extra = {"result_batches": batches, "active_batch": batches[-1]["batch_id"]}
+        # 不重新赋值（2026-09-14 YOLO 批修：重赋值会吞掉上面已写入的 ask_relax 键）。
+        extra.update({"result_batches": batches,
+                      "active_batch": batches[-1]["batch_id"]})
 
     if plan.get("kind") == _ap.EXEC:
         return {
@@ -1117,6 +1268,9 @@ def route_turn(
     search_params: dict | None = None,
     artifact_context: str = "",
     suggested_recipe: str = "",
+    ask_answer: dict | None = None,
+    conversation_history: list[dict] | None = None,
+    prefetched_out: list | None = None,
 ) -> dict[str, Any]:
     """turn 入口（签名/返回契约与 `_route_turn_impl` 逐位一致——本壳只做 trace 接线）。
 
@@ -1151,6 +1305,9 @@ def route_turn(
             on_event=on_event, principal=principal, search_params=search_params,
             artifact_context=artifact_context,
             suggested_recipe=suggested_recipe,
+            ask_answer=ask_answer,
+            **({"conversation_history": conversation_history} if conversation_history is not None else {}),
+            **({"prefetched_out": prefetched_out} if prefetched_out is not None else {}),
         )
         if rec.enabled:
             # additive 回显：webapp 透传进响应 meta，用户报障给号用。

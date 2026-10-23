@@ -85,7 +85,7 @@ def test_main_returns_2_without_serving_when_guard_config_invalid(monkeypatch):
     _clear(monkeypatch)
     monkeypatch.setenv("BIODATA_REQUIRE_ACCOUNT", "1")   # 其余全缺
     called = []
-    monkeypatch.setattr(run_web, "warm_web_recall", lambda *a, **k: called.append("warm") or "warmed")
+    monkeypatch.setattr(run_web, "start_background_warm", lambda *a, **k: called.append("warm"))
     monkeypatch.setattr(run_web.uvicorn, "run", lambda *a, **k: called.append("serve"))
     assert run_web.main() == 2
     assert called == []
@@ -95,7 +95,7 @@ def test_main_guard_off_behavior_unchanged(monkeypatch):
     """闸关：校验零介入，warm → serve 顺序与历史一致（与 test_run_web_warmup 同口径）。"""
     _clear(monkeypatch)
     order = []
-    monkeypatch.setattr(run_web, "warm_web_recall", lambda *a, **k: order.append("warm") or "warmed")
+    monkeypatch.setattr(run_web, "start_background_warm", lambda *a, **k: order.append("warm"))
     monkeypatch.setattr(run_web.uvicorn, "run", lambda *a, **k: order.append("serve"))
     assert run_web.main() == 0
     assert order == ["warm", "serve"]

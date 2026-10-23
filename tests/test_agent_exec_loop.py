@@ -730,6 +730,117 @@ def test_search_online_zero_write_is_ok_and_reported_honestly(monkeypatch, _tmp_
 
 # ---------------------------------------------------------------- ⑤b 写步预算闸
 
+def test_execute_passes_write_records_remaining_from_prior_steps(monkeypatch, _tmp_project_root):
+    """execute 在**执行前**把剩余写入额度算进 ctx——旧实现只查历史用量
+    （30 < 40 放行）且不传剩余 10 条，写工具按默认 20 跑，本轮总写入 50 条。"""
+    from types import SimpleNamespace
+
+    seen = {"remaining": None}
+
+    def _search(slots, root, ctx=None):
+        seen["remaining"] = (ctx or {}).get("write_records_remaining")
+        return dict(SEARCH_OK, record_count=min(20, seen["remaining"]))
+
+    monkeypatch.setattr(agent_exec, "LOOP_TOOLS", {
+        "curate.search_online": {"run": _search, "label_zh": "联网搜索入库",
+                                 "card_kind": "search_online", "readonly": False,
+                                 "needs_context": True},
+    })
+    state = {
+        "plan": {"verb": "curate.search_online", "kind": "exec", "slots": {},
+                 "steps": []},
+        "utterance": "联网搜 human lung 数据入库",
+        "has_results": False, "result_total": 0,
+        # 本轮已写 30 条（sync）——下一个写工具的剩余额度必须是 10。
+        "steps": [{"verb": "curate.sync_updates", "ok": True, "card_kind": "sync_updates",
+                   "result": {"imported_total": 30, "sources": []}}],
+    }
+    out = agent_exec.execute(state,
+                             runtime=SimpleNamespace(context=SimpleNamespace(on_progress=None)))
+    assert out["last_ran"] is True
+    assert seen["remaining"] == 10, "已写 30 条后，剩余 10 条必须传给下一个写工具"
+    step = (out.get("steps") or [])[0]
+    assert step["result"]["record_count"] == 10, "实际写入按剩余额度收窄，总量不越过 40"
+
+
+def test_written_files_of_result_extraction():
+    """快照归属清单只认工具自报的产物（未知动词 → None = 旧差分行为）。"""
+    ax = agent_exec
+    assert ax._written_files_of_result(
+        "curate.search_online", {"filename": "upload_x.json"}) == ["upload_x.json"]
+    assert ax._written_files_of_result(
+        "curate.search_online", {"filename": None}) == []       # 零写入 = 明确无产物
+    assert ax._written_files_of_result(
+        "curate.sync_updates", {"created_files": ["a.json", "b.json"]}) == ["a.json", "b.json"]
+    assert ax._written_files_of_result(
+        "curate.sync_updates",
+        {"sources": [{"filename": "a.json"}, {"filename": None}]}) == ["a.json"]
+    assert ax._written_files_of_result("curate.check_updates", {"sources": []}) is None
+    assert ax._written_files_of_result("curate.sync_updates", "坏了") is None
+
+
+def test_mutation_receipt_of_result_extraction():
+    """变更收据覆盖三类（created 来自既有产物映射；modified/deleted 恒空——
+    两个写漏斗都是「新建批次文件」语义）；未知动词 → None（旧差分行为）。"""
+    ax = agent_exec
+    assert ax._mutation_receipt_of_result(
+        "curate.search_online", {"filename": "upload_x.json"}) == {
+        "created": ["upload_x.json"], "modified": [], "deleted": []}
+    assert ax._mutation_receipt_of_result(
+        "curate.sync_updates", {"created_files": ["a.json"]}) == {
+        "created": ["a.json"], "modified": [], "deleted": []}
+    assert ax._mutation_receipt_of_result("curate.check_updates", {"sources": []}) is None
+    assert ax._empty_mutation_receipt() == {"created": [], "modified": [], "deleted": []}
+
+
+def test_loop_search_online_caps_limit_by_remaining_budget(monkeypatch):
+    """真实工具按 ctx 剩余额度收窄联网候选数（plan_search_online 的 limit）；
+    额度缺席 = 默认 20，行为逐位不变。"""
+    from dataset_recommender.corpus import corpus_curation as cc
+
+    seen: dict = {}
+
+    def _plan_search(keywords, source, species, limit=20, *, project_root):
+        seen["limit"] = limit
+        return {"confirm_token": "t", "warnings": [], "sample_titles": [],
+                "source_label": "ArrayExpress", "query": keywords, "species": species,
+                "skipped_existing": [], "skipped_existing_count": 0}
+
+    def _apply(pr, *, confirm_token, project_root):
+        return {"record_count": min(10, seen["limit"]), "filename": "f.json"}
+
+    monkeypatch.setattr(cc, "plan_search_online", _plan_search)
+    monkeypatch.setattr(cc, "apply_search_online", _apply)
+    out = agent_exec._loop_search_online(
+        {"keywords": "human lung"}, None, {"write_records_remaining": 10})
+    assert seen["limit"] == 10 and out["record_count"] == 10
+    assert any("只剩 10 条" in w for w in out["warnings"])
+    agent_exec._loop_search_online({"keywords": "human lung"}, None, {})
+    assert seen["limit"] == 20, "无额度上下文时默认 20 逐位不变"
+
+
+def test_loop_sync_updates_caps_import_by_remaining_budget(monkeypatch):
+    """sync 按剩余额度在写前同时收窄单源与**跨来源总预算**（与语料生产者同口径）。"""
+    from dataset_recommender.corpus import corpus_curation as cc
+
+    seen: dict = {}
+
+    def _sync(sources=None, *, project_root=None, **kw):
+        seen["max_import"] = kw.get("max_import")
+        seen["total_max_import"] = kw.get("total_max_import")
+        return {"sources": [], "imported_total": 0, "hint_zh": ""}
+
+    monkeypatch.setattr(cc, "sync_updates", _sync)
+    agent_exec._loop_sync_updates({}, None, {"write_records_remaining": 6})
+    assert seen["max_import"] == 6 and seen["total_max_import"] == 6
+    agent_exec._loop_sync_updates({}, None, {"write_records_remaining": 25})
+    assert seen["max_import"] == 10 and seen["total_max_import"] == 25, \
+        "总预算按实际剩余传（生产者侧 clamp 到既有 30 上限）"
+    agent_exec._loop_sync_updates({}, None, {})
+    assert seen["max_import"] is None and seen["total_max_import"] is None, \
+        "无额度上下文时不传参（沿用默认 10 / 30）"
+
+
 def test_write_step_budget_rejects_third_write_but_keeps_reads(monkeypatch, _tmp_project_root):
     """写步（search_online/sync_updates，成败都计）用满 MAX_WRITE_STEPS=2 后：
     decide 的 prompt 注入「写步预算已用完」段；模型仍提第三次写 → 裁决层机械拒绝
@@ -1164,6 +1275,8 @@ def _finish(report):
 
 def _rank_run(slots, root, ctx=None):
     q = str((slots or {}).get("query") or "")
+    # display 槽已退役（2026-09-13 rerank 处置批）：healthy 即 auto-show（displayed 恒 True），
+    # 结果带机械健康度键（屏面基线/告警注入的事实源）。
     return {"query": q, "total": 2,
             "top": [{"dataset_uid": "GSE-T1", "dataset_name": f"DS-{q}-1",
                      "species": "Human", "tissue": "Lung", "disease": "",
@@ -1171,7 +1284,7 @@ def _rank_run(slots, root, ctx=None):
                     {"dataset_uid": "GSE-T2", "dataset_name": f"DS-{q}-2",
                      "species": "Human", "tissue": "Lung", "disease": "",
                      "source": "10x Genomics", "rank": 2}],
-            "displayed": bool((slots or {}).get("display")), "batch": None}
+            "displayed": True, "health": "healthy", "batch": None}
 
 
 def _install_mixed_tools(monkeypatch, **runs):
@@ -1194,15 +1307,16 @@ def _install_mixed_tools(monkeypatch, **runs):
 def test_hybrid_gate_check_then_search_e2e(monkeypatch, _tmp_project_root):
     """「检查10x更新，然后帮我找人类肺数据集」：机械意图闸在 route_consensus 检出
     动作∧检索双信号 → 零投票直走 general（trace 首条如实留痕「机械意图闸」）；
-    general 全集面下 understand 先办动作（check_updates）、decide 再办检索（rank
-    display=true 上屏），finish 逐件核销——混合诉求两半都真做、顺序与原话一致。"""
+    general 全集面下 understand 先办动作（check_updates）、decide 再办检索（rank——
+    检索健康即自动上屏，2026-09-13 起 display 槽已退役），finish 逐件核销——混合诉求
+    两半都真做、顺序与原话一致。"""
     _install_mixed_tools(monkeypatch,
                          **{"curate.check_updates": _check_run(AE_TWO_NEW),
                             "rank": _rank_run})
     model = _FakeModel(
         _tool_call("curate.check_updates", quoted="检查10x更新", source="10x Genomics",
                    confidence="high", reason="先查更新"),
-        _tool_call("rank", quoted="帮我找人类肺数据集", query="人类肺 单细胞", display=True),
+        _tool_call("rank", quoted="帮我找人类肺数据集", query="人类肺 单细胞"),
         _finish("1. 检查10x更新：已做（第1步）。\n"
                 "2. 帮我找人类肺数据集：已做（第2步）。"),
         # narrate 不预置 → IndexError → 确定性兜底汇报（同一批事实）
@@ -1222,7 +1336,7 @@ def test_hybrid_gate_check_then_search_e2e(monkeypatch, _tmp_project_root):
 
 def test_hybrid_gate_search_then_db_status_e2e(monkeypatch, _tmp_project_root):
     """「帮我找乳腺癌数据，顺便看看数据库状态」：闸 → general；understand 首步 rank
-    （display=true，检索是主诉求必须上屏）→ decide 续办 db_status——面内面外逐件核销，
+    （检索是主诉求，健康结果自动上屏）→ decide 续办 db_status——面内面外逐件核销，
     两半都真执行。"""
     def _db_run(slots, root):
         return {"generated_at": "t", "sources": [], "total_records": 3,
@@ -1232,7 +1346,7 @@ def test_hybrid_gate_search_then_db_status_e2e(monkeypatch, _tmp_project_root):
     _install_mixed_tools(monkeypatch,
                          **{"rank": _rank_run, "curate.db_status": _db_run})
     model = _FakeModel(
-        _tool_call("rank", quoted="帮我找乳腺癌数据", query="乳腺癌 单细胞", display=True),
+        _tool_call("rank", quoted="帮我找乳腺癌数据", query="乳腺癌 单细胞"),
         _tool_call("curate.db_status", quoted="顺便看看数据库状态"),
         _finish("1. 帮我找乳腺癌数据：已做（第1步）。\n"
                 "2. 看看数据库状态：已做（第2步）。"),

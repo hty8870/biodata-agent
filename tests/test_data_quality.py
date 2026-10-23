@@ -6,7 +6,7 @@
 组织留给全库审计做人工 triage。record_caveats/field_description_conflict 均只读、不改任何数据。"""
 from types import SimpleNamespace
 
-from dataset_recommender.retrieval import vocabulary
+from dataset_recommender.domains.biodata import vocabulary
 from dataset_recommender.corpus.data_quality import field_description_conflict, record_caveats
 
 CAT = vocabulary.CATALOG

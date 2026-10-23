@@ -10,7 +10,7 @@ import json
 import pytest
 
 from dataset_recommender.agent import action_plan as AP
-from dataset_recommender.retrieval import vocabulary as V
+from dataset_recommender.retrieval import query_lexicon as V
 
 
 def _llm(payload):
@@ -451,6 +451,59 @@ def test_scope_all_is_refused_with_an_explicit_delta():
     assert "不支持" not in delta["why_zh"], "不许把入口口径说成产品不支持（假话回退检测）"
 
 
+def _raw_plan(utterance, payload):
+    """装配层直调（rank/rerank/compare 是环内动词，保底通道不收——本组钉的是
+    `build_plan_from_raw` 的槽位装配口径）。"""
+    return AP.build_plan_from_raw(payload, utterance, has_results=True, result_total=42)
+
+
+def test_long_retrieval_query_survives_verbatim():
+    """检索句按查询长度契约保留——旧口径通用槽 `[:80]` 静默截断，
+    尾部 FASTQ/排除/日期条件会无声消失（既不拒绝也不记录）。"""
+    tail = "，只要带 FASTQ 原始数据的，排除小鼠，2024 年以后"
+    query = "人类肺癌单细胞数据" * 6 + tail          # 100+ 字，硬条件在 80 字之后
+    assert len(query) > 80
+    plan = _raw_plan(query, {"verb": "rank", "query": query, "quoted": query,
+                             "confidence": "high"})
+    assert plan["slots"]["query"] == query, "长检索句不许截断"
+    assert "FASTQ" in plan["slots"]["query"] and "排除小鼠" in plan["slots"]["query"]
+
+
+def test_over_long_retrieval_query_is_refused_not_truncated():
+    """超过入口上限的检索句整槽弃用并如实记 delta——静默砍半是错误答案的伪装。"""
+    query = "肺" * (AP.MAX_UTTERANCE_CHARS + 1)
+    plan = _raw_plan("随便找找", {"verb": "rank", "query": query, "quoted": "随便找找",
+                                  "confidence": "high"})
+    assert "query" not in plan["slots"]
+    assert plan["slot_sources"].get("query") == "dropped"
+    delta = next(d for d in plan["deltas"] if d["slot"] == "query")
+    assert str(AP.MAX_UTTERANCE_CHARS) in delta["why_zh"]
+
+
+def test_identifier_slots_are_not_truncated_at_display_length():
+    """编号/文件名槽不走展示口径的 80 截断（dataset_uid 可长至 100+，
+    截断即毁形——按编号定位会失败）。"""
+    uid = "cxg:" + "a" * 110
+    plan = _raw_plan("和第一条比一下", {"verb": "compare.datasets", "a": uid,
+                                        "quoted": "比一下", "confidence": "high"})
+    assert plan["slots"]["a"] == uid
+
+
+def test_relax_multi_select_survives_plan_assembly_as_a_list():
+    """relax 是 schema 声明的数组槽——装配后必须仍是列表。旧口径把它拍平成
+    `"dim:disease raw"`，消费侧按一个 key 校验直接 bad_param，合法多选放松总失败。"""
+    keys = ["dim:disease", "raw"]
+    plan = _raw_plan("还是没结果就放松一下", {"verb": "rerank", "query": "人类肺癌数据",
+                                              "relax": keys, "quoted": "放松一下",
+                                              "confidence": "high"})
+    assert plan["slots"]["relax"] == keys, "多选 relax 不许被拍平成一个字符串"
+    # 单选照旧
+    plan2 = _raw_plan("放松一下", {"verb": "rerank", "query": "人类肺癌数据",
+                                   "relax": "raw", "quoted": "放松一下",
+                                   "confidence": "high"})
+    assert plan2["slots"]["relax"] == ["raw"]
+
+
 # ---------------------------------------------------------------- confidence 不是确认门
 
 def test_low_confidence_executes_the_same_verb_with_the_same_slots():
@@ -753,16 +806,20 @@ def test_plan_action_verbs_are_the_table_minus_loop_only_verbs():
     减去环内专属动词（search.rerun/rank/rerank 环内检索工具 + route.request 换线
     元动词 + curate.rollback 回滚——rb1补录：回滚目标依赖本轮 steps
     实录的快照锚，单次分流没有这个现场；2026-08-18 四工具批补录 compare.datasets /
-    compat.find / fair.check——默认对象依赖环内现场（当前结果集），单次分流没有）——
+    compat.find / fair.check——默认对象依赖环内现场（当前结果集），单次分流没有；
+    2026-09-13 rerank 处置批补录 results.show——handle 指认的是环内试跑现场，
+    单次分流没有试跑缓存可放屏；2026-09-14 YOLO 批补录 ask.relax——选择卡依赖
+    环内屏面基线与确定性预演现场，单次分流没有）——
     单此一份差集，多一个少一个都是泄漏或误伤。cite.export 不在差集里：它双通道
     （环内执行 + 保底通道前端 runner 仍在，仅 .ris 缺口由环内执行补上）。"""
     assert set(AP.ACTION_VERBS) - set(AP.PLAN_ACTION_VERBS) == {
         "search.rerun", "rank", "rerank", "route.request", "curate.rollback",
-        "compare.datasets", "compat.find", "fair.check"}
+        "compare.datasets", "compat.find", "fair.check", "results.show", "ask.relax"}
     # 保底面该有的都在：14 个前端接线 EXEC + none + 三个 ROUTE_QUERY 检索指令动词。
     assert {"none", "search.new", "refine.conditions", "lookup.identifier",
             "pack.download", "curate.db_status", "cite.export"} <= set(AP.PLAN_ACTION_VERBS)
-    assert len(AP.PLAN_ACTION_VERBS) == len(AP.ACTION_VERBS) - 8
+    # 2026-09-14 YOLO 批刻意更新：ask.relax 入差集（环内专属），-9 → -10。
+    assert len(AP.PLAN_ACTION_VERBS) == len(AP.ACTION_VERBS) - 10
 
 
 def test_mcp_doc_verb_list_covers_plan_action_verbs():

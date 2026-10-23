@@ -313,6 +313,108 @@ def test_ingest_baseline_collision_rejected_and_no_write(tmp_path):
     assert not patch_path_for(tmp_path, AID).exists()   # 零写入不落盘
 
 
+def test_patch_ingest_batch_duplicates_count_once_and_use_one_budget_slot(tmp_path, monkeypatch):
+    monkeypatch.setattr(pp, "MAX_PATCH_ADD_RECORDS", 1)
+    raw = {"dataset_uid": "P-1", "dataset_name": "P1", "species": "Human"}
+    result = ingest_records_to_patch(payload={}, records=[dict(raw), dict(raw)],
+                                    project_root=tmp_path, account_id=AID)
+    assert result.record_count == 1
+    assert len(load_patch(tmp_path, AID)["adds"]) == 1
+    assert any("1 条" in w and "去重" in w for w in result.warnings)
+    journal = tmp_path / ".userdata" / "uploads_journal.jsonl"
+    assert json.loads(journal.read_text(encoding="utf-8"))["record_count"] == 1
+
+
+def test_patch_ingest_conflicting_uid_in_batch_is_atomic(tmp_path):
+    from dataset_recommender.corpus.uploads import UploadError
+    rows = [{"dataset_uid": "P-1", "dataset_name": name, "species": "Human"}
+            for name in ("First", "Conflicting")]
+    with pytest.raises(UploadError, match="未写入") as exc:
+        ingest_records_to_patch(payload={}, records=rows, project_root=tmp_path, account_id=AID)
+    assert exc.value.code == "uid_conflict"
+    assert not patch_path_for(tmp_path, AID).exists()
+    assert not (tmp_path / ".userdata" / "uploads_journal.jsonl").exists()
+
+
+def test_uid_equivalence_variants_are_one_record(tmp_path):
+    """查重/批内冲突与定位共用比较键——大小写、零宽、NFD 变体不得各收一份
+    （旧口径只 strip，P-1 与 p-1 均被接受 → 后续定位歧义）。"""
+    from dataset_recommender.corpus.uploads import UploadError
+
+    base = {"dataset_uid": "P-1", "dataset_name": "First", "species": "Human"}
+    assert ingest_records_to_patch(payload={}, records=[base], project_root=tmp_path,
+                                   account_id=AID).record_count == 1
+    for variant in ("p-1", "P\u200b-1", "P-1 "):
+        res = ingest_records_to_patch(
+            payload={}, records=[{"dataset_uid": variant, "dataset_name": "Dup",
+                                  "species": "Human"}],
+            project_root=tmp_path, account_id=AID)
+        assert res.record_count == 0 and any("去重" in w for w in res.warnings), variant
+    assert len(load_patch(tmp_path, AID)["adds"]) == 1
+    # NFC/NFD 变体同判
+    assert ingest_records_to_patch(
+        payload={}, records=[{"dataset_uid": "café-1", "dataset_name": "C", "species": "Human"}],
+        project_root=tmp_path, account_id=AID).record_count == 1
+    assert ingest_records_to_patch(
+        payload={}, records=[{"dataset_uid": "cafe\u0301-1", "dataset_name": "C2",
+                              "species": "Human"}],
+        project_root=tmp_path, account_id=AID).record_count == 0
+    # 批内冲突：同键不同内容 → uid_conflict，零写入
+    with pytest.raises(UploadError, match="未写入") as exc:
+        ingest_records_to_patch(
+            payload={}, records=[
+                {"dataset_uid": "Q-1", "dataset_name": "A", "species": "Human"},
+                {"dataset_uid": "q-1", "dataset_name": "B", "species": "Human"}],
+            project_root=tmp_path, account_id=AID)
+    assert exc.value.code == "uid_conflict"
+    assert all(pp.record_uid(r) != "Q-1" for r in load_patch(tmp_path, AID)["adds"])
+
+
+def test_no_uid_records_get_stable_generated_uid(tmp_path):
+    """无 dataset_uid 记录在摄取锚点补发**稳定**编号（内容摘要派生）——
+    文档允许的无 UID JSON 照常可传，且此后可被常规删除路径命中。"""
+    import copy
+
+    raw = {"dataset_name": "No UID", "species": "Human"}
+    r1 = ingest_records_to_patch(payload={}, records=[copy.deepcopy(raw)],
+                                 project_root=tmp_path, account_id=AID)
+    assert r1.record_count == 1
+    assert any("补发系统编号" in w for w in r1.warnings)
+    stored = load_patch(tmp_path, AID)["adds"][0]
+    uid = pp.record_uid(stored)
+    assert uid.startswith("user-upload-")
+    # 同内容重复上传 → 同编号 → 走既有去重（不重复占额度）
+    r2 = ingest_records_to_patch(payload={}, records=[copy.deepcopy(raw)],
+                                 project_root=tmp_path, account_id=AID)
+    assert r2.record_count == 0
+    # 编号可被删除/恢复往返命中
+    assert trash_adds(tmp_path, AID, [uid])["moved"] == [uid]
+    assert load_patch(tmp_path, AID)["adds"] == []
+    assert restore_adds(tmp_path, AID, [uid])["restored"] == [uid]
+    assert [pp.record_uid(r) for r in load_patch(tmp_path, AID)["adds"]] == [uid]
+
+
+def test_restore_adds_respects_cumulative_cap(tmp_path, monkeypatch):
+    """恢复也占累计额度——「导入满→删→补满→恢复」不得突破账户上限；
+    超限 too_large 且回收区原样（零落盘变化）。"""
+    monkeypatch.setattr(pp, "MAX_PATCH_ADD_RECORDS", 2)
+    ingest_records_to_patch(
+        payload={},
+        records=[{"dataset_uid": "P-1", "dataset_name": "P1", "species": "Human"},
+                 {"dataset_uid": "P-2", "dataset_name": "P2", "species": "Human"}],
+        project_root=tmp_path, account_id=AID)
+    assert trash_adds(tmp_path, AID, ["P-2"])["moved"] == ["P-2"]
+    ingest_records_to_patch(
+        payload={}, records=[{"dataset_uid": "P-3", "dataset_name": "P3", "species": "Human"}],
+        project_root=tmp_path, account_id=AID)
+    with pytest.raises(PatchError) as exc:
+        restore_adds(tmp_path, AID, ["P-2"])
+    assert exc.value.code == "too_large"
+    patch = load_patch(tmp_path, AID)
+    assert sorted(pp.record_uid(r) for r in patch["adds"]) == ["P-1", "P-3"]
+    assert [pp.record_uid(r) for r in patch["trash"]] == ["P-2"], "拒绝时回收区原样"
+
+
 def test_ingest_budget_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(pp, "MAX_PATCH_ADD_RECORDS", 2)
     records = [
@@ -336,3 +438,186 @@ def test_patch_generation_missing_then_changes_after_write(tmp_path):
     assert gen[0] == AID
     assert gen[1] is not None and gen[2] is not None
     assert gen != (AID, None, None)
+
+
+@pytest.mark.parametrize("operation", ["ingest", "block", "unblock", "trash", "restore", "restore_file"])
+def test_all_patch_writers_obey_the_same_os_transaction_lock(tmp_path, operation):
+    import threading
+    from dataset_recommender.corpus import fs_utils
+    from dataset_recommender.corpus import uploads
+
+    records = [{"dataset_uid": "own", "dataset_name": "Own", "species": "Human"}]
+    ingest_records_to_patch(payload={}, records=records, project_root=tmp_path, account_id=AID)
+    block_uids(tmp_path, AID, ["shared"])
+    if operation == "restore":
+        trash_adds(tmp_path, AID, ["own"])
+    target = patch_path_for(tmp_path, AID)
+    before = target.read_bytes()
+    attempted, done = threading.Event(), threading.Event()
+    errors = []
+    def write():
+        attempted.set()
+        try:
+            if operation == "ingest":
+                with bind_patch_scope(AID):
+                    uploads.ingest_dataset(
+                        raw_bytes=b'[{"dataset_uid":"new","dataset_name":"New","species":"Human"}]',
+                        safe_name=uploads.new_upload_name("new.json"), project_root=tmp_path)
+            elif operation == "block":
+                block_uids(tmp_path, AID, ["other"])
+            elif operation == "unblock":
+                unblock_uids(tmp_path, AID, ["shared"])
+            elif operation == "trash":
+                trash_adds(tmp_path, AID, ["own"])
+            elif operation == "restore":
+                restore_adds(tmp_path, AID, ["own"])
+            else:
+                pp.restore_patch_file(tmp_path, AID, existed=False)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+    fh = fs_utils.acquire_file_lock(target.with_suffix(".lock"))
+    thread = threading.Thread(target=write)
+    try:
+        thread.start()
+        assert attempted.wait(10)
+        assert not done.wait(0.15)
+        assert target.read_bytes() == before
+    finally:
+        fs_utils.release_file_lock(fh)
+        thread.join(10)
+    assert not thread.is_alive() and not errors
+    assert (target.read_bytes() if target.exists() else None) != before
+
+
+def test_patch_transaction_reentry_and_account_isolation(tmp_path):
+    import threading
+
+    done = threading.Event()
+    errors = []
+    def other_account():
+        try:
+            block_uids(tmp_path, "other_account", ["other"])
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+    with pp.patch_critical_section(tmp_path, AID):
+        with pp.patch_critical_section(tmp_path.resolve(), AID):
+            block_uids(tmp_path, AID, ["mine"])
+        thread = threading.Thread(target=other_account)
+        thread.start()
+        assert done.wait(10), "账户锁不能扩大成阻塞所有账户的全局锁"
+        thread.join(10)
+    assert not errors
+    assert load_patch(tmp_path, AID)["blocks"] == ["mine"]
+    assert load_patch(tmp_path, "other_account")["blocks"] == ["other"]
+
+
+def test_file_transaction_busy_releases_handles_for_retry(tmp_path):
+    from dataset_recommender.corpus import fs_utils
+
+    path = tmp_path / "busy.lock"
+    held = fs_utils.acquire_file_lock(path)
+    try:
+        with pytest.raises(fs_utils.FileLockBusy):
+            with fs_utils.file_critical_section(path, timeout=0.02):
+                pytest.fail("OS 锁已被占，不得进入事务")
+    finally:
+        fs_utils.release_file_lock(held)
+    with fs_utils.file_critical_section(path, timeout=0.2):
+        with fs_utils.file_critical_section(path, timeout=0):
+            pass
+
+
+def _import_patch_version(root, uid, name):
+    from dataset_recommender.corpus import uploads
+
+    with bind_patch_scope(AID):
+        result = uploads.ingest_dataset(
+            raw_bytes=json.dumps([{"dataset_uid": uid, "dataset_name": name,
+                                   "species": "Human"}], ensure_ascii=False).encode("utf-8"),
+            safe_name=uploads.new_upload_name("version.json"), project_root=root)
+    assert result.record_count == 1
+    return load_patch(root, AID)["adds"][-1]
+
+
+def _trash_patch_versions(root, first_uid="P-1", second_uid="p-1"):
+    first = _import_patch_version(root, first_uid, "First version")
+    assert trash_adds(root, AID, [second_uid])["moved"] == [first_uid]
+    second = _import_patch_version(root, second_uid, "Last trashed version")
+    assert trash_adds(root, AID, [first_uid])["moved"] == [second_uid]
+    assert load_patch(root, AID)["trash"] == [first, second]
+    return first, second
+
+
+@pytest.mark.parametrize("first_uid,second_uid", [
+    ("P-1", "P-1"), ("P-1", "p-1"), ("P-1", "P\u200b-1"),
+    ("café-1", "cafe\u0301-1"),
+])
+def test_restore_multiple_imported_versions_selects_last_trash_entry(tmp_path, first_uid, second_uid):
+    first, second = _trash_patch_versions(tmp_path, first_uid, second_uid)
+    result = restore_adds(tmp_path, AID, [first_uid, second_uid])
+    assert result == {"restored": [second_uid], "not_found": [], "already_present": []}
+    patch = load_patch(tmp_path, AID)
+    assert patch["adds"] == [second]
+    assert patch["trash"] == [first]
+    assert len({pp.uid_key(pp.record_uid(r)) for r in patch["adds"]}) == len(patch["adds"])
+
+
+def test_restore_multiple_uids_keeps_old_versions_in_trash_order(tmp_path):
+    first, second = _trash_patch_versions(tmp_path)
+    third = _import_patch_version(tmp_path, "Q-2", "Other UID")
+    assert trash_adds(tmp_path, AID, ["Q-2"])["moved"] == ["Q-2"]
+    result = restore_adds(tmp_path, AID, ["P-1", "Q-2", "missing"])
+    assert result == {"restored": ["p-1", "Q-2"], "not_found": ["missing"], "already_present": []}
+    assert load_patch(tmp_path, AID)["adds"] == [second, third]
+    assert load_patch(tmp_path, AID)["trash"] == [first]
+
+
+@pytest.mark.parametrize("cap,allowed", [(1, True), (0, False)])
+def test_restore_version_selection_counts_only_selected_records(tmp_path, monkeypatch, cap, allowed):
+    first, second = _trash_patch_versions(tmp_path)
+    before = patch_path_for(tmp_path, AID).read_bytes()
+    monkeypatch.setattr(pp, "MAX_PATCH_ADD_RECORDS", cap)
+    if allowed:
+        assert restore_adds(tmp_path, AID, ["P-1"])["restored"] == ["p-1"]
+        assert load_patch(tmp_path, AID)["adds"] == [second]
+        assert load_patch(tmp_path, AID)["trash"] == [first]
+    else:
+        with pytest.raises(PatchError) as caught:
+            restore_adds(tmp_path, AID, ["P-1"])
+        assert caught.value.code == "too_large"
+        assert patch_path_for(tmp_path, AID).read_bytes() == before
+
+
+def test_restore_version_selection_byte_quota_is_zero_write(tmp_path, monkeypatch):
+    _trash_patch_versions(tmp_path)
+    before = patch_path_for(tmp_path, AID).read_bytes()
+    monkeypatch.setattr(pp, "MAX_PATCH_FILE_BYTES", 1)
+    with pytest.raises(PatchError) as caught:
+        restore_adds(tmp_path, AID, ["P-1"])
+    assert caught.value.code == "too_large"
+    assert patch_path_for(tmp_path, AID).read_bytes() == before
+
+
+def test_restore_already_present_preserves_all_trash_versions(tmp_path):
+    _trash_patch_versions(tmp_path)
+    _import_patch_version(tmp_path, "P-1", "Current version")
+    before = patch_path_for(tmp_path, AID).read_bytes()
+    assert restore_adds(tmp_path, AID, ["p-1", "missing"]) == {
+        "restored": [], "not_found": ["missing"], "already_present": ["p-1"]}
+    assert patch_path_for(tmp_path, AID).read_bytes() == before
+
+
+def test_restore_rejects_preexisting_duplicate_adds_without_deleting_any_version(tmp_path):
+    first, _second = _trash_patch_versions(tmp_path)
+    patch = load_patch(tmp_path, AID)
+    patch["adds"] = [dict(first), dict(first, dataset_uid="p-1")]
+    path = _seed_patch_file(tmp_path, AID, patch)
+    before = path.read_bytes()
+    with pytest.raises(PatchError) as caught:
+        restore_adds(tmp_path, AID, ["P-1"])
+    assert caught.value.code == "patch_corrupt"
+    assert path.read_bytes() == before

@@ -13,19 +13,21 @@
    可变 let，live import 只读——本文件从不写它）。cards/act（downloadTextBlob）、accounts
    （resetReuseScope）、browse（syncReuseBar）、interactions（buildReusePack/setReuseScope）
    经 import 取本文件导出（绞杀桥已全退役）。 */
-import { API, CURRENT_USER, $, copyTextAny, escapeHtml, favFolderIdOrDefault, favFolderNameById, favFolderOf, getFavFolders, getFavs, isHttp, toast } from "#core";
+import { API, CURRENT_USER, $, copyTextAny, escapeHtml, favFolderIdOrDefault, favFolderNameById, favFolderOf, getFavFolders, getFavs, isHttp, toast, beginRequest, invalidateRequest } from "#core";
 import { dlqFireBlob } from "#downloads";
 import { USAGE_KINDS } from "#usage_core";
 import { usageLog } from "#usage_log";
 
 let _packBusy = false;
+let _packRequest = null;
+const _reuseRequests = {};
 
 /* 清单范围：REUSE_SCOPE_ALL = 全部收藏；"" = 默认收藏夹；否则为用户夹 id。
    不持久化——换账户 / 范围夹被删都复位回「全部收藏」。范围名只用于前端展示与按钮文案，
    绝不进 POST 体（keys-only 红线）。 */
 const REUSE_SCOPE_ALL = "__all__";
 let _reuseScope = REUSE_SCOPE_ALL;
-export function resetReuseScope() { _reuseScope = REUSE_SCOPE_ALL; }
+export function resetReuseScope() { invalidateRequest(_reuseRequests); _reuseScope = REUSE_SCOPE_ALL; syncReuseBar(); }
 function reuseScopeLabel() {
     if (_reuseScope === REUSE_SCOPE_ALL) return "全部收藏";
     return "「" + favFolderNameById(_reuseScope) + "」";
@@ -33,6 +35,7 @@ function reuseScopeLabel() {
 export function setReuseScope(v) {
     v = String(v ?? REUSE_SCOPE_ALL);
     if (v !== REUSE_SCOPE_ALL && v !== "" && !getFavFolders().some((f) => f.id === v)) v = REUSE_SCOPE_ALL;
+    if (_reuseScope !== v) invalidateRequest(_reuseRequests);
     _reuseScope = v;
     syncReuseBar();
 }
@@ -71,7 +74,15 @@ function favUidsForPack(folderScope) {
 }
 
 /* 收藏视图顶部的工具条：有收藏才出现；范围下拉 = 全部收藏 + 各夹，条数实时反映当前范围。 */
+function reuseSelectionKey() {
+    return JSON.stringify([(CURRENT_USER && CURRENT_USER.id) || "", _reuseScope, favUidsForPack().sort()]);
+}
 export function syncReuseBar() {
+    if (_packRequest && !_packRequest.isCurrent()) {
+        _packBusy = false;
+        const button = $("reusePackBtn");
+        if (button) button.disabled = false;
+    }
     const bar = $("reuseBar");
     if (!bar) return;
     const folders = getFavFolders();
@@ -99,7 +110,7 @@ export function syncReuseBar() {
     // 同账户同条数但换了收藏夹范围，旧清单同样必须判陈旧收起。
     const panel = $("reusePanel");
     const packUser = (CURRENT_USER && CURRENT_USER.id) || "";
-    if (panel && panel.dataset.n && (String(uids.length) !== panel.dataset.n || packUser !== (panel.dataset.u || "") || _reuseScope !== (panel.dataset.f || ""))) {
+    if (panel && panel.dataset.n && (panel.dataset.selection !== reuseSelectionKey() || String(uids.length) !== panel.dataset.n || packUser !== (panel.dataset.u || "") || _reuseScope !== (panel.dataset.f || ""))) {
         panel.style.display = "none";
         panel.innerHTML = "";
         delete panel.dataset.n;
@@ -114,6 +125,10 @@ export async function buildReusePack() {
     if (!uids.length) { toast(_reuseScope === REUSE_SCOPE_ALL ? "你还没有收藏任何数据集" : "这个收藏夹还是空的"); return; }
     const btn = $("reusePackBtn");
     const panel = $("reusePanel");
+    const token = beginRequest(_reuseRequests, reuseSelectionKey);
+    _packRequest = token;
+    const label = reuseScopeLabel();
+    const selection = reuseSelectionKey();
     _packBusy = true;
     if (btn) { btn.disabled = true; btn.textContent = "正在整理…"; }
     try {
@@ -123,16 +138,19 @@ export async function buildReusePack() {
             body: JSON.stringify({ uids }),
         });
         const data = await res.json();
+        if (!token.isCurrent()) return;
         if (!res.ok || !data.ok || !data.pack) throw new Error(data.detail || "未能生成清单，请稍后重试。");
         // 范围名只进面板回显（纯前端展示），不进 POST 体
-        renderReusePack(data.pack, data.markdown || "", data.ris || "", data.bibtex || "", reuseScopeLabel());
+        renderReusePack(data.pack, data.markdown || "", data.ris || "", data.bibtex || "", label);
         // 生成成功即**自动**把三个文件（.md + .ris + .bib）落进浏览器下载目录；
         // 面板上方的三个「下载」按钮保留为重下入口。
         autoDownloadReuseTrio({ md: data.markdown || "", ris: data.ris || "", bib: data.bibtex || "" });
         // 同时记录生成时的账户 + 范围指纹：syncReuseBar 据此识别「条数相同但属于另一账户/另一夹」的陈旧清单。
-        if (panel) { panel.dataset.n = String(uids.length); panel.dataset.u = (CURRENT_USER && CURRENT_USER.id) || ""; panel.dataset.f = _reuseScope; }
+        if (panel) { panel.dataset.selection = selection; panel.dataset.n = String(uids.length); panel.dataset.u = (CURRENT_USER && CURRENT_USER.id) || ""; panel.dataset.f = _reuseScope; }
     } catch (e) {
+        if (!token.isCurrent()) return;
         if (panel) {
+            panel.dataset.selection = selection;
             panel.style.display = "block";
             panel.innerHTML = `<div class="files-hint">暂时无法生成清单，请稍后重试。原因：${escapeHtml(String(e && e.message || e))}</div>`;
             // 错误面板也按**当前**收藏指纹登记：收藏一变（条数、账户或范围）syncReuseBar 就把它收起。
@@ -143,9 +161,11 @@ export async function buildReusePack() {
         }
     } finally {
         // 必须放 finally：失败时若不复位，按钮永久卡在「正在整理…」。
-        _packBusy = false;
-        if (btn) btn.disabled = false;
-        syncReuseBar();
+        if (_packRequest === token) {
+            _packBusy = false;
+            if (btn) btn.disabled = false;
+            syncReuseBar();
+        }
     }
 }
 

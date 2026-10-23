@@ -1,20 +1,22 @@
 "use strict";
 
-/* 本文件是 ES Module：core/cards/memory/progress/results/shell 经 import 取。
+/* 本文件是 ES Module：core/cards/memory/progress/results/shell/facets（facetDrawerIsOpen/
+   facetDrawerSet，Esc 分层链）经 import 取。
    board 的 ubSubmit/cbLogPush、search 的 runRecommend/setLastRecommendData、browse 的
    renderHistory/renderBrowse/applyBrowseYearRange/scrollBrowseTop/uploadFile/
    runDiagnose 与 bs、reuse_pack 的 buildReusePack/setReuseScope、fav_folders 的
    toggleFavFolderManage 经 import 取（互调成环——绑定都只在函数体内使用，ESM 允许）。
    boot 与 search/browse/shell/results 经 import 取本文件导出（绞杀桥已全退役）。 */
-import { API, LS, MOTION, REDUCE_MOTION, $, clampInt, copyTextAny, escapeHtml, nsKey, openPopup, prettySource, readJSON, toast, writeJSON } from "#core";
+import { API, LS, MOTION, REDUCE_MOTION, $, clampInt, copyTextAny, currentAccountScope, escapeHtml, nsKey, openPopup, prettySource, readJSON, toast, writeJSON } from "#core";
 import { closeFilesModal } from "#cards";
 import { closeMemoryModal, renderMemorySuggestions, setRememberSearchAvailable } from "#memory";
 import { animateConsoleWidth } from "#progress";
 import { exitResultsLayout } from "#results";
-import { applyPreset, closeSettings, openSettings, saveConfig, setSidebar, showView, aiGateChange, syncAiGates, syncStrategyNode,
+import { applyPreset, closeSettings, openSettings, saveConfig, setSidebar, setRailCollapsed, showView, aiGateChange, syncAiGates, syncStrategyNode,
     toggleLibWin, libWinOpen, closeLibWin, toggleHistWin, histWinOpen, closeHistWin, webGuardOn, setHealthArrivedHook } from "#shell";
-import { applyBrowseYearRange, bs, renderBrowse, renderHistory, runDiagnose, scrollBrowseTop, uploadFile } from "#browse";
+import { applyBrowseYearRange, bs, setBrowseState, renderBrowse, renderHistory, runDiagnose, scrollBrowseTop, uploadFile } from "#browse";
 import { cbChatInMain, cbLogPush, ubSubmit } from "#board";
+import { facetDrawerIsOpen, facetDrawerSet } from "#facets";
 import { runRecommend, setLastRecommendData } from "#search";
 import { buildReusePack, setReuseScope } from "#reuse_pack";
 import { toggleFavFolderManage } from "#fav_folders";
@@ -196,9 +198,35 @@ export function copyAgentPrompt(btn) {
    仅网页版公网护栏形态（webGuardOn）可见——本机形态没有在线 MCP（铸币端点 404），块保持
    hidden。health 快照到达时同步一次（setHealthArrivedHook），bind 时若快照已到也直接同步。
    剪贴板写入统一走 core.copyTextAny（能力基元唯一实现）。 */
+/* ---------- 在线接入（MCP）令牌 ---------- */
+/* 令牌与「复制接入提示词」的全部状态都**带属主**（生成/展示时刻的账户 scope）。
+   换账户后不允许 B 复制 A 的长期 Bearer 凭证，也不允许迟回包把旧凭证重新展示——
+   读取口一律先核 `_mcpTokenSameOwner()`，不符即清空状态与输出区（不假称是别人的东西）。 */
+let _mcpTokenOwner = null;
+function _mcpTokenSameOwner() {
+    return _mcpTokenOwner === null || _mcpTokenOwner === currentAccountScope();
+}
+function _mcpTokenClear(clearDom) {
+    _lastMcpConfig = null;
+    _mcpTokenOwner = null;
+    if (!clearDom) return;
+    const cfg = $("mcpTokenConfig");
+    if (cfg) cfg.textContent = "";
+    const out = $("mcpTokenOut");
+    if (out) out.hidden = true;
+}
+/* 复制前的属主闸：两个复制入口（提示词 / 配置 JSON）共用；不符即清空并拒绝。 */
+function _mcpTokenGuardForCopy() {
+    if (_mcpTokenSameOwner()) return true;
+    _mcpTokenClear(true);
+    toast("已切换账号——请先点「生成接入令牌」");
+    return false;
+}
 function syncOnlineMcpBlock() {
     const block = $("onlineMcpBlock");
     if (!block) return;
+    // 换账户后的惰性清理：打开设置/health 到达时核属主，符不符都把不属于当前账户的凭证收起来。
+    if (!_mcpTokenSameOwner()) _mcpTokenClear(true);
     const on = webGuardOn();
     block.hidden = !on;
     // 引导语与方式二标题随形态收口：本地形态没有在线接入——不说「两种方式任选」、不挂「方式二」前缀，
@@ -212,16 +240,20 @@ function syncOnlineMcpBlock() {
 export async function mintOnlineMcpToken(btn) {
     if (!btn || btn.disabled) return;
     btn.disabled = true;
+    const launchOwner = currentAccountScope();
     try {
         const resp = await fetch(API.mcpTokenMint, {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ label: "" }),
         });
         const data = await resp.json().catch(() => null);
         if (!resp.ok || !data || !data.ok) throw new Error((data && (data.detail || data.error)) || ("http " + resp.status));
+        // 迟回包闸：铸造期间换号 → 这颗令牌属于上一个账户，绝不落进当前账户的界面/状态。
+        if (launchOwner !== currentAccountScope()) { _mcpTokenClear(true); return; }
         const out = $("mcpTokenOut");
         if (out && data.config) {
             // 标准 MCP 客户端配置形状（Kimi Code / Claude 等通用）：mcpServers.<name>.url + headers
             _lastMcpConfig = data.config;   // 供「复制接入提示词（含令牌）」代入模板
+            _mcpTokenOwner = launchOwner;
             $("mcpTokenConfig").textContent = JSON.stringify({ mcpServers: { biodata: data.config } }, null, 2);
             out.hidden = false;
         }
@@ -240,15 +272,23 @@ let _lastMcpConfig = null;
 let _onlinePromptTemplate = null;   // 模板拉取一次后缓存（纯静态资源）
 export async function copyOnlineMcpPrompt(btn) {
     if (!btn || btn.disabled) return;
+    if (!_mcpTokenGuardForCopy()) return;   // 换号后不许复制上一个账户的令牌
     if (!_lastMcpConfig || !_lastMcpConfig.url || !_lastMcpConfig.headers) {
         toast("请先点「生成接入令牌」"); return;
     }
     btn.disabled = true;
+    const launchOwner = currentAccountScope();
     try {
         if (!_onlinePromptTemplate) {
             const r = await fetch("/api/guide/online-prompt");
             if (!r || !r.ok) throw new Error("online-prompt http " + (r && r.status));
             _onlinePromptTemplate = await r.text();
+        }
+        // 模板在途期间换号：不复制（凭据属于上一个账户）
+        if (launchOwner !== currentAccountScope() || !_mcpTokenSameOwner()) {
+            _mcpTokenClear(true);
+            toast("已切换账号——请先点「生成接入令牌」");
+            return;
         }
         const bearer = String(_lastMcpConfig.headers.Authorization || "").replace(/^Bearer\s+/i, "");
         const text = _onlinePromptTemplate
@@ -266,9 +306,11 @@ export async function copyOnlineMcpPrompt(btn) {
 export async function loadMcpTokenList() {
     const box = $("mcpTokenList");
     if (!box || !webGuardOn()) return;
+    const launchOwner = currentAccountScope();
     try {
         const resp = await fetch(API.mcpTokenList);
         const data = await resp.json().catch(() => null);
+        if (launchOwner !== currentAccountScope()) return;   // 迟到的列表不画进新账户
         if (!resp.ok || !data || !data.ok) return;
         const rows = (data.tokens || []).map((t) =>
             `<div class="mcp-token-row"><span class="mcp-token-meta">${escapeHtml(t.prefix || "")} · ${escapeHtml(t.label || "未命名")} · ${escapeHtml(t.created_at || "")}</span>` +
@@ -291,6 +333,33 @@ export async function revokeOnlineMcpToken(tokenId, btn) {
         toast("吊销失败：" + (e && e.message ? e.message : "请稍后重试"));
         if (btn) btn.disabled = false;
     }
+}
+
+/* 无障碍：.switch 里的原生 checkbox 被 CSS 移出焦点与辅助树
+   （`.switch input { display: none; }`），Tab/Space 用户根本切换不了自动排序/AI 执行/
+   用户记忆/反馈这些开关。修法**不动样式**：把包着它的 label/span 变成 role="switch" 的
+   可聚焦开关——Tab 可达、Space/Enter 经原生 input.click() 切换（沿用既有 change/toggle
+   监听链，绝不复制第二份切换逻辑），aria-checked 与真实勾选态同步。 */
+function bindSwitchA11y() {
+    const switches = document.querySelectorAll(".switch");
+    Array.prototype.forEach.call(switches, function (label) {
+        const input = label.querySelector('input[type="checkbox"]');
+        if (!input) return;
+        if (!label.hasAttribute("role")) label.setAttribute("role", "switch");
+        if (!label.hasAttribute("tabindex")) label.setAttribute("tabindex", "0");
+        const sync = function () {
+            label.setAttribute("aria-checked", input.checked ? "true" : "false");
+            label.setAttribute("tabindex", input.disabled ? "-1" : "0");
+        };
+        sync();
+        input.addEventListener("change", sync);
+        label.addEventListener("keydown", function (ev) {
+            if (ev.key !== " " && ev.key !== "Enter") return;
+            ev.preventDefault();          // 空格不滚页、回车不触发外层 label 的默认行为
+            if (input.disabled) return;
+            input.click();                // 原生切换 + change 事件（既有监听链原样生效）
+        });
+    });
 }
 
 export function bind() {
@@ -319,7 +388,8 @@ export function bind() {
         showView(n.dataset.view);
     }));
     document.querySelectorAll("[data-goto]").forEach((b) => b.addEventListener("click", () => showView(b.dataset.goto)));
-    $("sideCollapse").addEventListener("click", () => setSidebar(false));
+    // #sideCollapse：桌面 = 导航轨折叠为胶囊（rail-collapsed）；移动端维持抽屉收起语义
+    $("sideCollapse").addEventListener("click", () => { if (window.innerWidth > 780) setRailCollapsed(true); else setSidebar(false); });
     $("sideFab").addEventListener("click", () => setSidebar(true));
     $("sideBackdrop").addEventListener("click", () => setSidebar(false));
     $("settingsBtn").addEventListener("click", openSettings);
@@ -335,6 +405,7 @@ export function bind() {
     if (mcpCopyBtn) mcpCopyBtn.addEventListener("click", () => copyOnlineMcpPrompt(mcpCopyBtn));
     const mcpCopyJsonBtn = $("mcpTokenCopyJsonBtn");
     if (mcpCopyJsonBtn) mcpCopyJsonBtn.addEventListener("click", () => {
+        if (!_mcpTokenGuardForCopy()) return;   // 换号后不许复制上一个账户的配置 JSON
         const cfg = $("mcpTokenConfig");
         if (!cfg || !cfg.textContent) return;
         copyTextAny(cfg.textContent).then((ok) => {
@@ -348,6 +419,7 @@ export function bind() {
     });
     setHealthArrivedHook(syncOnlineMcpBlock);
     syncOnlineMcpBlock();
+    bindSwitchA11y();   // 开关的键盘/辅助树可达（Tab + Space/Enter）
     // 结果摘要卡不再有「查看每一步」折叠，无需接线其展开/收起。
     $("overlay").addEventListener("click", closeSettings);
 
@@ -404,6 +476,8 @@ export function bind() {
     }
     const csb = $("chatSendBtn");
     if (csb) csb.addEventListener("click", () => ubSubmit("chat"));
+    // （2026-10-10 rp1：复盘自浮窗迁入侧栏第三页签，#replayNavBtn 入口随之删除——
+    //   页签点击由 board.js initSideWork 统一绑定，本文件不再接线复盘。）
 
     // 设置三维度（2026-08-03）：LLM 依赖开关统一过禁点闸 aiGateChange（未配 key 弹回并指路）；
     // 非依赖开关直接 sync。API 配置项的变动会翻转 llmCapable → 门控视觉随之重算。
@@ -415,7 +489,7 @@ export function bind() {
     $("cfgRecall").addEventListener("change", syncStrategyNode);
     ["cfgApiKey", "cfgBaseUrl", "cfgModel"].forEach((id) => {
         const b = $(id);
-        if (b) b.addEventListener("input", syncAiGates);
+        if (b) ["input", "change"].forEach((event) => b.addEventListener(event, () => syncAiGates({ configurationChanged: true })));
     });
     // 填数题：失焦时把越界值收敛到边界（与提交时 getConfig 的 clampInt 同口径），让输入框显示的就是真正生效的值
     $("cfgTopK").addEventListener("change", () => { $("cfgTopK").value = String(clampInt($("cfgTopK").value, 10, 1, 50)); });
@@ -444,27 +518,26 @@ export function bind() {
     // change 事件（离散选择），照旧即时生效。
     $("fSearch").addEventListener("input", () => {
         if (browseSearchTimer) clearTimeout(browseSearchTimer);
-        browseSearchTimer = setTimeout(() => { bs.q = $("fSearch").value.trim(); bs.page = 1; renderBrowse(); }, 250);
+        browseSearchTimer = setTimeout(() => { setBrowseState({ q: $("fSearch").value.trim(), page: 1 }); renderBrowse(); }, 250);
     });
-    $("fSource").addEventListener("change", () => { bs.source = $("fSource").value; bs.page = 1; renderBrowse(); });
-    $("fSpecies").addEventListener("change", () => { bs.species = $("fSpecies").value; bs.page = 1; renderBrowse(); });
-    $("fPlatform").addEventListener("change", () => { bs.platform = $("fPlatform").value; bs.page = 1; renderBrowse(); });
-    $("fFastq").addEventListener("change", () => { bs.fastq = $("fFastq").checked; bs.page = 1; renderBrowse(); });
+    $("fSource").addEventListener("change", () => { setBrowseState({ source: $("fSource").value, page: 1 }); renderBrowse(); });
+    $("fSpecies").addEventListener("change", () => { setBrowseState({ species: $("fSpecies").value, page: 1 }); renderBrowse(); });
+    $("fPlatform").addEventListener("change", () => { setBrowseState({ platform: $("fPlatform").value, page: 1 }); renderBrowse(); });
+    $("fFastq").addEventListener("change", () => { setBrowseState({ fastq: $("fFastq").checked, page: 1 }); renderBrowse(); });
     $("fYearFrom").addEventListener("change", () => applyBrowseYearRange("from"));
     $("fYearTo").addEventListener("change", () => applyBrowseYearRange("to"));
-    $("timelineClear").addEventListener("click", () => { bs.yearFrom = ""; bs.yearTo = ""; $("fYearFrom").value = ""; $("fYearTo").value = ""; bs.page = 1; renderBrowse(); });
+    $("timelineClear").addEventListener("click", () => { setBrowseState({ yearFrom: "", yearTo: "", page: 1 }); $("fYearFrom").value = ""; $("fYearTo").value = ""; renderBrowse(); });
     // 一键复位全部筛选维度（关键词/来源/物种/平台/FASTQ/年份范围）并同步控件值；
     // 时间线「清除」只管年份范围，这个是全量入口。renderBrowse → syncBrowseTimelineState 会重算柱 active 态与 timelineClear disabled。
     $("browseFilterClear").addEventListener("click", () => {
-        bs.q = ""; bs.source = ""; bs.species = ""; bs.platform = ""; bs.fastq = false;
-        bs.yearFrom = ""; bs.yearTo = ""; bs.page = 1;
+        setBrowseState({ q: "", source: "", species: "", platform: "", fastq: false, yearFrom: "", yearTo: "", page: 1 });
         $("fSearch").value = ""; $("fSource").value = ""; $("fSpecies").value = ""; $("fPlatform").value = "";
         $("fFastq").checked = false; $("fYearFrom").value = ""; $("fYearTo").value = "";
         renderBrowse();
     });
-    $("browsePrev").addEventListener("click", () => { if (bs.page > 1) { bs.page--; renderBrowse(); scrollBrowseTop(); } });
-    $("browseNext").addEventListener("click", () => { bs.page++; renderBrowse(); scrollBrowseTop(); });
-    $("fPageSize").addEventListener("change", () => { bs.pageSize = clampInt($("fPageSize").value, 24, 1, 200); bs.page = 1; renderBrowse(); scrollBrowseTop(); });
+    $("browsePrev").addEventListener("click", () => { if (bs.page > 1) { setBrowseState({ page: bs.page - 1 }); renderBrowse(); scrollBrowseTop(); } });
+    $("browseNext").addEventListener("click", () => { setBrowseState({ page: bs.page + 1 }); renderBrowse(); scrollBrowseTop(); });
+    $("fPageSize").addEventListener("change", () => { setBrowseState({ pageSize: clampInt($("fPageSize").value, 24, 1, 200), page: 1 }); renderBrowse(); scrollBrowseTop(); });
 
     const uz = $("uploadZone");
     uz.addEventListener("click", () => $("uploadInput").click());
@@ -492,10 +565,11 @@ export function bind() {
     document.addEventListener("keydown", (e) => {
         trapDialogFocus(e);
         if (e.key !== "Escape") return;
-        // 逐层关，最上层优先：记忆/文件弹窗 → 设置抽屉 → 来源/时间浮面板 → 档案浮窗 → 移动端侧栏。
+        // 逐层关，最上层优先：记忆/文件弹窗 → 设置抽屉 → 筛选抽屉 → 来源/时间浮面板 → 档案浮窗 → 移动端侧栏。
         if ($("memoryModal") && !$("memoryModal").hidden) { closeMemoryModal(); return; }
         if ($("filesModal") && !$("filesModal").hidden) { closeFilesModal(); return; }
         if ($("settings").classList.contains("open")) { closeSettings(); return; }
+        if (facetDrawerIsOpen()) { facetDrawerSet(false); return; }
         // 来源/时间面板被 placeScopeControls 零复制搬进 #scopePop 后 hidden 恒=false（弹层内恒展开是
         // 刻意设计：可见性由 scopePop 自身的 hidden 遮蔽，弹层由 board.js 自己的 Esc 监听负责关）。
         // 托管态下它们不算「打开着的浮层」——旧链第一环只看 panel.hidden，结果态每次 Esc 都命中
@@ -653,7 +727,7 @@ function scopeSidebarRerun(desc) {
     const qi = $("queryInput");
     if (!qi || !qi.value.trim()) return;
     if (desc) cbLogPush("refine", desc);
-    runRecommend({ keepFacets: true });
+    runRecommend({ keepFacets: true, sharedUtterance: desc, sayPushed: !!desc, messageKind: "refine" });
 }
 export function updateTimeSummary() {
     const el = $("timeSummary");

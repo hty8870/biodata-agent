@@ -1,23 +1,34 @@
 "use strict";
+import { startConversationRun, awaitConversationRun, pendingConversationRuns, forgetConversationRun,
+    getSharedConversation, sharedConversationAction, listSharedConversations, claimConversationClientAction,
+    forgetSharedConversationRuns } from "#conversation_client";
+import { cbSharedRestore, cbHitKeywords } from "#board_core";
+import { setReplaySharedFn } from "#replay_core";
+import { notifyContextChanged } from "#core";
+import { dlqEnqueue } from "#downloads";
+import { exitResultsLayout } from "#results";
+import { workspaceEnsureSelect } from "#workspaces";
 
 /* C4 起本文件是 ES Module：core 的工具、board_core 纯核（cbRowsFrom/cbSummary/cbPushFrame）、
    search 的 runRecommend/applyRecommendResult/bumpRecSeq/setLastRecommendData 与 LAST_RECOMMEND_DATA
    （活绑定只读）、results 的 enterResultsLayout/setFacetState/resetFacetState/toggleLenient 与四个
-   分面状态（活绑定只读）、facets 的 toggleQueryHit/facetStageSubmit/facetStageCancel/placeFacetBar、
+   分面状态（活绑定只读）、facets 的 toggleQueryHit/facetStageSubmit/facetStageCancel/facetDrawerSet、
    progress 的 resetSubmitButton、usage_log/usage_core、shell 的 getConfig、interactions 的
    autoGrow/getDateRange 经 import 取；act（actEnabled/actDispatchPlanChain）与
    task_pack（previewTaskPack/tpCountFromUtterance）同批互转走 import（board↔act 成环，
    但绑定都只在函数体内使用，ESM 允许）。
    core/search/results/facets/interactions/browse/accounts 同样经 import 取本文件导出
    （绞杀桥全退役）。 */
-import { API, $, escapeHtml, MOTION, ghostExit, nsKey, openPopup, pushHistChatOnly, setHistHooks, toast, currentAccountScope } from "#core";
-import { cbPushFrame, cbRowsFrom, cbSummary, CB_MAX_FRAMES, cbMsgFbNext, cbMsgCommentText, cbMsgForkable, searchFactsReceiptText, plansNeedActReceipt, PLAN_CANCELLED_FALLBACK_ZH } from "#board_core";
+import { API, $, escapeHtml, MOTION, ghostExit, beginLayoutTransition, layoutMotionActive, nsKey, openPopup, pushHistChatOnly, syncHistConversation, setHistHooks, toast, currentAccountScope, currentProjectScope, beginRequest, invalidateRequest } from "#core";
+import { replayTurnDone, replayReset, replaySetActive, setReplayLogGetter } from "#replay";
+import { setReplayConvIdFn, setReplayLlmFn, replayConvFields } from "#replay_core";
+import { cbPushFrame, cbRowsFrom, cbSummary, CB_MAX_FRAMES, cbMsgFbNext, cbMsgCommentText, cbMsgForkable, cbHistoryMessages, cbHistoryRestore, searchFactsReceiptText, plansNeedActReceipt, PLAN_CANCELLED_FALLBACK_ZH } from "#board_core";
 import { applyRecommendResult, bumpRecSeq, LAST_RECOMMEND_DATA, landRecommendResult,
     recSeqNow, runRecommend, searchParamSnapshot, setLastRecommendData, setPrelimBadge } from "#search";
 import { _facetFilters, _lenientDims, _queryHits, _suppressed,
     renderBatchSwitcher, resetFacetState, setFacetState, switchBatch, toggleLenient } from "#results";
-import { deriveRescueOptions, isZeroHitBatch, latestActiveBatchId, selectDisplayBatch } from "#batch_select";
-import { facetStageCancel, facetStageSubmit, placeFacetBar, toggleQueryHit } from "#facets";
+import { deriveRelaxCard, isZeroHitBatch, latestActiveBatchId, selectDisplayBatch } from "#batch_select";
+import { facetStageCancel, facetStageSubmit, facetDrawerSet, toggleQueryHit, removeFacet } from "#facets";
 import { estimateDuration, finishProgress, progressActive, resetSubmitButton, startProgress } from "#progress";
 import { actCanonicalDispatchPlans, actDispatchPlanChain, actEnabled, actPrimeTurnSearchFacts } from "#act";
 import { arxActive, arxFinish, arxTailHtml, arxVisible } from "#act_run";
@@ -26,7 +37,8 @@ import { usageLog, usageEnabled, usageSetEnabled, usageConsentGiven, requestUsag
 import { USAGE_KINDS, usageBeginTurn } from "#usage_core";
 import { benchfbAfterRender, benchfbOnChatEntry, benchfbSetAutoGrow, benchfbTurnBegin, benchfbTurnEcho, benchfbTurnError, benchfbTurnNote, benchfbTurnRoute } from "#benchfb";
 import { autoGrow, getDateRange, openSrcPanel, openTimePanel } from "#interactions";
-import { agentExtMissing, getConfig, llmCapable, openSettings, revealSetting } from "#shell";
+import { agentExtMissing, getConfig, llmCapable, llmProviderWire, openSettings, revealSetting } from "#shell";
+import { setEndpointProviderWire } from "#examples";
 import { compressFlow, flowVerbLabel, KIND_TOOL, renderableStages, shouldDiscardOutcome, stageFromEvent, upsertStage } from "#flow_trace";
 import { COPY, armTwoStepConfirm, resetTwoStepConfirm } from "../core/copy.js";
 
@@ -96,6 +108,7 @@ let _cbReplaying = false;     // 正在回放历史帧（此时不推新帧）
    用户的展开/收起选择会记住。 */
 let _cbCollapsed = true;
 let _cbChoices = [];          // 同一项冲突时后端给的三个选项（含它已经拆好的取值）
+let _askRelaxPending = null;  // ask.relax「放松哪个条件」选择卡的在途载荷（环内 LLM 触发或零命中自动兜底，用户作答/新一轮提交前挂起）
 
 /* 板上现在画的这批条件是**哪一次检索**给的。
    不能拿 LAST_RECOMMEND_DATA 当这个真源：用户在主搜索框里敲任何一个字，
@@ -159,9 +172,6 @@ function cbLenientLabel(dim) {
 export function renderCondBoard(data) {
     const board = $("condBoard");
     if (!board) return;
-    // 放宽预览用 .cb-relax-preview 临时藏起条件展示层（见 results.js applyRelaxation）；任何一次真实重画
-    // （点「返回原条件」或换新检索都会走到这里）先把它清掉，让摘要/条件行按新数据重新出现——单一复位点。
-    board.classList.remove("cb-relax-preview");
     if (!data || !data.results) {
         // 没有结果就没有条件可编辑；此时露出面板只会让用户对着空板发呆。
         board.hidden = true;
@@ -218,10 +228,9 @@ export function renderCondBoard(data) {
     swSync();   // 条件板刚有内容 → 「对话记录」页签可用；落位由 swApplyMode → placeCondBoard 收口
 }
 
-/* ============ 侧栏工作卡：同一张卡承载「数据细化 / 对话记录」============
-   落位规则与 #facetBar 同源（facets.js placeFacetBar）：侧栏展开且非移动端 → 搬进侧栏；
-   否则搬回结果区原位。同一个 DOM 节点在两处间 appendChild 搬家，已绑定的监听全部保留。
-   移动端/收起侧栏时回退到原位，保证任何情况下这两块都能被看到、被操作。 */
+/* ============ 侧栏工作卡：「对话记录 / 复盘」双页签卡（rp2 起「筛选」摘出到右侧抽屉）============
+   条件板（#condBoard）在「侧栏面板 ↔ 主区 hero」两处间 appendChild 搬家（placeCondBoard），
+   已绑定的监听全部保留；移动端/收起侧栏时回退到主区原位，保证任何情况下都能被看到、被操作。 */
 /* 侧栏工作模式偏好。与 BOARD_COLLAPSED_KEY 同性质：**纯 UI 偏好，不是用户数据**
    （不含查询、不含结果、不含撤销栈），所以允许落盘；但同样必须走 nsKey() 每账户键——
    共用机器上，下一个人不该继承上一个人的界面状态。
@@ -234,90 +243,102 @@ let _swPicked = false;   // 本会话用户是否**显式**点过页签（自动
 
 function swAvailable() {
     const board = $("condBoard");
-    const groups = $("facetGroups");
     const qview = document.querySelector('.view[data-view="query"]');
     const inResults = !!(qview && qview.classList.contains("has-results"));
+    // cur3：对话记录的可见性不再依赖条件板。三种够格：① 条件板在（有结果的条件）；
+    // ② 已进入结果态（has-results——弃权/空结果也算：检索**落地了**，对话就该可见）；
+    // ③ 有 sys 回音（clarify/没听懂——不触发检索，再没有别的反馈通道）。
+    // 反例（2026-08-02 图4）：首次检索**进行中**只有 say——此时落地页上侧栏工作卡
+    // 提前弹出正是用户报的异常；检索中只许按钮滚进度，完成后结果+侧栏一起入场。
+    const boardOk = !!(board && !board.hidden) || inResults
+        || _cbLog.some(function (e) { return e.kind === "sys"; });
     return {
-        // 数据细化 pane 的真实内容是「可细化维度」#facetGroups——命中已搬到常驻栏 #swHits（两模式都在）。
-        // 只有 facets-active、groups 却为空时，pane 是空的：此时不该启用该页签（否则点开是一片空白）。
-        facets: document.body.classList.contains("facets-active") && !!(groups && groups.children.length),
-        // cur3：对话记录的可见性不再依赖条件板。三种够格：① 条件板在（有结果的条件）；
-        // ② 已进入结果态（has-results——弃权/空结果也算：检索**落地了**，对话就该可见）；
-        // ③ 有 sys 回音（clarify/没听懂——不触发检索，再没有别的反馈通道）。
-        // 反例（2026-08-02 图4）：首次检索**进行中**只有 say——此时落地页上侧栏工作卡
-        // 提前弹出正是用户报的异常；检索中只许按钮滚进度，完成后结果+侧栏一起入场。
-        board: !!(board && !board.hidden) || inResults
-            || _cbLog.some(function (e) { return e.kind === "sys"; })
+        board: boardOk,
+        // 复盘页签（2026-10-10 rp1）：复盘对象就是当前这段对话，可用性与「对话」同源同值——
+        // 单列一个键，swSync/swApplyMode 的三态回退与 disabled 判定就不必再特判。
+        replay: boardOk
     };
 }
 
 /* 可用性变了就把开关、卡片可见性、两块面板重新对齐一次。
    单一真源是 swAvailable()：哪一块有内容由它说了算，别处不再各自判断。 */
+/* 查询界面的移动节点配置只在布局属主维护；core 负责通用的几何过渡。 */
+export function cbBeginLayoutTransition() {
+    const query = document.querySelector('.view[data-view="query"]');
+    if (!query || !document.body.classList.contains("on-query")) return false;
+    const composer = $("chatComposer"), console = query.querySelector(".console");
+    const source = composer && composer.getClientRects().length ? composer : console;
+    const elements = [{ source, target: composer }, { source: $("cbHistory"), target: $("cbHistory") }];
+    document.querySelectorAll('.side-nav .nav-item svg, .side-head .wm-o, .workspace-color-dot, .workspace-create-mark, .nav-item .lbl, .wordmark .wm-t, .workspace-nav-label, .hero-rot, .hero .chips, .hero .memory-suggestions')
+        .forEach((element) => elements.push({ source: element, target: element }));
+    return beginLayoutTransition({ elements, navigation: $("sideNavCard"), entering: $("sideWork"),
+        content: document.querySelector(".main") });
+}
 export function swSync() {
     const card = $("sideWork");
     if (!card) return;
     const has = swAvailable();
     const onQuery = document.body.classList.contains("on-query");
     const inSidebar = !document.body.classList.contains("side-closed") && window.innerWidth > 780;
-    // 整张卡：查询视图 + 侧栏可用 + 至少一块有内容；
+    // 整张卡：查询视图 + 侧栏可用 + 对话/复盘有内容（rp2 起「筛选」摘出侧栏，不再参与整卡显隐）；
     // chat-in-main（无结果、对话在主区）时整卡收起——对话界面在主区，这里不重复摆一份（p10）。
     // 视图交换（vs1）无需额外分支：它生效的前提是 has-results，此时 cbChatInMain() 恒假、
     // swAvailable().board 恒真，本卡自然显示（承载搬进侧栏的结果网格）。
-    card.hidden = !(onQuery && inSidebar && (has.facets || has.board)) || cbChatInMain();
+    const hidden = !(onQuery && inSidebar && has.board) || cbChatInMain();
+    if (hidden !== card.hidden) cbBeginLayoutTransition();
+    card.hidden = hidden;
     // 双窗口（导航卡 + 本工作卡并立）→ 导航卡折叠成两列布局（2026-08-24 用户点图：凡是双窗口，
-    // 左上恒两列——此前只在 facets-active【有活跃分面】时两列，无分面的对话窗口态导航傻大单列）。
-    // 真源就是本卡可见性（含 onQuery/侧栏展开/桌面断点全部前提），收侧栏/移动端/单窗口自动回单列。
+    // 左上恒两列）。真源就是本卡可见性（含 onQuery/侧栏展开/桌面断点全部前提），收侧栏/移动端/单窗口自动回单列。
     document.body.classList.toggle("side-duo", !card.hidden);
-    const tabF = $("swTabFacets"), tabB = $("swTabBoard");
-    if (tabF) tabF.disabled = !has.facets;
+    const tabB = $("swTabBoard"), tabR = $("swTabReplay");
     if (tabB) tabB.disabled = !has.board;
+    if (tabR) tabR.disabled = !has.replay;
     // 模式来源分两类：**用户显式选择**（本会话点过页签，或上个会话存过 localStorage）优先；
-    // 否则默认「对话记录」（2026-08-01 出检索结果后聊天是主路径，细化是进阶动作）。
-    // 选中的模式若已无内容 → 自动落到另一块显示（而不是让用户对着空面板发呆）——但**自动回退只改
-    // 显示、不落盘也不算选择**：否则「先出分面、后出对话」的中间态会把默认值永久顶成 facets
-    // （swApplyMode 旧实现逢切必写 localStorage，视觉自查实测默认 board 永远到不了用户）。
+    // 否则默认「对话」（2026-08-01 出检索结果后聊天是主路径）。
+    // 选中的模式若已无内容 → 自动落到有内容的一块显示（而不是让用户对着空面板发呆）——但**自动回退只改
+    // 显示、不落盘也不算选择**。旧持久化/历史快照里的 "facets"（rp2 前）一律映射成 "board"。
     const picked = (_swPicked && _swMode) || localStorage.getItem(nsKey(SIDE_MODE_KEY));
     let mode = picked || "board";
-    if (mode === "facets" && !has.facets && has.board) mode = "board";
-    if (mode === "board" && !has.board && has.facets) mode = "facets";
+    if (mode === "facets") mode = "board";
+    if (mode === "replay" && !has.replay) mode = "board";
     swApplyMode(mode, has);
-    placeHitsBar();   // 常驻「查询条件」栏（=facets 的 #facetActive）随可用性重新落位（两模式都在）
 }
 
 /* opts.picked=true 只来自页签点击/键盘快捷键（显式选择）：记 _swPicked 并落盘持久。
    swSync 的自动路径不传 → 只更新显示状态（_swMode 供 placeScopeControls 读），不碰持久偏好。 */
 function swApplyMode(mode, has, opts) {
+    if (mode === "facets") mode = "board";   // rp2：旧持久化/历史快照里的「筛选」页签已退役，一律归到「对话」
     has = has || swAvailable();
     _swMode = mode;
     const cardEl = $("sideWork");
-    if (cardEl) cardEl.dataset.swMode = mode;   // vs3：当前页签标识——交换态「检索结果」页签纯 CSS 隐藏 #swHits 用（只读显示态，不落盘）
+    if (cardEl) cardEl.dataset.swMode = mode;   // 当前页签标识——交换态紧凑样式 / 复盘态隐藏主输入条的 CSS 闸门（只读显示态，不落盘）
     if (opts && opts.picked) {
         _swPicked = true;
         try { localStorage.setItem(nsKey(SIDE_MODE_KEY), mode); } catch (_e) {}
     }
-    const paneF = $("sideFacets"), paneB = $("sideBoardPane");
-    const tabF = $("swTabFacets"), tabB = $("swTabBoard");
-    const showF = mode === "facets" && has.facets;
+    const paneB = $("sideBoardPane"), paneR = $("sideReplayPane");
+    const tabB = $("swTabBoard"), tabR = $("swTabReplay");
     const showB = mode === "board" && has.board;
-    if (paneF) paneF.hidden = !showF;
+    const showR = mode === "replay" && has.replay;
     if (paneB) paneB.hidden = !showB;
-    if (tabF) { tabF.classList.toggle("is-on", mode === "facets"); tabF.setAttribute("aria-selected", String(mode === "facets")); }
+    if (paneR) paneR.hidden = !showR;
     if (tabB) { tabB.classList.toggle("is-on", mode === "board"); tabB.setAttribute("aria-selected", String(mode === "board")); }
+    if (tabR) { tabR.classList.toggle("is-on", mode === "replay"); tabR.setAttribute("aria-selected", String(mode === "replay")); }
     // 页签滑动指示块（Phase D 动效）：滑块跟激活页签走，弹簧缓动；reduced-motion 时 transition 已被 CSS 关。
     const glide = $("swGlide");
-    if (glide) glide.style.transform = mode === "board" ? "translateX(calc(100% + 3px))" : "translateX(0)";
+    if (glide) glide.style.transform = mode === "replay" ? "translateX(calc(100% + 3px))" : "translateX(0)";
+    replaySetActive(showR);   // 复盘 pane 的取数/观察轮询随激活启停（replay.js 内部同值短路，稳态零开销）
     placeCondBoard();
     placeScopeControls();   // 范围控件（来源/时间）随模式在「主控制台 ↔ 对话记录面板」间搬家
     placeChatLog();         // 对话记录随模式在「条件板内（telegram）↔ 主区静态家（hero）」间搬家
     placeChatSuite();       // 视图交换（vs1）：对话套件 ↔ 结果网格 换位搬家，同一条链收口
 }
-/* 细化「提交」后把侧栏切到「继续对话」pane：刚上屏的用户消息与即将到来的系统回复（进度泡→完成摘要）
-   都在那边——不切换的话用户在「细化筛选」页签里什么都看不见（圈1 的另一半）。
+/* 细化「提交」后把侧栏切到「对话」pane：刚上屏的用户消息与即将到来的系统回复（进度泡→完成摘要）
+   都在那边——不切换的话用户在「筛选」页签里什么都看不见（圈1 的另一半）。
    只是显示切换：不算用户显式选择、不落盘，下次 swSync 仍按持久偏好回默认。 */
 export function swShowBoard() { swApplyMode("board", null); }
 
-/* 条件板落位。注意 #sideFacets 的可见性由 facets.js 的 syncFacetsCard 用 GSAP autoAlpha 控制，
-   本函数只管 #condBoard 这一个节点搬到哪儿，不去抢那套动画的控制权。 */
+/* 条件板落位。本函数只管 #condBoard 这一个节点搬到哪儿（侧栏面板 ↔ 主区 hero）。 */
 function placeCondBoard() {
     const board = $("condBoard");
     if (!board) return;
@@ -341,31 +362,6 @@ function placeCondBoard() {
     }
 }
 
-/* ============ 常驻「查询条件」栏（= facets 的 #facetActive，用户圈的那一栏）============
-   不另造栏：把 facets.js 渲染的 #facetActive（含 忽略/× chip）整块搬到切换开关下方的 #swHits，
-   两模式都在、切换不消失。它就是对话「上文」——手动细化后 facets.js 立即重建它、这里同步反映（同一 DOM 节点）。
-   侧栏收起/移动端/离开查询视图 → 搬回 #facetBar（结果区上方，#facetGroups 之前）。#facetActive 由 facets.js 按 id
-   重建，与它落在哪儿无关；无命中/细化时 facets.js 把它 hidden → 常驻栏一并不占位。 */
-function placeHitsBar() {
-    const hits = $("facetActive");
-    if (!hits) return;
-    const host = $("swHits"), bar = $("facetBar"), groups = $("facetGroups");
-    const inSidebar = !document.body.classList.contains("side-closed")
-        && window.innerWidth > 780
-        && document.body.classList.contains("on-query")
-        && !hits.hidden;
-    if (inSidebar && host) {
-        if (hits.parentElement !== host) host.appendChild(hits);
-        host.hidden = false;
-    } else {
-        if (bar && hits.parentElement !== bar) {   // 搬回 #facetBar 顶部（#facetGroups 之前，还原原始顺序）
-            if (groups && groups.parentElement === bar) bar.insertBefore(hits, groups);
-            else bar.insertBefore(hits, bar.firstChild);
-        }
-        if (host) host.hidden = true;   // hits 已移出 → host 自然为空
-    }
-}
-
 /* ============ 聊天 + 细化记录 ============
    本轮检索里说过的话（say）与做过的细化（refine）按发生顺序留痕。**本文件自己不落盘**：
    撤销栈里是完整的后端响应，落盘会撑爆配额（test_board_only_persists 钉死本文件只许存 UI 偏好）。
@@ -374,8 +370,11 @@ function placeHitsBar() {
    不是这里。这不是绕开上面那条规则，而是因为历史本来就已经在存「查询原话 + 完整结果快照」，
    走的是同一个 per-account `nsKey` 命名空间、同一套配额降级、同一个「清空历史」按钮；
    对话记录（几十条短句）与它同性质、同生命周期，不构成新的数据面。 */
-const CB_LOG_MAX = 40;
 let _cbLog = [];
+let _cbHistoryOwner = null;
+let _cbHistoryTimer = null;
+let _cbRestoring = false;
+let _cbRestoreSeq = 0;
 /* ---------- 信息流 · 过程轨迹（2026-08 用户重申定稿：上工具行/中唯一气泡/下 pill）----------
    _flow：本轮的工具行记录（有序、按行 id 去重——upsertStage 状态机：同一次调用的 tool_start 亮
    pending、step 落 done/failed 只更新同一行，绝不 append 两行）。
@@ -416,6 +415,7 @@ export function flowFinish(recordsOverride) {
         _flowAnimArmed = 2;
         _flowAttach = { summaryText: _flowCompressed.summaryText, expanded: _flowCompressed.expanded || [] };
     }
+    replayTurnDone();   // 复盘角标轮询（2026-09-28 复盘批）：utterance 轮收尾的统一挂点（服务端已在 final 前落痕）
 }
 /* 结果 pill 持件（落地/回执处把本轮存活批做成 pill；下一颗 sys 回执领取）。
    2026-08-31（用户定「pill 与工具执行绑定」）按族分治：
@@ -452,24 +452,277 @@ export function flowTraceSnapshot() {
 /* 新消息入场动效（Phase D）：cbLogPush 置位、cbRenderHistory 消费一次——回放/重画（cbReplay/
    快照回看）不置位，于是「滑上来」只属于真新消息；渲染即消费也保证后续重画不重播。 */
 let _cbEnterPending = false;
-/* 一条「对话」的 id。边界就是 search.js 里那句 `if (!keep) { cbLogClear(); cbLogPush("say", query); }`——
-   用户**亲手发起一次新查询**＝开一条新对话；分面细化 / 放宽 / 说一句话改条件都算同一条往下走。
-   所以只要把生成点挂在 cbLogClear 上，边界定义就只有一处、不会与实际行为漂开。 */
-let _cbConvId = "";
+/* 一条「对话」的 id。边界：**用户亲手发起一次新查询 = 开一条新对话**——滚动发生在每条
+   新对话路径的起点（ubSubmit 非续聊 / runRecommend 独立新检索 / 结果清空作废），
+   经 cbRollConvId() 统一作废重开；分面细化 / 放宽 / 说一句话改条件 / chat-in-main 续聊都算同一条。
+   2026-09-28 复盘批起滚动**必须早于该新对话的第一个请求体构造**（此前在 cbLogClear 里滚——
+   路由落地后，首句落痕被记进上一条/页载引导 id，真正的对话 id 反而丢了动机）。 */
+let _cbConvId = "", _sharedMode = true, _sharedConversation = null, _sharedControls = null, _sharedPresentation = false;
+const _sharedRequests = {}, _sharedPollRequests = {}, _commentRequests = {};
+let _sharedForegroundToken = null, _sharedRefreshToken = null, _sharedRunRequestId = null;
+function cbResetSharedRequests() {
+    invalidateRequest(_sharedRequests); invalidateRequest(_sharedPollRequests);
+    _sharedForegroundToken = null; _sharedRefreshToken = null; _sharedRunRequestId = null;
+}
+function cbResetComments() {
+    invalidateRequest(_commentRequests);
+    _cbCommentFor = ""; _cbCommentDraft = ""; _cbCommentBusy = false;
+}
+export function cbSharedConversation() { return _sharedMode ? (_sharedConversation || { id: "", revision: 0 }) : null; }
 export function cbConvId() {
     if (!_cbConvId) _cbConvId = "c" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
     return _cbConvId;
 }
-/* 供 core.js 的 pushHist 取用：把这一刻的对话记录压成能落盘的最小形状（kind/text/note，**不含 frameId**——
-   帧号是内存里的东西，回看时按每轮的累计长度差重新归属）。
-   2026-08-28 msgfb 起多存两个可选字段：i=消息 id（逐条反馈埋点的关联锚，回看恢复时原样带回）、
-   f=赞/倒赞态（""|"up"|"down"，空串省略不写）。旧历史行没有这两个字段，恢复路径按缺省处理。 */
+export function cbRollConvId({ shared = true } = {}) {
+    clearTimeout(_cbHistoryTimer);
+    cbResetSharedRequests(); cbResetComments();
+    _sharedMode = shared; _sharedConversation = null; _sharedControls = null;
+    _cbRestoreSeq += 1; _cbRestoring = false;
+    _cbHistoryOwner = currentAccountScope();
+    _cbConvId = ""; replayReset();
+}
+function cbSharedMissing(error, id) {
+    if (error?.status !== 404 || error.code !== "conversation_not_found" || !_sharedMode
+        || !id || (_sharedConversation?.id && _sharedConversation.id !== id)) return false;
+    const queryBox = $("queryInput"), chatBox = $("chatInput");
+    const query = String(queryBox?.value || ""), chat = String(chatBox?.value || "");
+    const queryDraft = query === String(_sharedConversation?.current_state?.query || "") ? "" : query;
+    forgetSharedConversationRuns(id);
+    cbClear({ archive: false });
+    _sharedPresentation = true;
+    try { exitResultsLayout(); } finally { _sharedPresentation = false; }
+    if (queryBox) { queryBox.value = queryDraft || chat; autoGrow(queryBox); }
+    if (chatBox) { chatBox.value = queryDraft ? chat : ""; autoGrow(chatBox); }
+    history.replaceState(null, "", location.pathname);
+    notifyContextChanged("conversations");
+    toast("这条共享对话已不存在；未发送的内容已保留，可以新开一条继续。");
+    return true;
+}
+async function cbSharedRunMissing(error, row, stillCurrent) {
+    if (!row?.shared || error?.status !== 404 || !row.conversation_id || !stillCurrent()) return false;
+    if (error.code === "conversation_not_found") return cbSharedMissing(error, row.conversation_id);
+    if (error.code !== "run_not_found") return false;
+    try { await getSharedConversation(row.conversation_id, { metadataOnly: true }); }
+    catch (missing) { if (stillCurrent()) return cbSharedMissing(missing, row.conversation_id); }
+    return false;
+}
+function cbControlSnapshot(query) {
+    const cfg = getConfig();
+    return { sources: cfg.sources, search_params: { ...searchParamSnapshot(query),
+        auto_parse_sources: cfg.auto_parse_sources, auto_allow_llm: cfg.auto_allow_llm, rerank_top_n: cfg.rerank_top_n } };
+}
+function cbSharedPatch(query) {
+    const controls = cbControlSnapshot(query), state = _sharedConversation?.current_state || {};
+    const params = { ...(state.search_params || {}) };
+    for (const [key, value] of Object.entries(controls.search_params)) {
+        if (["experiment_id", "experiment_arm", "propensity"].includes(key)) continue;
+        if (!_sharedControls || JSON.stringify(value) !== JSON.stringify(_sharedControls.search_params[key])
+            || ["facet_filters", "suppressed_constraints", "lenient_dims"].includes(key)) params[key] = value;
+    }
+    return { sources: !_sharedControls || JSON.stringify(controls.sources) !== JSON.stringify(_sharedControls.sources)
+            ? controls.sources : (state.sources ?? controls.sources), search_params: params };
+}
+function cbRestoreShared(conversation, { preserveDraft = false, sentText = null, requestId = null } = {}) {
+    const sameIdentity = _sharedMode && _cbConvId === conversation.id && _cbHistoryOwner === currentAccountScope();
+    if (sameIdentity && _sharedConversation && conversation.revision < _sharedConversation.revision) return false;
+    const sameRequest = _sharedMode && !_sharedConversation && requestId && requestId === _sharedRunRequestId;
+    const draft = preserveDraft && (sameIdentity || sameRequest) ? { query: $("queryInput")?.value || "", chat: $("chatInput")?.value || "" } : null;
+    if (draft && sentText != null && (!draft.query || draft.query === sentText)) draft.query = String(conversation.current_state?.query || "");
+    const restored = cbSharedRestore(conversation);
+    if (!sameIdentity) cbResetComments();
+    else if (_cbCommentFor && !restored.log.some((row) => row.id === _cbCommentFor)) cbResetComments();
+    clearTimeout(_cbHistoryTimer);
+    _sharedMode = true; _sharedConversation = conversation; _cbConvId = conversation.id;
+    _cbHistoryOwner = currentAccountScope(); _cbRestoring = true;
+    _cbStack = restored.stack; _cbCursor = restored.cursor;
+    _cbFrameSeq = Math.max(0, ..._cbStack.map((f) => f.id)); _cbLog = restored.log;
+    _cbProg = false; _cbProgHint = ""; _cbProgLabel = "";
+    if (_cbStack[_cbCursor]) cbReplay(_cbStack[_cbCursor]);
+    else {
+        _sharedPresentation = true;
+        try { exitResultsLayout(); } finally { _sharedPresentation = false; }
+        setLastRecommendData(null); resetFacetState(); cbRenderSteps(); cbRenderHistory();
+    }
+    const state = conversation.current_state || {}, sp = state.search_params || {};
+    setFacetState({ facetFilters: sp.facet_filters || [], suppressed: sp.suppressed_constraints || [],
+        lenientDims: sp.lenient_dims || [], queryHits: state.current_filters || [] });
+    if ($("queryInput")) $("queryInput").value = draft ? draft.query : String(state.query || "");
+    if ($("chatInput")) $("chatInput").value = draft ? draft.chat : "";
+    _sharedControls = cbControlSnapshot(state.query || "");
+    _cbRestoring = false; swSync();
+    if (!sameIdentity) replayReset();
+    history.replaceState(null, "", location.pathname + "?conv=" + encodeURIComponent(conversation.id));
+    if (state.ask_relax) askRelaxShow(state.ask_relax);
+    notifyContextChanged("conversation-view");
+    return true;
+}
+export async function cbOpenSharedConversation(id, options = {}) {
+    invalidateRequest(_sharedPollRequests);
+    const token = beginRequest(_sharedRequests);
+    _sharedForegroundToken = token;
+    try {
+        const conversation = await getSharedConversation(id);
+        if (!token.isCurrent()) return false;
+        if (!(await workspaceEnsureSelect(conversation.project_id || "", { preserveConversation: true, allowArchived: true }))) return false;
+        if (!token.isCurrent()) return false;
+        invalidateRequest(_routeRequests); _ubSeq++; _ubBusy = false; bumpRecSeq(); resetSubmitButton();
+        cbRestoreShared(conversation, options);
+        if (conversation.active_run_id) {
+            const row = { owner: currentAccountScope(), project_id: conversation.project_id || "", shared: true,
+                run_id: conversation.active_run_id, conversation_id: id, request_id: conversation.active_run_id, at: Date.now() };
+            await cbRecoverRun(row);
+        }
+        return token.isCurrent() && _sharedConversation?.id === id;
+    } catch (error) {
+        if (token.isCurrent() && !cbSharedMissing(error, id)) toast(error.message);
+        return false;
+    } finally {
+        if (_sharedForegroundToken === token) _sharedForegroundToken = null;
+    }
+}
+export async function cbRefreshSharedConversation() {
+    const c = _sharedConversation;
+    if (!_sharedMode || !c || _ubBusy || _sharedForegroundToken?.isCurrent() || _sharedRefreshToken?.isCurrent()) return;
+    const token = beginRequest(_sharedPollRequests, () => _cbConvId);
+    _sharedRefreshToken = token;
+    try {
+        const meta = await getSharedConversation(c.id, { metadataOnly: true });
+        if (!token.isCurrent()) return;
+        if (meta.revision < (_sharedConversation?.revision ?? c.revision)) return;
+        if (meta.revision !== c.revision || meta.active_run_id) {
+            const fresh = await getSharedConversation(c.id);
+            if (!token.isCurrent() || fresh.revision < (_sharedConversation?.revision ?? c.revision)) return;
+            if (!(await workspaceEnsureSelect(fresh.project_id || "", { preserveConversation: true, allowArchived: true }))) return;
+            if (!token.isCurrent()) return;
+            if (cbRestoreShared(fresh, { preserveDraft: true }) === false) return;
+            if (fresh.active_run_id) await cbRecoverRun({ owner: currentAccountScope(), project_id: fresh.project_id || "",
+                shared: true, run_id: fresh.active_run_id, conversation_id: fresh.id, request_id: fresh.active_run_id });
+        }
+    } catch (error) {
+        if (token.isCurrent() && !error.contextChanged && !cbSharedMissing(error, c.id)) toast(error.message);
+    } finally {
+        if (_sharedRefreshToken === token) _sharedRefreshToken = null;
+    }
+}
+async function cbSharedAction(action, fields, openBranch = false) {
+    const c = _sharedConversation;
+    if (!c) return;
+    invalidateRequest(_sharedPollRequests);
+    const token = beginRequest(_sharedRequests, () => _cbConvId);
+    _sharedForegroundToken = token;
+    let refresh = false;
+    try {
+        const data = await sharedConversationAction(c.id, action, c.revision, fields);
+        if (!token.isCurrent()) return;
+        if (openBranch) {
+            if (!openPopup(location.pathname + "?conv=" + encodeURIComponent(data.conversation.id))) toast("分支已保存，可在历史记录中打开。");
+        } else {
+            const fresh = await getSharedConversation(c.id);
+            if (!token.isCurrent()) return;
+            cbRestoreShared(fresh, { preserveDraft: true });
+        }
+        await listSharedConversations();
+        if (token.isCurrent()) notifyContextChanged("conversations");
+    } catch (error) {
+        if (!token.isCurrent() || cbSharedMissing(error, c.id)) return;
+        toast(error.message);
+        refresh = !!error.conflict;
+    } finally {
+        if (_sharedForegroundToken === token) _sharedForegroundToken = null;
+    }
+    if (refresh && token.isCurrent()) await cbRefreshSharedConversation();
+}
+async function cbSharedFinal(reply, row, text, stillCurrent, opts = {}) {
+    const id = reply.conv_id || row?.conversation_id;
+    if (!id) throw new Error("任务未返回共享对话编号，请刷新核对。");
+    const c = await getSharedConversation(id);
+    if (!stillCurrent()) return false;
+    if (_sharedConversation?.id === id && c.revision < _sharedConversation.revision) return false;
+    if (!(await workspaceEnsureSelect(c.project_id || "", { preserveConversation: true, allowArchived: true }))) return false;
+    if (!stillCurrent()) return false;
+    const requestId = row?.request_id && row.owner === currentAccountScope() && row.project_id === currentProjectScope() ? row.request_id : null;
+    flowFinish();
+    if (cbRestoreShared(c, { preserveDraft: true, sentText: opts.preserveComposer ? null : text, requestId }) === false) return false;
+    resetSubmitButton(); setPrelimBadge(false);
+    const actionCurrent = () => stillCurrent() && _cbConvId === id;
+    const actions = Array.isArray(reply.client_actions) ? reply.client_actions : [];
+    for (const [index, action] of actions.entries()) {
+        if (!actionCurrent()) return false;
+        const plan = action.plan || action;
+        const url = action.url ? new URL(action.url, location.origin) : null;
+        if (url && (url.origin !== location.origin || !url.pathname.startsWith("/api/"))) throw new Error("下载地址不属于当前服务，未打开。");
+        if (!url && !plan.verb) throw new Error("服务端返回的页面动作不完整，未重复执行后台步骤；请核对任务回执。");
+        if (!(await claimConversationClientAction(row, index, actionCurrent))) {
+            if (!actionCurrent()) return false;
+            toast("浏览器曾接手这一步，未重复执行；请核对下载记录或对应面板。"); continue;
+        }
+        if (!actionCurrent()) return false;
+        if (url) {
+            dlqEnqueue([{ url: url.href, filename: action.filename || "", kind: action.download_kind || "other" }]);
+        } else {
+            await actDispatchPlanChain({ intents: [{ ...plan, kind: "exec" }], pending_frontend: [] }, text);
+        }
+    }
+    if (!stillCurrent()) return false;
+    await listSharedConversations();
+    if (!stillCurrent()) return false;
+    notifyContextChanged("conversations"); replayTurnDone();
+    return true;
+}
+/* 历史消息格式由纯核统一序列化：保留正文、消息 id、反馈、帧归属和回复呈现数据。
+   结果载荷仍由 core 的各轮历史快照单独保存，回看时统一重映射帧号。 */
 export function cbLogForHistory() {
-    return _cbLog.map(function (e) {
-        const row = { k: e.kind, t: e.text, n: e.note || "", i: e.id || "" };
-        if (e.msgFb) row.f = e.msgFb;
-        return row;
+    return cbHistoryMessages(_cbLog);
+}
+function cbStateForHistory() {
+    const box = $("cbHistory");
+    const scroller = box && (box.closest(".sw-board-scroll") || box);
+    const current = _cbStack[_cbCursor];
+    return { owner: _cbHistoryOwner, frames: _cbStack.map((frame) => frame === current && LAST_RECOMMEND_DATA
+            ? { ...frame, resp: LAST_RECOMMEND_DATA } : frame), cursorId: (current || {}).id ?? null,
+        view: { queryDraft: $("queryInput") ? $("queryInput").value : "",
+            chatDraft: $("chatInput") ? $("chatInput").value : "",
+            mode: _swMode, collapsed: _cbCollapsed, swapped: _viewSwap,
+            pageScroll: window.scrollY, chatScroll: scroller ? scroller.scrollTop : 0,
+            openDetails: box ? Array.from(box.querySelectorAll("details")).map((d) => d.open) : [] } };
+}
+export function cbSaveConversation() {
+    clearTimeout(_cbHistoryTimer);
+    if (_cbRestoring || !_cbLog.length || _cbHistoryOwner !== currentAccountScope()) return;
+    syncHistConversation();
+}
+function cbScheduleHistorySave() {
+    clearTimeout(_cbHistoryTimer);
+    if (_cbRestoring || !_cbLog.length) return;
+    const convId = _cbConvId, owner = currentAccountScope();
+    _cbHistoryTimer = setTimeout(function () {
+        if (convId === _cbConvId && owner === currentAccountScope()) cbSaveConversation();
+    }, 120);
+}
+/* 历史存储不是可信 HTML 来源。只恢复呈现标记和被动内容，去掉脚本、
+   内联事件、样式及不安全链接，保持原有回复卡片的交互挂点。 */
+function cbSafeHistoryHtml(html) {
+    if (!html) return "";
+    const template = document.createElement("template");
+    template.innerHTML = String(html);
+    const tags = new Set(["div", "span", "p", "br", "strong", "b", "em", "i", "ul", "ol", "li",
+        "details", "summary", "button", "a", "table", "thead", "tbody", "tr", "th", "td", "pre", "code",
+        "svg", "path", "circle", "line", "polyline", "polygon", "rect", "g", "title"]);
+    template.content.querySelectorAll("*").forEach(function (el) {
+        if (!tags.has(el.tagName.toLowerCase())) { el.remove(); return; }
+        Array.from(el.attributes).forEach(function (attr) {
+            const name = attr.name;
+            if (name === "href") {
+                if (!/^(https?:\/\/|\/(?!\/)|#)/i.test(attr.value.trim())) el.removeAttribute(name);
+            } else if (!["class", "title", "type", "role", "open", "target", "rel", "disabled", "tabindex",
+                "viewBox", "width", "height", "d", "cx", "cy", "r", "x", "y", "x1", "y1", "x2", "y2", "points",
+                "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin"].includes(name)
+                && !name.startsWith("data-") && !name.startsWith("aria-")) el.removeAttribute(name);
+            if (["fill", "stroke"].includes(name) && /url\s*\(/i.test(attr.value)) el.removeAttribute(name);
+        });
+        if (el.tagName === "A") el.setAttribute("rel", "noopener noreferrer");
     });
+    return template.innerHTML;
 }
 /* 逐条反馈（msgfb）：每条消息一个会话内唯一 id。回看恢复时旧 id 原样带回（见 cbRestoreConversation），
    并用本计数器兜底生成与避让碰撞。 */
@@ -494,9 +747,9 @@ export function cbLogPush(kind, text, opts) {
     // needsAgent：仅 sys 用（2026-08-03 降级气泡）——「AI 执行」关时规则检出操作指令，
     // 该回音渲染成带「去开启 AI 执行」指路按钮的美观气泡（样式见 app.css .cbh-agent-*）。
     // isError：仅 sys 用——传输/服务异常回音（非「没听懂」）渲染成错误样式气泡
-    // 与正常灰泡一眼可分。两标都不落盘（cbLogForHistory 只存 k/t/n，回看降级为纯文字——同 needsAgent 口径）。
+    // 与正常灰泡一眼可分。历史保存这两标，回看时保持原有回复形态。
     // html：仅 sys 用（p10 执行总结），存可信 HTML（没做到的紧凑行/纠错 chips/结果卡/过程 details；
-    // 动态值一律 escapeHtml 后拼接）。**不落盘**——cbLogForHistory 只存 k/t/n，历史回看降级为纯文字。
+    // 动态值一律 escapeHtml 后拼接）。随消息保存，恢复前通过呈现标记白名单净化。
     // llmTag：该 sys 的正文已被 LLM 原位改写（/api/act/summary 执行总结，或 /api/search/reply
     // 检索回执——显示「AI 总结」小标）。
     const entry = { kind: k, text: t, frameId: null, note: "", needsAgent: !!(opts && opts.needsAgent),
@@ -513,12 +766,12 @@ export function cbLogPush(kind, text, opts) {
         if (_flowPills) { entry.pills = _flowPills; _flowPills = null; }
     }
     _cbLog.push(entry);
-    while (_cbLog.length > CB_LOG_MAX) _cbLog.shift();
     _cbEnterPending = true;   // 新消息入场动效（Phase D）：下一次渲染给最后一条 turn 播 cbhIn（只播一次；后续重画不重播）
     cbRenderHistory();
     // 聊天内容的有无决定「对话记录」页签是否可用（swAvailable.board 读 _cbLog）——
     // 首次回音（如 clarify）也得让侧栏工作卡立刻出现，否则回音写在了一张看不见的卡里。
     swSync();
+    cbScheduleHistorySave();
     return entry;
 }
 /* LLM 总结落地（p10）：原位改写一条还在对话流里的 sys 条目（被剪枝/清空则 no-op，静默 fail-open）。 */
@@ -527,10 +780,11 @@ export function cbUpdateEntry(entry, opts) {
     if (opts && typeof opts.text === "string" && opts.text.trim()) entry.text = opts.text;
     if (opts && opts.llmTag) entry.llmTag = true;
     cbRenderHistory();
+    cbScheduleHistorySave();
 }
-/* 清空对话记录 ＝ 一条对话到此为止。conv id 一并作废，下次 cbConvId() 现开一个新的 →
-   历史里这两段就分成两行，而不是黏成一条越滚越长的对话。 */
-export function cbLogClear() { _cbLog = []; _cbConvId = ""; cbRenderHistory(); swSync(); }
+/* 清空对话记录（纯清屏，不滚 conv id——滚动归 cbRollConvId，必须在每条新对话路径的
+   起点、第一个请求体构造之前发生；见 cbConvId 上方注释）。 */
+export function cbLogClear() { cbResetComments(); _cbLog = []; cbRenderHistory(); swSync(); }
 
 /* A2：纯工具对话（一句检索都没跑过）从不触发 pushHist——被丢弃前先补一条
    「仅对话」历史行，否则强制新开对话（重击智能查询）时这段对话永久丢失。
@@ -538,6 +792,7 @@ export function cbLogClear() { _cbLog = []; _cbConvId = ""; cbRenderHistory(); s
    excludeQuery＝调用方紧接着要自己发起的那句检索：记录里若只有这一句（hero 首句经
    ubSubmit 刚上屏的 say），它不是「被丢弃的对话」，而是这次检索自己的开场白，不归档。 */
 export function cbArchiveChatOnly(excludeQuery) {
+    cbSaveConversation();
     if (_cbStack.length || !_cbLog.length) return;
     const ex = String(excludeQuery || "").trim();
     if (_cbLog.length === 1 && _cbLog[0].kind === "say" && ex && _cbLog[0].text === ex) return;
@@ -613,7 +868,7 @@ function _searchReplyFacts(data, query, popts, total, shown, hint) {
     const keywords = [];
     ((data && data.query_constraints) || []).forEach(function (c) {
         if (!c || typeof c !== "object") return;
-        if (String(c.polarity || "include") !== "include") return;   // 只报正向硬条件（同 flowHitKeywords 口径）
+        if (String(c.polarity || "include") !== "include") return;   // 只报正向硬条件（同 cbHitKeywords 口径）
         (c.values || []).forEach(function (v) {
             const s = String(v || "").trim();
             if (!s || seen[s] || keywords.length >= 30) return;
@@ -691,6 +946,7 @@ function cbFrameIndexById(id) {
 function cbViewFrame(id) {
     const idx = cbFrameIndexById(id);
     if (idx < 0) return;
+    if (_sharedConversation) { cbSharedAction("select_frame", { frame_id: _cbStack[idx].serverId }); return; }
     _cbCursor = idx;
     cbReplay(_cbStack[idx]);   // cbReplay 末尾重画聊天记录（高亮随游标走）——回到上一步/查看/回退共用同一条重画
 }
@@ -749,9 +1005,12 @@ function cbHistoryClick(event) {
     if (pill) {
         const bid = String(pill.getAttribute("data-ft-pill") || "");
         // 零命中 pill —— 不再切换结果批。仅当它是最新结果（最后一个回执 entry 的活跃批）
-        // 时点击 = 重新打开救回选择条；否则（已被更新的结果取代）点击无任何反应（连换批也不响应）。
+        // 时点击 = 显式重开放松选择卡（清该批 dismiss 记忆）；否则（已被更新的结果取代）点击无任何反应。
         if (pill.getAttribute("data-ft-zero") === "1") {
-            if (pill.getAttribute("data-ft-zero-latest") === "1") openRescueStrip(bid);
+            if (pill.getAttribute("data-ft-zero-latest") === "1") {
+                _relaxDismissed.delete(bid);   // 显式重开：清该批 dismiss 记忆
+                _autoRelaxCardOpen(bid);
+            }
             return;
         }
         if (bid) {
@@ -811,6 +1070,8 @@ function cbComposerSync() {
     const viewing = _cbCursor >= 0 && _cbCursor < _cbStack.length - 1;
     if (bar) bar.hidden = viewing;
     if (fork) fork.hidden = !viewing;
+    const revert = $("cbRevertBtn");
+    if (revert) revert.hidden = !!_sharedConversation;
 }
 
 function cbBranchFromHere() {
@@ -819,6 +1080,7 @@ function cbBranchFromHere() {
     // 分支＝**新开浏览器标签页**——本标签页的原会话一帧不动；
     // 新标签页从 ?fork=<convId>:<N> 读出前 N 轮历史（每轮都带完整快照），重建到这一帧为止，
     // 并换上一个新 convId（cbAdoptAsBranch）——此后两边的历史记录分成两条对话。
+    if (_sharedConversation) { cbSharedAction("branch", { frame_id: cur.serverId, project_id: currentProjectScope() }, true); return; }
     const conv = cbConvId();
     const url = location.pathname + "?fork=" + encodeURIComponent(conv + ":" + (_cbCursor + 1));
     if (openPopup(url)) toast("已在新标签页打开分支；本标签页保持不变");
@@ -827,8 +1089,10 @@ function cbBranchFromHere() {
 /* 新标签页分支落点（?fork=，browse.js initHistWin 调用）：会话已按历史前缀重建好，
    这里换一个新 convId —— 之后这条分支的检索按新 id 落历史，与原对话分成两条（互不串行）。 */
 export function cbAdoptAsBranch() {
-    _cbConvId = "";
+    cbRollConvId();   // 换身份并作废原会话尚未完成的呈现态恢复回调。
+    _sharedMode = false;
     cbLogPush("sys", "这是从原对话分出来的一支；原对话还在原标签页和历史记录里。");
+    syncHistConversation({ createFrames: true });
 }
 
 function cbRevertDisarm() {
@@ -886,8 +1150,9 @@ function _flowTraceHtml(grp) {
      （{conv, mid, v}，无文本）；态度随历史落盘（cbLogForHistory 的 f 字段），回看原样带回。
    - 评论：气泡下原地展开小编辑器；发送复用加密意见通道（feedback_core 入队 +
      usage_upload.sendFeedback，与设置抽屉「使用反馈」同一明示单次授权语义），正文尾部由
-     cbMsgCommentText 拼一行「针对哪句回复」的引用（mid + 摘段）。feedback 三件套**只经相对
-     路径动态 import**（与 feedback.js 同哲学：不进静态图，import 图门只盯 # 静态边）。
+     cbMsgCommentText 拼一行「针对哪句回复」的引用（mid + 摘段）。feedback 三件套在这里只经
+     **动态 import** 取，通道按目标模块的属性分：有键的 feedback_dialog_core 走
+     `#feedback_dialog_core`，无键的 feedback_core / usage_upload 走相对路径（2026-10-01 tidy1 修）。
    - 分支：复用 ?fork=<convId>:<N>（与输入条变形三键同一落点格式）——浏览器里新开标签页、
      本窗口不动。没有存活帧的回复（首次检索前的纯对话回音）不能作分支点：按钮置灰、
      点击如实告知（cbMsgForkable 判据——给个点了没反应的按钮才是撒谎）。 */
@@ -955,6 +1220,7 @@ function _cbMsgFork(entry) {
     if (idx < 0) { toast(_CB_FORK_DISABLED_COPY); return; }
     // 与 cbBranchFromHere 同一落点格式（?fork=<convId>:<N>，N = 前 N 轮检索快照）——
     // 浏览器里新开标签页，本窗口原样保留；新标签页由 browse.js 重建前缀并换新 convId。
+    if (_sharedConversation) { cbSharedAction("branch", { frame_id: _cbStack[idx].serverId, project_id: currentProjectScope() }, true); return; }
     const url = location.pathname + "?fork=" + encodeURIComponent(cbConvId() + ":" + (idx + 1));
     if (openPopup(url)) toast("已在新标签页打开分支；本标签页保持不变");
 }
@@ -962,8 +1228,8 @@ function _cbMsgFork(entry) {
 function _cbMsgCommentToggle(entry) {
     if (!entry) return;
     const mid = String(entry.id || "");
-    _cbCommentFor = (_cbCommentFor === mid) ? "" : mid;
-    _cbCommentDraft = "";
+    const next = (_cbCommentFor === mid) ? "" : mid;
+    cbResetComments(); _cbCommentFor = next;
     cbRenderHistory();
     if (_cbCommentFor) {
         const box = $("cbHistory");
@@ -976,16 +1242,18 @@ function _cbMsgCommentToggle(entry) {
    先入 per-profile pending 队列，再尝试 sendFeedback；失败留队，稍后的自动重试仍会发出。 */
 async function _cbMsgCommentSend(entry) {
     if (!entry || _cbCommentBusy) return;
-    const mid = String(entry.id || "");
+    const mid = String(entry.id || ""), scope = currentAccountScope();
+    const token = beginRequest(_commentRequests, () => _cbConvId);
     const box = $("cbHistory");
     const ta = box && box.querySelector('[data-cbh-cmt-ta="' + mid + '"]');
     const text = ta ? ta.value : _cbCommentDraft;
     _cbCommentBusy = true;
     cbRenderHistory();
-    let sent = false;
+    let sent = false, queued = false;
     try {
-        const dlg = await import("../core/feedback_dialog_core.js");
+        const dlg = await import("#feedback_dialog_core");
         const fcore = await import("../core/feedback_core.js");
+        if (!token.isCurrent()) return;
         const st = dlg.feedbackTextState(text);
         if (!st.ok) {
             _cbCommentBusy = false;
@@ -997,26 +1265,25 @@ async function _cbMsgCommentSend(entry) {
             return;
         }
         const row = dlg.feedbackEntryBuild(cbMsgCommentText(text, mid, entry.text), false, null, {});
-        const scope = currentAccountScope();
-        fcore.feedbackEnqueue(scope, row, {});
+        queued = !!fcore.feedbackEnqueue(scope, row, {});
         const upload = await import("../core/usage_upload.js");
-        sent = await upload.sendFeedback(scope);
+        if (!token.isCurrent()) return;
+        sent = queued && await upload.sendFeedback(scope);
     } catch (_e) { sent = false; }
+    if (!token.isCurrent()) return;
     if (sent) {
         _cbCommentFor = "";
         _cbCommentDraft = "";
         toast("已发送，谢谢反馈");
     } else {
-        toast("未立即送达：已存入待发送队列，稍后会自动重试");
+        toast(queued ? "未立即送达：已存入待发送队列，稍后会自动重试" : "反馈没能保存，请检查存储空间后重试");
     }
     _cbCommentBusy = false;
     cbRenderHistory();
 }
 
 function _cbMsgCommentCancel() {
-    _cbCommentFor = "";
-    _cbCommentDraft = "";
-    cbRenderHistory();
+    cbResetComments(); cbRenderHistory();
 }
 
 export function cbRenderHistory() {
@@ -1032,10 +1299,7 @@ export function cbRenderHistory() {
     _cbLog.forEach(function (e, i) { if (e.frameId != null && e.kind !== "sys") lastIdxForFrame[e.frameId] = i; });
     // 2026-08-03：每帧的「查看历史回复」入口**并入该帧的系统回复泡**（footer 内联链接）——
     // 同一帧的系统回应只有一颗泡（此前系统泡 + 独立按钮泡两颗并立，用户判定「两条太多」）。
-    // 预扫描哪些帧有系统泡；没有的（分面点击细化等不产系统泡的帧）在用户消息下给独立行链接，入口不丢。
-    // 两种形态同一颗 `.cbh-view-link` 低调文本链接（无箭头、muted 小字）。
-    const sysFrames = {};
-    _cbLog.forEach(function (e) { if (e.kind === "sys" && e.frameId != null) sysFrames[e.frameId] = true; });
+    // 无系统回复时不生成占位入口；已有结果 pill 时不再重复显示文本入口。
     // 检索在途且进度泡已蜕变成文字：实时三点挂在最后一颗系统泡的**右端**继续滚（不再滚百分比）。
     // 渲染期注入、不进 _cbLog——不落盘、不参与帧剪枝。
     let lastSysIdx = -1;
@@ -1052,9 +1316,9 @@ export function cbRenderHistory() {
     box.innerHTML = _cbLog.map(function (e, i) {
         if (e.kind === "sys") {
             const sLinked = e.frameId != null && cbFrameIndexById(e.frameId) >= 0;
-            const viewLink = (sLinked && e.frameId !== curId)
+            const viewLink = (sLinked && e.frameId !== curId && !(e.pills && e.pills.length))
                 ? '<button type="button" class="cbh-view-link" data-cbh-view="' + e.frameId + '"'
-                    + ' title="' + _CB_VIEW_LINK_HINT + '">查看历史回复</button>'
+                    + ' title="' + _CB_VIEW_LINK_HINT + '">查看这轮结果</button>'
                 : "";
             const aiTag = e.llmTag
                 ? '<span class="cbh-ai" title="这句由 AI 依据真实执行/检索结果写成；数字与事实以实际结果为准">AI 总结</span>'
@@ -1128,11 +1392,6 @@ export function cbRenderHistory() {
         // 两种形态同一颗 `.cbh-view-link` 低调文本链接（气泡按钮形态已退役）。
         // 执行类（action）的回执（「已…」注记）是普通系统气泡，不加任何标记。
         let reply = "";
-        if (linked && !isCurrent && !sysFrames[e.frameId]) {
-            reply += '<div class="cbh-reply-row"><button type="button" class="cbh-view-link" data-cbh-view="' + e.frameId + '"'
-                + ' title="' + _CB_VIEW_LINK_HINT + '">'
-                + '<span class="sr-only">系统：</span>查看历史回复</button></div>';
-        }
         if (e.kind === "action" && e.note) {
             reply += '<div class="cbh-reply-row"><span class="cbh-sys-bubble cbh-note">'
                 + '<span class="sr-only">系统：</span>' + escapeHtml(e.note) + "</span></div>";
@@ -1177,12 +1436,13 @@ export function cbRenderHistory() {
     // 滚最近的滚动祖先，否则 scrollTop 写在不可滚元素上是空操作。
     const scroller = box.closest(".sw-board-scroll") || box;
     scroller.scrollTop = scroller.scrollHeight;
+    cbScheduleHistorySave();
     // benchmark 采集（b1）：评分卡是采集层的投影、不进 _cbLog——innerHTML 重画会把它抹掉，
     // 每次重画完由它自己挂回（无待评分记录时是一次布尔短路）。
     benchfbAfterRender();
-    // 救回选择条随「最新结果」同步——最新 pill 是零命中批 → 开着（可关可经 pill 重开）；
-    // 最新 pill 不是零命中 / 无 pill → 收起。纯 UI 展示层，不进对话流、不落历史。
-    maybeSyncRescueStrip();
+    // 零命中自动放松卡随「最新结果」同步——最新 pill 是零命中批 → 兜底弹 ask.relax
+    // 选择卡（环内已弹卡 / 用户已 dismiss 该批时不抢）。纯 UI 展示层，不进对话流、不落历史。
+    maybeAutoRelaxCard();
 }
 
 /* ============ fb1：chat 轮收尾 → 评分卡绑到本轮系统回复 entry ============
@@ -1368,8 +1628,7 @@ export function cbChatInMain() {
    交换本无意义）。生效判据 viewSwapEffective()：旗标 ∧ on-query ∧ has-results ∧ 侧栏展开
    ∧ 非移动端——任一不满足即整体退化为现状布局（移动端/收起侧栏/无结果自动落回原位，
    内容不消失）。搬家唯一收口是 placeChatSuite()（swApplyMode 链尾，与 placeChatLog 同链）：
-   一律整节点 move（已绑定监听不失效），绝不按数据重渲——放宽预览（applyRelaxation）
-   绕过 renderResults 直接重建 #resultsGrid，按 LAST_RECOMMEND_DATA 重渲会错显。 */
+   一律整节点 move（已绑定监听不失效），绝不按数据重渲。 */
 let _viewSwap = false;
 let _suiteTl = null;   // 交换动画在途句柄（任务6）：反向翻转时杀掉旧时间线并把旧方向瞬时落定，再播新动画
 function viewSwapEffective() {
@@ -1384,7 +1643,7 @@ function viewSwapEffective() {
 /* 交换搬家的唯一收口（swApplyMode 链尾、placeChatLog 之后调用；对话记录本体的落位
    仍归 placeChatLog——它在交换态把 #cbHistory 放进 #chatStage 上槽）。
    进入交换：#chatComposer 整棵（含 #scopePop 弹层锚点）→ #chatStageBar，#resultsGrid →
-   #sideBoardScroll（加 grid-mini 紧凑化），页签文案「继续对话」→「检索结果」。
+   #sideBoardScroll（加 grid-mini 紧凑化），页签文案「对话」→「检索结果」。
    vs2 起 #resultsHead（标题行/摘要卡/各诚实回显条）随 grid 一起搬进侧栏顶部（卡片列表之前），
    主区只剩对话舞台；#feasibilityPanel/#taskPackPanel 不进 #resultsHead、留在主区原位。
    退出交换：全部搬回静态原位（head 回 #resultsWrap 首子、grid 回 #resultsWrap 末尾、
@@ -1431,7 +1690,7 @@ function placeChatSuite() {
             grid.classList.remove("grid-mini");
             if (work) work.appendChild(composer); // 静态原位：#sideWork 末尾（#sideBoardPane 之后）
             stage.hidden = true;
-            if (tabLabel) tabLabel.textContent = "继续对话";
+            if (tabLabel) tabLabel.textContent = "对话";
             if (scroll) scroll.setAttribute("aria-label", "对话与细化记录（可上下滚动）");
             placeChatLog();   // 对话记录回侧栏 #sideBoardScroll（或侧栏收起/移动端时的 #chatMain）
         }
@@ -1505,7 +1764,7 @@ function placeChatLog() {
     // （a) 路径的瞬时 display:none 软化——hero 问候/示例 chips/记忆建议与
     // （侧栏展开桌面档将被统一输入条取代的）hero 大框，各留一粒屏幕原位幽灵淡出再隐：
     // 余部向上飘走、大框向下沉去（输入权交给即将落位的 #chatComposer），切换不再硬跳。
-    if (heroFlip) {
+    if (heroFlip && !layoutMotionActive()) {
         heroFlip.querySelectorAll(".hero-rot, .chips, .memory-suggestions").forEach(function (el) { ghostExit(el, { y: -12, duration: 0.32 }); });
         if (composerInHero()) ghostExit(heroFlip.querySelector(".console"), { y: 22, duration: 0.34, ease: "power3.inOut", keepIds: true });
     }
@@ -1521,7 +1780,7 @@ function placeChatLog() {
             scroll.insertBefore(log, scroll.firstChild);
             // (b) 主区 → 侧栏迁移（结果落地）：卡级入场由 CSS swIn 承担（见上方注释，不叠加），
             // 这里只给对话记录本体淡入微移标新家；焦点跟到侧栏输入行（继续说）。
-            if (MOTION && fromParent === main) gsap.from(log, { opacity: 0, x: -10, duration: 0.3, ease: "power3.out", clearProps: "all" });
+            if (MOTION && fromParent === main && !layoutMotionActive()) gsap.from(log, { opacity: 0, x: -10, duration: 0.3, ease: "power3.out", clearProps: "all" });
             if (fromParent === main) { const ci = $("chatInput"); if (ci) ci.focus(); }
         }
         if (main) main.hidden = true;
@@ -1535,7 +1794,7 @@ function placeChatLog() {
         main.hidden = false;   // 记录已搬进主区（chat-in-main 或移动端/收起侧栏回退）——容器必须可见
     }
     if (qview) qview.classList.toggle("chat-main-on", inMain);
-    if (heroFlip) {
+    if (heroFlip && !layoutMotionActive()) {
         // (a) 的位移 FLIP：chat-main-on 已落、布局已定，hero 从旧屏幕位置（首屏居中）平滑送到位
         // （顶部对话列）；时长 0.48s ≤ 钦点 500ms 上限；对话容器同步淡入微升。
         const hdy = heroFromTop - heroFlip.getBoundingClientRect().top;
@@ -1556,17 +1815,42 @@ function placeChatLog() {
                 target.appendChild(composer);
                 // 统一输入条落进 hero（chat-in-main）时淡入微升到位——它接替刚淡出的 hero 大框
                 // 输入权交接不断片。搬回侧栏不播（卡级 swIn / placeChatSuite 的淡入已承担）。
-                if (MOTION && target === heroHome) gsap.from(composer, { autoAlpha: 0, y: 10, duration: 0.32, ease: "power2.out", clearProps: "all" });
+                if (MOTION && target === heroHome && !layoutMotionActive()) gsap.from(composer, { autoAlpha: 0, y: 10, duration: 0.32, ease: "power2.out", clearProps: "all" });
             }
         }
     }
     // 主区态靠自己滚动（.cbh-main：flex:1 + overflow-y）；侧栏态由外层 #sideBoardScroll 统一滚动。
     log.classList.toggle("cbh-main", !inSidebar || !!swapHome);
+    placeCbPreview();   // 追问/选择卡跟随对话记录落位（chat-in-main 时它的静态家必不可见，见函数注释）
+}
+
+/* #cbPreview（ask.relax 选择卡 / cbShowMessage 追问卡共用节点）的可见宿主跟随。
+   它的静态家在条件板 #cbBody 里，而条件板只在「有结果落地」时才被摘下 hidden
+   （renderCondBoard），chat-in-main（无结果有对话）时整条宿主链必然不可见
+   （#condBoard hidden + 侧栏工作卡整卡收起）——环内 ask.relax 暂停回合恰恰没有结果落地，
+   卡渲进去 0×0 不可见：用户只看到「选完我会按你的选择自动重跑检索并继续」却无东西可点。
+   规则：卡有内容且处于 chat-in-main → 跟对话记录走（#cbHistory 之后、主区输入框正上方，
+   即 index.html 对本卡「聊天记录下方、对话框上方」定位在该态下的正解）；其余一律回静态家。
+   整节点搬家（点击委托绑在 #cbPreview 自身——见 initCondBoard——搬家不失效）；
+   与 placeChatLog 同链收口，两个渲染口（askRelaxShow/cbShowMessage）落定后各调一次。 */
+function placeCbPreview() {
+    const pv = $("cbPreview"), log = $("cbHistory");
+    if (!pv || !log) return;
+    const live = !pv.hidden && !!pv.firstChild;   // 有内容的卡才算「在屏」；清空/隐藏态只负责回家
+    if (live && cbChatInMain()) {
+        const host = log.parentElement;
+        if (host && pv.previousElementSibling !== log) host.insertBefore(pv, log.nextSibling);
+    } else {
+        const home = $("cbBody");
+        if (home && pv.parentElement !== home) {
+            home.insertBefore(pv, home.querySelector(".cb-hint"));   // 静态原位：#cbStepHint 之后、「不想打字…」提示之前
+        }
+    }
 }
 
 function initSideWork() {
     // 视图交换钮（2026-08-16 vs1）：只切旗标、走 swSync 链整体重排（搬家统一在 placeChatSuite 收口）。
-    // 交换生效后侧栏承载的是结果网格——若显示模式停在「细化筛选」，用户点交换会看不到结果，
+    // 交换生效后侧栏承载的是结果网格——若显示模式停在「复盘」，用户点交换会看不到结果，
     // 故顺手把显示切回「检索结果」页签（只是显示切换：不算显式选择、不落盘，同 swShowBoard 口径）。
     const swapBtn = $("swSwapBtn");
     if (swapBtn) swapBtn.addEventListener("click", function () {
@@ -1574,7 +1858,7 @@ function initSideWork() {
         swSync();
         if (viewSwapEffective() && _swMode !== "board") swApplyMode("board", null);
     });
-    const _swTabIds = ["swTabFacets", "swTabBoard"];
+    const _swTabIds = ["swTabBoard", "swTabReplay"];
     _swTabIds.forEach(function (id, i) {
         const el = $(id);
         if (!el) return;
@@ -1592,9 +1876,8 @@ function initSideWork() {
     });
     // 侧栏收展 / 视口变化 / 切视图都要重新落位——否则收起侧栏后条件板留在已隐藏的容器里，
     // 用户既看不到也点不到（这正是 hidden 属性那一族缺陷的形态：功能还在、但到不了）。
-    // resize 走 placeFacetBar（内部收口 swSync）而非只 swSync：跨 780 断点时 #facetBar 也要重新落位，
-    // 否则 #facetActive(常驻栏,swSync 管) 与 #facetBar(分面条,placeFacetBar 管) 会落到不同容器/被搁在隐藏区。
-    window.addEventListener("resize", function () { placeFacetBar(false); });
+    // resize 只需 swSync：rp2 起 #facetBar 恒住筛选抽屉、不随断点搬家，没有第二处要重新落位。
+    window.addEventListener("resize", function () { swSync(); });
     // 「范围」chip（图7）：点开合并弹层；点外面 / Esc 收起。摘要跟随两个既有摘要 span
     // （MutationObserver 现读现写，不另存状态——updateSrcSummary/updateTimeSummary 无需知道这里）。
     const chip = $("scopeChip");
@@ -1700,6 +1983,7 @@ export function cbPushCurrent(data, query, popts) {
         // 快照没了就再也建不回来，那一整行凭空消失。
         queryHits: JSON.parse(JSON.stringify(_queryHits || []))
     };
+    const discarded = _cbStack.slice(_cbCursor + 1).map(function (f) { return f.id; });
     const next = cbPushFrame(_cbStack, _cbCursor, frame);
     _cbStack = next.stack;
     _cbCursor = next.cursor;
@@ -1708,7 +1992,8 @@ export function cbPushCurrent(data, query, popts) {
     // 只保留仍指向存活帧的消息，以及尚未归属的在途消息（frameId==null，下面紧接着回填）。与 cbRevertToFrame 同口径。
     const alive = {};
     _cbStack.forEach(function (f) { if (f && f.id != null) alive[f.id] = true; });
-    _cbLog = _cbLog.filter(function (e) { return e.frameId == null || alive[e.frameId]; });
+    _cbLog = _cbLog.filter(function (e) { return !discarded.includes(e.frameId); });
+    _cbLog.forEach(function (e) { if (e.frameId != null && !alive[e.frameId]) e.frameId = null; });
     // 回填：这次检索之前新增、还没归属帧的对话/细化消息（一句话可能先记「说」再记「细化」，两条都归到这一帧），
     // 都挂到刚推出的这一帧上——从此它们才有「查看历史回复」按钮。走到第一条已有 frameId 的就停。
     for (let i = _cbLog.length - 1; i >= 0; i--) {
@@ -1718,7 +2003,8 @@ export function cbPushCurrent(data, query, popts) {
     /* 结果 pill（一个 query 一个）——普通落地（非 _applyBatchDecision 多批路径）也给 pill。
        有多批（result_batches）pill 指向各存活批（点击 switchBatch 换批）；legacy 单批无批 id →
        pill 只带 frameId，点击＝在结果区看这帧的这批结果（与「查看历史回复」同径）。
-       无结果 / 没做检索（abstained、标识符直达空态）→ 无 pill（用户：检索无结果可以没有）。 */
+       零命中且有放松选项 → 包成单批视图给零命中 pill（放松卡触发/重开的锚点，见下方分支）；
+       没做检索（abstained、标识符直达空态）→ 无 pill（用户：检索无结果可以没有）。 */
     const _landed = ((data && data.results) || []).length;
     if (_landed > 0) {
         const _lbs = Array.isArray(data.result_batches) ? data.result_batches : null;
@@ -1727,9 +2013,25 @@ export function cbPushCurrent(data, query, popts) {
         } else {
             // legacy 单批——优先用本次命中的关键词作 pill 文案（拿不到 → 回退原 query）。
             flowSetPills([{ batchId: "", frameId: frame.id,
-                label: flowHitKeywords(data.query_constraints) || String(query || "检索结果"),
+                label: cbHitKeywords(data.query_constraints) || String(query || "检索结果"),
                 count: _landed, active: true }]);
         }
+    } else if (!Array.isArray(data.result_batches)
+               && Array.isArray(data.relaxation_options) && data.relaxation_options.length) {
+        /* legacy 单批**零命中**（纯 /api/recommend 路径，2026-09-14 收编补网）：包成单批视图——
+           零命中 pill 由此存在，自动弹放松卡（maybeAutoRelaxCard）与 pill「点击处理」重开都锚在
+           它上（_findBatchById 读 LAST_RECOMMEND_DATA.result_batches）。abstained/标识符直达
+           空态没有 relaxation_options → 照旧无 pill（「没做检索可以没有」不变）。
+           batch_id 带帧号：dismiss 记忆按批 id 记，跨查询不得互相吞没。
+           payload 用浅拷贝（且在本函数给 data 挂 result_batches **之前**取）——直接引 data 会让
+           LAST_RECOMMEND_DATA 自引用成环，任何 JSON 序列化都会炸。 */
+        const _zid = "fz" + frame.id;
+        const _zpayload = Object.assign({}, data);
+        data.result_batches = [{ batch_id: _zid, kind: "final",
+            query_raw: String(query || ""), query_effective: String(query || ""),
+            payload: _zpayload }];
+        data.active_batch = _zid;
+        flowSetPills(_flowPillsFrom(data.result_batches, _zid, false));
     }
     // 进度泡：检索落地＝这句的回复到了——进度泡原位蜕变成完成摘要。
     // runRecommend 的所有路径（含加入/去掉/忽略等改条件重跑）都已开泡，这里几乎总是兑现；
@@ -1824,8 +2126,7 @@ function cbReplay(frame) {
 function cbToLatest() {
     if (!_cbStack.length) return;
     if (_cbCursor >= _cbStack.length - 1) { toast("已经在最新结果上"); return; }
-    _cbCursor = _cbStack.length - 1;
-    cbReplay(_cbStack[_cbCursor]);
+    cbViewFrame(_cbStack[_cbStack.length - 1].id);
 }
 
 /* 从左侧「历史记录」回看时调用：把整条对话搬回来（用户 2026-07-29）。
@@ -1841,78 +2142,79 @@ function cbToLatest() {
    - 配额不足被剥成「仅元信息」的那几轮没有 `snap` → **不建帧**，挂在它上面的消息就没有按钮。
      这是如实的：那一次的结果确实没留下来，给个点不出东西的按钮才是撒谎。
    - conv id 沿用被回看的那条 → 接着改/接着说会续在同一条对话上，而不是又分出一行。 */
-export function cbRestoreConversation(rows) {
+export function cbRestoreConversation(rows, options) {
+    const restoreSeq = ++_cbRestoreSeq;
+    _cbRestoring = true;
+    clearTimeout(_cbHistoryTimer);
+    invalidateRequest(_routeRequests);
+    _ubSeq += 1;
+    _ubBusy = false;
+    _cbProg = false;
+    _cbProgHint = "";
+    _cbProgLabel = "";
+    flowReset();
+    _sharedMode = false; _sharedConversation = null; _sharedControls = null;
+    cbResetSharedRequests(); cbResetComments();
     rows = Array.isArray(rows) ? rows : [];
-    _cbStack = [];
-    _cbCursor = -1;
-    _cbLog = [];
-    _cbConvId = String((rows[rows.length - 1] || {}).convId || "");
-    let prevChatLen = 0;
-    rows.forEach(function (h) {
-        let frameId = null;
-        if (h && h.snap && h.snap.results) {
-            _cbStack.push({
-                id: ++_cbFrameSeq,
-                query: String(h.query || ""),
-                resp: h.snap,
-                facets: (h.facetFilters || []).map(function (f) { return Object.assign({}, f); }),
-                suppressed: (h.suppressed || []).slice(),
-                lenient: (h.lenientDims || []).slice(),
-                queryHits: (h.queryHits || []).map(function (g) {
-                    return { filter_id: g.filter_id || g.dim, polarity: g.polarity || "include", dim: g.dim, label: g.label, values: (g.values || []).slice() };
-                }),
-            });
-            _cbCursor = _cbStack.length - 1;
-            frameId = _cbStack[_cbCursor].id;
-        }
-        // 老历史行没有 chat 字段（本轮之前存的）→ 退化成「一条＝当时那句查询」，与从前屏上什么都没有相比只多不少。
-        const chat = Array.isArray(h && h.chat) ? h.chat : null;
-        const fresh = chat ? chat.slice(prevChatLen) : [{ k: "say", t: String((h && h.query) || "") }];
-        fresh.forEach(function (e) {
-            const t = String((e && e.t) || "").trim();
-            if (!t) return;
-            const k = (e && e.k === "action") ? "action" : ((e && e.k === "sys") ? "sys" : ((e && e.k === "say") ? "say" : "refine"));
-            // needsAgent 不随历史回看恢复：降级气泡的指路只属当下，回看时只留回音本身（不落盘，见 cbLogForHistory）。
-            // msgfb：消息 id 与赞/倒赞态原样带回（旧历史行没有这两个字段 → 重新发 id、态度默认为空）。
-            const mid = String((e && e.i) || "");
-            const fb = (e && (e.f === "up" || e.f === "down")) ? e.f : "";
-            if (mid) _cbMsgIdSeen(mid);
-            _cbLog.push({ kind: k, text: t, frameId: frameId, note: String((e && e.n) || ""), needsAgent: false,
-                id: mid || _cbMsgIdNext(), msgFb: fb });
-        });
-        if (chat) prevChatLen = chat.length;
+    const restored = cbHistoryRestore(rows, _cbFrameSeq, options);
+    _cbStack = restored.stack;
+    _cbCursor = restored.cursor;
+    _cbFrameSeq = restored.frameSeq;
+    _cbLog = restored.log.map(function (entry) {
+        if (entry.id) _cbMsgIdSeen(entry.id);
+        else entry.id = _cbMsgIdNext();
+        entry.html = cbSafeHistoryHtml(entry.html);
+        return entry;
     });
-    // 恢复路径与推帧同一截断闸：历史行数 > CB_MAX_FRAMES 时
-    // 只留最近 N 帧（与 cbPushFrame 同向丢最旧）；被丢帧的「查看结果」按钮如实消失——
-    // 那几轮的结果帧确实不在了，留个点了没反应的按钮才是撒谎。
-    if (_cbStack.length > CB_MAX_FRAMES) {
-        const dropped = _cbStack.slice(0, _cbStack.length - CB_MAX_FRAMES).map(function (f) { return f.id; });
-        _cbStack = _cbStack.slice(_cbStack.length - CB_MAX_FRAMES);
-        _cbCursor = _cbStack.length - 1;
-        _cbLog.forEach(function (e) { if (e.frameId && dropped.indexOf(e.frameId) >= 0) e.frameId = null; });
+    _cbConvId = String((rows[rows.length - 1] || {}).convId || "");
+    _cbHistoryOwner = currentAccountScope();
+    const view = restored.view;
+    if (typeof view.swapped === "boolean") _viewSwap = view.swapped;
+    replayReset();
+    if (_cbStack[_cbCursor]) cbReplay(_cbStack[_cbCursor]);
+    else { cbRenderSteps(); cbRenderHistory(); }
+    if (typeof view.queryDraft === "string" && $("queryInput")) {
+        $("queryInput").value = view.queryDraft; autoGrow($("queryInput"));
     }
-    while (_cbLog.length > CB_LOG_MAX) _cbLog.shift();
-    cbRenderSteps();
-    cbRenderHistory();
+    if ($("chatInput")) {
+        $("chatInput").value = String(view.chatDraft || ""); autoGrow($("chatInput"));
+    }
+    if (view.mode === "board" || view.mode === "facets") {   // "facets"=rp2 前旧快照：swApplyMode 内映射成 board
+        _swPicked = true; swApplyMode(view.mode);
+    }
+    if (typeof view.collapsed === "boolean") { _cbCollapsed = view.collapsed; cbApplyCollapsed(); }
+    // 回看不追加任何系统消息或提示，按保存的呈现态落位。
     const hint = $("cbStepHint");
-    if (hint) {
-        // A2 仅对话回看：一行帧都建不起来（当时没有检索）时照实说，不说成「一次结果」。
-        hint.textContent = !_cbStack.length
-            ? "这是从历史里回看的一段对话（当时只有对话、没有检索），接着说会从这里继续。"
-            : (rows.length > 1
-                ? "这是从历史里回看的一条对话（共 " + rows.length + " 轮），接着说会从这里继续。"
-                : "这是从历史里回看的一次结果，接着改会从这里继续。");
-        hint.hidden = false;
-    }
+    if (hint) { hint.textContent = ""; hint.hidden = true; }
+    const convId = _cbConvId, owner = _cbHistoryOwner;
+    requestAnimationFrame(function () {
+        if (restoreSeq !== _cbRestoreSeq) return;
+        if (convId !== _cbConvId || owner !== currentAccountScope()) { _cbRestoring = false; return; }
+        const box = $("cbHistory");
+        if (box) {
+            const scroller = box.closest(".sw-board-scroll") || box;
+            if (Number.isFinite(view.chatScroll)) scroller.scrollTop = view.chatScroll;
+            Array.from(box.querySelectorAll("details")).forEach(function (d, i) { d.open = !!(view.openDetails || [])[i]; });
+        }
+        if (Number.isFinite(view.pageScroll)) window.scrollTo({ top: view.pageScroll, behavior: "instant" });
+        _cbRestoring = false;
+    });
 }
 
 export function cbClear(opts) {
+    if (_sharedPresentation) return;
+    invalidateRequest(_routeRequests);
+    _ubSeq += 1;
+    _ubBusy = false;
+    bumpRecSeq();
+    resetSubmitButton();
     // A2：丢弃前归档「仅对话」历史行。账户切换除外（accounts.js 传 archive:false）——
     // 那一刻命名空间已是新账户，归档会把上一个人的对话写进新账户的历史（隔离漏洞）。
     if (!(opts && opts.archive === false)) cbArchiveChatOnly("");
     _cbStack = [];
     _cbCursor = -1;
     _cbCoverageCounts = {};
+    cbRollConvId();   // 对话作废 = 旧对话结束（conv id 与复盘 UI 一并复位，见 cbConvId 注释）
     cbLogClear();   // 结果清空 → 对话/细化记录随之作废（不把上一轮的记录挂在新一屏上）
     const board = $("condBoard");
     if (board) board.hidden = true;
@@ -1973,6 +2275,44 @@ function cbShowMessage(message, detail, actions) {
     box.innerHTML = html;
     box.hidden = false;
     cbEnsureExpanded();
+    placeCbPreview();   // 与 askRelaxShow 同一可见宿主管线：chat-in-main 时跟对话记录走
+}
+
+/* 环内 ask.relax 的「放松哪个条件」选择卡（2026-09-14 YOLO 批）：坏结果的病根在
+   用户条件互相打架/过严时由 LLM 环内发起，选项与各选项能救回多少条由服务端确定性
+   预演。**不复用 cbShowMessage**——它首行 cbProgressDrop 会把「正在等作答」的进度泡
+   撤掉；本卡渲进 #cbPreview（输入框上方），作答走 cbChoose 的 askrelax: 分支。
+   卡面两行事实：msg（环内 reason 或默认句）+「卡住的查询：「…」」（payload.query，
+   一句话多句查询时指出是哪句）。选项只写「怎么放松 + 约几条」，不内嵌示例数据集名
+   （2026-09-14 用户评审：示例名塞进按钮信息效率太低，卡层 payload 不再携带 preview）。 */
+function askRelaxShow(payload) {
+    const box = $("cbPreview");
+    if (!box || !payload) return;
+    _askRelaxPending = payload;
+    const options = Array.isArray(payload.options) ? payload.options : [];
+    if (!options.length) { _askRelaxPending = null; return; }
+    const msg = String(payload.reason || "").trim()
+        || "这组条件在库里查不到同时满足的数据——选一个放松试试：";
+    let html = '<p class="cb-msg">' + escapeHtml(msg) + "</p>";
+    // 指出卡住的到底是哪句查询（一句话可含多句查询、各自成批）——选项只答「怎么放松」，
+    // 不答「在放松谁」。长查询单行截断，悬停 title 看全。
+    const q = String(payload.query || "").trim();
+    if (q) {
+        html += '<p class="cb-msg cb-relax-q" title="' + escapeHtml(q) + '">卡住的查询：「'
+            + escapeHtml(q) + "」</p>";
+    }
+    html += '<div class="cb-choices">' + options.map(function (o, i) {
+        const approx = o.count ? "（约 " + o.count + " 条）" : "";
+        const verb = o.kind === "only" ? "只按「" + (o.label || "") + "」搜" : "不按「" + (o.label || "") + "」筛";
+        return '<button type="button" class="btn cb-choice" data-cb-choice="askrelax:' + i + '">'
+            + escapeHtml(verb + approx) + "</button>";
+    }).join("");
+    html += '<button type="button" class="btn cb-choice" data-cb-choice="askrelax:dismiss">都不合适，保持原样</button>';
+    html += "</div>";
+    box.innerHTML = html;
+    box.hidden = false;
+    cbEnsureExpanded();
+    placeCbPreview();   // chat-in-main（无结果落地——环内暂停回合的常态）时静态家不可见，卡跟对话记录走
 }
 
 /* 听不懂 / 没通过校验时固定挂出来的一排出路。
@@ -1991,6 +2331,7 @@ function cbEscapeHatches() {
    再按 route 分发。后端只在 action/歧义分支碰 LLM——search/refine/identifier/clarify 结构性零 LLM，
    所以明确检索句不为路由多付一次大模型延迟。 */
 
+const _routeRequests = {};
 let _ubSeq = 0;        // 路由请求代号：晚到的旧路由响应一律丢弃（与 _recSeq/_cbSeq/_curateSeq 同型）
 let _ubBusy = false;   // 统一框在途闸：一次路由未落地不接下一句。**不绑死 submitBtn**——路由阶段检索还没开始
 
@@ -2060,11 +2401,36 @@ function ubRouteBody(text, opts) {
         // AI 执行开关（cfgAgentExec，2026-08-03 合并旧「说了就直接做」+「Agent 规划执行」）：
         // 后端在「装扩展 ∧ 本开关 ∧ LLM 可用」时走 langgraph 规划，否则自动回退 action_plan
         // 基础规划（契约 §2.2）。
-        agent: cfg.agent
+        agent: cfg.agent,
+        // 复盘会话标识（2026-09-28 复盘批，additive）：服务端据此把本轮落进对话级 session log；
+        // 空 conv 时两字段为 ""，后端挂钩整链不启动（行为与不带逐位一致）。
+        conv_id: replayConvFields().conv_id,
+        project_id: currentProjectScope(),
+        replay_key: replayConvFields().replay_key
     }, searchParamSnapshot(text));
-    // 建议动作 hint——任务卡模板**未经编辑**时由 ladder.js 显式传入
-    // （编辑后不传 = 普通路由）；服务端 allowlist 校验在 action_plan 单一真源。
+    // 建议动作 hint（suggested_recipe）：opts 透传管道保留，当前无前端调用方
+    // （阶梯/任务卡 2026-10-10 退役）；服务端 allowlist 校验在 action_plan 单一真源。
     if (opts.suggestedRecipe) body.suggested_recipe = opts.suggestedRecipe;
+    // 环内放松卡作答（2026-09-14 ask 暂停/重启批）：作答作为新回合重新入环——
+    // additive ask_answer 字段（kind 恒 "ask.relax"，服务端另有形状/净化闸），且
+    // suppressed_constraints 覆写为所选选项的 suppress（服务端已合并既有忽略，
+    // 整组替换语义与条件板「忽略此条件」同径）；pre-loop 与图 initial state 都吃覆写后值。
+    if (opts.askAnswer) {
+        body.ask_answer = opts.askAnswer;
+        body.suppressed_constraints = (opts.askAnswer.suppress || []).slice();
+    }
+    if (_sharedMode) {
+        const patch = cbSharedPatch(_sharedConversation?.current_state?.query || text);
+        if (opts.sharedQuery !== undefined) patch.query = opts.sharedQuery;
+        if (opts.askAnswer) patch.search_params.suppressed_constraints = (opts.askAnswer.suppress || []).slice();
+        for (const key of ["has_results", "result_total", "query", "current_filters", "sources", "replay_key", "ask_answer",
+            ...Object.keys(searchParamSnapshot(text))]) delete body[key];
+        body.shared = true; body.expected_revision = _sharedConversation?.revision || 0;
+        body.state_patch = patch;
+        if (_sharedConversation?.id) body.conv_id = _sharedConversation.id;
+        else delete body.conv_id;
+        if (opts.askAnswer) body.ask_choice = String(opts.askAnswer.choice_key || "");
+    }
     return _attachArtifactCtx(body);
 }
 
@@ -2072,6 +2438,8 @@ export async function ubSubmit(source, opts) {
     // 信息流：每提交一次（新检索 / 新对话）开一条新的过程轨迹——在此复位（不再挂 cbLogClear，
     //   那会被 display 落地路径的 `if(!keepConv) cbLogClear()` 中途清掉，轨迹就没了）。
     flowReset();
+    // 新一轮提交清掉上一轮挂起的 ask.relax 选择卡（作答语义不属于这一轮；卡随预览区一并撤下）。
+    if (_askRelaxPending) { _askRelaxPending = null; cbCancel(); }
     // 双来源：hero 主框（首屏）与侧栏微信式输入行（结果态唯一输入入口）共用这一条路由。
     // （additive）：opts 可选 {text（任务卡等程序化提交的文本，跳过读输入框）,
     //   suggestedRecipe, templateOriginated}——普通手打调用不传，行为与旧版逐位一致。
@@ -2090,11 +2458,14 @@ export async function ubSubmit(source, opts) {
     if ((_sb && _sb.disabled) || _ubBusy) { toast("上一步还在处理，稍等一下再说"); return; }
     // consent 首次告知（S5）：开关开着且没同意过 → 弹窗拦截，不点确认不发送。
     // 开关关着（usageEnabled() 为假）不弹；'disable' → 关掉采集开关，本次照常发送。
+    const routeToken = beginRequest(_routeRequests);
+    invalidateRequest(_sharedPollRequests);
     if (usageEnabled() && !usageConsentGiven()) {
         const r = await requestUsageConsent();
+        if (!routeToken.isCurrent()) return;
         if (r === "disable") usageSetEnabled(false);
     }
-    if (fromChat) {
+    if (fromChat && !opts.preserveComposer) {
         const qi = $("queryInput");
         if (qi) qi.value = text;
     }
@@ -2102,6 +2473,14 @@ export async function ubSubmit(source, opts) {
     // 捕获——cbLogPush 之后 _cbLog 恒非空，cbChatInMain() 恒真，hero 首句与主区续聊再也分不清。
     // 这个值串到 ubDispatch 的 search 档：wasChat 时与 fromChat 同待遇（keepConv 保对话）。
     const wasChat = cbChatInMain();
+    // 新对话的 conv id 必须在路由请求发出**之前**滚动（2026-09-28 复盘批，见 cbConvId 注释）：
+    // 续聊形态不滚——fromChat 侧栏输入行 / wasChat chat-in-main 主框续聊 / ask.relax 卡作答，
+    // 都属于同一条对话；hero 新查询（含旧对话在屏时）一律新开一条。
+    if (!fromChat && !wasChat && !opts.askAnswer && !opts.sharedRerun) {
+        cbArchiveChatOnly(""); cbRollConvId();
+        history.replaceState(null, "", location.pathname);
+        _cbStack = []; _cbCursor = -1; resetFacetState(); cbLogClear();
+    }
     // 发送即清空（微信语义，2026-08-04）：说过的话由对话记录与「当前检索句」状态真源保管，
     // 输入框只是起草器——此前主框发完仍留原话，用户以为没发出去。需要回显的路径各自回填：
     // search 档 / requires_results 档在**结果落地时**由 runRecommend 回填（queryOverride 递句，
@@ -2110,13 +2489,22 @@ export async function ubSubmit(source, opts) {
     // 发送即空的视觉软化——真值仍瞬时清空（在途窗口语义不变）
     // 文字本身钉一粒 fixed 幽灵在原位淡出微升：「话被收走了」而不是「字没了」。仅首页大框；
     // 侧栏输入行维持微信式瞬时清空（聊天气泡已即时上屏，反馈足够）。
-    if (!fromChat) ubInputGhost(box);
-    box.value = "";
-    autoGrow(box);
+    if (!fromChat && !wasChat) cbBeginLayoutTransition();
+    if (!opts.preserveComposer) {
+        if (!fromChat && !layoutMotionActive()) ubInputGhost(box);
+        box.value = "";
+        autoGrow(box);
+    }
     // 零反应治理（p10 起双来源统一）：气泡**先上屏**再走路由——此前要等 /api/utterance 回来
     // 才见到自己这句。后续 ubDispatch 各分支与 runRecommend 的 say push 被 cbLogPush 的
     // 「连续同条去重」天然吞掉，不会双泡；进度泡幂等（已开不再开）。
-    cbLogPush("say", text);
+    // 环内放松卡作答回合（opts.askAnswer，2026-09-14 ask 暂停/重启批）：用户不是「说了
+    // 一句新话」，而是在选择卡上做了选择——对话记录按 refine 口径记所选（与条件板
+    // cbCommit 的呈现同径），不把原查询当新话再 push 一遍。
+    if (!opts.sayPushed) {
+        if (opts.askAnswer) cbLogPush("refine", String(opts.askAnswer.message || "") || text);
+        else cbLogPush(["say", "refine", "action"].includes(opts.messageKind) ? opts.messageKind : "say", text);
+    }
     const _cfg = getConfig();
     // 遥测轮次起点：所有用户提交都过 ubSubmit——search 与 conv
     // 共用这一个 tid，本轮内的 open/dl/fav/view 全归到它。usageLogSearch 里另有兜底。
@@ -2164,11 +2552,55 @@ export async function ubSubmit(source, opts) {
     // 幂等请求号：本次提交一个号，流式与断流重发共用——服务端占用去重
     // 断流重发拿缓存结果而不再执行一遍。独立于 myGen/_ubSeq：那是上屏代际闸，与服务端无关。
     const reqId = ubNewReqId();
+    _sharedRunRequestId = reqId;
+    let durable = null;
     try {
-        if (streamAgent) {
+        durable = await startConversationRun(Object.assign(ubRouteBody(text, opts), { req_id: reqId }),
+            function (entry, kind) {
+                if (myGen !== _ubSeq) return;
+                if (kind === "preliminary") {
+                    if (recGenAtSend !== recSeqNow() || !entry || entry.ok !== true) return;
+                    flowPushEvent("preliminary", entry); prelimShown = true;
+                    landRecommendResult(entry, text, { fromPrelim: true, sentText: text });
+                } else if (kind === "tool_start" || kind === "step") {
+                    flowPushEvent(kind, entry); if (kind === "step") streamStepCount += 1;
+                }
+            }, () => myGen === _ubSeq && routeToken.isCurrent());
+        if (myGen !== _ubSeq || !routeToken.isCurrent()) return;
+        reply = durable.result; replyFromStream = true;
+        if (reply.shared || durable.row.shared) {
+            await cbSharedFinal(reply, durable.row, text, () => myGen === _ubSeq && routeToken.isCurrent(), opts);
+            if (myGen !== _ubSeq || !routeToken.isCurrent()) return;
+            _ubBusy = false; forgetConversationRun(durable.row); _fireCtxAfterSend(!!reply.ok); return;
+        }
+        if (!reply.ok) {
+            cbLogPush("sys", reply.detail || "这次任务没有完成，请核对执行记录。", { isError: true });
+            _ubBusy = false; resetSubmitButton(); cbProgressDrop();
+            cbArchiveChatOnly(""); forgetConversationRun(durable.row); _fireCtxAfterSend(false); return;
+        }
+    } catch (error) {
+        if (myGen !== _ubSeq) return;
+        // Only legacy requests may fall back after a verified validation rejection.
+        if (_sharedMode || !error.fallbackAllowed) {
+            if (!routeToken.isCurrent() || error.contextChanged) return;
+            if (error.status === 404) {
+                const row = durable?.row || pendingConversationRuns().find((pending) => pending.request_id === reqId);
+                if (await cbSharedRunMissing(error, row, () => myGen === _ubSeq && routeToken.isCurrent())) { _fireCtxAfterSend(false); return; }
+            }
+            if (myGen !== _ubSeq || !routeToken.isCurrent()) return;
+            _ubBusy = false; resetSubmitButton(); cbProgressDrop();
+            ubFillQuery($("queryInput"), text, text);
+            if (error.conflict && _sharedConversation) await cbRefreshSharedConversation();
+            if (myGen !== _ubSeq || !routeToken.isCurrent()) return;
+            cbLogPush("sys", error.message || "任务状态暂时无法核对，可刷新后恢复。", { isError: true });
+            _fireCtxAfterSend(false); return;
+        }
+    }
+    try {
+        if (!reply && streamAgent) {
             try {
                 reply = await ubFetchStream(text, reqId, function (step, evKind) {
-                    if (myGen !== _ubSeq) return;   // 已被更晚的一次提交取代，迟到的帧不再上屏
+                    if (myGen !== _ubSeq || !routeToken.isCurrent()) return;   // 已被更晚的一次提交取代，迟到的帧不再上屏
                     // pre-loop 第一阶段结果先行上屏——共享落地入口 +
                     // 「初步结果」徽标 + 进度泡换句「正在更深一步思考…」（均收口在 landRecommendResult
                     // 的 fromPrelim 档）。代际闸：发送时的检索代被取代（用户环跑期间另起检索）→ 丢帧。
@@ -2195,7 +2627,7 @@ export async function ubSubmit(source, opts) {
                 }, opts);
                 replyFromStream = true;
             } catch (streamErr) {
-                if (myGen !== _ubSeq) return;
+                if (myGen !== _ubSeq || !routeToken.isCurrent()) return;
                 // 流式失败不静默：撤掉已播的半成品规划流，按非流式原路径（下方 if (!reply)）再发一次——
                 // 用户看到进度继续，请求一定落地，不吞掉这句话。
                 // loading 从发送起就在跑（流式档也起跑，见上方），这里是**同一次路由的继续**——
@@ -2227,9 +2659,10 @@ export async function ubSubmit(source, opts) {
         }
         if (!reply || !reply.ok) throw new Error((reply && reply.detail) || "没能读懂这句话");
     } catch (err) {
-        if (myGen !== _ubSeq) return;
+        if (myGen !== _ubSeq || !routeToken.isCurrent()) return;
         _ubBusy = false;
         if (err && err.busy) {
+            resetSubmitButton();
             // 忙态上屏：原话留在框里（发送即清空的兜底回填），用户看着重发即可。
             ubFillQuery($("queryInput"), text, text);
             cbLogPush("sys", "系统正忙：" + err.message + "。你的原话已留在输入框，稍后再发一次即可。", { isError: true });
@@ -2254,7 +2687,7 @@ export async function ubSubmit(source, opts) {
         _fireCtxAfterSend(false);   // 上下文卡：fail-open 成普通检索，卡内容没随消息走 → 保留 + 如实标注
         return;
     }
-    if (myGen !== _ubSeq) return;   // 已被更晚的一次提交取代
+    if (myGen !== _ubSeq || !routeToken.isCurrent()) return;   // 已被更晚的一次提交取代
     _ubBusy = false;
     // 流式去重标：步骤已随 SSE 播过，actDispatchPlan 跳过 plan.trace 二次渲染。
     if (replyFromStream && streamStepCount && reply.plan) reply.plan._traceStreamed = true;
@@ -2264,7 +2697,58 @@ export async function ubSubmit(source, opts) {
     // 采集：路由应答全量入档（agent 路径的 plan.trace 逐步执行记录随 reply.plan 一起来）。
     benchfbTurnRoute(reply, { ms: Date.now() - _bfT0, streamed: replyFromStream });
     ubDispatch(text, reply, fromChat, wasChat);
+    if (durable) forgetConversationRun(durable.row);
     _fireCtxAfterSend(true);   // 上下文卡：发送成功 → 自动移除卡（projects.js 统一清空双挂点）
+}
+
+export async function ubRecoverPendingRun() {
+    if (_ubBusy) return;
+    const row = pendingConversationRuns().find((r) => !_sharedConversation || r.conversation_id === _sharedConversation.id);
+    if (!row) return;
+    if (!_sharedConversation) cbClear({ archive: false });
+    return cbRecoverRun(row);
+}
+async function cbRecoverRun(row) {
+    if (_ubBusy) return;
+    invalidateRequest(_sharedPollRequests);
+    _sharedRunRequestId = row.request_id || null;
+    if (!row.shared) {
+        _sharedMode = false; _sharedConversation = null;
+        _cbConvId = row.conversation_id || ""; cbLogPush("say", row.text || "恢复任务");
+    }
+    _ubBusy = true; const myGen = ++_ubSeq;
+    cbProgressBegin("正在恢复任务");
+    try {
+        const recovered = await awaitConversationRun(row, (entry, kind) => {
+            if (myGen === _ubSeq && (kind === "step" || kind === "tool_start")) flowPushEvent(kind, entry);
+        }, () => myGen === _ubSeq);
+        if (myGen !== _ubSeq) return;
+        const result = recovered.result;
+        if (row.shared || result.shared) {
+            await cbSharedFinal(result, recovered.row, row.text || "", () => myGen === _ubSeq);
+            if (myGen !== _ubSeq) return;
+        } else if (!result.ok) {
+            cbLogPush("sys", result.detail || "任务没有完成，请核对执行记录。", { isError: true });
+            cbArchiveChatOnly("");
+        } else if (result.route === "search" || result.route === "identifier") {
+            const queryInput = $("queryInput"); if (queryInput) queryInput.value = recovered.run.request.query || row.text;
+            const sp = recovered.run.request.search_params || {};
+            setFacetState({ facetFilters: sp.facet_filters || [], suppressed: sp.suppressed_constraints || [],
+                lenientDims: sp.lenient_dims || [], queryHits: [] });
+            ubDispatch(row.text, result, true, false);
+        } else {
+            const plan = result.plan || {};
+            cbLogPush("sys", plan.report_zh || result.echo_zh || "已恢复任务结果。页面动作不会自动重复执行。");
+            cbArchiveChatOnly("");
+        }
+        _ubBusy = false; resetSubmitButton(); cbProgressDrop(); forgetConversationRun(row);
+    } catch (error) {
+        if (myGen !== _ubSeq || error.contextChanged) return;
+        if (await cbSharedRunMissing(error, row, () => myGen === _ubSeq)) return;
+        if (myGen !== _ubSeq) return;
+        _ubBusy = false; resetSubmitButton(); cbProgressDrop();
+        cbLogPush("sys", error.message || "暂时无法找回任务，请稍后再试。", { isError: true });
+    }
 }
 
 /* 流式路由请求：POST /api/utterance 带 additive stream:true → text/event-stream。
@@ -2338,29 +2822,8 @@ function ubFillQuery(input, value, sentText) {
      runRecommend 推出最终帧后再 push（同步 push 会挂到 preliminary 先行帧、帧 id 错位）。
    - dedupe / alternate：不重渲结果区（保持当前屏）——摘徽标、撤进度、如实回执；弱批直接丢弃
      （不作任何形式展示），不再刷新 batchBar（结果头部件整体退役）。 */
-/* 结果 pill 文案 = 实际命中/生效的关键词——把 query_constraints（同 _queryHits 的
-   {dim,label,values} 形状）里「生效」的取值用顿号连起来（如「FASTQ、乳腺癌」），太长截断；
-   取不到 → 空串，调用方回退原 query（现状）。只用 include（正向硬条件）：排除/优先/被忽略的
-   不是「命中的关键词」（用户点名的「实际命中/生效」）。 */
-function flowHitKeywords(qc) {
-    if (!Array.isArray(qc) || !qc.length) return "";
-    const seen = Object.create(null);
-    const parts = [];
-    qc.forEach(function (c) {
-        if (!c || typeof c !== "object") return;
-        if (String(c.polarity || "include") !== "include") return;
-        (c.values || []).forEach(function (v) {
-            const s = String(v || "").trim();
-            if (!s || seen[s]) return;
-            seen[s] = true;
-            parts.push(s);
-        });
-    });
-    if (!parts.length) return "";
-    const joined = parts.join("、");
-    // 太长截断：超长整体截断、留尾部省略号（视觉省略仍由 .ft-pill-q 的 ellipsis 兜底）。
-    return joined.length > 40 ? joined.slice(0, 39) + "…" : joined;
-}
+/* 结果 pill 的命中关键词文案唯一真源已上移 board_core.cbHitKeywords（共享会话恢复路径也要用），
+   本文件经 import 取；口径（只取 include 生效值、顿号连接、超长截断）见该导出。 */
 
 /* 本轮存活批 → 结果 pill（渲染在回执气泡内部；一个 query 一个）。
    onlyActive=true 时只留当前活跃批（alternate/dedupe：弱批已丢弃，不作任何展示）。 */
@@ -2374,7 +2837,7 @@ function _flowPillsFrom(batches, activeBatchId, onlyActive) {
         if (onlyActive && !isOn) return;
         const p = (b.payload && typeof b.payload === "object") ? b.payload : {};
         // 优先用实际命中/生效的关键词作 pill 文案（拿不到 → 回退原 query，现状）。
-        const kw = flowHitKeywords(p.query_constraints);
+        const kw = cbHitKeywords(p.query_constraints);
         out.push({ batchId: id,
             label: kw || String(b.query_effective || b.label || b.query_raw || "检索结果"),
             count: Array.isArray(p.results) ? p.results.length : null,
@@ -2486,15 +2949,19 @@ function _discardSuperseded(batches, activeBatchId) {
     });
 }
 
-/* ============ 零命中救回选择条（贴输入框上沿，不进对话流） ============
-   救回选项不再以 sys 气泡出现（search.js 自动救回链已退役）：零命中批的放宽/换词选项收进
-   贴着输入框上沿的选择条。交互：点一个选项只置选中态（不提交）；旁边「提交」键才把选中项
-   作为用户下一句经 ubSubmit 走既有管线；右上角叉可暂时关闭（保留选中态，可经零命中 pill
-   「点击处理」重开）；一行放不下的选项只显摘要，hover（title）浮窗显完整信息。
-   状态只是一块展示层：不进 _cbLog、不落盘、不占对话流。 */
-let _rsEl = null;          // 选择条根节点（惰性建一次，随 #chatComposer 搬家一起搬）
-let _rsState = null;       // { batchId, options, selected }；null=关闭态
-let _rsSig = "";           // 上次同步签名（batchId:zero），避免每次重画都重建
+/* ============ 零命中自动弹 ask.relax 卡（收编后唯一救回触点，2026-09-14） ============
+   「放松哪个条件」收编为单一通道后，非 agent 路径的零命中也走同一张卡：
+   最新活跃 pill 是零命中批 → 从批载荷派生 ask.relax 选择卡（deriveRelaxCard 纯函数），
+   渲进 #cbPreview（askRelaxShow 唯一渲染口），作答走 cbChoose askrelax 分支。
+   作答按卡的来源分流（2026-09-14 ask 暂停/重启批）：自动卡（带 _autoBatchId，非环内、
+   可能 AI 关）走 cbCommit 零 LLM 重搜旧路径；环内卡（LLM 触发）把作答作为新回合
+   经 ubSubmit 重新入环（ask_answer 字段），由环裁决上屏/finish/再追问。
+   两条不变量守住与环内通道的竞态：
+     ① 环内优先——_askRelaxPending 非空（环内已弹卡/卡在屏上）时不补发、不覆盖；
+     ② dismiss 记忆——自动卡点过「都不合适，保持原样」的批记入 _relaxDismissed，
+        同批不再自动弹（zero pill「点击处理」显式重开时清掉该批记忆）。
+   状态只是展示层：不进 _cbLog、不落盘、不占对话流。 */
+let _relaxDismissed = new Set();   // 自动卡被 dismiss 过的 batchId（本页面会话内有效）
 
 /* 取「最后一个带 pill 的回执 entry」的活跃 pill——即最新结果（与 _flowPillsFrom 同源判定）。 */
 function _latestActivePill() {
@@ -2513,96 +2980,23 @@ function _findBatchById(batchId) {
         return String((b && b.batch_id) || "") === String(batchId || "");
     }) || null;
 }
-/* 渲染侧同步：最新 pill 是零命中批 → 开着（可关可经 pill 重开）；否则收起。 */
-function maybeSyncRescueStrip() {
+/* 渲染侧同步：最新 pill 是零命中批 → 兜底弹 ask.relax 选择卡；否则不动（卡的去留
+   由用户作答/新提交各路径管理，不在这里强行收）。 */
+function maybeAutoRelaxCard() {
     const act = _latestActivePill();
-    const sig = act ? (String(act.batchId || "") + ":" + (act.zero ? "z" : "n")) : "none";
-    if (sig === _rsSig) return;
-    _rsSig = sig;
-    if (act && act.zero) openRescueStrip(String(act.batchId || ""));
-    else closeRescueStrip({ keepData: false });
+    if (!act || !act.zero) return;
+    const bid = String(act.batchId || "");
+    if (!bid || _relaxDismissed.has(bid)) return;
+    if (_askRelaxPending) return;   // 环内通道已弹卡（或自动卡已在屏上）——环内优先，不抢不覆盖
+    _autoRelaxCardOpen(bid);
 }
-function openRescueStrip(batchId) {
-    // 同批重开：仅重开（保留已选态，不重建）；异批/首开：从批数据重新派生选项。
-    if (_rsState && _rsState.batchId === String(batchId || "") && _rsState.options.length) {
-        _renderRescueStrip(false);
-        return;
-    }
-    const b = _findBatchById(batchId);
-    if (!b) { closeRescueStrip({ keepData: false }); return; }
-    const opts = deriveRescueOptions(b);
-    if (!opts.length) { closeRescueStrip({ keepData: false }); return; }
-    _rsState = { batchId: String(batchId || ""), options: opts, selected: "" };
-    _renderRescueStrip(true);
-}
-/* 空态卡放宽 chips（results.js applyRelaxation）与选择条需要状态同步——
-   进入放宽预览即收起选择条。故导出给 results.js 用（results↔board 已有互 import 环，
-   活绑定、只在函数体内使用，同 cbLogPush 口径）。 */
-export function closeRescueStrip(opts) {
-    if (opts && opts.keepData) {   // 叉隐藏：保留选中态，可经 pill 重开
-        if (_rsEl) _rsEl.classList.remove("is-open");
-        return;
-    }
-    _rsState = null;
-    if (_rsEl) _rsEl.classList.remove("is-open");
-}
-function _mountRescueStrip() {
-    const composer = $("chatComposer");
-    const bar = composer ? composer.querySelector(".cb-bar") : null;
-    if (!composer || !bar) return null;
-    if (!_rsEl) {
-        _rsEl = document.createElement("div");
-        _rsEl.className = "rs-strip";
-        _rsEl.setAttribute("role", "group");
-        _rsEl.setAttribute("aria-label", "零命中救回选项");
-        _rsEl.addEventListener("click", _rescueStripClick);
-    }
-    if (_rsEl.parentElement !== composer) composer.insertBefore(_rsEl, bar);
-    return _rsEl;
-}
-function _renderRescueStrip(build) {
-    const el = _mountRescueStrip();
-    if (!el || !_rsState) { if (el) el.classList.remove("is-open"); return; }
-    const opts = _rsState.options;
-    const head = '<div class="rs-head"><span class="rs-title">这批检索没有匹配到数据集</span>'
-        + '<button type="button" class="rs-close" data-rs-close aria-label="关闭救回选项"'
-        + ' title="暂时关闭（可再从零命中 pill「点击处理」重开）">' + _rsCloseIconHtml() + '</button></div>';
-    const optHtml = opts.map(function (o) {
-        const sel = (o.id === _rsState.selected) ? " is-selected" : "";
-        return '<button type="button" class="rs-opt' + sel + '" data-rs-opt="' + escapeHtml(o.id) + '"'
-            + ' title="' + escapeHtml(o.full || o.summary) + '">'
-            + '<span class="rs-opt-txt">' + escapeHtml(o.summary) + '</span>'
-            + (o.count != null ? '<span class="rs-opt-n">' + escapeHtml(String(o.count)) + ' 条</span>' : '')
-            + '</button>';
-    }).join("");
-    el.innerHTML = head
-        + '<div class="rs-opts">' + optHtml + '</div>'
-        + '<div class="rs-foot"><span class="rs-hint">点选一个方式后，再点「提交」发出</span>'
-        + '<button type="button" class="rs-submit" data-rs-submit' + (_rsState.selected ? "" : " disabled") + '>提交</button></div>';
-    el.classList.add("is-open");
-}
-function _rsCloseIconHtml() {
-    return '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
-}
-function _rescueStripClick(event) {
-    if (!_rsEl || !_rsState) return;
-    if (event.target.closest("[data-rs-close]")) { closeRescueStrip({ keepData: true }); return; }
-    const opt = event.target.closest("[data-rs-opt]");
-    if (opt) {
-        _rsState.selected = String(opt.getAttribute("data-rs-opt") || "");
-        _rsEl.querySelectorAll("[data-rs-opt]").forEach(function (b) {
-            b.classList.toggle("is-selected", String(b.getAttribute("data-rs-opt")) === _rsState.selected);
-        });
-        _rsEl.querySelectorAll("[data-rs-submit]").forEach(function (b) { b.disabled = false; });
-        return;
-    }
-    const submit = event.target.closest("[data-rs-submit]");
-    if (submit && !submit.disabled && _rsState.selected) {
-        const o = _rsState.options.find(function (x) { return x.id === _rsState.selected; });
-        if (!o) return;
-        closeRescueStrip({ keepData: false });   // 提交即收起：对话流有 say + 回执承载，选择条不占流
-        ubSubmit("chat", { text: o.submitText });
-    }
+
+/* 组卡并弹出（自动兜底与 zero pill 显式重开共用；卡上带 _autoBatchId 供 dismiss 记忆）。 */
+function _autoRelaxCardOpen(batchId) {
+    const card = deriveRelaxCard(_findBatchById(batchId));
+    if (!card) return;   // 无放松选项（死维不给选 / 分面收窄到 0）→ 不弹
+    card._autoBatchId = String(batchId || "");
+    askRelaxShow(card);
 }
 
 function ubDispatch(text, reply, fromChat, wasChat) {
@@ -2611,6 +3005,9 @@ function ubDispatch(text, reply, fromChat, wasChat) {
        立即压缩（只减不增），压缩快照由本轮回执（下一颗 sys）领取、渲染在气泡上方。
        分流本身不是工具调用，不上行（「一工具一行，除此以外什么信息都没有」）。 */
     flowFinish();
+    // 环内 ask.relax 弹卡（2026-09-14 YOLO 批）：服务端只在真发起询问时带 ask_relax 键；
+    // 选择卡渲进 #cbPreview，作答走 cbChoose 的 askrelax: 分支。键缺席时与现状逐位一致。
+    if (reply && reply.ask_relax) askRelaxShow(reply.ask_relax);
     const _planSteps = (reply && reply.plan && reply.plan.steps) || null;
     // 2026-08-18 rescue 去重（评估迁移步骤 1）：final 帧 plan.steps 沿 runRecommend →
     // landRecommendResult 透传到 maybeSearchRescue——环内已提议过 search.rerun/rerank 就跳过
@@ -3066,7 +3463,7 @@ function cbCommit(plan, hadSay) {
     // 条件板改条件的唯一提交点：conv 事件的 refine 模态在此接线
     // （chat 模态在各发送路径另记）；同一轮的 tid 由 ubSubmit 开局。
     usageLog(USAGE_KINDS.conv, { mode: "refine" });
-    runRecommend({ fromBoard: true });
+    runRecommend({ fromBoard: true, queryOverride: request.query, sharedUtterance: String(plan.message || ""), sayPushed: true, messageKind: "refine" });
 }
 
 function cbCancel() {
@@ -3080,6 +3477,63 @@ async function cbChoose(choiceId) {
     // 否则两次 cbCommit 并发在途，且 cbPushCurrent 会把两批改动吞并进同一帧。
     const _sb = $("submitBtn");
     if (_sb && _sb.disabled) { toast("上一步还在检索，稍等一下再操作"); return; }
+    // ask.relax 选择卡的作答（2026-09-14 收编单一通道 + ask 暂停/重启批）：
+    // 自动卡（带 _autoBatchId）→ cbCommit 零 LLM 重搜（suppress 服务端已合并去重）；
+    // 环内卡 → ubSubmit 把作答作为新回合重新入环（ask_answer 字段），环裁决后续。
+    if (id === "askrelax:dismiss") {
+        const pending = _askRelaxPending;
+        _askRelaxPending = null;
+        // 自动卡的 dismiss 按批记忆（同批不再自动弹；zero pill 显式重开时清除）；
+        // 环内卡无 _autoBatchId，不记（环内机械闸自己管触发频率）。
+        if (pending && pending._autoBatchId) _relaxDismissed.add(String(pending._autoBatchId));
+        cbCancel();
+        return;
+    }
+    if (id.indexOf("askrelax:") === 0) {
+        const pending = _askRelaxPending;
+        _askRelaxPending = null;
+        const opt = pending ? (pending.options || [])[parseInt(id.slice(9), 10)] : null;
+        if (!opt) { cbCancel(); return; }
+        // 「用户不得不放宽条件」本身就是一次检索没做好的信号，值得进反馈包
+        //（埋点自退役的空态卡 chips 迁来，payload 同形：d=放松目标可读名，dim/key 供分析侧归类）。
+        usageLog(USAGE_KINDS.relax, {
+            d: String(opt.label || "放宽"),
+            dim: String(opt.key || "").replace(/^(dim:|only:|exclude:)/, ""),
+            key: String(opt.key || ""),
+        });
+        const msg = opt.kind === "only"
+            ? "这次只按「" + (opt.label || "") + "」搜，其余条件都没参与筛选"
+            : "已经不按「" + (opt.label || "") + "」筛了（其余条件不变）";
+        if (pending._autoBatchId) {
+            // 自动弹卡（零命中兜底 / zero pill 重开，非环内、可能 AI 关）：没有环可续——
+            // 走 cbCommit 零 LLM 重搜旧路径，逐位不变。
+            cbCommit({
+                message: msg,
+                next_request: {
+                    query: String(pending.query || ""),
+                    suppressed_constraints: (opt.suppress || []).slice(),
+                    lenient_dims: (_lenientDims || []).slice(),
+                    facet_filters: (_facetFilters || []).map(function (f) { return { dim: f.dim, value: f.value }; })
+                }
+            }, false);
+            return;
+        }
+        // 环内卡（2026-09-14 ask 暂停/重启批）：作答作为新回合重新入环——服务端按所选
+        // suppress 重跑检索（rank 步），decide 注入作答事实后由 LLM 裁决上屏/finish/再追问；
+        // 环暂停时弹的卡在此刻把结果交还给环。日志口径 = refine（ubSubmit 内接线）。
+        cbCancel();
+        ubSubmit("board", {
+            text: String(pending.query || ""),
+            askAnswer: {
+                kind: "ask.relax",
+                choice_key: String(opt.key || ""),
+                label: String(opt.label || ""),
+                message: msg,
+                suppress: (opt.suppress || []).slice()
+            }
+        });
+        return;
+    }
     if (id === "reset") { cbResetAllConditions(); return; }
     // 「先查点数据」：屏上没有结果时那条如实回答给的出路。只把光标放回统一输入框，不替他编一句查询。
     if (id === "focus_search") {
@@ -3123,9 +3577,10 @@ async function cbChoose(choiceId) {
 function cbResetAllConditions() {
     resetFacetState();   // C2：四个分面状态一起归零，经 results.js（属主）setter
     cbCancel();
-    cbLogPush("refine", "恢复全部条件");
+    const message = "恢复全部条件";
+    cbLogPush("refine", message);
     toast("已经恢复全部条件");
-    runRecommend({ fromBoard: true });
+    runRecommend({ fromBoard: true, sharedUtterance: message, sayPushed: true, messageKind: "refine" });
 }
 
 /* 行内按钮：一律复用既有通道，不新造一套并行的过滤逻辑。 */
@@ -3142,8 +3597,8 @@ function cbBindRowActions(event) {
 }
 
 function cbRemoveFacet(dim) {
-    setFacetState({ facetFilters: (_facetFilters || []).filter(function (f) { return f.dim !== dim; }) });   // C2：重赋值经属主 setter（C4 起读取走 import 活绑定）
-    runRecommend({ keepFacets: true });
+    const facet = (_facetFilters || []).find((f) => f.dim === dim);
+    if (facet) removeFacet(dim, facet.value);
 }
 
 export function initCondBoard() {
@@ -3154,7 +3609,30 @@ export function initCondBoard() {
     benchfbSetAutoGrow(autoGrow);
     // 历史打标钩子注册进 core（2026-08-10：core→board 反向边切断，改注册反转；
     // core 的 pushHist/pushHistChatOnly 只在用户检索时调钩子，此时必已注册）。
-    setHistHooks({ convId: cbConvId, logForHistory: cbLogForHistory });
+    _cbHistoryOwner = currentAccountScope();
+    setHistHooks({ convId: cbConvId, logForHistory: cbLogForHistory, stateForHistory: cbStateForHistory,
+        shared: () => _sharedMode });
+    setReplaySharedFn(cbSharedConversation);
+    ["queryInput", "chatInput"].forEach(function (id) {
+        const input = $(id);
+        if (input) input.addEventListener("input", cbScheduleHistorySave);
+    });
+    document.addEventListener("scroll", cbScheduleHistorySave, { capture: true, passive: true });
+    document.addEventListener("toggle", cbScheduleHistorySave, true);
+    window.addEventListener("pagehide", cbSaveConversation);
+    // 复盘注入（2026-09-28 复盘批，注册反转——replay 全家不 import #board/#shell，防新 SCC）：
+    // 对话 id 真源 / 本机对话 getter（补建数据源）/ LLM 覆盖字段（getConfig 的相关六键）。
+    // 端点指纹的 provider 注入：rules/examples 不 import #shell（环只缩不涨），
+    // 由本注册点把 wire 值真源（shell 的 LLM_PRESETS，经 llmProviderWire() 读）交给
+    // examples.endpointCfg()——地址/模型之外的第三维端点身份，trial 空地址下靠它区分。
+    setEndpointProviderWire(llmProviderWire);
+    setReplayConvIdFn(cbConvId);
+    setReplayLogGetter(cbLogForHistory);
+    setReplayLlmFn(function () {
+        const c = getConfig();
+        return { provider: c.provider, use_llm: c.use_llm, mock_llm: c.mock_llm,
+                 api_key: c.api_key, base_url: c.base_url, model: c.model };
+    });
     // 没存过偏好就沿用默认（收起）；存过就尊重用户那次选择。
     try {
         const saved = localStorage.getItem(nsKey(BOARD_COLLAPSED_KEY));
@@ -3163,6 +3641,15 @@ export function initCondBoard() {
     const board = $("condBoard");
     if (!board) return;
     board.addEventListener("click", cbBindRowActions);
+    // #cbPreview 会被 placeCbPreview 搬出 #condBoard（chat-in-main 时跟对话记录走）——
+    // 卡上按钮的点击委托必须绑在卡自身才搬家不失效；命中可点项后止泡，避免在静态家时
+    // 继续冒泡到 #condBoard 再触发一次 cbBindRowActions。
+    $("cbPreview").addEventListener("click", function (event) {
+        cbBindRowActions(event);
+        if (event.target.closest("[data-cb-remove],[data-cb-restore],[data-cb-lenient],[data-cb-strict],[data-cb-unfacet],[data-cb-edit],[data-cb-choice]")) {
+            event.stopPropagation();
+        }
+    });
     // 聊天/细化记录里每条消息的「查看历史回复」：委托挂在 #cbHistory 上（它的 innerHTML 每次重画，
     // 但监听绑在元素本身、不随子节点重建而失效）。#cbHistory 在条件板内，与上面的行内按钮通道分开。
     // 不加 `if (hist)` 守卫——与下面几个兄弟绑定一致：#cbHistory 缺失就当场炸（loud fail），
@@ -3184,6 +3671,10 @@ export function initCondBoard() {
     // facets.js 全局此刻已定义）。不加 typeof 守卫——名字对不对交给 markup 门钉死，别让打错名字静默短路。
     $("facetStageSubmit").addEventListener("click", facetStageSubmit);
     $("facetStageCancel").addEventListener("click", facetStageCancel);
+    // 筛选抽屉开关（rp2）：唯一入口 = 结果头行「筛选」钮；× 关闭。Esc 分层链在 interactions.js。
+    // 与上方同级 loud-fail：id 缺失当场炸，由 markup 门钉死。
+    $("facetOpenBtn").addEventListener("click", function () { facetDrawerSet(true); });
+    $("facetDrawerClose").addEventListener("click", function () { facetDrawerSet(false); });
     cbApplyCollapsed();
     initSideWork();
 }

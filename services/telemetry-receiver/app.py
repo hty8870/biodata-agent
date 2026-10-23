@@ -837,15 +837,35 @@ def _mask_string_value(text: str, counter: list[int]) -> str:
     return text
 
 
+#: 浏览器 URL 会省略的 scheme 缺省端口（与 `new URL().host` 同表；未知 scheme 保留端口）。
+_DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443, "ftp": 21}
+
+
 def _endpoint_host_only(url: Any) -> str:
-    """base_url 只留 host（对齐客户端 telemetryHost：保留端口，非法/空 → ""）。"""
+    """base_url 只留 host（与客户端 telemetryHost `new URL(s).host` 逐例同形）。
+
+    `netloc` 会把 `user:pass@` 原样留下——URL 内嵌凭据属秘密，必须剥掉后再落库。
+    改为 hostname（小写、去 userinfo、IPv6 去方括号）+ port 重建：IPv6 复原方括号、
+    scheme 缺省端口省略（http:80 / https:443 / ws / wss / ftp，与浏览器同表）、其余端口保留、
+    query/fragment 天然丢弃；端口非法（`.port` 抛 ValueError）视为无法安全归约 → ""。
+    无 scheme / 非法/空 → ""（与 `new URL` 抛错时的空串一致）。
+    """
     s = str(url or "").strip()
     if not s:
         return ""
     try:
-        return urlsplit(s).netloc or ""
+        parts = urlsplit(s)
+        host = parts.hostname
+        if not host:
+            return ""
+        port = parts.port  # 非法端口（越界/非数字）在此抛 ValueError
     except ValueError:
         return ""
+    if port is not None and port == _DEFAULT_PORTS.get(parts.scheme.lower()):
+        port = None
+    if ":" in host:
+        host = f"[{host}]"
+    return f"{host}:{port}" if port is not None else host
 
 
 def _sanitize_value(value: Any, counter: list[int]) -> Any:
@@ -1035,13 +1055,18 @@ def _store_ingest_packet(engine: Engine, payload: IngestPayload, settings: Setti
         had_events = bool(payload.usage_events or payload.benchfb_records
                           or payload.mcp_records or payload.feedback_records)
         if had_events and not usage_events and not benchfb_records and not mcp_records and not feedback_records:
+            # 全重复事件的新包不写空主包，但仍要兑现日字节容量：否则轮换 profile 可无限
+            # 产 receipt 而不计费。超限 → 429 与主事务一起回滚（receipt 不完成、计数不加）。
+            used_bytes = _reserve_daily_bytes(
+                conn, raw_bytes=raw_bytes, client_ip=client_ip, settings=settings,
+            )
             complete_packet(conn, packet_id=packet_id, row_id=0)
             return {
                 "ok": True, "id": None, "packet_id": packet_id,
                 "duplicate": False, "accepted_usage": 0, "accepted_benchfb": 0, "accepted_mcp": 0,
                 "accepted_feedback": 0,
                 "sanitized": sanitized_n,
-                "daily_used_bytes": _today_used_bytes(conn),
+                "daily_used_bytes": used_bytes,
             }
 
         used_bytes = _reserve_daily_bytes(

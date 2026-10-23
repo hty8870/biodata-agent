@@ -72,6 +72,18 @@ def main() -> int:
     if do_dense:
         ok &= _fetch(EMBED_MODEL_ID, default_model_dir(DEFAULT_EMBEDDING_MODEL))
 
+    if ok and do_dense:
+        # 安装期建索引（2026-09-14 冷启动治理）：嵌入模型刚下好就把全语料向量索引
+        # 一并构建——「首查建索引」（全语料编码，持 _INDEX_LOCK 单飞）不再落在第一条
+        # 用户搜索的请求路径上。失败不掀翻下载流程（请求内惰性构建仍是兜底）。
+        try:
+            from dataset_recommender.retrieval import vector_index
+            print("[fetch] 构建语料向量索引（全语料编码，一次性）…")
+            built = vector_index.ensure_index()
+            print(f"[fetch] 语料向量索引{'已就绪' if built is not None else '未能构建（首查时将惰性重试）'}。")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[fetch] 语料向量索引构建跳过（{type(exc).__name__}）——首查时将惰性构建。")
+
     if ok:
         print("[fetch] 就绪。CLI 加 --recall cross_encoder（或 dense / vector），或在 Web 设置选择对应语义排序后端。")
         print("[fetch] 验证：py scripts/evaluate_recall.py")

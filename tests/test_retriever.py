@@ -60,6 +60,29 @@ def _synthetic_record(name: str, source: str | None) -> "object":
     )
 
 
+@pytest.mark.parametrize("count", ["9" * 400, "9" * 5000, "50000", "49999", "0"])
+def test_retrieval_extreme_count_is_bounded(count):
+    from dataclasses import replace
+
+    record = _synthetic_record("finite", None)
+    intent = parse_query("human")
+    retriever = DatasetRetriever()
+    base = retriever._rank_score(record, intent)
+    candidate = retriever.retrieve([replace(record, count=count)], intent)[0]
+    assert base <= candidate.score <= round(base + 0.5, 4)
+    if len(count) == 400:
+        assert candidate.score == round(base + 0.5, 4)
+
+
+@pytest.mark.parametrize("number,expected", [("9" * 400, ""), ("2.5", "2500")])
+def test_normalizer_extreme_title_count_does_not_abort_retrieval(number, expected):
+    from dataset_recommender.retrieval.normalizer import normalize_dataset_record
+
+    record = normalize_dataset_record({"dataset_name": number + "K", "species": "Human"}, "synthetic")
+    assert record.count == expected
+    assert DatasetRetriever().retrieve([record], parse_query("human"))
+
+
 def test_facet_source_missing_source_is_neutral_sentinel():
     from dataset_recommender.retrieval.retriever import _facet_source
 

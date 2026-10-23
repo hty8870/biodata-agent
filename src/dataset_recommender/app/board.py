@@ -40,28 +40,27 @@ import re
 from typing import Any, Sequence
 
 from ..retrieval.query_parser import (
-    DIMENSIONS,
     PS_EXECUTABLE,
     QueryIntent,
-    _DIM_LABEL_CN,          # 单一真源：条件名的中文标签。手抄一份必然漂移，本仓库已吃过好几次亏。
     # 检索信号判定的两个既有真源：词表合并（含部署方注入）与 alias 匹配语义
     # （ASCII 词边界 / 复数 s 容忍，与解析热路径同一份判定）。不另抄第二份。
     _alias_occurrences,
     _merged_catalog,
     active_filters,
     annotate_query_spans,
-    # 执行类说法的唯一真源在 vocabulary，这里只读它的两个判定函数，不另抄一份词表。
+    # 执行类说法的唯一真源在词法层，这里只读它的两个判定函数，不另抄一份词表。
     # 回音用并集（markers），路由只看动作词（verbs）——见 detect_action_verbs 的 docstring。
     detect_action_markers as _detect_action_markers,
     detect_action_verbs as _detect_action_verbs,
     parse_query,
 )
 from ..retrieval.search_request import mask_source_spans, source_alias_spans
-from ..retrieval.vocabulary import (
+from ..retrieval.query_lexicon import (
     NEG_EXISTENTIAL_PHRASES,
     NEG_MORPHEMES_CN,
-    suggestable_terms,
 )
+from ..domain.registry import domain_dimensions, domain_labels_zh, get_domain
+from ..domain.vocab_tools import suggestable_terms
 from .workflow import (
     apply_explicit_date_range,
     apply_suppressed_constraints,
@@ -72,9 +71,9 @@ from .workflow import (
 # 同一句话的长度上限与 action_plan/utterance 入口同源（三个入口统一到同一个数：
 # board 300 / action_plan 500 / webapp 500 的不一致本身就是 bug 源）。
 from ..agent.action_plan import MAX_UTTERANCE_CHARS
+from .request_validation import MAX_QUERY_CHARS
 
 BOARD_SCHEMA = "biodata-board/v1"
-MAX_QUERY_CHARS = 2000
 
 #: 状态。auto_apply / needs_confirm 之外的一律不带 next_request——条件一个字节都不动。
 ST_AUTO = "auto_apply"
@@ -126,18 +125,23 @@ _FAMILY_NAME_CN = {
 _QUANT_HEAD = ("只要", "只需要", "只需", "仅要", "仅", "只", "必须", "一定要", "要求", "限定", "限", "要")
 
 #: 条件名 → 内部维度键。值是**维度**，不是筛选项编号；编号一律从上一次返回里取，绝不自己拼。
-_DIM_NOUNS: tuple[tuple[str, str], ...] = (
-    ("实验技术", "assay"), ("测序技术", "assay"), ("原始数据", "has_raw_data"),
-    ("发表时间", "date"), ("发表年份", "date"), ("数据模态", "modality"),
-    ("物种", "species"), ("生物", "species"), ("组织", "tissue"), ("部位", "tissue"),
-    ("疾病", "disease"), ("病种", "disease"), ("平台", "platform"), ("技术", "assay"),
-    ("模态", "modality"), ("fastq", "has_raw_data"), ("时间", "date"), ("年份", "date"),
-)
+#: 名词表由活动领域包声明（`DomainPack.dim_nouns`，biodata 与旧常量逐位一致）；
+#: 未声明的领域包按维度中文标签派生 + 骨架记录特典（原始数据/时间），换域开箱可用。
+def _dim_nouns() -> tuple[tuple[str, str], ...]:
+    pack = get_domain()
+    if pack.dim_nouns:
+        return pack.dim_nouns
+    derived = tuple((d.label_zh, d.name) for d in pack.dimensions if d.label_zh)
+    return derived + (
+        ("原始数据", "has_raw_data"), ("发表时间", "date"), ("发表年份", "date"),
+        ("时间", "date"), ("年份", "date"),
+    )
+
 
 _LABEL_RAW = "原始数据"
 _LABEL_DATE = "发表时间"
 
-#: 与执行层极性门（`action_plan`）**同一份**否定语素表——见 `vocabulary.NEG_MORPHEMES_CN`。
+#: 与执行层极性门（`action_plan`）**同一份**否定语素表——见 `retrieval/query_lexicon.NEG_MORPHEMES_CN`。
 _NEG_MORPHEMES = NEG_MORPHEMES_CN
 _EN_NEG_WORDS = re.compile(
     r"(?<![a-z0-9_])(no|not|non|without|exclude|excluding|except|avoid|omit|skip|neither|nor)(?![a-z])",
@@ -270,7 +274,7 @@ def _dim_label(dim: str, polarity: str = "include") -> str:
         return _LABEL_RAW
     if dim == "date":
         return _LABEL_DATE
-    base = _DIM_LABEL_CN.get(dim, dim)
+    base = domain_labels_zh().get(dim, dim)
     return ("排除·" + base) if polarity == "exclude" else base
 
 
@@ -286,7 +290,7 @@ def _label_for_filter_id(filter_id: str) -> str:
             return "优先·" + _LABEL_RAW
         if pdim == "source":
             return "优先·数据来源"
-        return "优先·" + _DIM_LABEL_CN.get(pdim, _LABEL_DATE if pdim == "date" else pdim)
+        return "优先·" + domain_labels_zh().get(pdim, _LABEL_DATE if pdim == "date" else pdim)
     if fid.startswith("raw:"):
         return _LABEL_RAW
     if fid.startswith("date:"):
@@ -436,13 +440,12 @@ def _existential_blanked(text: str) -> str:
 
 
 def _has_retrieval_signal(text: str, keyword_mapping: dict | None = None) -> bool:
-    """这句话里有没有**检索信号**：受控词表（`DIMENSIONS`：物种/组织/疾病/平台/assay/modality）
-    任一 alias 命中，或点名了数据集编号/直链。
+    """这句话里有没有**检索信号**：活动领域包受控词表任一 alias 命中，或点名了数据集编号/直链。
 
-    词表与匹配语义全部复用既有单一真源——`vocabulary.CATALOG`（部署方注入的说法经
-    `query_parser._merged_catalog` 同径合并）+ `query_parser._alias_occurrences`
-    （与解析热路径同一份 ASCII 词边界判定）+ `identifiers.classify`（与首个搜索框
-    标识符直链反查同一套判据）。**不另抄第二份词表。**
+    词表与匹配语义全部复用既有单一真源——活动领域 catalog（`query_parser._merged_catalog`
+    同径合并部署方注入的说法）+ `query_parser._alias_occurrences`（与解析热路径同一份
+    ASCII 词边界判定）+ `identifiers.classify`（与首个搜索框标识符直链反查同一套判据）。
+    **不另抄第二份词表。**
     """
     from ..content.identifiers import classify as _classify_identifier
 
@@ -453,7 +456,7 @@ def _has_retrieval_signal(text: str, keyword_mapping: dict | None = None) -> boo
         return True
     catalog = _merged_catalog(keyword_mapping)
     low = text.lower()
-    for dim in DIMENSIONS:
+    for dim in domain_dimensions():
         for entry in catalog.get(dim, []):
             for alias in entry.get("aliases", []):
                 a = str(alias).lower().strip()
@@ -508,8 +511,8 @@ def board_view(
             "filter_id": str(item.get("filter_id") or ""),
             "polarity": str(item.get("polarity") or "include"),
             "removable": bool(item.get("filter_id")),
-            "editable": dim in DIMENSIONS and str(item.get("polarity") or "include") == "include",
-            "lenientable": dim in DIMENSIONS and dim in coverage,
+            "editable": dim in domain_dimensions() and str(item.get("polarity") or "include") == "include",
+            "lenientable": dim in domain_dimensions() and dim in coverage,
             "note": "",
         })
 
@@ -676,7 +679,7 @@ def verify_edit(
             mismatches.append(_mismatch("unexpected_or", dim, before["date"], after["date"]))
 
     # 其余每一项都必须逐位不变——包括原始数据三态与时间范围。
-    for other in DIMENSIONS:
+    for other in domain_dimensions():
         if other == dim:
             continue
         for polarity in ("include", "exclude"):
@@ -857,7 +860,7 @@ def _payload_text(intent: "QueryIntent | None", dim: str, fallback: str) -> str:
     """
     if intent is None:
         return fallback
-    if dim in DIMENSIONS:
+    if dim in domain_dimensions():
         values = list(intent.display_map.get(dim, [])) or list(intent.excluded_display.get(dim, []))
         if values:
             return "、".join(values)
@@ -869,7 +872,7 @@ def _payload_text(intent: "QueryIntent | None", dim: str, fallback: str) -> str:
 
 def _dim_from_noun(text: str) -> str:
     low = str(text or "").lower()
-    for noun, dim in sorted(_DIM_NOUNS, key=lambda t: len(t[0]), reverse=True):
+    for noun, dim in sorted(_dim_nouns(), key=lambda t: len(t[0]), reverse=True):
         if noun in low:
             return dim
     return ""
@@ -944,7 +947,7 @@ def plan_edit(
         target_dim = norm["dim"] or _dim_from_noun(payload)
         return _blank(norm, ST_SUGGEST, op="suggest", dim=target_dim,
                       message=COPY["suggest_title"],
-                      suggestions=suggestable_terms(target_dim) if target_dim in DIMENSIONS else [])
+                      suggestions=suggestable_terms(target_dim) if target_dim in domain_dimensions() else [])
 
     # 用户在这句话里点了数据来源 —— 来源不归条件板管，明说清楚，不猜。
     if payload and source_alias_spans(payload):
@@ -982,7 +985,7 @@ def plan_edit(
             # 会被静默丢掉，而板上照样把这一行搬进「这次没有用它筛」并给出「恢复」按钮。
             removed_filter_ids = [r["filter_id"] for r in rows]
         else:
-            if target_dim not in DIMENSIONS:
+            if target_dim not in domain_dimensions():
                 return _blank(norm, ST_UNKNOWN, op=op, dim=target_dim,
                               message=COPY["lenient_unsupported"].format(label=_dim_label(target_dim)))
             # 只有在调用方**确实告诉过我**覆盖情况时，才敢说「这一项没有缺口」。
@@ -996,7 +999,7 @@ def plan_edit(
         payload_intent = parse_query(payload, keyword_mapping)
         located = _locate_dim_in_payload(payload, keyword_mapping)
         if not located["dims"]:
-            suggestions = suggestable_terms(target_dim) if target_dim in DIMENSIONS else []
+            suggestions = suggestable_terms(target_dim) if target_dim in domain_dimensions() else []
             message = (COPY["unknown_term"] if keyword_mapping else COPY["unknown_term_no_mapping"]).format(term=payload)
             return _blank(norm, ST_UNKNOWN, op=op, dim=target_dim, message=message, suggestions=suggestions)
         if len(located["dims"]) >= 2:
@@ -1114,7 +1117,7 @@ def plan_edit(
                     # 残余里还有我不认识的实义词 → 整句不做，而不是猜着做一半。
                     return _blank(norm, ST_UNKNOWN, op=op, dim=target_dim,
                                   message=COPY["unknown_term"].format(term=_norm_ws(leftover)),
-                                  suggestions=suggestable_terms(target_dim) if target_dim in DIMENSIONS else [])
+                                  suggestions=suggestable_terms(target_dim) if target_dim in domain_dimensions() else [])
                 # 只报「本来像个条件、但系统没有这一项可落」的词（延续既有的未作筛选提示口径）。
                 # 「含」「的」这类说话方式词不报——报了等于把噪声当成用户丢失的条件，反而制造焦虑。
                 if leftover_intent is not None:

@@ -305,6 +305,27 @@ def test_search_zenodo_curation_id_lookup_for_sync(tmp_path, monkeypatch):
     assert len(records) == 1 and records[0]["dataset_uid"] == "zenodo:6962483"
 
 
+def test_search_zenodo_id_lookup_respects_species_and_types_the_doi(tmp_path, monkeypatch):
+    """数字 id 直查同样吃文本级物种政策；数据 DOI 按对象类型落 dataset_doi，
+    出口不把它当论文 DOI。"""
+    single = ZENODO_LEGACY_PAYLOAD["hits"]["hits"][0]
+    monkeypatch.setattr(cc, "_fetch_logged", lambda url, **kw: single)
+    ok, _w = cc.SOURCE_ADAPTERS["zenodo"]["search"]("6962483", species="Human", limit=5,
+                                                    project_root=tmp_path)
+    assert len(ok) == 1 and ok[0]["dataset_doi"] == "10.5281/zenodo.5720285"
+    from dataset_recommender.corpus import provenance as prov
+    assert prov.collection_doi(ok[0]) is None, "数据 DOI 不许被当成关联论文 DOI"
+    assert prov.dataset_doi(ok[0]) == "10.5281/zenodo.5720285"
+    with pytest.raises(cc.CurateError) as ei:
+        cc.SOURCE_ADAPTERS["zenodo"]["search"]("6962483", species="Mouse", limit=5,
+                                               project_root=tmp_path)
+    assert ei.value.code == "no_candidates" and "不一致" in ei.value.hint
+    # 缺省物种：照旧返回（回归钉）
+    plan, _w2 = cc.SOURCE_ADAPTERS["zenodo"]["search"]("6962483", species="", limit=5,
+                                                       project_root=tmp_path)
+    assert len(plan) == 1
+
+
 def test_search_zenodo_curation_drift_fail_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(cc, "_fetch_logged", lambda url, **kw: {"hits": {"hits": [{"id": "x"}]}})
     with pytest.raises(cc.CurateError):

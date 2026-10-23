@@ -172,61 +172,69 @@ async function _loadStatus() {
     }
 }
 
+/* ---------- 异步 job 协议（**唯一实现**；对话执行器与一键同步共用，禁止第二份轮询） ----------
+   start：POST /api/curate/sync-updates → {kind:"result",result}｜{kind:"async"}（202 后台跑）
+          ｜{kind:"busy",detail}｜{kind:"error",message}；
+   await：GET /api/curate/sync-updates/status 轮询到 done/failed——间隔/上限/终态口径只此一份。
+   两个消费者：本页一键同步（dataset.html）与 act.js 的 curate.sync_updates 动词（index.html）。 */
+export async function startSyncUpdates(opts) {
+    const body = (opts && Array.isArray(opts.sources) && opts.sources.length) ? { sources: opts.sources } : {};
+    try {
+        const res = await fetch(API.curateSyncUpdates, {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        const j = await res.json().catch(function () { return null; });
+        if (res.ok && j && j.ok && j.result) return { kind: "result", result: j.result };
+        if (res.ok && j && j.ok && j.async === true) return { kind: "async" };
+        const cls = syncClassifyError(res.status, j, null);
+        if (cls.kind === "sync_busy") return { kind: "busy", detail: cls.detail };
+        return { kind: "error", message: cls.message };
+    } catch (e) {
+        return { kind: "error", message: syncClassifyError(0, null, e).message };
+    }
+}
+
+/* 异步 job 轮询（网页形态）：到 done/failed 再给终态；上限约 20 分钟（job 含向量重建，
+   分钟级正常），到点如实回 timeout（由调用方给各自文案）。 */
+const JOB_POLL_MS = 3000;
+const JOB_POLL_MAX = 400;
+export function awaitSyncJob() {
+    return new Promise(function (resolve) {
+        let tries = 0;
+        const timer = setInterval(async function () {
+            tries += 1;
+            if (tries > JOB_POLL_MAX) { clearInterval(timer); resolve({ kind: "timeout" }); return; }
+            try {
+                const res = await fetch(API.curateSyncJobStatus);
+                const j = await res.json();
+                const job = (res.ok && j && j.ok && j.job) ? j.job : null;
+                if (!job || job.status === "running" || job.status === "idle") return;
+                clearInterval(timer);
+                if (job.status === "done" && job.result) { resolve({ kind: "result", result: job.result }); return; }
+                const err = String((job && job.error) || "未知错误");
+                if (err.indexOf("同步") !== -1) { resolve({ kind: "busy", detail: err }); return; }
+                resolve({ kind: "error", message: "同步失败：" + err });
+            } catch (_e) { /* 单次轮询失败静默，下轮再试（只读端点） */ }
+        }, JOB_POLL_MS);
+    });
+}
+
 async function _startSync() {
     const node = $("dsSync");
     if (!node) return;
     _renderRunning();
-    try {
-        const res = await fetch(API.curateSyncUpdates, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({}),   // sources 缺省 = 全部已注册来源（后端契约）
-        });
-        const j = await res.json().catch(function () { return null; });
-        if (res.ok && j && j.ok && j.result) { _renderResult(j.result); return; }
-        // 2026-08-26 起：网页形态异步响应（{async:true, job}）→ 轮询 job 到终态再呈现
-        if (res.ok && j && j.ok && j.async === true) { _pollSyncJob(); return; }
-        // 失败分类：400 + detail 含「同步」= sync_busy（另一任务进行中）；其余如实报
-        const cls = syncClassifyError(res.status, j, null);
-        if (cls.kind === "sync_busy") { _renderBusy(cls.detail); return; }
-        _renderError(cls.message);
-    } catch (e) {
-        _renderError(syncClassifyError(0, null, e).message);
+    const out = await startSyncUpdates();
+    if (out.kind === "result") { _renderResult(out.result); return; }
+    if (out.kind === "busy") { _renderBusy(out.detail); return; }
+    if (out.kind === "async") {
+        const done = await awaitSyncJob();
+        if (done.kind === "result") { _renderResult(done.result); return; }
+        if (done.kind === "busy") { _renderBusy(done.detail); return; }
+        if (done.kind === "timeout") { _renderError("同步仍在后台进行，请稍后重新打开本页查看结果"); return; }
+        _renderError(done.message);
+        return;
     }
-}
-
-/* 异步 job 轮询（网页形态）：GET /api/curate/sync-updates/status 到
-   done/failed 再呈现回执/错误；上限约 20 分钟（job 含向量重建，分钟级正常），到点如实提示。 */
-const JOB_POLL_MS = 3000;
-const JOB_POLL_MAX = 400;
-let _jobPollTimer = null;
-let _jobPollTries = 0;
-function _pollSyncJob() {
-    if (_jobPollTimer) { clearInterval(_jobPollTimer); _jobPollTimer = null; }
-    _jobPollTries = 0;
-    _jobPollTimer = setInterval(async function () {
-        _jobPollTries += 1;
-        if (_jobPollTries > JOB_POLL_MAX) {
-            _clearJobPoll();
-            _renderError("同步仍在后台进行，请稍后重新打开本页查看结果");
-            return;
-        }
-        try {
-            const res = await fetch(API.curateSyncJobStatus);
-            const j = await res.json();
-            const job = (res.ok && j && j.ok && j.job) ? j.job : null;
-            if (!job || job.status === "running" || job.status === "idle") return;
-            _clearJobPoll();
-            if (job.status === "done" && job.result) { _renderResult(job.result); return; }
-            const err = String((job && job.error) || "未知错误");
-            if (err.indexOf("同步") !== -1) { _renderBusy(err); return; }
-            _renderError("同步失败：" + err);
-        } catch (_e) { /* 单次轮询失败静默，下轮再试（只读端点） */ }
-    }, JOB_POLL_MS);
-}
-function _clearJobPoll() {
-    if (_jobPollTimer) { clearInterval(_jobPollTimer); _jobPollTimer = null; }
-    _jobPollTries = 0;
+    _renderError(out.message);
 }
 
 async function _recall() {
@@ -287,4 +295,9 @@ function initSyncButton() {
     _loadStatus();
 }
 
-document.addEventListener("DOMContentLoaded", initSyncButton);
+/* 防御性自挂（与 ladder/task_card 同款）：本模块现在也被 act.js 静态 import（异步 sync 的
+   start/await 单一实现）——node 真行为门里的 document 是桩、没有 addEventListener，
+   裸调会在模块求值期炸掉整个 import 图。挂点缺失/宿主无 DOM 时本模块的纯函数仍可被调用。 */
+if (typeof document !== "undefined" && document && typeof document.addEventListener === "function") {
+    document.addEventListener("DOMContentLoaded", initSyncButton);
+}

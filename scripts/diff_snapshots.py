@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
-"""快照 diff = 存活变化报告：比较活台账两帧，回答「自上次以来谁死了 / 谁恢复了 / 谁大小变了」。
+"""快照 diff = 存活变化报告：比较活台账两帧，回答「自上次以来谁死了 / 谁恢复了 / 谁大小变了」，
+以及 integrity(md5)/load 两腿的迁移（mismatch/failed ↔ verified/loaded）。
 
 这是「活台账」相对「一次性快照」的核心增量：把 append-only 的两帧内容寻址快照对齐，逐文件比较
-reachable / size 档，报告状态迁移。纯本地、只读、离线。
+reachable / size / integrity / load 档，报告状态迁移。纯本地、只读、离线。
+
+problem 判据唯一真源：`patrol_links.file_problem`（r=dead / s=mismatch / i=mismatch / l=failed）。
+头条 problem 优先采用帧内 `_meta.tally`（帧自报的权威计数）；老帧没有 tally 时才按判据复算。
 
 用法：
   py scripts/diff_snapshots.py                 # 自动取 snapshots/ 里最新两帧（旧→新）
@@ -16,8 +20,16 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
+_SCRIPTS = Path(__file__).resolve().parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+
+import patrol_links as P  # noqa: E402  —— problem 口径与帧 tally 的唯一真源
+
 _AGENT = Path(__file__).resolve().parent.parent
 _SNAP_DIR = _AGENT / "src" / "dataset_recommender" / "data" / "inspection" / "snapshots"
+
+_file_problem = P.file_problem
 
 
 def load_snap(path: Path) -> "tuple[dict, dict]":
@@ -36,8 +48,12 @@ def load_snap(path: Path) -> "tuple[dict, dict]":
     return meta, rows
 
 
-def _problem(v: dict) -> bool:
-    return v.get("r") == "dead" or v.get("s") == "mismatch"
+def _frame_problem_count(meta: dict, rows: dict) -> "tuple[int, str]":
+    """帧内 problem 计数：优先权威 tally，缺失时按共用判据复算（老帧没有 tally 字段）。"""
+    tally = meta.get("tally") if isinstance(meta, dict) else None
+    if isinstance(tally, dict) and isinstance(tally.get("problem"), int):
+        return tally["problem"], "帧内 tally"
+    return sum(_file_problem(v) for v in rows.values()), "按判据复算"
 
 
 def auto_pick() -> "tuple[Path, Path] | None":
@@ -52,7 +68,10 @@ def diff(old_path: Path, new_path: Path) -> int:
     nmeta, new = load_snap(new_path)
 
     newly_dead, recovered, newly_mismatch, resolved_mismatch, appeared, disappeared = [], [], [], [], [], []
-    inconclusive = []   # 问题腿转 unknown（dead→unknown / mismatch→unknown）：problem 计数下降，但属「本帧未测到/不结论」，**非确认修复**。
+    newly_integrity, resolved_integrity, newly_load, resolved_load = [], [], [], []
+    # 问题腿转 unknown（dead/mismatch/i-mismatch/l-failed → unknown）：problem 计数下降，
+    # 但属「本帧未测到/不结论」，**非确认修复**。
+    inconclusive = []
     for k in set(old) | set(new):
         o, n = old.get(k), new.get(k)
         if o is None:
@@ -69,13 +88,24 @@ def diff(old_path: Path, new_path: Path) -> int:
             newly_mismatch.append(k)
         if o.get("s") == "mismatch" and n.get("s") == "match":
             resolved_mismatch.append(k)
-        # 诚实核对：dead→unknown / mismatch→unknown 会让 problem 计数掉，但那是「没复测到」不是「修好了」。
-        # 单列此桶，让六桶增量与头条净变化对得上，避免头条虚报「问题变少」。
-        if (o.get("r") == "dead" and n.get("r") == "unknown") or (o.get("s") == "mismatch" and n.get("s") == "unknown"):
+        if o.get("i") != "mismatch" and n.get("i") == "mismatch":
+            newly_integrity.append(k)
+        if o.get("i") == "mismatch" and n.get("i") == "verified":
+            resolved_integrity.append(k)
+        if o.get("l") != "failed" and n.get("l") == "failed":
+            newly_load.append(k)
+        if o.get("l") == "failed" and n.get("l") == "loaded":
+            resolved_load.append(k)
+        # 诚实核对：问题腿转 unknown 会让 problem 计数掉，但那是「没复测到」不是「修好了」。
+        # 单列此桶，让增量桶与头条净变化对得上，避免头条虚报「问题变少」。
+        if ((o.get("r") == "dead" and n.get("r") == "unknown")
+                or (o.get("s") == "mismatch" and n.get("s") == "unknown")
+                or (o.get("i") == "mismatch" and n.get("i") in (None, "unknown"))
+                or (o.get("l") == "failed" and n.get("l") in (None, "unknown"))):
             inconclusive.append(k)
 
-    prob_o = sum(_problem(v) for v in old.values())
-    prob_n = sum(_problem(v) for v in new.values())
+    prob_o, src_o = _frame_problem_count(ometa, old)
+    prob_n, src_n = _frame_problem_count(nmeta, new)
 
     def _blk(title, keys):
         print(f"\n{title}: {len(keys)}")
@@ -84,8 +114,10 @@ def diff(old_path: Path, new_path: Path) -> int:
             print(f"  - {uid} / {url.rsplit('/', 1)[-1]}")
 
     print("== 存活变化报告 ==")
-    print(f"旧帧 {old_path.name}  ({ometa.get('snapshot_date', '?')}, source={ometa.get('source', '?')}, 文件 {len(old)}, problem {prob_o})")
-    print(f"新帧 {new_path.name}  ({nmeta.get('snapshot_date', '?')}, source={nmeta.get('source', '?')}, 文件 {len(new)}, problem {prob_n})")
+    print(f"旧帧 {old_path.name}  ({ometa.get('snapshot_date', '?')}, source={ometa.get('source', '?')}, "
+          f"文件 {len(old)}, problem {prob_o}（{src_o}）)")
+    print(f"新帧 {new_path.name}  ({nmeta.get('snapshot_date', '?')}, source={nmeta.get('source', '?')}, "
+          f"文件 {len(new)}, problem {prob_n}（{src_n}）)")
     print(f"problem 净变化：{prob_n - prob_o:+d}（{prob_o} → {prob_n}）")
     if inconclusive:
         print(f"  ⚠ 其中 {len(inconclusive)} 条属「问题腿转 unknown（本帧未复测到/不结论）」——"
@@ -94,7 +126,11 @@ def diff(old_path: Path, new_path: Path) -> int:
     _blk("已恢复 recovered (dead → ok，确认修复)", recovered)
     _blk("新大小不一致 newly_size_mismatch", newly_mismatch)
     _blk("大小已修复 resolved_size_mismatch (mismatch → match，确认修复)", resolved_mismatch)
-    _blk("转 unknown / 不结论 became_inconclusive (dead→unknown 或 mismatch→unknown，非确认修复)", inconclusive)
+    _blk("新完整性不一致 newly_integrity_mismatch", newly_integrity)
+    _blk("完整性已修复 resolved_integrity_mismatch (mismatch → verified，确认修复)", resolved_integrity)
+    _blk("新加载失败 newly_load_failed", newly_load)
+    _blk("加载已修复 resolved_load_failed (failed → loaded，确认修复)", resolved_load)
+    _blk("转 unknown / 不结论 became_inconclusive (问题腿→unknown，非确认修复)", inconclusive)
     _blk("新增文件 appeared", appeared)
     _blk("消失文件 disappeared", disappeared)
     return 0

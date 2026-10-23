@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
-from .vector_recall import _WARNED, _warn_once_prefixed
+from .warn_once import WARNED as _WARNED, warn_once_prefixed as _warn_once_prefixed
 
 # ------------------------------------------------------------------ 配置（全 env，缺省 off）
 
@@ -329,6 +329,8 @@ def _embed_texts(
     usage 后在落账旁路同步回调（供调用方做实际用量对账）；默认 None 时行为逐位不变。
     record_ledger：False 时跳过 .userdata/embed_usage.jsonl 落账（调用方自建账本的
     场景——如 devcontext 直写共享 usage_events——从源头避免双计）；默认 True 逐位不变。"""
+    from .vector_recall import valid_vector  # 惰性复用：API/本地向量遵守同一数值契约。
+
     out: "list[list[float]]" = []
     for start in range(0, len(texts), _EMBED_BATCH):
         chunk = list(texts[start:start + _EMBED_BATCH])
@@ -339,17 +341,23 @@ def _embed_texts(
         data = _post("/embeddings", payload, _EMBED_TIMEOUT_S)
         if data is None:
             return None
-        rows = data.get("data")
+        rows = data.get("data") if isinstance(data, dict) else None
         if not isinstance(rows, list) or len(rows) != len(chunk):
             _warn_once("embed_shape", "嵌入响应形状不符——回退规则序。")
             return None
-        rows = sorted(rows, key=lambda r: r.get("index", 0))
+        ordered: list = [None] * len(chunk)
         for row in rows:
-            vec = row.get("embedding")
-            if not isinstance(vec, list) or len(vec) != _embed_dims():
-                _warn_once("embed_dims", "嵌入向量维度与配置不符——回退规则序。")
+            idx = row.get("index") if isinstance(row, dict) else None
+            if type(idx) is not int or not 0 <= idx < len(chunk) or ordered[idx] is not None:
+                _warn_once("embed_index", "嵌入响应索引缺失、重复或越界——回退规则序。")
                 return None
-            out.append([float(x) for x in vec])
+            vec = row.get("embedding")
+            if not valid_vector(vec, _embed_dims()):
+                _warn_once("embed_dims", "嵌入向量维度不符或含非有限值——回退规则序。")
+                return None
+            ordered[idx] = [float(x) for x in vec]
+        # 行数与输入相等、索引唯一且有界，保证这里每个槽位都已覆盖。
+        out.extend(ordered)
         if record_ledger:
             _record_usage("embed", _embed_model(), data.get("usage"))
         if usage_sink is not None:
@@ -366,7 +374,7 @@ def api_dense_vectors(
     文档向量优先查语料向量文件（按 uid + 候选文本指纹双校验，防模板漂移静默错版）；
     文件未覆盖/指纹不符的条目（用户上传、模板更新）现场 API 补嵌。任何环节失败 → None。
     """
-    from .vector_recall import _candidate_text  # 惰性：避免循环导入
+    from .candidate_text import candidate_text as _candidate_text  # 打分文本单一真源（叶子模块）
 
     vectors_file = _load_vectors()
     if vectors_file is None:
@@ -405,14 +413,10 @@ def api_dense_vectors(
 
 
 # ------------------------------------------------------------------ 通用文本语义接口（additive）
-# 供非检索的内部批处理工具复用同一 HTTP/QPM/批次/形状校验/usage 落账/
-# 密钥纪律（单通道原则：不复制第二套 API 客户端）。纯别名，产品检索行为零变化。
-
-
-def api_embed_ready_simple() -> bool:
-    """embed API 就绪判定的「无向量文件」形态：配置启用 + key 在位；不加载语料向量文件。"""
-    return bool(api_embed_enabled()) and bool(_api_key())
-
+# 供非检索的内部批处理工具（devcontext/semantic_backend.py）复用同一 HTTP/QPM/批次/形状
+# 校验/usage 落账/密钥纪律（单通道原则：不复制第二套 API 客户端）。纯别名，产品检索行为
+# 零变化。注意：消费方在 devcontext/，其测试只在 quality_gate full profile 内运行——
+# 删这两个名字前必须先跑 full profile（2026-10-01 批次 B 曾误删 api_embed_texts 致 3 红）。
 
 def api_embed_texts(
     texts: "Sequence[str]",

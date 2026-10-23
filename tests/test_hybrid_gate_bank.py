@@ -174,12 +174,23 @@ class TestRequiredCapabilities:
         assert ids == ["action.check_updates", "search", "action.db_status"]
 
     def test_generic_family_has_empty_verbs(self):
-        """环面给不出工具的动作（导出引文）归 generic：verbs 空 → 只能靠 declined 交代。"""
-        caps = AX._hybrid_required_capabilities("帮我找肺癌数据，再导出引文")
+        """环面真给不出工具的动作（安装本地模型）归 generic：verbs 空 → 只能靠 declined 交代。"""
+        caps = AX._hybrid_required_capabilities("帮我找肺癌数据，再安装本地模型")
         ids = [c["capability"] for c in caps]
         assert ids == ["search", "action.generic"]
         gen = caps[1]
-        assert gen["verbs"] == [] and "导出引文" in gen["label_zh"]
+        assert gen["verbs"] == [] and "安装本地模型" in gen["label_zh"]
+
+    def test_cite_export_family_maps_to_the_registered_loop_tool(self):
+        """引文导出已在环内 LOOP_TOOLS 注册（`cite.export`）——能力账必须归族到
+        真动词而非 action.generic：rank + cite.export 成功后无欠账（旧口径判缺项，
+        finish 回灌「本环做不到」并多余重问）。"""
+        caps = AX._hybrid_required_capabilities("帮我找肺癌数据，再导出引文")
+        ids = [c["capability"] for c in caps]
+        assert ids == ["search", "action.cite_export"]
+        assert caps[1]["verbs"] == ["cite.export"]
+        steps = [_step("rank"), _step("cite.export")]
+        assert AX._capabilities_unsettled(caps, steps) == []
 
     def test_same_family_deduped(self):
         caps = AX._hybrid_required_capabilities("检查10x更新，再检查ENCODE更新，再搜小鼠脑数据")
@@ -291,16 +302,30 @@ class TestFinishVetoCapabilities:
         assert "没有对应的成功步骤" in cap_vetoes[0][0]
 
     def test_generic_capability_vetoed_when_unaddressed(self):
-        caps = AX._hybrid_required_capabilities("帮我找肺癌数据，再导出引文")
+        caps = AX._hybrid_required_capabilities("帮我找肺癌数据，再安装本地模型")
         out = AX._finish_veto_all("都办完了", 1, [], [], [_step("rank")], "",
-                                  "帮我找肺癌数据，再导出引文", capabilities=caps)
+                                  "帮我找肺癌数据，再安装本地模型", capabilities=caps)
         cap_vetoes = [(t, c) for t, c in out if c == "capability_unsettled"]
         assert len(cap_vetoes) == 1 and "没有明确交代" in cap_vetoes[0][0]
         # declined_zh 交代后放行
-        out2 = AX._finish_veto_all("都办完了，导出引文做不到", 1, [], [], [_step("rank")],
-                                   "导出引文本环做不到", "帮我找肺癌数据，再导出引文",
+        out2 = AX._finish_veto_all("都办完了，安装本地模型做不到", 1, [], [], [_step("rank")],
+                                   "安装本地模型本环做不到", "帮我找肺癌数据，再安装本地模型",
                                    capabilities=caps)
         assert all(code != "capability_unsettled" for _t, code in out2)
+
+    def test_cite_export_settled_when_executed(self):
+        """引文导出的能力账能被真执行步骤核销——rank + cite.export 后 finish
+        不再报 capability_unsettled（旧口径判环外，成功也缺项）。"""
+        caps = AX._hybrid_required_capabilities("帮我找肺癌数据，再导出引文")
+        steps = [_step("rank"), _step("cite.export")]
+        out = AX._finish_veto_all("第 1 步检索、第 2 步导出引文，都办完了", len(steps),
+                                  [], [], steps, "", "帮我找肺癌数据，再导出引文",
+                                  capabilities=caps)
+        assert all(code != "capability_unsettled" for _t, code in out)
+        # 反向：没做导出仍欠账（不能被 rank 顺带核销）
+        out2 = AX._finish_veto_all("都办完了", 1, [], [], [_step("rank")], "",
+                                   "帮我找肺癌数据，再导出引文", capabilities=caps)
+        assert len([c for _t, c in out2 if c == "capability_unsettled"]) == 1
 
     def test_all_settled_no_veto(self):
         steps = [_step("curate.check_updates", result=_CHECK_ZERO), _step("rank")]

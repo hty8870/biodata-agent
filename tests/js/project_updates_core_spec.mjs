@@ -8,8 +8,8 @@
  * 语义边界——「truncated 时不得声称某条已从全部结果消失」「排序/score 变化不算」
  * 「规则升级单列」这些设计约定 的红线，错一处就是如实第一的事故。
  *
- * 纯函数直测：project_updates_core.js 只相对 import artifacts.js（同为纯模块），
- * node 直接相对路径 import；不依赖真实 Date.now。
+ * 纯函数直测：project_updates_core.js 走 `#artifacts` 取纯数据层（有 importmap 键的模块须走
+ * `#键`，见 FRONTEND.md §4 通道规则）；node 经 package.json imports 解析到同一份；不依赖真实 Date.now。
  * ========================================================================== */
 
 import * as U from "../../web/static/js/core/project_updates_core.js";

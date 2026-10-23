@@ -166,6 +166,23 @@ def _no_real_downloads_pollution():
     assert after <= before, f"测试在真实下载目录新建了目录：{sorted(after - before)}（必须改用 tmp_path / out_dir）"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_corpus_write_marker(monkeypatch, tmp_path):
+    """把「跨进程语料写代际标记」的读路径钉进沙箱。
+
+    真实语料装载（`load_full_corpus` → `corpus_write_generation`）会读
+    `<project_root>/.userdata/corpus_write_generation`。离线审计 harness 把 `.userdata`
+    一律当真实用户数据硬阻断，于是所有走真实语料的端点测试都会 500（不是 507/400）。
+    标记只是缓存代际令牌，读不到即空串（生产语义，见 `corpus_write_generation`），
+    这里用同语义的空沙箱路径隔离——不改任何断言面，也不碰真实 `.userdata`。
+    """
+    from dataset_recommender.corpus import corpus as _corpus
+
+    sandbox = tmp_path / "_userdata"
+    monkeypatch.setattr(_corpus, "_write_marker_path",
+                        lambda root: sandbox / "corpus_write_generation")
+
+
 # ---------------------------------------------------------------- plan：manager 级纯函数
 
 def test_plan_size_only_synth_row_supported():
@@ -515,23 +532,32 @@ def test_start_bad_params_400():
         assert r.status_code == 400, f"{payload!r} 应 400，实际 {r.status_code}"
 
 
-def test_start_endpoint_disk_insufficient_507(monkeypatch):
+def test_start_endpoint_disk_insufficient_507(monkeypatch, tmp_path):
     from types import SimpleNamespace
     monkeypatch.setattr(DM.shutil, "disk_usage",
                         lambda p: SimpleNamespace(free=1000, total=10 ** 12, used=10 ** 12))
+    # 默认下载根钉到沙箱：真实 ~/Downloads 是仓库外写（离线审计硬阻断），这条测试本来也
+    # 不该碰用户的真实下载目录；临时根仍走「先预检、后建目录」的同一段生产代码。
+    sandbox_root = tmp_path / "Downloads" / "BioData数据-测试"
+    monkeypatch.setattr(DM, "default_download_dir", lambda: sandbox_root)
     # 真实语料里挑一个 filesize 足够大的 CELLxGENE 数据集（只读，零网络；磁盘预检先拒绝）
     r = _client().post("/api/download/start", json={"uids": [UID_CXG]})
     assert r.status_code == 507
     assert r.json()["code"] == "disk_space_insufficient"
+    assert not sandbox_root.exists(), "磁盘预检不通过时不得创建任务目录（否则真实目录会留下空壳）"
 
 
 # ---------------------------------------------------------------- 在途增删（/api/download/update）
 
-def test_update_add_appends_new_dataset_to_running_job(tmp_path):
+@pytest.mark.parametrize("new_host", [False, True])
+def test_update_add_appends_new_dataset_to_running_job(tmp_path, new_host):
     gate = threading.Event()
     entered = threading.Event()
     a = _record("cxg:a", url=CXG_PAGE, download_url=H5AD_URL, filesize=len(b"a"), name="甲")
-    b = _record("cxg:b", url=CXG_PAGE, download_url=H5AD_URL.replace("6d55", "6d56"),
+    new_url = H5AD_URL.replace("6d55", "6d56")
+    if new_host:
+        new_url = new_url.replace("datasets.cellxgene.cziscience.com", "other.example.org")
+    b = _record("cxg:b", url=CXG_PAGE, download_url=new_url,
                 filesize=len(b"b"), name="乙")
 
     def open_(url, timeout):
@@ -738,3 +764,152 @@ def test_update_endpoint_end_to_end_add_and_remove(tmp_path, monkeypatch):
     assert by["cxg:a"]["status"] == "size_ok"
     assert by["cxg:b"]["status"] == "skipped"
     assert by["cxg:c"]["status"] == "size_ok"
+
+
+# ---------------------------------------------------------------- 在途增删回归
+
+def test_update_preflight_counts_remaining_queue_budget(tmp_path, monkeypatch):
+    """在途追加的磁盘预检必须把「原有队列还没下完的部分」一起算上。
+
+    只对新项做预检时，队列里已有的 10^9 字节未下载 + 新加 10 字节也能过闸，
+    随后照样把磁盘写爆。这里 free 只够新项：合并预算必须被拒。
+    """
+    from types import SimpleNamespace
+    gate, entered = threading.Event(), threading.Event()
+    a = _record("cxg:a", url=CXG_PAGE, download_url=H5AD_URL, filesize=len(b"a"), name="甲")
+    big = _record("cxg:big", url=CXG_PAGE, download_url=H5AD_URL.replace("6d55", "6d58"),
+                  filesize=10 ** 9, name="大件")
+    small = _record("cxg:small", url=CXG_PAGE, download_url=H5AD_URL.replace("6d55", "6d59"),
+                    filesize=10, name="小件")
+
+    def open_(url, timeout):
+        return BlockingResp(b"a", gate, entered)
+
+    job = DM.start_job(["cxg:a", "cxg:big"], records=_records(a, big, small),
+                       out_dir=str(tmp_path), opener=open_)
+    try:
+        assert entered.wait(timeout=10), "下载线程没有进入 read()"
+        monkeypatch.setattr(DM.shutil, "disk_usage",
+                            lambda p: SimpleNamespace(free=10 ** 6, total=10 ** 12, used=10 ** 12))
+        with pytest.raises(DM.DownloadManagerError) as e:
+            DM.update_job(add=["cxg:small"], records=_records(a, big, small))
+        assert e.value.code == "disk_space_insufficient"
+        st = DM.get_status(job["job_id"])
+        assert all(f["dataset_uid"] != "cxg:small" for f in st["files"]), "预检失败不得有任何变更"
+    finally:
+        gate.set()
+        try:
+            _wait_state(job["job_id"], timeout=15)
+        except AssertionError:
+            pass   # 主断言失败时不掩盖它；残留任务由 _cleanup_jobs 夹具兜底
+
+
+class _GateFirstClaimLock:
+    """`_REGISTRY_LOCK` 的替身：把 worker 线程**第一次**进入（= 领取一行）卡在闸上。
+
+    目的是让测试线程能在「worker 读完 status」与「worker 置 downloading」之间的那个
+    真实竞态窗口里插入一次 `update_job(remove=…)`——修复前正是这个窗口让被移除的行照样
+    下载、完成时还撤下 `_removed_rows`（界面 skipped、磁盘上却多了文件）。
+    只门控名字以 biodata-download- 开头的线程；测试线程照常拿真锁（否则 update_job 死锁）。
+    """
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.armed = threading.Event()
+        self.gate = threading.Event()
+        self._gated = False
+
+    def __enter__(self):
+        thread = threading.current_thread()
+        if not self._gated and thread.name.startswith("biodata-download-"):
+            self._gated = True
+            self.armed.set()
+            assert self.gate.wait(timeout=15), "gate 等待超时（测试线程应放行）"
+        return self._lock.__enter__()
+
+    def __exit__(self, *exc):
+        return self._lock.__exit__(*exc)
+
+
+def test_update_remove_wins_over_unclaimed_row(tmp_path, monkeypatch):
+    """remove 与「worker 即将领取该行」竞态时，remove 必须赢。
+
+    修复前 worker 在锁外读 status（pending）、锁内无条件置 downloading：窗口内被移除的
+    行仍会真下载（opener 被调用）并落盘，完成时把 `_removed_rows` 撤下。
+    """
+    lock = _GateFirstClaimLock()
+    monkeypatch.setattr(DM, "_REGISTRY_LOCK", lock)
+    b_url = H5AD_URL.replace("6d55", "6d56")
+    a = _record("cxg:a", url=CXG_PAGE, download_url=H5AD_URL, filesize=len(b"a"), name="甲")
+    b = _record("cxg:b", url=CXG_PAGE, download_url=b_url, filesize=len(b"b"), name="乙")
+    calls = []
+
+    def open_(url, timeout):
+        calls.append(url)
+        return FakeResp(b"b" if url == b_url else b"a")
+
+    job = DM.start_job(["cxg:a", "cxg:b"], records=_records(a, b), out_dir=str(tmp_path), opener=open_)
+    try:
+        assert lock.armed.wait(timeout=10), "worker 没有走到领取点（领取点应在锁内）"
+        r = DM.update_job(remove=["cxg:a"])
+        assert any(x["dataset_uid"] == "cxg:a" and x["outcome"] == "skipped" for x in r["removed"])
+        lock.gate.set()
+        st = _wait_state(job["job_id"])
+        assert st["state"] == "done"
+        assert H5AD_URL not in calls, "被移除的行不得再发起下载（remove 必须赢）"
+        assert calls == [b_url], f"只应下载未被移除的 b，实际 {calls}"
+        by = [f["status"] for f in st["files"]]
+        assert by[0] == "skipped" and by[1] == "size_ok"
+        saved = [p.name for p in tmp_path.rglob("*.h5ad")]
+        assert saved and all(name.endswith("6d56.h5ad") for name in saved), \
+            f"被移除的行不得在磁盘上留下文件，实际 {saved}"
+    finally:
+        lock.gate.set()
+        try:
+            _wait_state(job["job_id"], timeout=15)
+        except AssertionError:
+            pass   # 主断言失败时不掩盖它；残留任务由 _cleanup_jobs 夹具兜底
+
+
+def test_update_readd_after_remove_downloads_again(tmp_path):
+    """移除后重新加入同一 uid 必须真的下载（并复用原子目录名）。
+
+    修复前重复判据用 `_subdirs`（移除后仍留旧名）→ 重新加入被当成 already_in_queue，
+    该 uid 永久停在 skipped，用户重新勾选也下不回来。
+    """
+    gate, entered = threading.Event(), threading.Event()
+    b_url = H5AD_URL.replace("6d55", "6d56")
+    a = _record("cxg:a", url=CXG_PAGE, download_url=H5AD_URL, filesize=len(b"a"), name="甲")
+    b = _record("cxg:b", url=CXG_PAGE, download_url=b_url, filesize=len(b"b"), name="乙")
+    calls = []
+
+    def open_(url, timeout):
+        calls.append(url)
+        if len(calls) == 1:
+            return BlockingResp(b"a", gate, entered)   # a 钉住 → b 始终是 pending
+        return FakeResp(b"b")
+
+    job = DM.start_job(["cxg:a", "cxg:b"], records=_records(a, b), out_dir=str(tmp_path), opener=open_)
+    try:
+        assert entered.wait(timeout=10)
+        r1 = DM.update_job(remove=["cxg:b"])
+        assert r1["queue_uids"] == ["cxg:a"]
+        subdir_before = DM._JOBS[job["job_id"]]["_subdirs"]["cxg:b"]
+        r2 = DM.update_job(add=["cxg:b"], records=_records(a, b))
+        assert [x["status"] for x in r2["added"]] == ["added"], r2["added"]
+        assert r2["queue_uids"] == ["cxg:a", "cxg:b"]
+        assert DM._JOBS[job["job_id"]]["_subdirs"]["cxg:b"] == subdir_before, "重新加入应复用原子目录名"
+        pre = DM.get_status(job["job_id"])
+        assert [f["status"] for f in pre["files"] if f["dataset_uid"] == "cxg:b"] == ["skipped", "pending"]
+        gate.set()
+        st = _wait_state(job["job_id"])
+        assert st["state"] == "done"
+        assert [f["status"] for f in st["files"] if f["dataset_uid"] == "cxg:b"] == ["skipped", "size_ok"]
+        assert b_url in calls, "重新加入的 uid 必须真的发起下载"
+        assert len([p for p in tmp_path.iterdir() if p.is_dir()]) == 2, "复用子目录，不得多出 ~2 兄弟目录"
+    finally:
+        gate.set()
+        try:
+            _wait_state(job["job_id"], timeout=15)
+        except AssertionError:
+            pass   # 主断言失败时不掩盖它；残留任务由 _cleanup_jobs 夹具兜底

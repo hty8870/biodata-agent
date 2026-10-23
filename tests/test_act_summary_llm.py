@@ -121,6 +121,37 @@ def test_empty_llm_text_fails_open(monkeypatch):
     assert out["llm_status"].startswith("failed:")
 
 
+@pytest.mark.parametrize("finish", ["length", "content_filter", "tool_calls", "unexpected", "stop", None])
+@pytest.mark.parametrize("surface", ["action", "brief", "search", "intro"])
+def test_summary_consumers_reject_incomplete_provider_responses(monkeypatch, finish, surface):
+    import io
+    import json
+    from dataset_recommender.llm import intro_llm, search_reply_llm
+    from dataset_recommender.content.introduction import build_dataset_introduction
+
+    text = "已经完成第一项；第二项尚"
+    payload = {"choices": [{"message": {"content": text}, "finish_reason": finish}]}
+    monkeypatch.setattr(llm_client, "_open_request", lambda *a, **k: io.BytesIO(json.dumps(payload).encode()))
+    complete = finish in ("stop", None)
+    if surface == "brief":
+        assert act_summary_llm.summarize_brief_with_llm(_facts(), config=_cfg()) == (text if complete else None)
+        return
+    if surface == "action":
+        out = act_summary_llm.summarize_action_with_llm(_facts(), config=_cfg())
+        key = "summary_zh"
+    elif surface == "search":
+        out = search_reply_llm.search_reply_with_llm({"total": 1, "shown": 1}, config=_cfg())
+        key = "reply_zh"
+    else:
+        item = {"source": "Human Cell Atlas", "description": "A public study of human lung cells."}
+        deterministic = build_dataset_introduction(item)
+        out = intro_llm.enrich_introduction_with_llm(item, intro=deterministic, config=_cfg())
+        assert all(out[k] == v for k, v in deterministic.items())
+        key = "llm_summary"
+    assert out[key] == (text if complete else None)
+    assert out["llm_status"] == ("ok" if complete else "failed:incomplete_response")
+
+
 def test_config_error_fails_open(monkeypatch):
     """config 加载异常也 fail-open（脱敏、永不抛）。"""
     def _boom(*a, **k):
@@ -330,3 +361,28 @@ def test_endpoint_brief_success_path(monkeypatch, no_key_server_config):
     assert body["llm_status"] == "ok"
     assert "不超过 35 字" in captured["prompt"]              # 端点走的确实是 brief prompt
     assert len(body["summary_zh"]) <= 35                    # 桩遵守了铁律（真 LLM 质量不在本门）
+
+
+# ---------------------------------------------------------------- 错误正文读取失败不许逃出 fail-soft
+
+def test_call_llm_survives_error_body_read_failure(monkeypatch):
+    """HTTPError 正文读取本身再失败（超时/半截）也必须回落为脱敏失败结果，不许抛出——
+    否则可选润色故障会掀翻整个推荐请求（调用方只拿规则结果）。"""
+    import urllib.error
+
+    class _BrokenHTTPError(urllib.error.HTTPError):
+        def read(self, *args, **kwargs):
+            raise TimeoutError("synthetic body read timeout")
+
+    def boom(*_a, **_k):
+        raise _BrokenHTTPError("https://provider.example/v1", 502, "bad gateway", None, None)
+
+    monkeypatch.setattr(llm_client, "_open_request", boom)
+    cfg = LLMConfig(enable_llm=True, provider="openai-compatible",
+                    api_key="sk-fake-not-a-secret", base_url="https://provider.example/v1",
+                    model="m")
+    result = llm_client.call_llm("你好", cfg)
+
+    assert result.attempted is True and result.succeeded is False
+    assert "HTTPError 502" in (result.error or "")
+    assert "sk-fake-not-a-secret" not in (result.error or "")

@@ -135,6 +135,64 @@ def test_same_req_id_different_fingerprint_conflicts_409():
     assert is_owner is False, "同指纹的同号仍是合法重发"
 
 
+def test_http_idempotency_is_scoped_to_principal(monkeypatch):
+    monkeypatch.setattr(webapp, "_utterance_principal", lambda req: req.headers.get("x-test-principal", "anonymous"))
+    calls = []
+    def fake(text, **kwargs):
+        calls.append(kwargs["principal"])
+        return {**FAKE_RESULT, "echo_zh": kwargs["principal"]}
+    monkeypatch.setattr(turn, "route_turn", fake)
+    payload = {"utterance": "查看数据", "req_id": "1", "provider": "mock"}
+    a = client.post("/api/utterance", json=payload, headers={"x-test-principal": "A"})
+    b = client.post("/api/utterance", json=payload, headers={"x-test-principal": "B"})
+    again = client.post("/api/utterance", json=payload, headers={"x-test-principal": "A"})
+    assert a.status_code == b.status_code == again.status_code == 200
+    assert a.json() != b.json() and a.json() == again.json()
+    assert calls == ["A", "B"]
+
+
+def test_fingerprint_covers_answer_and_replay_destination():
+    ref = _fp()
+    for extra in ({"ask_answer": {"suppress": ["species"]}}, {"conv_id": "another"}, {"replay_key": "another-key"}):
+        assert _fp(**extra) != ref
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_quota_rejection_releases_slots_and_same_id_can_retry(monkeypatch, counting_route_turn, stream):
+    monkeypatch.setattr(webapp, "_UTT_IDEM_MAX_ENTRIES", 2)
+    def reject(*a, **kw):
+        raise HTTPException(429, "quota reached")
+    monkeypatch.setattr(webapp, "_gate_llm_quota", reject)
+    for i in range(4):
+        response = client.post("/api/utterance", json={"utterance": "你好", "req_id": str(i), "stream": stream})
+        assert response.status_code == 429
+        assert not webapp._UTT_IDEM
+    monkeypatch.setattr(webapp, "_gate_llm_quota", lambda *a, **kw: None)
+    assert client.post("/api/utterance", json={"utterance": "你好", "req_id": "0"}).status_code == 200
+    assert len(counting_route_turn) == 1
+
+
+def test_preflight_abort_wakes_waiter_and_preserves_http_error():
+    entry, _ = webapp._utterance_idem_claim("waiting")
+    webapp._utterance_idem_abort(entry, HTTPException(429, "quota reached"))
+    assert entry["event"].is_set() and not webapp._UTT_IDEM
+    with pytest.raises(HTTPException) as exc:
+        webapp._utterance_idem_wait_response(entry, stream=False)
+    assert exc.value.status_code == 429
+
+
+def test_stream_config_failure_releases_owner(monkeypatch):
+    entry, _ = webapp._utterance_idem_claim("stream-config")
+    def broken(*a, **kw):
+        raise RuntimeError("config failure")
+    monkeypatch.setattr(webapp, "_materialize_request_llm_config", broken)
+    payload = webapp.UtteranceRequest(utterance="你好", stream=True)
+    with pytest.raises(RuntimeError):
+        list(webapp._utterance_event_stream("你好", payload, provider="mock", requested_base_url="",
+             mock_llm=True, use_llm=True, idem_entry=entry))
+    assert entry["event"].is_set() and not webapp._UTT_IDEM
+
+
 # ---------------------------------------------------------------- 请求指纹（补全）
 
 def _fp(**over):
@@ -174,8 +232,8 @@ def test_max_entries_evicts_done_first_running_never_evicted(monkeypatch):
     webapp._utterance_idem_claim("r-running-2")
     # 表满（1 done + 2 running）：新占用淘汰最早的 done 腾位，running 一个不动
     webapp._utterance_idem_claim("r-running-3")
-    assert "r-done-0" not in webapp._UTT_IDEM
-    assert all(r in webapp._UTT_IDEM for r in ("r-running-1", "r-running-2", "r-running-3"))
+    assert ("anonymous", "r-done-0") not in webapp._UTT_IDEM
+    assert all(("anonymous", r) in webapp._UTT_IDEM for r in ("r-running-1", "r-running-2", "r-running-3"))
 
 
 def test_max_entries_all_running_rejects_new_claim(monkeypatch):

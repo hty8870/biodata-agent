@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..retrieval.normalizer import is_missing_value
-from ..retrieval.vocabulary import CATALOG
+from ..domain.registry import domain_catalog as _domain_catalog
 
 __all__ = [
     "BACKFILL_METHOD",
@@ -38,7 +38,7 @@ __all__ = [
 BACKFILL_METHOD = "offline description alias backfill v1"
 
 #: 参与反标的维度 → 记录顶层字段。assay 维落 chemistry 字段（与 CELLxGENE ingest 口径一致：
-#: assay 文本即 chemistry；retriever 的 _technology_text 读 assay+chemistry 联合文本）。
+#: assay 文本即 chemistry；硬约束侧的联合文本访问器在 domains/biodata/dimensions 的 assay 描述符）。
 BACKFILL_DIMS: tuple[str, ...] = ("species", "tissue", "disease", "assay")
 DIM_TO_FIELD: dict[str, str] = {
     "species": "species",
@@ -102,7 +102,7 @@ def detect_terms(
     返回 {dim: [{"display", "targets", "alias"}…]}（命中顺序、按 display 去重）。不做「消费」——
     反标要的是**标全**（同一文本可同时命中 generic 与 specific 术语，两者都标上对检索只有好处）。
     """
-    cat = catalog or CATALOG
+    cat = catalog or _domain_catalog()
     lowered = (text or "").lower()
     found: dict[str, list[dict[str, Any]]] = {}
     for dim in dims:

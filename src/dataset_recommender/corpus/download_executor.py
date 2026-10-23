@@ -286,12 +286,16 @@ def _item_for_uid(uid: str) -> dict:
     }
 
 
-def url_policy_error(url: str, allowed_hosts: Sequence[str]) -> "str | None":
-    """https + 计划白名单 + 端口三闸；返回 None 表示放行，否则返回中文原因（fail-closed）。
+def url_policy_error(url: str, allowed_hosts: "Sequence[str] | None") -> "str | None":
+    """https + 计划白名单（可缺省）+ 端口三闸；返回 None 表示放行，否则返回中文原因（fail-closed）。
 
     端口只放 443（台账 15215 条直链实测全部 443/无端口）；带 userinfo 的 URL
     （`https://user@host/`）拒绝——它是钓鱼形态（视觉主机名 ≠ 连接目标），且重定向时
     可能被用来夹带凭据。非法端口/无法解析的 URL 一律按策略拒绝。
+
+    `allowed_hosts=None`（`_open_stream` 兼容形态）只跳过**主机集合匹配**一闸：
+    scheme=https、userinfo 拒绝、端口仅 443 仍然无条件生效。此前 None 让整函数被跳过，
+    三闸一起失效（只有 IP 解析闸还在），是「无白名单形态」下的静默降级。
     """
     if not url.startswith("https://"):
         # A1-L6：不回显完整 URL（可能含 userinfo/查询串等敏感片段）——只给原因 + 主机名
@@ -307,7 +311,7 @@ def url_policy_error(url: str, allowed_hosts: Sequence[str]) -> "str | None":
         return "URL 没有主机名"
     if parts.username is not None or parts.password is not None:
         return "URL 不允许带用户名/密码（userinfo），拒绝"
-    if host not in {h.lower() for h in allowed_hosts}:
+    if allowed_hosts is not None and host not in {h.lower() for h in allowed_hosts}:
         return f"主机 {host} 不在本次计划的白名单里"
     try:
         port = parts.port
@@ -456,8 +460,9 @@ def _open_stream_safe(url: str, timeout: int, *, allowed_hosts: "Sequence[str] |
 
     **不依赖 urllib 的默认重定向跟随**：重定向由本函数手动跟随，且**每一跳**（含首次）
     都重新执行——scheme 仅 https + 主机白名单 + 端口仅 443 + IP 解析闸（全部 A/AAAA 拒绝
-    禁止网段）+ 固定到已校验 IP 建连；跳数上限 `max_hops`。`allowed_hosts=None` 时跳过
-    主机白名单（`_open_stream` 形态，https/端口/IP/重定向闸依然生效）。
+    禁止网段）+ 固定到已校验 IP 建连；跳数上限 `max_hops`。
+    `allowed_hosts=None`（`_open_stream` 兼容形态）只跳过主机集合匹配一闸；scheme/端口/
+    userinfo/IP/重定向闸无条件生效（闸在 `url_policy_error` 内部按 None 分支，不再整体跳过）。
     `resolver/connect` 是测试注入点（禁真网）；返回带 .status/.getcode()/.read(n)/.headers
     的响应对象（http.client 约定）。
     """
@@ -468,10 +473,9 @@ def _open_stream_safe(url: str, timeout: int, *, allowed_hosts: "Sequence[str] |
         if hops > max_hops:
             raise DownloadPolicyError(
                 "redirect_limit", f"重定向超过 {max_hops} 跳上限，拒绝继续（疑似重定向环或攻击）。")
-        if allowed_hosts is not None:
-            why = url_policy_error(current, allowed_hosts)
-            if why:
-                raise DownloadPolicyError("url_blocked", why)
+        why = url_policy_error(current, allowed_hosts)
+        if why:
+            raise DownloadPolicyError("url_blocked", why)
         try:
             host = (urlsplit(current).hostname or "").lower()
         except ValueError:

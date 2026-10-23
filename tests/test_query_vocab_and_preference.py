@@ -18,7 +18,7 @@
 """
 import pytest
 
-from dataset_recommender.retrieval import vocabulary as V
+from dataset_recommender.retrieval import query_lexicon as V
 from dataset_recommender.retrieval.query_parser import (
     _alias_occurrences,
     active_filters,

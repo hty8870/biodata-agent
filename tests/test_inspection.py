@@ -80,8 +80,38 @@ def test_env_override_takes_effect_at_runtime(tmp_path, monkeypatch):
     assert I.is_available() is True
 
 
-# ---- 读盘失败不再负向缓存 ----
+# ---- 同路径重建必须刷新（长驻进程不许读旧台账）----
 
+def test_same_path_rewrite_is_picked_up(tmp_path, monkeypatch):
+    """别的进程重写**同一路径**的 current.json 后，长驻 Web/MCP 必须读到新结论。
+
+    共享骨架以路径为缓存键 → 旧实现第二次读仍返回旧值（巡检重建后结论永久过期）。
+    文件指纹（mtime_ns+size）一变即失效重读，不需要调用方清缓存。"""
+    import json as _json
+
+    p = tmp_path / "current.json"
+    p.write_text(_json.dumps({
+        "by_uid": {"u1": {"nf": 1, "np": 0, "lv": "2026-07-10"}},
+        "snapshot_id": "s-old", "snapshot_date": "2026-07-10"}), encoding="utf-8")
+    monkeypatch.setenv("BIODATA_INSPECTION", str(p))
+    I._load.cache_clear()
+    try:
+        assert I.is_available() is True
+        assert I.snapshot_info()["snapshot_id"] == "s-old"
+        assert I.dataset_summary("u1")["n_problem"] == 0
+        # 巡检在别的进程重建同一路径（内容/大小都变）
+        p.write_text(_json.dumps({
+            "by_uid": {"u1": {"nf": 3, "np": 2, "lv": "2026-10-04"},
+                       "u2": {"nf": 1, "np": 0, "lv": "2026-10-04"}},
+            "snapshot_id": "s-2026-10-04", "snapshot_date": "2026-10-04"}), encoding="utf-8")
+        assert I.snapshot_info()["snapshot_id"] == "s-2026-10-04", "同路径重建后仍在读旧快照元信息"
+        assert I.dataset_summary("u1")["n_problem"] == 2
+        assert I.dataset_summary("u1")["last_verified"] == "2026-10-04"
+    finally:
+        I._load.cache_clear()
+
+
+# ---- 读盘失败不再负向缓存 ----
 def test_corrupt_file_not_cached_and_recovers(tmp_path, monkeypatch):
     """D6：坏 JSON → 降级 is_available()=False 但不入缓存；同进程修复后无需 cache_clear 即恢复。"""
     import json as _json

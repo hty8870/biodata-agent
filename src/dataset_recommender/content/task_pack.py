@@ -32,9 +32,8 @@ from typing import Any, Sequence
 
 from ..corpus import download_plan as DP
 from ..corpus import download_script as DS
-from . import item_view, reuse_pack
+from . import reuse_pack
 from ..retrieval import fair
-from ..corpus import provenance
 from ..corpus.corpus import corpus_snapshot
 
 SCHEMA = "biodata-task-pack/v1"
@@ -143,30 +142,6 @@ def plan_spec(*, candidate_uids: Sequence[str], plan: dict, snapshot: dict,
 
 def plan_token(spec: dict) -> str:
     return _digest(spec)
-
-
-def resolve_membership(uids: Sequence[str], records: Sequence[Any],
-                       result_uids: "set[str] | None" = None) -> dict:
-    """这些编号在不在库里、在不在这次结果里。**三类分开，措辞各不相同，绝不猜用户做过什么。**"""
-    index: dict[str, Any] = {}
-    for record in records:
-        raw = record.raw if isinstance(getattr(record, "raw", None), dict) else {}
-        uid = str(raw.get("dataset_uid") or "")
-        if uid and uid not in index:
-            index[uid] = record
-    resolved, unresolved, membership = [], [], {}
-    for uid in uids:
-        record = index.get(uid)
-        if record is None:
-            unresolved.append(uid)
-            membership[uid] = "not_in_catalog"
-            continue
-        resolved.append(record)
-        if result_uids is None:
-            membership[uid] = "unverified"
-        else:
-            membership[uid] = "in_result_set" if uid in result_uids else "out_of_result_set"
-    return {"records": resolved, "unresolved": unresolved, "membership": membership}
 
 
 def build_task_pack(*, query: str, items: Sequence[dict], records: Sequence[Any],
