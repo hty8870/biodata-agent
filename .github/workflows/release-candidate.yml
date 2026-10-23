@@ -1,9 +1,6 @@
 name: Release candidate
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 # This workflow produces a verified, downloadable release candidate. It does

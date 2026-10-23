@@ -151,6 +151,7 @@ scripts/build_release.py
 scripts/build_sample_supplement.py
 scripts/build_supply_chain.py
 scripts/build_telemetry_benchmark.py
+scripts/build_web_context.py
 scripts/build_windows_installer.py
 scripts/build_windows_runtime.py
 scripts/check_leakage.py
@@ -219,6 +220,7 @@ scripts/smoke_sumhl.py
 scripts/smoke_test.py
 scripts/smoke_ui_acceptance.py
 scripts/smoke_ui_playwright.py
+scripts/smoke_web_image.py
 scripts/split_ood_evalonly.py
 scripts/summarize_mcp_calls.py
 scripts/synth_ltr_data.py
@@ -713,6 +715,8 @@ tests/test_vector_recall_lock.py
 tests/test_vocabulary_alias_expansion.py
 tests/test_vocabulary_alias_expansion_ext.py
 tests/test_wave3_consolidation.py
+tests/test_web_context.py
+tests/test_web_image_smoke.py
 tests/test_webapp_account_guard.py
 tests/test_webapp_all_files.py
 tests/test_webapp_curate_examples.py

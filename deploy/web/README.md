@@ -4,9 +4,9 @@
 > 宿主 loopback，公网入口必须先经过 TLS 反向代理；无域名/证书时不得承载真实账户、查询、
 > 会话或 BYOK 凭据。回退 = 换 tag 重新部署，分钟级。
 >
-> **过渡状态（2026-09-09 用户拍板）**：域名 ICP 备案中，公网暂以 HTTP 直连 + 账户门运行，
-> `PUBLIC_HEALTH_URL` 用 `http://<server-host>/api/health`；备案与证书落地后恢复上述 TLS 形态
-> （恢复动作 = 装回反向代理 + 把 environment 变量切回 https，代码与脚本不变）。
+> 日常发布不依赖 GitHub Actions、TCR 或其计费状态：本地验收后生成最小构建包，服务器
+> 构建、冒烟，再调用现有 `deploy.sh` 切换版本。托管工作流仅为可选客户端。
+> 公网使用 HTTPS；HTTP 仅用于宿主 loopback 诊断。
 
 ## 1. 形态一览
 
@@ -28,46 +28,50 @@
 - `/data/biodata-web/`——应用运行态数据（宿主每日 03:00 自动备份 `/data`，见 §6）
 - 受控运维系统——保存批准、digest、备份、回退和健康证据；不把真实记录回填 Git
 
-## 2. 代码同步到服务器（仅首次自建/离线构建）
+## 2. 从干净提交生成构建上下文
 
-原则：**一个 tag 一份完整构建上下文，禁止手工散拷单文件**。上下文 = worktree 的 git tracked
-快照（`.dockerignore` 在构建时进一步瘦身）。
+一个 tag 对应一份不可变构建包，不再上传整个私仓或手工散拷源码。工具从 Git blob 读取
+Dockerfile 的真实 COPY 源，额外带部署配置与共享冒烟脚本；拒绝未提交改动、上传、秘密、
+研究模型和已有输出路径。运行报告放在已忽略的 `artifacts/`，不改变源码快照。
 
-在已经通过完整质量门的本机 worktree 执行；远程身份与地址均用占位符表示：
+在本地干净提交上执行（`$Python` 是已解析的项目解释器，输出名每次换新）：
 
-```bash
-TAG=<WEB_API_VERSION>-g<短sha>
-ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-host> "sudo mkdir -p /opt/biodata-web/build && sudo chown <deploy-user>:<deploy-user> /opt/biodata-web/build"
-git archive --format=tar.gz -o /tmp/biodata-ctx-$TAG.tar.gz HEAD
-scp -i ~/.ssh/<ssh-key> /tmp/biodata-ctx-$TAG.tar.gz <deploy-user>@<server-host>:/tmp/
-ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-host> "mkdir -p /opt/biodata-web/build/$TAG && tar -xzf /tmp/biodata-ctx-$TAG.tar.gz -C /opt/biodata-web/build/$TAG && rm /tmp/biodata-ctx-$TAG.tar.gz"
+```powershell
+& $Python scripts/quality_gate.py --profile full --report-json artifacts/quality-web-release.json
+if ($LASTEXITCODE -ne 0) { throw 'full quality gate failed' }
+& $Python scripts/build_web_context.py --out artifacts/web-context.tar.gz
+if ($LASTEXITCODE -ne 0) { throw 'context build failed' }
+$m = Get-Content -LiteralPath artifacts/web-context.tar.gz.manifest.json -Raw | ConvertFrom-Json
+$m | Select-Object commit, version, image_tag
+Get-FileHash -Algorithm SHA256 -LiteralPath artifacts/web-context.tar.gz
+scp -i ~/.ssh/<ssh-key> artifacts/web-context.tar.gz artifacts/web-context.tar.gz.manifest.json <admin-user>@<server-host>:/tmp/
+if ($LASTEXITCODE -ne 0) { throw 'context transfer failed' }
 ```
 
-注意：git archive 只含 tracked 内容——`database/trace/`、`database/external/upload_*.json`
-等 gitignored 运行产物天然不进上下文（镜像也不需要它们）。
-
-## 3. 生成依赖锁定文件（改依赖时才需要重跑）
-
-`requirements/requirements.txt` 只有 5 个下界约束；镜像必须按**精确锁定**安装。网页版镜像额外装
-「AI 执行」扩展链 `langgraph` + `langchain-openai`（2026-08-26 产品所有者拍板装入镜像；
-版本与 requirements/requirements-ci.lock 对齐），本机形态不受影响（扩展在本地仍可选装）。
-2026-08-28 起再补 `mcp`（在线 MCP 形态：webapp 顶层 import mcp_server 挂载 `/mcp`，
-版本与 requirements/requirements-ci.lock 的 `mcp==1.28.1` 对齐）。
-锁定文件在服务器上用与镜像完全相同的基础环境生成（本机 Windows Python 版本不同，不在此生成）：
+服务器上把 `TAG` 和 `EXPECTED_SHA` 设为本地 manifest 中的 `image_tag` 和 `archive.sha256`，
+先比对传输哈希，再解到**新目录**。管理员需先为构建用户准备 `/opt/biodata-web/build`：
 
 ```bash
-# $CTX = /opt/biodata-web/build/$TAG（构建上下文已按 §2 同步）
-ssh -i ~/.ssh/<ssh-key> <deploy-user>@<server-host> "
-  sudo docker run --rm -v $CTX:/ctx -w /ctx python:3.12-slim bash -lc \
-    'pip install --no-cache-dir -q -r requirements/requirements.txt \
-       langgraph==<ci锁版本> langchain-openai==<ci锁版本> mcp==<ci锁版本> && pip freeze' \
-    | sudo tee $CTX/deploy/web/requirements-web.lock >/dev/null
-"
-scp -i ~/.ssh/<ssh-key> <deploy-user>@<server-host>:/opt/biodata-web/build/$TAG/deploy/web/requirements-web.lock deploy/web/requirements-web.lock
+set -euo pipefail
+TAG='<manifest-image-tag>'
+EXPECTED_SHA='<manifest-archive-sha256>'
+[[ "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+printf '%s  %s\n' "$EXPECTED_SHA" /tmp/web-context.tar.gz | sha256sum --check -
+CTX="/opt/biodata-web/build/$TAG"
+mkdir "$CTX"
+tar -xzf /tmp/web-context.tar.gz -C "$CTX"
+sudo docker build --label "org.opencontainers.image.revision=<manifest-commit>" \
+  -f "$CTX/deploy/web/Dockerfile" -t "biodata-web:$TAG" "$CTX"
 ```
 
-回填 worktree 后 `deploy/web/requirements-web.lock` 随分支 commit（Dockerfile COPY 它安装）。
-若曾生成过锁定文件且依赖未变，直接复用 build 目录里的上一份即可。
+manifest 含每个成员的路径、长度和 SHA-256；归档 SHA 通过后还可逐成员核对。构建目录不含
+`.env` 或运行态数据，不能代替服务器独立管理的密钥与数据卷。
+
+## 3. 依赖锁定（改依赖时才更新）
+
+日常发布直接消费已提交的 `deploy/web/requirements-web.lock`，不现场改锁。
+需要更新时，在与 Dockerfile 相同的 Linux/Python 基础环境、独立工作目录里解析并验证依赖，
+回填源码锁后重新提交、跑完整质量门、重新生成构建包。不要改已经过 SHA 验证的上下文。
 
 ## 4. 首次部署（one-time）
 
@@ -106,31 +110,49 @@ ssh -i ~/.ssh/<deploy-key> deploy@<server-host> "sudo -n /opt/biodata-web/deploy
 ```
 
 `BIODATA_TRUSTED_HOSTS` 填浏览器实际访问域名；compose 固定开启账户门与 Secure cookie，
-并只发布宿主 loopback。`PUBLIC_HEALTH_URL` 用同一入口的 `/api/health`；目标形态为 HTTPS，
-2026-09-09 起域名 ICP 备案过渡期允许 http（见 §5 末注）。
+并只发布宿主 loopback。`PUBLIC_HEALTH_URL` 用同一 HTTPS 入口的 `/api/health`。
 
 ## 5. 日常发布与回退
 
-发布新版 = ① 按 §2 同步构建上下文到服务器，构建并推送经过验证的镜像到 TCR（`docker build` +
-`docker push`，标签规则见 §1）→ ② GitHub「Deploy web」workflow 手动触发（`workflow_dispatch`，
-**唯一部署入口**，部署 TCR 中已存在的 tag；`AUTO_DEPLOY=false` 时不存在自动路径）。
-workflow 经受限 deploy 账号在服务器上执行 `sudo docker pull` → `sudo docker tag` →
-`sudo /opt/biodata-web/deploy.sh <new-tag>`（sudoers 白名单只放行这三条）；
-deploy.sh 写 `IMAGE_TAG` → `up -d` → 等 healthy（≤120s）→ 容器内断言账户护栏 →
-失败自动切回上一 tag → 成功记 `/opt/biodata-web/RELEASES.log` 并清理镜像只留最近 5 个。
+主路径：干净提交的本地 `full` → §2 构建包与传输哈希 → 服务器 Docker 构建 → 共享冒烟 →
+确认无在线用户和运行中任务 → 调用现有 `deploy.sh`。不需要 TCR、GitHub Actions 或托管额度。
 
-> 2026-09-09 起域名 ICP 备案过渡：`PUBLIC_HEALTH_URL` 允许 `http://<server-host>/api/health`，
-> 公网健康断言按 scheme 分支（https 钉死 TLS1.2+，http 明文直连并在日志给警告）。
-> 备案与证书落地后，只需把 environment 变量 `PUBLIC_HEALTH_URL` 切回
-> `https://<your-domain>/api/health`，workflow 与脚本均无需再改。
-
-**手工回退**（不走 GitHub workflow 时，同样经 deploy 账号）：
+服务器构建后先做隔离验证（沿用 §2 的 `CTX`、`TAG`）：
 
 ```bash
-ssh -i ~/.ssh/<deploy-key> deploy@<server-host> "sudo -n /opt/biodata-web/deploy.sh '<old-tag>'"
-# 或最原始形态：改 /opt/biodata-web/.env 的 IMAGE_TAG=<old-tag> 后
-#   sudo docker compose --env-file /opt/biodata-web/.env -f /opt/biodata-web/docker-compose.web.yml -p biodata-web up -d
+sudo python3 "$CTX/scripts/smoke_web_image.py" --image "biodata-web:$TAG" --require-account
 ```
+
+脚本使用唯一临时容器、loopback 动态端口、不挂宿主数据卷、不读 `.env`；同时验证健康、
+`account.required=true` 和未登录访问受保护 API 返回 401，只清理本次带匹配 label 的容器。
+若服务器已有 `deploy.sh` 与本次提交不同，先备份原脚本，再安装构建包中的同源版本：
+
+```bash
+sudo cp -p /opt/biodata-web/deploy.sh "/opt/biodata-web/deploy.sh.before-$(date -u +%Y%m%dT%H%M%SZ)"
+sudo install -m 755 -o root -g root "$CTX/deploy/web/deploy.sh" /opt/biodata-web/deploy.sh
+```
+
+实际切换仍须事先得到用户部署授权，且刚刚核实没有在线访问或运行中任务；有活动则延期。
+部署账号的 sudoers 白名单保持不变；管理员也调用同一脚本，不另造部署逻辑：
+
+```bash
+sudo /opt/biodata-web/deploy.sh "$TAG"
+curl --fail --proto '=https' --tlsv1.2 https://<your-domain>/api/health
+```
+
+`deploy.sh` 校验 tag、更新 `IMAGE_TAG`、`up -d`、等待 healthy（≤120s）、断言账户护栏；
+失败自动切回上一 tag，成功记 `RELEASES.log` 并保留最近 5 个镜像。上线后还需核验公网
+HTTPS、未登录 401、实际 image ID 与源提交，不能只凭进程启动判定成功。数据卷不随换 tag 回退。
+
+**手工回退**（同一脚本，无需 GitHub）：
+
+```bash
+sudo /opt/biodata-web/deploy.sh '<old-tag>'
+```
+
+`.github/workflows/deploy-web.yml` 保留为可选 TCR/SSH 客户端；仓库级 `AUTO_DEPLOY=false`。
+它不会替代用户授权、活动检查或本地完整验收。公仓合并的本地 `local-quality` 回执规则见
+[自动化质量门与候选发布](../../docs/AUTOMATION_AND_RELEASE.md)。
 
 ## 6. 备份核对
 

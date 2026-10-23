@@ -587,18 +587,8 @@ class TestInstallerWorkflow:
         assert "biodata-agent-windows-installer-unsigned-dev" in workflow
         assert "TODO(W4)" not in workflow
 
-    @pytest.mark.parametrize(
-        "trigger",
-        [
-            '"src/**"',
-            '"web/static/**"',
-            '"database/base/**"',
-            '"database/external/*.json"',
-            '"src/dataset_recommender/app/mcp_server.py"',
-            '"prompts/**"',
-            '"scripts/build_windows_installer.py"',
-        ],
-    )
-    def test_ci_trigger_covers_shipped_runtime_inputs(self, trigger):
+    @pytest.mark.parametrize("event", ["push", "pull_request", "schedule"])
+    def test_ci_only_runs_on_manual_request(self, event):
         workflow = _INSTALLER_WORKFLOW.read_text(encoding="utf-8")
-        assert trigger in workflow
+        assert re.search(r"(?m)^  workflow_dispatch:\s*$", workflow)
+        assert not re.search(rf"(?m)^  {event}:", workflow)

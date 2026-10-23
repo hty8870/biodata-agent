@@ -23,10 +23,10 @@ def _workflow() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_release_candidate_has_manual_tag_triggers_and_no_deploy_authority() -> None:
+def test_release_candidate_is_manual_only_and_has_no_deploy_authority() -> None:
     text = _workflow()
     assert re.search(r"(?m)^  workflow_dispatch:\s*$", text)
-    assert re.search(r'(?m)^      - "v\*"\s*$', text)
+    assert not re.search(r"(?m)^  (push|pull_request|schedule):", text)
     assert "pull_request_target" not in text
     assert re.search(r"(?m)^permissions: \{\}\s*$", text)
     assert "cancel-in-progress: false" in text

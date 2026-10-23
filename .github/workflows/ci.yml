@@ -1,13 +1,6 @@
 name: CI
 
 on:
-  # push 限定到集成分支与发布 tag：避免「同一分支 push 事件 + 该分支 PR 的 synchronize 事件」
-  # 因并发组 key 不同（push 走 github.ref、PR 走 PR number）而**双跑**整套 OS 矩阵（验证）。
-  # feature 分支的验证交给 pull_request 覆盖。
-  push:
-    branches: [master]
-    tags: ["v*"]
-  pull_request:
   workflow_dispatch:
 
 # Start from no token permissions. Only the job that checks out source receives

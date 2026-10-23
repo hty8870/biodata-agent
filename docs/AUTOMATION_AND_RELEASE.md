@@ -8,7 +8,7 @@
 - 依赖安装与质量门执行分开。安装依赖可能需要网络；进入质量门后，runner 会清空常见密钥和进程注入变量，使用空的专用 LLM env 文件，设置离线/禁下载环境，并把外部代理指向不可用的本机端口。mock 与 `BIODATA_CI_OFFLINE=1` 的诊断路径不会解析 DNS、建连或发 HTTP。
 - 这套“离线门”是受审查命令白名单、环境清理和网络 tripwire 组成的纵深防御，不是操作系统级网络沙箱；新增门必须审查其代码路径，不能据此声称任意子进程在物理上绝不联网。
 - 所有必需工具、超时和命令失败都按 fail-closed 处理，不会把降级环境记为通过。
-- `.github/workflows/ci.yml` 描述推送、Pull Request 和手动触发时应执行的 CI；`.github/workflows/release-candidate.yml` 描述 tag 或手动触发时应生成的候选包。
+- 托管质量门、镜像、安装器、候选包及公开镜像工作流均改为按需手动触发；普通 push、Pull Request、tag 或定时计划不再自动启动它们。GitHub Actions 是可选执行环境，不是本地验收、合并或服务器发布的必经通道。
 - 当前候选发布只生成并上传经过验证的 ZIP、SHA-256 sidecar 和质量报告。它不会创建 GitHub Release，不会读取部署凭据，也不会部署任何主机。
 - 产品默认以本机 loopback 形态运行（受信任单用户）；另提供网页版形态，部署走 [deploy/web/README.md](../deploy/web/README.md) 的通用模板（版本化 Docker 镜像 + 可选的登录/邀请/配额护栏）。`.github/workflows/web-image.yml` 只构建镜像并做容器冒烟与漏洞扫描，不执行任何部署。公开、多用户或互联网部署若要继续扩大，认证、授权、限流、上传配额、TLS/反向代理、监控、持久数据备份和自动化部署回滚仍需按目标环境补齐，详见 [SECURITY.md](../SECURITY.md)。
 
@@ -119,16 +119,11 @@ git commit --no-verify                       # 单次绕过
 
 首启矩阵分别在 `windows-2025`、`macos-15`、`ubuntu-24.04` 上构建并解压候选 zip，调用各自面向用户的 `打开前端.bat` / `.command` / `.sh`。启动器必须新建项目内 `.venv`、成功导入全部 Web 运行依赖，并证明 `import pytest` 失败；探针在向导、浏览器和服务启动前退出。该矩阵会访问依赖索引模拟真实首装，和安装后离线运行的质量门职责不同。
 
-工作流从空 token 权限开始，具体 job 只获得 `contents: read`；第三方 action 固定到完整 commit SHA；checkout 不持久化凭据。质量腿上传 JSON 报告，稳定的 `gate` job 同时汇总质量矩阵和三平台首启矩阵，适合作为以后受保护分支的 required check。
+工作流从空 token 权限开始，具体 job 只获得 `contents: read`；第三方 action 固定到完整 commit SHA；checkout 不持久化凭据。按需手动运行时，稳定的 `gate` job 汇总质量矩阵和三平台首启矩阵；它不再是日常合并的必需检查。
 
-要让它真正成为合并门，还需要在 GitHub 上完成以下外部配置：
+受保护分支改用 commit status `local-quality`：发布者在对应提交的本地 `full` 全绿后，向**该提交 SHA** 上报成功，说明中附报告 SHA-256 和源提交。不能复用旧 head 的成功状态，不能将本地报告冒称 Actions 运行。strict、PR、线性历史、管理员约束、讨论解决和禁止 force/delete 等其余保护保持不变。本地回执依赖有状态写权限的发布者诚信，不具有独立托管 runner 的信任隔离；它解决的是托管额度/可用性依赖，不是更强的供应链证明。
 
-1. 把项目连接到正确的远程仓库并推送工作流；
-2. 在 GitHub Actions 页面确认三条执行腿真实通过；
-3. 在目标分支保护规则中把精确 job 名 `gate` 设为 required check；
-4. 检查 Dependabot 提交的 pip 与 GitHub Actions 更新，不自动合并未经本项目门验证的更新。
-
-仓库内没有远程运行记录，因此交付说明不得把上述外部步骤写成“已完成”。
+GitHub Actions 无法运行时仍可执行同一份本地质量门。服务器发布直接使用 `build_web_context.py` 的干净提交包与 `smoke_web_image.py`，然后调用既有 `deploy.sh`，详见[网页版部署手册](../deploy/web/README.md)。仓库级 `AUTO_DEPLOY` 保持 `false`；TCR/托管工作流只保留为可选客户端。Dependabot 更新仍须审阅和本地验证，不自动合并。
 
 ## 5. 构建与验证候选包
 
