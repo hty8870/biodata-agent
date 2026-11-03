@@ -9,7 +9,7 @@ sqlalchemy==2.0.52
 langchain-core==1.6.2
 # test_scoped_routing / test_artifact_context 硬 import langgraph（agent_exec._get_graph
 # 不做缺包跳过是刻意设计）；windows-primary-full 必须装。
-langgraph==1.2.11
+langgraph==1.2.14
 # langgraph-sdk 仍要 websockets<17（1.2.11 未放宽，uv 解析冲突实测），langsmith 要 >=15
 # ——钉 15.0.1 解除旧锁 websockets 16.1.1/17.0.1 双 marker 对 langgraph-sdk 的冲突；
 # dependabot 的 17.x 升级须等 langgraph-sdk 放宽后整体跟进。
